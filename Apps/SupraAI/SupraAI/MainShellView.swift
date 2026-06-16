@@ -36,15 +36,21 @@ struct MainShellView: View {
         case .globalChats:
             GlobalChatsView(controller: environment.chatController, library: environment.modelLibrary)
         case .matters:
-            ContentUnavailableView("Matters", systemImage: "folder.badge.gearshape")
+            ContentUnavailableView(
+                "Matters",
+                systemImage: "folder.badge.gearshape",
+                description: Text("Matter folders that group chats are coming next.")
+            )
         case .models:
-            ModelsView(library: environment.modelLibrary, validation: environment.validationController)
-        case .tasks:
-            ContentUnavailableView("Tasks", systemImage: "checklist")
+            ModelsView(
+                library: environment.modelLibrary,
+                validation: environment.validationController,
+                downloader: environment.modelDownloadController
+            )
         case .diagnostics:
             DiagnosticsView(history: environment.validationHistory, validation: environment.validationController)
         case .settings:
-            ContentUnavailableView("Settings", systemImage: "gearshape")
+            SettingsView(settings: environment.settingsController)
         }
     }
 }
