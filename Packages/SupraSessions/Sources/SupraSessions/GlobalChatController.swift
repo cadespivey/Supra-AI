@@ -21,7 +21,6 @@ public final class GlobalChatController: ObservableObject {
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
-    private var generationTask: Task<Void, Never>?
     private var activeGenerationID: GenerationID?
 
     public init(store: SupraStore, runtimeClient: any RuntimeClientProtocol) {
@@ -76,7 +75,7 @@ public final class GlobalChatController: ObservableObject {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isGenerating else { return }
 
-        generationTask = Task {
+        Task {
             await self.performSend(
                 prompt: trimmed,
                 modelID: modelID,
@@ -143,6 +142,7 @@ public final class GlobalChatController: ObservableObject {
 
             var streamedContent = ""
             var sawFirstToken = false
+            var sawTerminal = false
             var finalMetrics: RuntimeMetrics?
 
             for try await event in try runtimeClient.generate(request) {
@@ -161,6 +161,7 @@ public final class GlobalChatController: ObservableObject {
                     finalMetrics = event.metrics
 
                 case .generationCompleted:
+                    sawTerminal = true
                     finalMetrics = event.metrics ?? finalMetrics
                     try store.chats.completeVariant(variant.id)
                     try store.generation.completeGeneration(
@@ -170,6 +171,7 @@ public final class GlobalChatController: ObservableObject {
                     updateMessage(id: assistant.id, content: streamedContent, status: .completed)
 
                 case .generationCancelled:
+                    sawTerminal = true
                     try store.chats.markVariantCancelled(variant.id)
                     try store.generation.cancelGeneration(
                         generationID: session.id,
@@ -178,6 +180,7 @@ public final class GlobalChatController: ObservableObject {
                     updateMessage(id: assistant.id, content: streamedContent, status: .cancelled)
 
                 case .generationFailed:
+                    sawTerminal = true
                     let reason = event.error?.message ?? "Generation failed."
                     try store.chats.markVariantFailed(variant.id, reason: reason)
                     try store.generation.failGeneration(
@@ -191,6 +194,19 @@ public final class GlobalChatController: ObservableObject {
                 case .queued, .modelLoading, .modelLoaded, .generationStarted:
                     break
                 }
+            }
+
+            // The stream finished without a terminal event; never leave the
+            // assistant message stuck rendering as "still generating".
+            if !sawTerminal {
+                let reason = "Generation ended unexpectedly."
+                try store.chats.markVariantInterrupted(variant.id, reason: reason)
+                try store.generation.interruptGeneration(
+                    generationID: session.id,
+                    reason: reason,
+                    diagnosticEventID: nil
+                )
+                updateMessage(id: assistant.id, content: streamedContent, status: .interrupted)
             }
         } catch {
             errorMessage = error.localizedDescription

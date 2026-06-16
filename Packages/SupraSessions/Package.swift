@@ -14,7 +14,8 @@ let package = Package(
         .package(path: "../SupraCore"),
         .package(path: "../SupraStore"),
         .package(path: "../SupraRuntimeInterface"),
-        .package(path: "../SupraRuntimeClient")
+        .package(path: "../SupraRuntimeClient"),
+        .package(path: "../SupraDiagnostics")
     ],
     targets: [
         .target(
@@ -23,7 +24,11 @@ let package = Package(
                 .product(name: "SupraCore", package: "SupraCore"),
                 .product(name: "SupraStore", package: "SupraStore"),
                 .product(name: "SupraRuntimeInterface", package: "SupraRuntimeInterface"),
-                .product(name: "SupraRuntimeClient", package: "SupraRuntimeClient")
+                .product(name: "SupraRuntimeClient", package: "SupraRuntimeClient"),
+                .product(name: "SupraDiagnostics", package: "SupraDiagnostics")
+            ],
+            resources: [
+                .process("Resources")
             ]
         ),
         .testTarget(
@@ -33,7 +38,8 @@ let package = Package(
                 .product(name: "SupraCore", package: "SupraCore"),
                 .product(name: "SupraStore", package: "SupraStore"),
                 .product(name: "SupraRuntimeInterface", package: "SupraRuntimeInterface"),
-                .product(name: "SupraRuntimeClient", package: "SupraRuntimeClient")
+                .product(name: "SupraRuntimeClient", package: "SupraRuntimeClient"),
+                .product(name: "SupraDiagnostics", package: "SupraDiagnostics")
             ]
         )
     ]

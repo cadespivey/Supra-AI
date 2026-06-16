@@ -6,7 +6,7 @@ import SupraCore
 import SupraRuntimeInterface
 
 protocol ChatModelController: Sendable {
-    func loadModel(path: String) async throws -> RuntimeMetrics
+    func loadModel(bookmark: Data?, path: String) async throws -> RuntimeMetrics
 
     func generate(
         prompt: String,
@@ -39,18 +39,42 @@ actor MLXModelController: ChatModelController {
     private var loadedPath: String?
     private var cancellationRequested = false
 
-    func loadModel(path: String) async throws -> RuntimeMetrics {
+    func loadModel(bookmark: Data?, path: String) async throws -> RuntimeMetrics {
+        let startedAt = Date()
+
+        // Resolve a plain bookmark sent by the app to gain read access to the
+        // model directory while staying sandboxed. The security scope must stay
+        // open for the ENTIRE load — the multi-gigabyte weight shards are read
+        // during `loadModelContainer`, so `stopAccessing` runs only on return.
+        let resolvedURL: URL
+        var scopedURL: URL?
+        if let bookmark {
+            var isStale = false
+            let url = try URL(
+                resolvingBookmarkData: bookmark,
+                options: [],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            guard url.startAccessingSecurityScopedResource() else {
+                throw MLXModelControllerError.modelDirectoryMissing(path)
+            }
+            scopedURL = url
+            resolvedURL = url
+        } else {
+            resolvedURL = URL(fileURLWithPath: path, isDirectory: true)
+        }
+        defer { scopedURL?.stopAccessingSecurityScopedResource() }
+
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw MLXModelControllerError.modelDirectoryMissing(path)
+        guard FileManager.default.fileExists(atPath: resolvedURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw MLXModelControllerError.modelDirectoryMissing(resolvedURL.path)
         }
 
-        let startedAt = Date()
-        let modelURL = URL(fileURLWithPath: path, isDirectory: true)
-        let loadedContainer = try await MLXLMTokenizers.loadModelContainer(from: modelURL)
+        let loadedContainer = try await MLXLMTokenizers.loadModelContainer(from: resolvedURL)
 
         container = loadedContainer
-        loadedPath = path
+        loadedPath = resolvedURL.path
         cancellationRequested = false
 
         return RuntimeMetrics(loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000))

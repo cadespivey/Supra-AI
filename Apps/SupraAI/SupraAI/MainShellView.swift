@@ -38,7 +38,7 @@ struct MainShellView: View {
         case .matters:
             ContentUnavailableView("Matters", systemImage: "folder.badge.gearshape")
         case .models:
-            ModelsView(library: environment.modelLibrary)
+            ModelsView(library: environment.modelLibrary, validation: environment.validationController)
         case .tasks:
             ContentUnavailableView("Tasks", systemImage: "checklist")
         case .diagnostics:

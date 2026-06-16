@@ -1,0 +1,139 @@
+{
+  "id": "milestone1-practical-legal-client-suite",
+  "version": 1,
+  "name": "Milestone 1 Practical Legal-Client Suite",
+  "description": "A fixed validation suite for proving 32B-class local MLX runtime readiness.",
+  "pass_policy": "core_pass",
+  "tests": [
+    {
+      "id": "basic_response",
+      "name": "Basic response",
+      "prompt": "Respond in one sentence: \"Supra AI runtime is working.\"",
+      "expected_behavior": "Model produces a coherent one-sentence response; streaming begins and completes.",
+      "mechanical_checks": [
+        "generation_started",
+        "streaming_started",
+        "nonempty_output",
+        "completed_without_crash"
+      ],
+      "rule_checks": [
+        {
+          "type": "rough_sentence_limit",
+          "max_sentences": 2,
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "id": "instruction_following",
+      "name": "Instruction following",
+      "prompt": "Return exactly three bullet points explaining what a local-first legal AI app should prioritize. Do not include an introduction.",
+      "expected_behavior": "Exactly three bullets, no introduction, responsive content.",
+      "mechanical_checks": [
+        "generation_started",
+        "streaming_started",
+        "nonempty_output",
+        "completed_without_crash"
+      ],
+      "rule_checks": [
+        {
+          "type": "exact_bullet_count",
+          "count": 3,
+          "severity": "warning"
+        },
+        {
+          "type": "no_intro_before_first_bullet",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "id": "short_legal_reasoning",
+      "name": "Short legal reasoning",
+      "prompt": "In five sentences or fewer, explain why a legal drafting tool should distinguish between controlling authority, persuasive authority, and unsupported assumptions.",
+      "expected_behavior": "Coherent legal reasoning; distinguishes controlling authority, persuasive authority, and assumptions; no invented citations required.",
+      "mechanical_checks": [
+        "generation_started",
+        "streaming_started",
+        "nonempty_output",
+        "completed_without_crash"
+      ],
+      "rule_checks": [
+        {
+          "type": "rough_sentence_limit",
+          "max_sentences": 6,
+          "severity": "warning"
+        },
+        {
+          "type": "contains_terms",
+          "terms": ["controlling", "persuasive", "assumption"],
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "id": "source_grounded_formatting",
+      "name": "Source-grounded formatting",
+      "prompt": "Using only the following source text, answer the question below. If the source does not support an answer, say so.\n\nSource:\n\"The agreement requires written notice before termination. The agreement does not mention arbitration.\"\n\nQuestion:\nDoes the agreement require arbitration?",
+      "expected_behavior": "Answer says the source does not support an arbitration requirement and does not invent additional facts.",
+      "mechanical_checks": [
+        "generation_started",
+        "streaming_started",
+        "nonempty_output",
+        "completed_without_crash"
+      ],
+      "rule_checks": [
+        {
+          "type": "must_not_contain_unsupported_yes",
+          "severity": "failure"
+        },
+        {
+          "type": "contains_any",
+          "terms": ["does not support", "does not mention", "not require", "no"],
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "id": "drafting_style",
+      "name": "Drafting-style test",
+      "prompt": "Draft a concise neutral research-memo \"Brief Answer\" section on this issue: whether a legal AI tool should flag unverified authorities before using them in a draft. Use placeholders instead of legal citations.",
+      "expected_behavior": "Neutral research-memo tone; concise Brief Answer format; uses placeholders rather than invented citations.",
+      "mechanical_checks": [
+        "generation_started",
+        "streaming_started",
+        "nonempty_output",
+        "completed_without_crash"
+      ],
+      "rule_checks": [
+        {
+          "type": "contains_heading",
+          "text": "Brief Answer",
+          "severity": "warning"
+        },
+        {
+          "type": "contains_placeholder",
+          "severity": "warning"
+        },
+        {
+          "type": "no_case_citation_pattern",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "id": "cancellation",
+      "name": "Cancellation test",
+      "prompt": "Write a detailed ten-paragraph explanation of local RAG for legal documents.",
+      "expected_behavior": "Generation starts; cancellation request stops generation; partial output is preserved and marked incomplete.",
+      "mechanical_checks": [
+        "generation_started",
+        "streaming_started",
+        "cancel_request_sent",
+        "generation_cancelled",
+        "partial_output_preserved"
+      ],
+      "rule_checks": []
+    }
+  ]
+}
