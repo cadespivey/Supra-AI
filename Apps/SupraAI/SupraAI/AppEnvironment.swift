@@ -1,6 +1,10 @@
 import Combine
+import Foundation
 import SupraCore
+import SupraRuntimeClient
 import SupraRuntimeInterface
+import SupraSessions
+import SupraStore
 
 @MainActor
 final class AppEnvironment: ObservableObject {
@@ -9,10 +13,19 @@ final class AppEnvironment: ObservableObject {
     @Published var runtimeStatusMessage = "Checking runtime"
     @Published var activeModelName: String?
 
+    let store: SupraStore
+    let modelLibrary: ModelLibrary
+    let chatController: GlobalChatController
+
     private let runtimeStatusController: RuntimeStatusController
 
-    init(runtimeStatusController: RuntimeStatusController = RuntimeStatusController()) {
-        self.runtimeStatusController = runtimeStatusController
+    init() {
+        let runtimeClient = RuntimeClient()
+        let store = AppEnvironment.makeStore()
+        self.store = store
+        self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
+        self.modelLibrary = ModelLibrary(store: store, runtimeClient: runtimeClient)
+        self.chatController = GlobalChatController(store: store, runtimeClient: runtimeClient)
     }
 
     var statusBadgeTitle: String {
@@ -28,11 +41,34 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
+    /// Loads persisted state and refreshes runtime status on launch.
+    func bootstrap() async {
+        modelLibrary.refresh()
+        chatController.loadChats()
+        await refreshRuntimeStatus()
+    }
+
     func refreshRuntimeStatus() async {
         await runtimeStatusController.refresh()
         runtimeReadinessState = runtimeStatusController.readinessState
         runtimeServiceState = runtimeStatusController.serviceState
         runtimeStatusMessage = runtimeStatusController.statusMessage
-        activeModelName = runtimeStatusController.loadedModelID?.rawValue.uuidString
+        activeModelName = modelLibrary.activeModel?.displayName
+    }
+
+    /// Opens the on-disk store, falling back to a temporary store so the app
+    /// still launches if the Application Support database cannot be created.
+    private static func makeStore() -> SupraStore {
+        if let store = try? SupraStore.openAppSupportStore() {
+            return store
+        }
+        let fallbackURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SupraAI-fallback.sqlite")
+        // The temporary store is a last resort; if it also fails the app cannot persist anything.
+        return (try? SupraStore(url: fallbackURL)) ?? unavailableStore()
+    }
+
+    private static func unavailableStore() -> SupraStore {
+        fatalError("Unable to open any Supra AI store.")
     }
 }

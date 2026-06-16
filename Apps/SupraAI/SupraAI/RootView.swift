@@ -6,7 +6,7 @@ struct RootView: View {
     var body: some View {
         MainShellView()
             .task {
-                await environment.refreshRuntimeStatus()
+                await environment.bootstrap()
             }
     }
 }
