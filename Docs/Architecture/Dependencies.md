@@ -53,13 +53,14 @@ Runtime API instability may affect model loading and inference.
 ## MLX Swift LM
 
 Purpose:
-Used by SupraRuntimeService for language model loading, tokenizer handling, and generation.
+Used by SupraRuntimeService for MLX language model implementations and generation.
 
 Used by:
 - SupraRuntimeService.xpc
 
-SPM product:
+SPM products:
 - `MLXLLM`
+- `MLXLMCommon`
 
 Pinned version/revision:
 - `3.31.3`
@@ -67,6 +68,24 @@ Pinned version/revision:
 
 Update risk:
 Model-loading/generation APIs may change.
+
+## MLX LM Tokenizers
+
+Purpose:
+Used by SupraRuntimeService to load local MLX model directories with tokenizer support. MLX Swift LM 3.x keeps tokenizer integrations outside the core package, so this bridge provides the local tokenizer loader used by `MLXModelController`.
+
+Used by:
+- SupraRuntimeService.xpc
+
+SPM product:
+- `MLXLMTokenizers`
+
+Pinned version/revision:
+- `0.3.0`
+- `6fb48051a8b7e36707725d3ef2f876d6ed860250`
+
+Update risk:
+Tokenizer-loading or chat-template behavior changes may affect prompt formatting and local model compatibility.
 
 ## Transitive Dependencies
 
@@ -89,3 +108,15 @@ Used by:
 Pinned version/revision:
 - `600.0.1`
 - `0687f71944021d616d34d922343dcef086855920`
+
+### swift-tokenizers
+
+Used by:
+- MLX LM Tokenizers
+
+Pinned version/revision:
+- `0.5.0`
+- `9cb02e836c1d8782a36ea02e7c437697ceff2ab8`
+
+Pinning note:
+This package is held at `0.5.0` by an exact workspace constraint because `swift-tokenizers-mlx` 0.3.0 does not yet compile against the throwing encode/decode APIs introduced by later `swift-tokenizers` releases.

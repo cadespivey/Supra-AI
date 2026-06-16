@@ -6,17 +6,17 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
     private struct ActiveGeneration {
         let request: GenerateRequest
         let eventSink: any GenerationEventSinkProtocol
-        var metricsCollector = RuntimeMetricsCollector()
-        var scheduledWorkItems: [DispatchWorkItem] = []
+        var task: Task<Void, Never>?
     }
 
     private let lock = NSLock()
-    private let queue = DispatchQueue(label: "ai.supra.runtime.generation", qos: .userInitiated)
     private let eventBuffer: GenerationEventBuffer
+    private let modelController: any ChatModelController
     private var activeGeneration: ActiveGeneration?
 
-    init(eventBuffer: GenerationEventBuffer) {
+    init(eventBuffer: GenerationEventBuffer, modelController: any ChatModelController) {
         self.eventBuffer = eventBuffer
+        self.modelController = modelController
     }
 
     func startGeneration(
@@ -42,7 +42,7 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
 
         reply(GenerateStartResponse(status: .started, generationID: request.generationID))
         deliver(type: .generationStarted, generationID: request.generationID, eventSink: eventSink)
-        schedulePlaceholderGeneration(for: request)
+        startModelGenerationTask(for: request)
     }
 
     func cancelGeneration(_ generationID: GenerationID) -> CancelGenerationResponse {
@@ -52,12 +52,17 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
             return CancelGenerationResponse(status: .notFound, generationID: generationID)
         }
 
-        activeGeneration.scheduledWorkItems.forEach { $0.cancel() }
-        let metrics = activeGeneration.metricsCollector.cancellationMetrics()
+        let task = activeGeneration.task
         let eventSink = activeGeneration.eventSink
         self.activeGeneration = nil
         lock.unlock()
 
+        task?.cancel()
+        Task { [modelController] in
+            await modelController.cancel()
+        }
+
+        let metrics = RuntimeMetrics(cancellationLatencyMs: 0)
         deliver(
             type: .generationCancelled,
             generationID: generationID,
@@ -75,74 +80,107 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         return activeGeneration?.request.generationID
     }
 
-    private func schedulePlaceholderGeneration(for request: GenerateRequest) {
-        let tokens = placeholderTokens(for: request)
+    private func startModelGenerationTask(for request: GenerateRequest) {
+        let task = Task { [weak self, modelController] in
+            guard let coordinator = self else {
+                return
+            }
 
-        for (index, token) in tokens.enumerated() {
-            let delay = DispatchTimeInterval.milliseconds(35 * (index + 1))
-            let workItem = DispatchWorkItem { [weak self] in
-                self?.emitToken(token, generationID: request.generationID)
+            do {
+                let metrics = try await modelController.generate(
+                    prompt: request.prompt,
+                    systemPrompt: request.systemPrompt,
+                    options: request.options
+                ) { token in
+                    coordinator.emitToken(token, generationID: request.generationID)
+                }
+                coordinator.completeGeneration(generationID: request.generationID, metrics: metrics)
+            } catch is CancellationError {
+                coordinator.completeCancelledGeneration(generationID: request.generationID)
+            } catch {
+                coordinator.failGeneration(generationID: request.generationID, error: error)
             }
-            guard appendWorkItem(workItem, generationID: request.generationID) else {
-                workItem.cancel()
-                continue
-            }
-            queue.asyncAfter(deadline: .now() + delay, execute: workItem)
         }
 
-        let completionDelay = DispatchTimeInterval.milliseconds(35 * (tokens.count + 1))
-        let completionWorkItem = DispatchWorkItem { [weak self] in
-            self?.completeGeneration(generationID: request.generationID)
-        }
-        guard appendWorkItem(completionWorkItem, generationID: request.generationID) else {
-            completionWorkItem.cancel()
+        lock.lock()
+        guard var activeGeneration, activeGeneration.request.generationID == request.generationID else {
+            lock.unlock()
+            task.cancel()
             return
         }
-        queue.asyncAfter(deadline: .now() + completionDelay, execute: completionWorkItem)
-    }
 
-    private func appendWorkItem(_ workItem: DispatchWorkItem, generationID: GenerationID) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-
-        guard var activeGeneration, activeGeneration.request.generationID == generationID else {
-            return false
-        }
-
-        activeGeneration.scheduledWorkItems.append(workItem)
+        activeGeneration.task = task
         self.activeGeneration = activeGeneration
-        return true
+        lock.unlock()
     }
 
     private func emitToken(_ token: String, generationID: GenerationID) {
-        lock.lock()
-        guard var activeGeneration, activeGeneration.request.generationID == generationID else {
-            lock.unlock()
-            return
-        }
-
-        activeGeneration.metricsCollector.recordToken()
-        let eventSink = activeGeneration.eventSink
-        self.activeGeneration = activeGeneration
-        lock.unlock()
-
-        deliver(type: .token, generationID: generationID, tokenText: token, eventSink: eventSink)
-    }
-
-    private func completeGeneration(generationID: GenerationID) {
         lock.lock()
         guard let activeGeneration, activeGeneration.request.generationID == generationID else {
             lock.unlock()
             return
         }
 
-        let metrics = activeGeneration.metricsCollector.completionMetrics()
+        let eventSink = activeGeneration.eventSink
+        lock.unlock()
+
+        deliver(type: .token, generationID: generationID, tokenText: token, eventSink: eventSink)
+    }
+
+    private func completeGeneration(generationID: GenerationID, metrics: RuntimeMetrics) {
+        lock.lock()
+        guard let activeGeneration, activeGeneration.request.generationID == generationID else {
+            lock.unlock()
+            return
+        }
+
         let eventSink = activeGeneration.eventSink
         self.activeGeneration = nil
         lock.unlock()
 
         deliver(type: .metrics, generationID: generationID, metrics: metrics, eventSink: eventSink)
         deliver(type: .generationCompleted, generationID: generationID, metrics: metrics, eventSink: eventSink)
+    }
+
+    private func completeCancelledGeneration(generationID: GenerationID) {
+        lock.lock()
+        guard let activeGeneration, activeGeneration.request.generationID == generationID else {
+            lock.unlock()
+            return
+        }
+
+        let eventSink = activeGeneration.eventSink
+        self.activeGeneration = nil
+        lock.unlock()
+
+        let metrics = RuntimeMetrics(cancellationLatencyMs: 0)
+        deliver(
+            type: .generationCancelled,
+            generationID: generationID,
+            message: "Generation cancelled.",
+            metrics: metrics,
+            eventSink: eventSink
+        )
+    }
+
+    private func failGeneration(generationID: GenerationID, error: Error) {
+        lock.lock()
+        guard let activeGeneration, activeGeneration.request.generationID == generationID else {
+            lock.unlock()
+            return
+        }
+
+        let eventSink = activeGeneration.eventSink
+        self.activeGeneration = nil
+        lock.unlock()
+
+        deliver(
+            type: .generationFailed,
+            generationID: generationID,
+            message: "Generation failed.",
+            error: RuntimeErrorMapper.generationFailed(error),
+            eventSink: eventSink
+        )
     }
 
     private func deliver(
@@ -164,20 +202,4 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         )
         eventSink.receive(event) {}
     }
-
-    private func placeholderTokens(for request: GenerateRequest) -> [String] {
-        let response: String
-        if request.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            response = "Supra AI runtime is working."
-        } else {
-            response = "Supra AI runtime is working. This placeholder response is streaming through the XPC service."
-        }
-
-        var tokens = response.split(separator: " ").map { String($0) + " " }
-        if let last = tokens.indices.last {
-            tokens[last] = tokens[last].trimmingCharacters(in: .whitespaces)
-        }
-        return tokens
-    }
 }
-

@@ -2,10 +2,14 @@ import Foundation
 import SupraCore
 import SupraRuntimeInterface
 
-final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol {
+final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @unchecked Sendable {
     private let stateLock = NSLock()
     private let eventBuffer = GenerationEventBuffer()
-    private lazy var generationCoordinator = RuntimeGenerationCoordinator(eventBuffer: eventBuffer)
+    private let modelController: any ChatModelController = MLXModelController()
+    private lazy var generationCoordinator = RuntimeGenerationCoordinator(
+        eventBuffer: eventBuffer,
+        modelController: modelController
+    )
 
     private var loadedModelID: ModelID?
     private var currentModelRequest: LoadModelRequest?
@@ -25,18 +29,22 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol {
             return
         }
 
-        stateLock.lock()
-        loadedModelID = request.modelID
-        currentModelRequest = request
-        stateLock.unlock()
-
-        reply(
-            LoadModelResponse(
-                status: .loaded,
-                modelID: request.modelID,
-                metrics: RuntimeMetrics(loadTimeMs: 0)
-            )
-        )
+        let reply = RuntimeReply(reply)
+        Task { [weak self, modelController, reply] in
+            do {
+                let metrics = try await modelController.loadModel(path: request.modelPath)
+                self?.setLoadedModel(request)
+                reply(LoadModelResponse(status: .loaded, modelID: request.modelID, metrics: metrics))
+            } catch {
+                reply(
+                    LoadModelResponse(
+                        status: .failed,
+                        modelID: request.modelID,
+                        error: RuntimeErrorMapper.modelLoadFailed(error)
+                    )
+                )
+            }
+        }
     }
 
     func generate(
@@ -94,6 +102,10 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol {
         currentModelRequest = nil
         stateLock.unlock()
 
+        Task { [modelController] in
+            try? await modelController.unload()
+        }
+
         reply(UnloadModelResponse(status: .unloaded))
     }
 
@@ -139,6 +151,25 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol {
                 metrics: nil
             )
         )
+    }
+
+    private func setLoadedModel(_ request: LoadModelRequest) {
+        stateLock.lock()
+        loadedModelID = request.modelID
+        currentModelRequest = request
+        stateLock.unlock()
+    }
+}
+
+private struct RuntimeReply<Response: Sendable>: @unchecked Sendable {
+    private let reply: (Response) -> Void
+
+    init(_ reply: @escaping (Response) -> Void) {
+        self.reply = reply
+    }
+
+    func callAsFunction(_ response: Response) {
+        reply(response)
     }
 }
 

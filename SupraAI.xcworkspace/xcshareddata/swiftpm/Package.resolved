@@ -1,5 +1,5 @@
 {
-  "originHash" : "778571eee800490e4b2ade99d14e0f3b9ea3bf1321ba04f8ce4c1d9b1f0708a1",
+  "originHash" : "cebad221a52f7df2f7d34534a76db019e8e17c49b3a76537addac11c5bc10359",
   "pins" : [
     {
       "identity" : "grdb.swift",
@@ -44,6 +44,24 @@
       "state" : {
         "revision" : "0687f71944021d616d34d922343dcef086855920",
         "version" : "600.0.1"
+      }
+    },
+    {
+      "identity" : "swift-tokenizers",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/DePasqualeOrg/swift-tokenizers.git",
+      "state" : {
+        "revision" : "9cb02e836c1d8782a36ea02e7c437697ceff2ab8",
+        "version" : "0.5.0"
+      }
+    },
+    {
+      "identity" : "swift-tokenizers-mlx",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/DePasqualeOrg/swift-tokenizers-mlx.git",
+      "state" : {
+        "revision" : "6fb48051a8b7e36707725d3ef2f876d6ed860250",
+        "version" : "0.3.0"
       }
     }
   ],
