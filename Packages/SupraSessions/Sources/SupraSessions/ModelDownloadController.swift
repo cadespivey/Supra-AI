@@ -73,6 +73,15 @@ public final class ModelDownloadController: ObservableObject {
         do {
             let files = try await fetcher.listModelFiles(repoID: repoID)
 
+            // Reject incompatible architectures up front, before downloading
+            // gigabytes of weights for a model the runtime can't load. Best-effort:
+            // a failed config probe must not abort an otherwise-valid download.
+            if let configJSON = try? await fetcher.fetchConfigJSON(repoID: repoID),
+               let reason = ModelCompatibility.unsupportedReason(configJSON: configJSON) {
+                state = .failed(message: reason)
+                return
+            }
+
             for (index, file) in files.enumerated() {
                 try Task.checkCancellation()
                 state = .downloading(
