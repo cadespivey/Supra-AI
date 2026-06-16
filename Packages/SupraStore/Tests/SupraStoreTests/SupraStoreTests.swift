@@ -30,6 +30,25 @@ final class SupraStoreTests: XCTestCase {
         XCTAssertTrue(tableNames.contains("model_validation_runs"))
         XCTAssertTrue(tableNames.contains("model_validation_tests"))
         XCTAssertTrue(tableNames.contains("exported_reports"))
+        XCTAssertTrue(tableNames.contains("matters"))
+    }
+
+    func testMatterChatsAreScopedSeparatelyFromGlobalChats() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+
+        _ = try store.chats.createGlobalChat(title: "Global")
+        let matterChat = try store.chats.createMatterChat(matterID: matter.id, title: "Issue 1")
+
+        let globalChats = try store.chats.fetchGlobalChats()
+        let matterChats = try store.chats.fetchMatterChats(matterID: matter.id)
+
+        XCTAssertEqual(globalChats.count, 1)
+        XCTAssertEqual(globalChats.first?.title, "Global")
+        XCTAssertEqual(matterChats.count, 1)
+        XCTAssertEqual(matterChats.first?.id, matterChat.id)
+        XCTAssertEqual(matterChats.first?.matterID, matter.id)
+        XCTAssertEqual(try store.matters.fetchMatters().count, 1)
     }
 
     func testSettingsRoundTripCodableValues() throws {

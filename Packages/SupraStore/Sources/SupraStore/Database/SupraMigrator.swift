@@ -200,6 +200,21 @@ public enum SupraMigrator {
             try db.create(index: "idx_exported_reports_validation_run_id", on: "exported_reports", columns: ["validation_run_id"], ifNotExists: true)
         }
 
+        migrator.registerMigration("v012_create_matters") { db in
+            try db.create(table: "matters", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("name", .text).notNull()
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+                table.column("deleted_at", .datetime)
+            }
+            try db.alter(table: "chats") { table in
+                table.add(column: "matter_id", .text)
+                    .references("matters", onDelete: .cascade)
+            }
+            try db.create(index: "idx_chats_matter_id", on: "chats", columns: ["matter_id"], ifNotExists: true)
+        }
+
         return migrator
     }
 
@@ -214,6 +229,7 @@ public enum SupraMigrator {
             "generation_sessions",
             "messages",
             "chats",
+            "matters",
             "runtime_profiles",
             "models",
             "app_settings",
