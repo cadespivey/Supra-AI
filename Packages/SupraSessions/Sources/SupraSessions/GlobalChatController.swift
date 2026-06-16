@@ -21,11 +21,17 @@ public final class GlobalChatController: ObservableObject {
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
+    private let defaultSystemPrompt: String?
     private var activeGenerationID: GenerationID?
 
-    public init(store: SupraStore, runtimeClient: any RuntimeClientProtocol) {
+    public init(
+        store: SupraStore,
+        runtimeClient: any RuntimeClientProtocol,
+        defaultSystemPrompt: String? = nil
+    ) {
         self.store = store
         self.runtimeClient = runtimeClient
+        self.defaultSystemPrompt = defaultSystemPrompt
     }
 
     // MARK: - Chat list
@@ -75,11 +81,12 @@ public final class GlobalChatController: ObservableObject {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isGenerating else { return }
 
+        let effectiveSystemPrompt = systemPrompt ?? defaultSystemPrompt
         Task {
             await self.performSend(
                 prompt: trimmed,
                 modelID: modelID,
-                systemPrompt: systemPrompt,
+                systemPrompt: effectiveSystemPrompt,
                 options: options
             )
         }

@@ -42,14 +42,7 @@ struct MainShellView: View {
         case .tasks:
             ContentUnavailableView("Tasks", systemImage: "checklist")
         case .diagnostics:
-            VStack(alignment: .leading, spacing: 12) {
-                Label(environment.runtimeServiceState.rawValue, systemImage: "waveform.path.ecg")
-                    .font(.title3)
-                Text(environment.runtimeStatusMessage)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            DiagnosticsView(history: environment.validationHistory, validation: environment.validationController)
         case .settings:
             ContentUnavailableView("Settings", systemImage: "gearshape")
         }

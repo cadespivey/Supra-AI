@@ -19,9 +19,16 @@ public final class ValidationRunController: ObservableObject {
     @Published public private(set) var state: State = .idle
 
     private let runner: ValidationRunner
+    private let systemPrompt: String?
 
-    public init(store: SupraStore, runtimeClient: any RuntimeClientProtocol, appVersion: AppVersion = .unknown) {
+    public init(
+        store: SupraStore,
+        runtimeClient: any RuntimeClientProtocol,
+        appVersion: AppVersion = .unknown,
+        systemPrompt: String? = nil
+    ) {
         self.runner = ValidationRunner(runtimeClient: runtimeClient, store: store, appVersion: appVersion)
+        self.systemPrompt = systemPrompt
     }
 
     public var isRunning: Bool {
@@ -46,7 +53,8 @@ public final class ValidationRunController: ObservableObject {
                     suite: suite,
                     modelID: modelID,
                     modelName: modelName,
-                    modelPath: modelPath
+                    modelPath: modelPath,
+                    systemPrompt: systemPrompt
                 )
                 state = .finished(result)
             } catch {

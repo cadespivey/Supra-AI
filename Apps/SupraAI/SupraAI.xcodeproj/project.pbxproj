@@ -40,6 +40,7 @@
 		5A000000000000000000001F /* GlobalChatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000112 /* GlobalChatsView.swift */; };
 		5A0000000000000000000020 /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000113 /* ModelsView.swift */; };
 		5A0000000000000000000021 /* SupraSessions in Frameworks */ = {isa = PBXBuildFile; productRef = 5A000000000000000000040F /* SupraSessions */; };
+		5A0000000000000000000022 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000114 /* DiagnosticsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -88,6 +89,7 @@
 		5A0000000000000000000202 /* SupraRuntimeService.xpc */ = {isa = PBXFileReference; explicitFileType = wrapper.xpc-service; includeInIndex = 0; path = SupraRuntimeService.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A0000000000000000000112 /* GlobalChatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalChatsView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000113 /* ModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsView.swift; sourceTree = "<group>"; };
+		5A0000000000000000000114 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -142,6 +144,7 @@
 				5A0000000000000000000105 /* SidebarView.swift */,
 				5A0000000000000000000112 /* GlobalChatsView.swift */,
 				5A0000000000000000000113 /* ModelsView.swift */,
+				5A0000000000000000000114 /* DiagnosticsView.swift */,
 				5A0000000000000000000903 /* Navigation */,
 				5A0000000000000000000904 /* Status */,
 				5A000000000000000000010B /* SupraAI.entitlements */,
@@ -330,6 +333,7 @@
 				5A0000000000000000000007 /* RuntimeStatusController.swift in Sources */,
 				5A000000000000000000001F /* GlobalChatsView.swift in Sources */,
 				5A0000000000000000000020 /* ModelsView.swift in Sources */,
+				5A0000000000000000000022 /* DiagnosticsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

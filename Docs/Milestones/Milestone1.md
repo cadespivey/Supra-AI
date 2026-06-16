@@ -25,13 +25,14 @@ Initial repository skeleton for the local 32B MLX runtime vertical slice.
 - The app shell now has a Models tab (folder selection via `NSOpenPanel` with a security-scoped bookmark, load-state feedback) and a Global Chats tab (chat selector, streaming transcript, send/stop composer) wired to the shared runtime client and on-disk store.
 - Cross-process model-file access implemented: `LoadModelRequest` carries a plain transferable bookmark (`modelBookmark`); the app mints it while holding its own security scope (`SecurityScopedModelAccess`) and the sandboxed service resolves it + holds the scope across the full load. Falls back to the raw path when no bookmark is present. Design + on-device verification steps recorded in `Docs/Architecture/RuntimeFileAccess.md`.
 - SupraSessions gained `ValidationRunner` (runs a `ValidationSuite` through the runtime, gathers mechanical signals, evaluates with SupraDiagnostics, persists the run/tests, renders Markdown/JSON), the bundled Milestone 1 suite resource + loader, and a `ValidationRunController` surfaced as a "Run Suite" action on the Models tab. Covered by passing/partial/failed runner tests.
+- The bundled `default-system-prompt-v1` is now wired into generation: `DefaultSystemPrompt` loads it and `GlobalChatController`/`ValidationRunController` send it with every chat and validation generation.
+- Diagnostics now shows validation history: `ValidationHistoryController` reads persisted runs/tests and `DiagnosticsView` lists each run with expandable per-test results.
 
 ## Known Limitations
 
 - The plain-bookmark cross-process access compiles but its sandbox behavior cannot be exercised in CI — it needs the on-device verification in `Docs/Architecture/RuntimeFileAccess.md`, with the unsandboxed-service fallback if it fails on the target OS.
 - Chat persistence runs on the main actor (one fetch per streamed token); fine for the vertical slice, a candidate for moving off-main later.
-- The chat flow does not yet send a system prompt (the bundled `default-system-prompt-v1` is not wired into generation).
 
 ## Next Engineering Slice
 
-Verify the model-load path on device with a real 32B MLX model, then run the bundled validation suite end-to-end against it and render the first real report. Wire the default system prompt into generation, and surface validation history in Diagnostics.
+On device with a real 32B MLX model: verify the model-load path (per `Docs/Architecture/RuntimeFileAccess.md`), run the bundled suite end-to-end, and capture the first real validation report. This is the manual step that closes the Milestone 1 vertical slice.
