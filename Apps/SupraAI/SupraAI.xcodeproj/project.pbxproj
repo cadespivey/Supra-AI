@@ -37,6 +37,9 @@
 		5A0000000000000000000017 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 5A000000000000000000040C /* MLXLLM */; };
 		5A000000000000000000001D /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 5A000000000000000000040D /* MLXLMCommon */; };
 		5A000000000000000000001E /* MLXLMTokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 5A000000000000000000040E /* MLXLMTokenizers */; };
+		5A000000000000000000001F /* GlobalChatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000112 /* GlobalChatsView.swift */; };
+		5A0000000000000000000020 /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000113 /* ModelsView.swift */; };
+		5A0000000000000000000021 /* SupraSessions in Frameworks */ = {isa = PBXBuildFile; productRef = 5A000000000000000000040F /* SupraSessions */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -83,6 +86,8 @@
 		5A0000000000000000000111 /* RuntimeErrorMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeErrorMapper.swift; sourceTree = "<group>"; };
 		5A0000000000000000000201 /* SupraAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SupraAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A0000000000000000000202 /* SupraRuntimeService.xpc */ = {isa = PBXFileReference; explicitFileType = wrapper.xpc-service; includeInIndex = 0; path = SupraRuntimeService.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
+		5A0000000000000000000112 /* GlobalChatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalChatsView.swift; sourceTree = "<group>"; };
+		5A0000000000000000000113 /* ModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -97,6 +102,7 @@
 				5A0000000000000000000010 /* SupraDiagnostics in Frameworks */,
 				5A0000000000000000000011 /* SupraDesignSystem in Frameworks */,
 				5A0000000000000000000015 /* GRDB in Frameworks */,
+				5A0000000000000000000021 /* SupraSessions in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -134,6 +140,8 @@
 				5A0000000000000000000103 /* RootView.swift */,
 				5A0000000000000000000104 /* MainShellView.swift */,
 				5A0000000000000000000105 /* SidebarView.swift */,
+				5A0000000000000000000112 /* GlobalChatsView.swift */,
+				5A0000000000000000000113 /* ModelsView.swift */,
 				5A0000000000000000000903 /* Navigation */,
 				5A0000000000000000000904 /* Status */,
 				5A000000000000000000010B /* SupraAI.entitlements */,
@@ -208,6 +216,7 @@
 				5A0000000000000000000405 /* SupraDiagnostics */,
 				5A0000000000000000000406 /* SupraDesignSystem */,
 				5A000000000000000000040A /* GRDB */,
+				5A000000000000000000040F /* SupraSessions */,
 			);
 			productName = SupraAI;
 			productReference = 5A0000000000000000000201 /* SupraAI.app */;
@@ -273,6 +282,7 @@
 				5A0000000000000000000305 /* XCLocalSwiftPackageReference "../../Packages/SupraRuntimeClient" */,
 				5A0000000000000000000306 /* XCLocalSwiftPackageReference "../../Packages/SupraDiagnostics" */,
 				5A0000000000000000000307 /* XCLocalSwiftPackageReference "../../Packages/SupraDesignSystem" */,
+				5A000000000000000000030D /* XCLocalSwiftPackageReference "../../Packages/SupraSessions" */,
 				5A0000000000000000000308 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 				5A0000000000000000000309 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				5A000000000000000000030A /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
@@ -318,6 +328,8 @@
 				5A0000000000000000000005 /* SidebarView.swift in Sources */,
 				5A0000000000000000000006 /* AppRoute.swift in Sources */,
 				5A0000000000000000000007 /* RuntimeStatusController.swift in Sources */,
+				5A000000000000000000001F /* GlobalChatsView.swift in Sources */,
+				5A0000000000000000000020 /* ModelsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -597,6 +609,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../Packages/SupraDesignSystem;
 		};
+		5A000000000000000000030D /* XCLocalSwiftPackageReference "../../Packages/SupraSessions" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../Packages/SupraSessions;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -712,6 +728,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5A000000000000000000030B /* XCRemoteSwiftPackageReference "swift-tokenizers-mlx" */;
 			productName = MLXLMTokenizers;
+		};
+		5A000000000000000000040F /* SupraSessions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A000000000000000000030D /* XCLocalSwiftPackageReference "../../Packages/SupraSessions" */;
+			productName = SupraSessions;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -22,4 +22,7 @@
    <FileRef
       location = "group:Packages/SupraDesignSystem">
    </FileRef>
+   <FileRef
+      location = "group:Packages/SupraSessions">
+   </FileRef>
 </Workspace>
