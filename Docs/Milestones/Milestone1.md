@@ -18,8 +18,9 @@ Initial repository skeleton for the local 32B MLX runtime vertical slice.
 - SupraRuntimeInterface now includes a Codable-over-XPC bridge contract for the app/runtime service boundary.
 - SupraRuntimeClient now connects through the XPC bridge, exposes async runtime calls, streams generation events, and has fake-service tests.
 - The app shell now refreshes live runtime status through the client and exposes it in Diagnostics.
-- SupraRuntimeService now has the Phase 7 service files, a buffered event stream, single-active-generation enforcement, placeholder token streaming, metrics events, cancellation, and recent-event replay.
+- SupraRuntimeService now has the Phase 7 service files, a buffered event stream, single-active-generation enforcement, MLX-backed model loading/generation, metrics events, cancellation, and recent-event replay.
+- Swift Package Manager now pins `swift-tokenizers-mlx` so local MLX model directories can be loaded with tokenizer support.
 
 ## Next Engineering Slice
 
-Replace the placeholder generation script inside the service with the first MLX-backed `MLXModelController`, then add model-folder selection and the first persisted global chat flow.
+Add model-folder selection and the first persisted global chat flow on top of the MLX-backed runtime service.
