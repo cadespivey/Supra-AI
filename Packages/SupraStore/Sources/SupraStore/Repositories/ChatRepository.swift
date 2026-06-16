@@ -138,6 +138,10 @@ public final class ChatRepository: @unchecked Sendable {
         try updateVariantStatus(variantID, status: .interrupted, interruptionReason: reason)
     }
 
+    public func markVariantFailed(_ variantID: String, reason: String) throws {
+        try updateVariantStatus(variantID, status: .failed, interruptionReason: reason)
+    }
+
     public func softDeleteVariant(_ variantID: String) throws {
         try writer.write { db in
             let now = Date()
