@@ -1,0 +1,145 @@
+import Foundation
+import GRDB
+import SupraCore
+@testable import SupraStore
+import XCTest
+
+final class SupraStoreTests: XCTestCase {
+    func testMigrationsCreateAllTables() throws {
+        let store = try makeStore()
+
+        let tableNames = try store.database.writer.read { db in
+            try String.fetchAll(
+                db,
+                sql: """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                ORDER BY name
+                """
+            )
+        }
+
+        XCTAssertTrue(tableNames.contains("app_settings"))
+        XCTAssertTrue(tableNames.contains("models"))
+        XCTAssertTrue(tableNames.contains("runtime_profiles"))
+        XCTAssertTrue(tableNames.contains("chats"))
+        XCTAssertTrue(tableNames.contains("messages"))
+        XCTAssertTrue(tableNames.contains("generation_sessions"))
+        XCTAssertTrue(tableNames.contains("message_variants"))
+        XCTAssertTrue(tableNames.contains("diagnostic_events"))
+        XCTAssertTrue(tableNames.contains("model_validation_runs"))
+        XCTAssertTrue(tableNames.contains("model_validation_tests"))
+        XCTAssertTrue(tableNames.contains("exported_reports"))
+    }
+
+    func testSettingsRoundTripCodableValues() throws {
+        let store = try makeStore()
+
+        try store.appSettings.setSetting("generation.default", value: GenerationOptions(preset: .drafting))
+        let options = try store.appSettings.getSetting("generation.default", as: GenerationOptions.self)
+
+        XCTAssertEqual(options?.preset, .drafting)
+    }
+
+    func testModelActivationAndValidationStatus() throws {
+        let store = try makeStore()
+        let first = ModelRecord(id: "model-a", displayName: "A", path: "/tmp/a")
+        let second = ModelRecord(id: "model-b", displayName: "B", path: "/tmp/b")
+
+        try store.models.upsertModel(first)
+        try store.models.upsertModel(second)
+        try store.models.setActiveModel(id: second.id)
+        try store.models.updateValidationStatus(modelID: second.id, status: ValidationRunStatus.passed.rawValue, date: Date())
+
+        let models = try store.models.fetchModels()
+        XCTAssertEqual(models.first?.id, second.id)
+        XCTAssertEqual(try store.models.fetchModel(id: second.id)?.validationStatus, ValidationRunStatus.passed.rawValue)
+        XCTAssertEqual(try store.models.fetchModel(id: first.id)?.isActive, false)
+    }
+
+    func testChatVariantTokenPersistenceAndCancellation() throws {
+        let store = try makeStore()
+        let chat = try store.chats.createGlobalChat(title: "Global")
+        _ = try store.chats.appendUserMessage(chatID: chat.id, content: "Hello")
+        let assistant = try store.chats.createAssistantMessageShell(chatID: chat.id)
+        let variant = try store.chats.createVariant(messageID: assistant.id, generationSessionID: nil)
+
+        try store.chats.appendToken(to: variant.id, token: "Hel")
+        try store.chats.appendToken(to: variant.id, token: "lo")
+        try store.chats.markVariantCancelled(variant.id)
+
+        let variants = try store.chats.fetchVariants(messageID: assistant.id)
+        XCTAssertEqual(variants.single?.content, "Hello")
+        XCTAssertEqual(variants.single?.status, MessageStatus.cancelled.rawValue)
+
+        let messages = try store.chats.fetchMessages(chatID: chat.id)
+        let storedAssistant = try XCTUnwrap(messages.first { $0.id == assistant.id })
+        XCTAssertEqual(storedAssistant.content, "Hello")
+        XCTAssertEqual(storedAssistant.status, MessageStatus.cancelled.rawValue)
+    }
+
+    func testGenerationDiagnosticsValidationAndReportRepositories() throws {
+        let store = try makeStore()
+        let model = ModelRecord(id: "model", displayName: "Model", path: "/tmp/model")
+        try store.models.upsertModel(model)
+
+        let chat = try store.chats.createGlobalChat(title: "Global")
+        let assistant = try store.chats.createAssistantMessageShell(chatID: chat.id)
+        let generation = try store.generation.createGenerationSession(
+            chatID: chat.id,
+            messageID: assistant.id,
+            modelID: model.id,
+            prompt: "Draft",
+            options: GenerationOptions()
+        )
+        try store.generation.markFirstToken(generationID: generation.id)
+        try store.generation.completeGeneration(
+            generationID: generation.id,
+            metrics: StoredRuntimeMetrics(generatedTokenCount: 12)
+        )
+
+        let storedGeneration = try store.generation.fetchGenerationSession(generationID: generation.id)
+        XCTAssertEqual(storedGeneration?.status, MessageStatus.completed.rawValue)
+        XCTAssertEqual(storedGeneration?.generatedTokenCount, 12)
+
+        try store.diagnostics.recordDiagnosticEvent(
+            DiagnosticEventRecord(severity: "info", message: "Runtime ready")
+        )
+        XCTAssertEqual(try store.diagnostics.fetchRecentDiagnostics(limit: 10).count, 1)
+
+        let run = try store.validation.createValidationRun(
+            modelID: model.id,
+            suiteID: "suite",
+            suiteVersion: 1
+        )
+        _ = try store.validation.appendValidationTest(
+            runID: run.id,
+            testID: "basic",
+            name: "Basic",
+            status: .passed,
+            outputExcerpt: "ok"
+        )
+        try store.validation.completeValidationRun(runID: run.id, status: .passed)
+
+        XCTAssertEqual(try store.validation.fetchValidationRuns(modelID: model.id).single?.status, ValidationRunStatus.passed.rawValue)
+        XCTAssertEqual(try store.validation.fetchValidationTests(runID: run.id).single?.status, ValidationTestStatus.passed.rawValue)
+
+        try store.exportedReports.recordExportedReport(
+            ExportedReportRecord(validationRunID: run.id, format: "markdown", fileURL: "/tmp/report.md")
+        )
+        XCTAssertEqual(try store.exportedReports.fetchExportedReports(validationRunID: run.id).single?.format, "markdown")
+    }
+
+    private func makeStore() throws -> SupraStore {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SupraStoreTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
+    }
+}
+
+private extension Array {
+    var single: Element? {
+        count == 1 ? first : nil
+    }
+}

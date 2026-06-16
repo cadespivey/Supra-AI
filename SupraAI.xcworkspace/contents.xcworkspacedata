@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workspace
+   version = "1.0">
+   <FileRef
+      location = "group:Apps/SupraAI/SupraAI.xcodeproj">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/SupraCore">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/SupraStore">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/SupraRuntimeInterface">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/SupraRuntimeClient">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/SupraDiagnostics">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/SupraDesignSystem">
+   </FileRef>
+</Workspace>
