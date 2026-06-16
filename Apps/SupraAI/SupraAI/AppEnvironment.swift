@@ -20,6 +20,7 @@ final class AppEnvironment: ObservableObject {
     let validationHistory: ValidationHistoryController
     let modelDownloadController: ModelDownloadController
     let settingsController: SettingsController
+    let mattersController: MattersController
 
     private let runtimeStatusController: RuntimeStatusController
 
@@ -50,6 +51,11 @@ final class AppEnvironment: ObservableObject {
             fetcher: HuggingFaceClient()
         )
         self.settingsController = SettingsController(store: store, appVersion: appVersion)
+        self.mattersController = MattersController(
+            store: store,
+            runtimeClient: runtimeClient,
+            defaultSystemPrompt: systemPrompt
+        )
     }
 
     var statusBadgeTitle: String {

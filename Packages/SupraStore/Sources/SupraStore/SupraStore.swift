@@ -6,6 +6,7 @@ public final class SupraStore: @unchecked Sendable {
     public let appSettings: AppSettingsRepository
     public let models: ModelRepository
     public let chats: ChatRepository
+    public let matters: MattersRepository
     public let generation: GenerationRepository
     public let diagnostics: DiagnosticsRepository
     public let validation: ValidationRepository
@@ -16,6 +17,7 @@ public final class SupraStore: @unchecked Sendable {
         self.appSettings = AppSettingsRepository(writer: database.writer)
         self.models = ModelRepository(writer: database.writer)
         self.chats = ChatRepository(writer: database.writer)
+        self.matters = MattersRepository(writer: database.writer)
         self.generation = GenerationRepository(writer: database.writer)
         self.diagnostics = DiagnosticsRepository(writer: database.writer)
         self.validation = ValidationRepository(writer: database.writer)

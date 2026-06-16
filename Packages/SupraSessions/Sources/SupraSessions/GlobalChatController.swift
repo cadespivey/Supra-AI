@@ -22,23 +22,26 @@ public final class GlobalChatController: ObservableObject {
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
     private let defaultSystemPrompt: String?
+    private let scope: ChatScope
     private var activeGenerationID: GenerationID?
 
     public init(
         store: SupraStore,
         runtimeClient: any RuntimeClientProtocol,
-        defaultSystemPrompt: String? = nil
+        defaultSystemPrompt: String? = nil,
+        scope: ChatScope = .global
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.defaultSystemPrompt = defaultSystemPrompt
+        self.scope = scope
     }
 
     // MARK: - Chat list
 
-    /// Reloads global chats and, if nothing is selected yet, selects the most recent one.
+    /// Reloads the scope's chats and, if nothing is selected yet, selects the most recent one.
     public func loadChats() {
-        chats = (try? store.chats.fetchGlobalChats())?.map(ChatSummary.init) ?? []
+        chats = fetchScopedChats()
         if let selectedChatID, chats.contains(where: { $0.id == selectedChatID }) {
             reloadMessages()
         } else {
@@ -48,10 +51,32 @@ public final class GlobalChatController: ObservableObject {
 
     @discardableResult
     public func createChat(title: String = "New Chat") throws -> ChatSummary {
-        let record = try store.chats.createGlobalChat(title: title)
-        chats = (try? store.chats.fetchGlobalChats())?.map(ChatSummary.init) ?? chats
+        let record: ChatRecord
+        switch scope {
+        case .global:
+            record = try store.chats.createGlobalChat(title: title)
+        case let .matter(id):
+            record = try store.chats.createMatterChat(matterID: id, title: title)
+        }
+        let summary = ChatSummary(record: record)
+        chats = fetchScopedChats()
+        // Keep selection consistent even if the refetch failed to include the new row.
+        if !chats.contains(where: { $0.id == summary.id }) {
+            chats.insert(summary, at: 0)
+        }
         select(chatID: record.id)
-        return ChatSummary(record: record)
+        return summary
+    }
+
+    private func fetchScopedChats() -> [ChatSummary] {
+        let records: [ChatRecord]?
+        switch scope {
+        case .global:
+            records = try? store.chats.fetchGlobalChats()
+        case let .matter(id):
+            records = try? store.chats.fetchMatterChats(matterID: id)
+        }
+        return records?.map(ChatSummary.init) ?? []
     }
 
     public func select(chatID: String?) {
