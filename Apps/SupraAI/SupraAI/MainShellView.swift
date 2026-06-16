@@ -36,11 +36,7 @@ struct MainShellView: View {
         case .globalChats:
             GlobalChatsView(controller: environment.chatController, library: environment.modelLibrary)
         case .matters:
-            ContentUnavailableView(
-                "Matters",
-                systemImage: "folder.badge.gearshape",
-                description: Text("Matter folders that group chats are coming next.")
-            )
+            MattersView(controller: environment.mattersController, library: environment.modelLibrary)
         case .models:
             ModelsView(
                 library: environment.modelLibrary,

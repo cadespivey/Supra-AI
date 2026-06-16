@@ -1,30 +1,24 @@
 import Foundation
 import GRDB
 
-public struct ChatRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Identifiable {
-    public static let databaseTableName = "chats"
+public struct MatterRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Identifiable {
+    public static let databaseTableName = "matters"
 
     public var id: String
-    public var title: String
-    public var scope: String
-    public var matterID: String?
+    public var name: String
     public var createdAt: Date
     public var updatedAt: Date
     public var deletedAt: Date?
 
     public init(
         id: String = UUID().uuidString,
-        title: String,
-        scope: String = "global",
-        matterID: String? = nil,
+        name: String,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         deletedAt: Date? = nil
     ) {
         self.id = id
-        self.title = title
-        self.scope = scope
-        self.matterID = matterID
+        self.name = name
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.deletedAt = deletedAt
@@ -32,9 +26,7 @@ public struct ChatRecord: Codable, FetchableRecord, PersistableRecord, Sendable,
 
     private enum CodingKeys: String, CodingKey {
         case id
-        case title
-        case scope
-        case matterID = "matter_id"
+        case name
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case deletedAt = "deleted_at"
