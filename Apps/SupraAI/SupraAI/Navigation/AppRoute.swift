@@ -4,7 +4,6 @@ enum AppRoute: String, CaseIterable, Identifiable {
     case globalChats
     case matters
     case models
-    case tasks
     case diagnostics
     case settings
 
@@ -18,8 +17,6 @@ enum AppRoute: String, CaseIterable, Identifiable {
             "Matters"
         case .models:
             "Models"
-        case .tasks:
-            "Tasks"
         case .diagnostics:
             "Diagnostics"
         case .settings:
@@ -35,8 +32,6 @@ enum AppRoute: String, CaseIterable, Identifiable {
             "folder"
         case .models:
             "cpu"
-        case .tasks:
-            "checklist"
         case .diagnostics:
             "waveform.path.ecg"
         case .settings:

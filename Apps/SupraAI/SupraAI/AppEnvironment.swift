@@ -18,6 +18,8 @@ final class AppEnvironment: ObservableObject {
     let chatController: GlobalChatController
     let validationController: ValidationRunController
     let validationHistory: ValidationHistoryController
+    let modelDownloadController: ModelDownloadController
+    let settingsController: SettingsController
 
     private let runtimeStatusController: RuntimeStatusController
 
@@ -25,9 +27,11 @@ final class AppEnvironment: ObservableObject {
         let runtimeClient = RuntimeClient()
         let store = AppEnvironment.makeStore()
         let systemPrompt = DefaultSystemPrompt.milestone1()
+        let appVersion = AppEnvironment.currentAppVersion()
+        let modelLibrary = ModelLibrary(store: store, runtimeClient: runtimeClient)
         self.store = store
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
-        self.modelLibrary = ModelLibrary(store: store, runtimeClient: runtimeClient)
+        self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
             store: store,
             runtimeClient: runtimeClient,
@@ -36,10 +40,16 @@ final class AppEnvironment: ObservableObject {
         self.validationController = ValidationRunController(
             store: store,
             runtimeClient: runtimeClient,
-            appVersion: AppEnvironment.currentAppVersion(),
+            appVersion: appVersion,
             systemPrompt: systemPrompt
         )
         self.validationHistory = ValidationHistoryController(store: store)
+        self.modelDownloadController = ModelDownloadController(
+            store: store,
+            modelLibrary: modelLibrary,
+            fetcher: HuggingFaceClient()
+        )
+        self.settingsController = SettingsController(store: store, appVersion: appVersion)
     }
 
     var statusBadgeTitle: String {

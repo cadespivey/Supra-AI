@@ -76,20 +76,25 @@ public final class GlobalChatController: ObservableObject {
         prompt: String,
         modelID: ModelID,
         systemPrompt: String? = nil,
-        options: GenerationOptions = GenerationOptions()
+        options: GenerationOptions? = nil
     ) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isGenerating else { return }
 
         let effectiveSystemPrompt = systemPrompt ?? defaultSystemPrompt
+        let effectiveOptions = options ?? storedDefaultOptions()
         Task {
             await self.performSend(
                 prompt: trimmed,
                 modelID: modelID,
                 systemPrompt: effectiveSystemPrompt,
-                options: options
+                options: effectiveOptions
             )
         }
+    }
+
+    private func storedDefaultOptions() -> GenerationOptions {
+        (try? store.appSettings.getSetting(SettingsController.generationDefaultsKey, as: GenerationOptions.self)) ?? GenerationOptions()
     }
 
     /// Requests cancellation of the active generation. The runtime emits a

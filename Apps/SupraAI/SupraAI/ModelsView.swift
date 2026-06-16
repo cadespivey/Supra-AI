@@ -2,10 +2,13 @@ import AppKit
 import SupraSessions
 import SwiftUI
 
-/// Lets the user register a local MLX model folder and load it into the runtime.
+/// Lets the user download an MLX model from Hugging Face or register a local
+/// model folder, then load it into the runtime.
 struct ModelsView: View {
     @ObservedObject var library: ModelLibrary
     @ObservedObject var validation: ValidationRunController
+    @ObservedObject var downloader: ModelDownloadController
+    @State private var showDownloadSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -23,11 +26,24 @@ struct ModelsView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button(action: addModelFolder) {
-                    Label("Add Model Folder", systemImage: "plus")
+                Button {
+                    showDownloadSheet = true
+                } label: {
+                    Label("Download Model", systemImage: "arrow.down.circle")
                 }
-                .help("Choose a local MLX model folder")
+                .help("Download an MLX model from Hugging Face")
             }
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: addModelFolder) {
+                    Label("Add Local Folder", systemImage: "folder.badge.plus")
+                }
+                .help("Register an MLX model folder already on disk")
+            }
+        }
+        .sheet(isPresented: $showDownloadSheet) {
+            ModelDownloadSheet(downloader: downloader)
+                // Clear a finished/failed banner on close (no-op mid-download).
+                .onDisappear { downloader.dismissResult() }
         }
     }
 
@@ -35,9 +51,11 @@ struct ModelsView: View {
         ContentUnavailableView {
             Label("No Models", systemImage: "cpu")
         } description: {
-            Text("Add a local MLX model folder to load a 32B-class model into the runtime.")
+            Text("Download an MLX model from Hugging Face, or register a folder already on disk, to load a model into the runtime.")
         } actions: {
-            Button("Add Model Folder…", action: addModelFolder)
+            Button("Download a Model…") { showDownloadSheet = true }
+                .buttonStyle(.borderedProminent)
+            Button("Add Local Folder…", action: addModelFolder)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -149,12 +167,13 @@ struct ModelsView: View {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        // Persist a security-scoped bookmark so the app retains access across launches.
-        let bookmark = try? url.bookmarkData(
+        // A user-selected folder is only usable if we can persist a security-scoped
+        // bookmark for it; without one the sandboxed service could never read it.
+        guard let bookmark = try? url.bookmarkData(
             options: .withSecurityScope,
             includingResourceValuesForKeys: nil,
             relativeTo: nil
-        )
+        ) else { return }
 
         guard let summary = try? library.addModel(
             displayName: url.lastPathComponent,
@@ -198,5 +217,107 @@ private struct ModelRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// Guided Hugging Face download: a curated MLX list plus a custom repo-id field.
+private struct ModelDownloadSheet: View {
+    @ObservedObject var downloader: ModelDownloadController
+    @Environment(\.dismiss) private var dismiss
+    @State private var customRepoID = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Download a Model")
+                    .font(.title2.bold())
+                Spacer()
+                Button("Done") { dismiss() }
+            }
+
+            statusView
+
+            Divider()
+
+            Text("Curated · Hugging Face MLX 4-bit")
+                .font(.headline)
+            ForEach(ModelCatalog.curated) { model in
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(model.displayName)
+                        Text("\(model.repoID) · ~\(sizeText(model.approxSizeGB)) GB")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(model.notes)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Download") { downloader.downloadCatalogModel(model) }
+                        .disabled(downloader.isBusy)
+                }
+            }
+
+            Divider()
+
+            Text("Custom repo ID")
+                .font(.headline)
+            HStack {
+                TextField("e.g. mlx-community/Qwen2.5-32B-Instruct-4bit", text: $customRepoID)
+                    .textFieldStyle(.roundedBorder)
+                Button("Download") {
+                    downloader.download(repoID: customRepoID)
+                    customRepoID = ""
+                }
+                .disabled(downloader.isBusy || customRepoID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 580)
+    }
+
+    @ViewBuilder
+    private var statusView: some View {
+        switch downloader.state {
+        case .idle:
+            Text("Models download into the app's storage and then appear in the list to load. Large models (a 32B is ~18 GB) can take a while.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        case let .preparing(repoID):
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Preparing \(repoID)…")
+            }
+        case let .downloading(repoID, completed, total, currentFile):
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(value: Double(completed), total: Double(max(total, 1)))
+                Text("\(repoID) — file \(completed + 1) of \(total): \(currentFile)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Button("Cancel", role: .cancel) { downloader.cancel() }
+            }
+        case let .finished(_, displayName):
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text("Downloaded “\(displayName)”. It's now in your models list.")
+                Spacer()
+                Button("OK") { downloader.dismissResult() }
+            }
+        case let .failed(message):
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text(message)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                Spacer()
+                Button("Dismiss") { downloader.dismissResult() }
+            }
+        }
+    }
+
+    private func sizeText(_ gb: Double) -> String {
+        gb == gb.rounded() ? String(Int(gb)) : String(format: "%.1f", gb)
     }
 }
