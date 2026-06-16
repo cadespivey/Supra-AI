@@ -25,6 +25,30 @@ final class RuntimeXPCCodecTests: XCTestCase {
         XCTAssertEqual(decoded.metrics?.generatedTokenCount, 1)
     }
 
+    func testLoadModelRequestRoundTripsModelBookmark() throws {
+        let modelID = ModelID()
+        let bookmark = Data([0x01, 0x02, 0x03, 0x04])
+        let request = LoadModelRequest(
+            modelID: modelID,
+            modelPath: "/models/local",
+            displayName: "Local",
+            modelBookmark: bookmark
+        )
+
+        let data = try RuntimeXPCCodec.encode(request)
+        let decoded = try RuntimeXPCCodec.decode(LoadModelRequest.self, from: data)
+
+        XCTAssertEqual(decoded.modelID, modelID)
+        XCTAssertEqual(decoded.modelPath, "/models/local")
+        XCTAssertEqual(decoded.modelBookmark, bookmark)
+    }
+
+    func testLoadModelRequestDefaultsBookmarkToNil() throws {
+        let request = LoadModelRequest(modelID: ModelID(), modelPath: "/m", displayName: "M")
+        let decoded = try RuntimeXPCCodec.decode(LoadModelRequest.self, from: try RuntimeXPCCodec.encode(request))
+        XCTAssertNil(decoded.modelBookmark)
+    }
+
     func testDefaultServiceNameMatchesAppXPCBundleIdentifier() {
         XCTAssertEqual(RuntimeXPCServiceNames.defaultServiceName, "ai.supra.SupraAI.SupraRuntimeService")
     }

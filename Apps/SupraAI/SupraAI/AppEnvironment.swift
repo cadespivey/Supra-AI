@@ -16,6 +16,7 @@ final class AppEnvironment: ObservableObject {
     let store: SupraStore
     let modelLibrary: ModelLibrary
     let chatController: GlobalChatController
+    let validationController: ValidationRunController
 
     private let runtimeStatusController: RuntimeStatusController
 
@@ -26,6 +27,11 @@ final class AppEnvironment: ObservableObject {
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
         self.modelLibrary = ModelLibrary(store: store, runtimeClient: runtimeClient)
         self.chatController = GlobalChatController(store: store, runtimeClient: runtimeClient)
+        self.validationController = ValidationRunController(
+            store: store,
+            runtimeClient: runtimeClient,
+            appVersion: AppEnvironment.currentAppVersion()
+        )
     }
 
     var statusBadgeTitle: String {
@@ -70,5 +76,13 @@ final class AppEnvironment: ObservableObject {
 
     private static func unavailableStore() -> SupraStore {
         fatalError("Unable to open any Supra AI store.")
+    }
+
+    private static func currentAppVersion() -> AppVersion {
+        let info = Bundle.main.infoDictionary
+        return AppVersion(
+            marketingVersion: info?["CFBundleShortVersionString"] as? String ?? "0.0.0",
+            buildNumber: info?["CFBundleVersion"] as? String ?? "0"
+        )
     }
 }

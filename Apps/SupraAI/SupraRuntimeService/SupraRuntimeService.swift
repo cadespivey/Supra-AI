@@ -32,7 +32,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         let reply = RuntimeReply(reply)
         Task { [weak self, modelController, reply] in
             do {
-                let metrics = try await modelController.loadModel(path: request.modelPath)
+                let metrics = try await modelController.loadModel(bookmark: request.modelBookmark, path: request.modelPath)
                 self?.setLoadedModel(request)
                 reply(LoadModelResponse(status: .loaded, modelID: request.modelID, metrics: metrics))
             } catch {
@@ -156,7 +156,16 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     private func setLoadedModel(_ request: LoadModelRequest) {
         stateLock.lock()
         loadedModelID = request.modelID
-        currentModelRequest = request
+        // The plain bookmark carries a single-use sandbox extension that is dead
+        // once the app releases its access, so it must not be replayed on reload.
+        // Retain only the path; a sandboxed reload must be re-driven by the app
+        // (via ModelLibrary.activateAndLoad) so a fresh bookmark is minted.
+        currentModelRequest = LoadModelRequest(
+            modelID: request.modelID,
+            modelPath: request.modelPath,
+            displayName: request.displayName,
+            modelBookmark: nil
+        )
         stateLock.unlock()
     }
 }

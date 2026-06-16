@@ -23,12 +23,15 @@ Initial repository skeleton for the local 32B MLX runtime vertical slice.
 - SupraSessions package added: `ModelLibrary` (registers local model folders and loads the active model into the runtime) and `GlobalChatController` (persisted send/stream/cancel/fail flow), with focused tests against a stub runtime client and an in-memory store.
 - SupraStore gained `ChatRepository.markVariantFailed` so a failed generation records a `failed` message status.
 - The app shell now has a Models tab (folder selection via `NSOpenPanel` with a security-scoped bookmark, load-state feedback) and a Global Chats tab (chat selector, streaming transcript, send/stop composer) wired to the shared runtime client and on-disk store.
+- Cross-process model-file access implemented: `LoadModelRequest` carries a plain transferable bookmark (`modelBookmark`); the app mints it while holding its own security scope (`SecurityScopedModelAccess`) and the sandboxed service resolves it + holds the scope across the full load. Falls back to the raw path when no bookmark is present. Design + on-device verification steps recorded in `Docs/Architecture/RuntimeFileAccess.md`.
+- SupraSessions gained `ValidationRunner` (runs a `ValidationSuite` through the runtime, gathers mechanical signals, evaluates with SupraDiagnostics, persists the run/tests, renders Markdown/JSON), the bundled Milestone 1 suite resource + loader, and a `ValidationRunController` surfaced as a "Run Suite" action on the Models tab. Covered by passing/partial/failed runner tests.
 
 ## Known Limitations
 
-- The runtime XPC service is sandboxed with no file-access entitlement, so a model folder selected by the (separately sandboxed) app is not yet readable by the service. Cross-process model access — passing the security-scoped bookmark to the service, or relaxing the service sandbox — is required before a real model loads on device.
+- The plain-bookmark cross-process access compiles but its sandbox behavior cannot be exercised in CI — it needs the on-device verification in `Docs/Architecture/RuntimeFileAccess.md`, with the unsandboxed-service fallback if it fails on the target OS.
 - Chat persistence runs on the main actor (one fetch per streamed token); fine for the vertical slice, a candidate for moving off-main later.
+- The chat flow does not yet send a system prompt (the bundled `default-system-prompt-v1` is not wired into generation).
 
 ## Next Engineering Slice
 
-Run the Milestone 1 validation suite end-to-end: execute the six suite prompts through the loaded model, evaluate them with SupraDiagnostics, and persist/render the validation report. Resolve the sandboxed XPC model-file access so a real model can be loaded first.
+Verify the model-load path on device with a real 32B MLX model, then run the bundled validation suite end-to-end against it and render the first real report. Wire the default system prompt into generation, and surface validation history in Diagnostics.

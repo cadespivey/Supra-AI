@@ -40,7 +40,7 @@ struct GlobalChatsView: View {
             }
             Spacer()
             Button {
-                try? controller.createChat()
+                _ = try? controller.createChat()
             } label: {
                 Label("New Chat", systemImage: "square.and.pencil")
             }

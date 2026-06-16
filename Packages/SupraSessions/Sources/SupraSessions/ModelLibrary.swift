@@ -64,6 +64,10 @@ public final class ModelLibrary: ObservableObject {
 
     /// Marks the given model active in the store and loads it into the runtime service.
     public func activateAndLoad(modelID modelIDString: String) async {
+        // Ignore overlapping loads so concurrent taps cannot leave the published
+        // load state and the runtime out of sync.
+        if case .loading = loadState { return }
+
         guard
             let record = try? store.models.fetchModel(id: modelIDString),
             let uuid = UUID(uuidString: record.id)
@@ -82,10 +86,31 @@ public final class ModelLibrary: ObservableObject {
 
         loadState = .loading(modelID: record.id)
 
+        // Hold the app's own access while a transferable bookmark is minted so
+        // the sandboxed runtime service can read the model directory.
+        let access = SecurityScopedModelAccess(bookmarkData: record.bookmarkData)
+        defer { access.release() }
+
+        // A registered model with a bookmark whose access cannot be re-established
+        // must fail loudly rather than fall through to an unreadable raw path.
+        if record.bookmarkData != nil, !access.hasAccess {
+            loadState = .failed(message: "Could not access the model folder. Re-add it from the Models tab.")
+            return
+        }
+
+        // Refresh a stale security-scoped bookmark so access survives future launches.
+        if access.isStale, let refreshed = access.makePersistentBookmark() {
+            var updated = record
+            updated.bookmarkData = refreshed
+            try? store.models.upsertModel(updated)
+            refresh()
+        }
+
         let request = LoadModelRequest(
             modelID: ModelID(uuid),
             modelPath: record.path,
-            displayName: record.displayName
+            displayName: record.displayName,
+            modelBookmark: access.makeTransferableBookmark()
         )
 
         do {

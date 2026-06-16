@@ -80,6 +80,23 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.errorMessage, "boom")
     }
 
+    func testStreamWithoutTerminalEventMarksInterrupted() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .generationStarted),
+                .event(request, 2, .token, token: "Partial")
+            ])
+        }
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+
+        await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
+
+        XCTAssertEqual(controller.messages.last?.status, .interrupted)
+        XCTAssertEqual(controller.messages.last?.content, "Partial")
+    }
+
     func testRejectedStreamMarksAssistantFailed() async throws {
         let store = try makeStore()
         let rejection = GenerateStartResponse(
@@ -145,6 +162,24 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(library.loadState, .failed(message: "missing weights"))
     }
 
+    func testActivateFailsWhenBookmarkCannotBeAccessed() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient() // would return .loaded if it were ever reached
+        let library = ModelLibrary(store: store, runtimeClient: stub)
+        let summary = try library.addModel(
+            displayName: "Bookmarked",
+            path: "/tmp/model",
+            bookmarkData: Data([0xDE, 0xAD, 0xBE, 0xEF])
+        )
+
+        await library.activateAndLoad(modelID: summary.id)
+
+        guard case let .failed(message) = library.loadState else {
+            return XCTFail("Expected a failed load state when the bookmark cannot be accessed.")
+        }
+        XCTAssertTrue(message.contains("Could not access"))
+    }
+
     // MARK: - Helpers
 
     private func makeStore() throws -> SupraStore {
@@ -157,12 +192,12 @@ final class SupraSessionsTests: XCTestCase {
 
 // MARK: - Stub runtime client
 
-private enum GenerationOutcome {
+enum GenerationOutcome {
     case events([GenerationEvent])
     case reject(Error)
 }
 
-private final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
+final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     private let loadResult: LoadModelResponse
     private let outcome: @Sendable (GenerateRequest) -> GenerationOutcome
     private let lock = NSLock()
@@ -225,7 +260,7 @@ private final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendabl
     func restartRuntimeService() async throws {}
 }
 
-private extension GenerationEvent {
+extension GenerationEvent {
     static func event(
         _ request: GenerateRequest,
         _ sequenceNumber: Int,

@@ -5,6 +5,7 @@ import SwiftUI
 /// Lets the user register a local MLX model folder and load it into the runtime.
 struct ModelsView: View {
     @ObservedObject var library: ModelLibrary
+    @ObservedObject var validation: ValidationRunController
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -15,6 +16,10 @@ struct ModelsView: View {
             }
             Divider()
             footer
+            if case .loaded = library.loadState {
+                Divider()
+                validationSection
+            }
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -40,10 +45,13 @@ struct ModelsView: View {
     private var modelList: some View {
         List {
             ForEach(library.models) { model in
-                ModelRow(model: model, isLoading: isLoading(model)) {
+                ModelRow(model: model, isLoading: isLoading(model), loadDisabled: isAnyLoading) {
                     Task { await library.activateAndLoad(modelID: model.id) }
                 }
             }
+        }
+        .onChange(of: library.loadState) { _, _ in
+            validation.reset()
         }
     }
 
@@ -77,10 +85,57 @@ struct ModelsView: View {
         .padding(12)
     }
 
+    @ViewBuilder
+    private var validationSection: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Milestone 1 Validation")
+                    .font(.callout.weight(.semibold))
+                validationStatusText
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(action: runValidation) {
+                if validation.isRunning {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("Run Suite")
+                }
+            }
+            .disabled(validation.isRunning || library.loadedModelID == nil)
+        }
+        .padding(12)
+    }
+
+    @ViewBuilder
+    private var validationStatusText: some View {
+        switch validation.state {
+        case .idle:
+            Text("Run the fixed legal-client suite against the loaded model.")
+        case .running:
+            Text("Running validation suite…")
+        case let .finished(result):
+            Text("Last run: \(result.report.overallStatus.rawValue) — \(result.report.testResults.count) tests")
+        case let .failed(message):
+            Text(message)
+        }
+    }
+
+    private func runValidation() {
+        guard let modelID = library.loadedModelID, let model = library.activeModel else { return }
+        validation.runMilestone1(modelID: modelID, modelName: model.displayName, modelPath: model.path)
+    }
+
     private func isLoading(_ model: ModelSummary) -> Bool {
         if case let .loading(modelID) = library.loadState {
             return modelID == model.id
         }
+        return false
+    }
+
+    private var isAnyLoading: Bool {
+        if case .loading = library.loadState { return true }
         return false
     }
 
@@ -114,6 +169,7 @@ struct ModelsView: View {
 private struct ModelRow: View {
     let model: ModelSummary
     let isLoading: Bool
+    let loadDisabled: Bool
     let onLoad: () -> Void
 
     var body: some View {
@@ -138,6 +194,7 @@ private struct ModelRow: View {
                     .foregroundStyle(Color.accentColor)
             } else {
                 Button("Load", action: onLoad)
+                    .disabled(loadDisabled)
             }
         }
         .padding(.vertical, 4)
