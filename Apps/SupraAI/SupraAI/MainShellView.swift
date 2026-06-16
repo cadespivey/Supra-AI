@@ -34,22 +34,15 @@ struct MainShellView: View {
     private func detailView(for route: AppRoute) -> some View {
         switch route {
         case .globalChats:
-            ContentUnavailableView("Global Chats", systemImage: "bubble.left.and.bubble.right")
+            GlobalChatsView(controller: environment.chatController, library: environment.modelLibrary)
         case .matters:
             ContentUnavailableView("Matters", systemImage: "folder.badge.gearshape")
         case .models:
-            ContentUnavailableView("Models", systemImage: "cpu")
+            ModelsView(library: environment.modelLibrary, validation: environment.validationController)
         case .tasks:
             ContentUnavailableView("Tasks", systemImage: "checklist")
         case .diagnostics:
-            VStack(alignment: .leading, spacing: 12) {
-                Label(environment.runtimeServiceState.rawValue, systemImage: "waveform.path.ecg")
-                    .font(.title3)
-                Text(environment.runtimeStatusMessage)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            DiagnosticsView(history: environment.validationHistory, validation: environment.validationController)
         case .settings:
             ContentUnavailableView("Settings", systemImage: "gearshape")
         }
