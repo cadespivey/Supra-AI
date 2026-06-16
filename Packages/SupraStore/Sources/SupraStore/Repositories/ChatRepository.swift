@@ -30,6 +30,28 @@ public final class ChatRepository: @unchecked Sendable {
         }
     }
 
+    public func createMatterChat(matterID: String, title: String) throws -> ChatRecord {
+        try writer.write { db in
+            let record = ChatRecord(title: title, scope: "matter", matterID: matterID)
+            try record.insert(db)
+            return record
+        }
+    }
+
+    public func fetchMatterChats(matterID: String) throws -> [ChatRecord] {
+        try writer.read { db in
+            try ChatRecord.fetchAll(
+                db,
+                sql: """
+                SELECT * FROM chats
+                WHERE scope = 'matter' AND matter_id = ? AND deleted_at IS NULL
+                ORDER BY updated_at DESC
+                """,
+                arguments: [matterID]
+            )
+        }
+    }
+
     public func fetchMessages(chatID: String) throws -> [MessageRecord] {
         try writer.read { db in
             try MessageRecord.fetchAll(

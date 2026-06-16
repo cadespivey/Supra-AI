@@ -131,6 +131,28 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertNotNil(controller.selectedChatID)
     }
 
+    // MARK: - MattersController
+
+    func testMattersControllerCreatesMatterWithScopedChats() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = MattersController(store: store, runtimeClient: stub)
+        controller.loadMatters()
+        XCTAssertTrue(controller.matters.isEmpty)
+
+        let matter = try controller.createMatter(name: "Acme v. Roe")
+        XCTAssertEqual(controller.matters.count, 1)
+        XCTAssertEqual(controller.selectedMatterID, matter.id)
+
+        let chat = try XCTUnwrap(controller.chatController)
+        _ = try chat.createChat(title: "Issue 1")
+
+        // The chat is scoped to the matter, not the global list.
+        XCTAssertEqual(chat.chats.count, 1)
+        XCTAssertTrue(try store.chats.fetchGlobalChats().isEmpty)
+        XCTAssertEqual(try store.chats.fetchMatterChats(matterID: matter.id).count, 1)
+    }
+
     // MARK: - ModelLibrary
 
     func testAddAndActivateLoadsModel() async throws {
