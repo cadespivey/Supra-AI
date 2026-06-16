@@ -86,31 +86,49 @@ public final class ModelLibrary: ObservableObject {
 
         loadState = .loading(modelID: record.id)
 
-        // Hold the app's own access while a transferable bookmark is minted so
-        // the sandboxed runtime service can read the model directory.
-        let access = SecurityScopedModelAccess(bookmarkData: record.bookmarkData)
-        defer { access.release() }
+        // Resolve a transferable bookmark so the sandboxed runtime service can
+        // read the model directory. Hold any security scope until the load RPC
+        // returns (the multi-GB read happens service-side during that call).
+        var scopedAccess: SecurityScopedModelAccess?
+        defer { scopedAccess?.release() }
 
-        // A registered model with a bookmark whose access cannot be re-established
-        // must fail loudly rather than fall through to an unreadable raw path.
-        if record.bookmarkData != nil, !access.hasAccess {
-            loadState = .failed(message: "Could not access the model folder. Re-add it from the Models tab.")
-            return
-        }
+        let modelBookmark: Data?
+        if record.bookmarkData != nil {
+            // User-selected folder: hold the app's own access while minting.
+            let access = SecurityScopedModelAccess(bookmarkData: record.bookmarkData)
+            scopedAccess = access
 
-        // Refresh a stale security-scoped bookmark so access survives future launches.
-        if access.isStale, let refreshed = access.makePersistentBookmark() {
-            var updated = record
-            updated.bookmarkData = refreshed
-            try? store.models.upsertModel(updated)
-            refresh()
+            guard access.hasAccess else {
+                loadState = .failed(message: "Could not access the model folder. Re-add it from the Models tab.")
+                return
+            }
+            // Refresh a stale bookmark so access survives future launches.
+            if access.isStale, let refreshed = access.makePersistentBookmark() {
+                var updated = record
+                updated.bookmarkData = refreshed
+                try? store.models.upsertModel(updated)
+                refresh()
+            }
+            modelBookmark = access.makeTransferableBookmark()
+        } else if ManagedModelStorage.isManaged(path: record.path) {
+            // App-downloaded model: the app owns the files, so it can mint a plain
+            // transferable bookmark directly without a security scope.
+            guard let managedBookmark = try? URL(fileURLWithPath: record.path, isDirectory: true)
+                .bookmarkData(options: []) else {
+                loadState = .failed(message: "The downloaded model files could not be found. Re-download the model.")
+                return
+            }
+            modelBookmark = managedBookmark
+        } else {
+            // No bookmark available; only readable if the service is unsandboxed.
+            modelBookmark = nil
         }
 
         let request = LoadModelRequest(
             modelID: ModelID(uuid),
             modelPath: record.path,
             displayName: record.displayName,
-            modelBookmark: access.makeTransferableBookmark()
+            modelBookmark: modelBookmark
         )
 
         do {
