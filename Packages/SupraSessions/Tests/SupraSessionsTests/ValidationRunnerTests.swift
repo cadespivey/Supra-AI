@@ -63,6 +63,45 @@ final class ValidationRunnerTests: XCTestCase {
         XCTAssertNoThrow(try JSONSerialization.jsonObject(with: result.json))
     }
 
+    @MainActor
+    func testHistoryReflectsCompletedRun() async throws {
+        let store = try makeStore()
+        let modelID = try seedModel(store)
+        let suite = ValidationSuite(
+            id: "hist-suite",
+            version: 2,
+            name: "History",
+            description: "",
+            passPolicy: "core_pass",
+            tests: [basicTest]
+        )
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .generationStarted),
+                .event(request, 2, .token, token: "ok"),
+                .event(request, 3, .generationCompleted)
+            ])
+        }
+        let runner = ValidationRunner(runtimeClient: stub, store: store)
+        _ = try await runner.run(suite: suite, modelID: modelID, modelName: "Ignored", modelPath: "/tmp/m")
+
+        let history = ValidationHistoryController(store: store)
+        history.refresh()
+
+        XCTAssertEqual(history.runs.count, 1)
+        let run = try XCTUnwrap(history.runs.first)
+        XCTAssertEqual(run.modelName, "Test Model") // resolved from the registered model record
+        XCTAssertEqual(run.suiteID, "hist-suite")
+        XCTAssertEqual(run.suiteVersion, 2)
+        XCTAssertEqual(run.status, .passed)
+        XCTAssertFalse(run.isUnfinished)
+
+        let tests = history.tests(forRun: run.id)
+        XCTAssertEqual(tests.count, 1)
+        XCTAssertEqual(tests.first?.name, "Basic")
+        XCTAssertEqual(tests.first?.status, .passed)
+    }
+
     func testWarningProducesPartialRun() async throws {
         let store = try makeStore()
         let suite = ValidationSuite(
