@@ -55,6 +55,7 @@
 		5A000000000000000000002C /* MatterAuthoritiesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011C /* MatterAuthoritiesView.swift */; };
 		5A000000000000000000002D /* AuthorityDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011D /* AuthorityDetailView.swift */; };
 		5A000000000000000000002E /* MatterOutputsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011E /* MatterOutputsView.swift */; };
+		5A00000000000000000000E3 /* MatterDocumentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000131 /* MatterDocumentsView.swift */; };
 		5A000000000000000000002F /* OutputDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011F /* OutputDetailView.swift */; };
 /* End PBXBuildFile section */
 
@@ -116,6 +117,7 @@
 		5A000000000000000000011C /* MatterAuthoritiesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterAuthoritiesView.swift; sourceTree = "<group>"; };
 		5A000000000000000000011D /* AuthorityDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthorityDetailView.swift; sourceTree = "<group>"; };
 		5A000000000000000000011E /* MatterOutputsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterOutputsView.swift; sourceTree = "<group>"; };
+		5A0000000000000000000131 /* MatterDocumentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterDocumentsView.swift; sourceTree = "<group>"; };
 		5A000000000000000000011F /* OutputDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputDetailView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -181,6 +183,7 @@
 				5A0000000000000000000907 /* Research */,
 				5A0000000000000000000909 /* Authorities */,
 				5A000000000000000000090A /* Outputs */,
+				5A000000000000000000090B /* Documents */,
 				5A0000000000000000000903 /* Navigation */,
 				5A0000000000000000000904 /* Status */,
 				5A000000000000000000010B /* SupraAI.entitlements */,
@@ -239,6 +242,14 @@
 				5A000000000000000000011F /* OutputDetailView.swift */,
 			);
 			path = Outputs;
+			sourceTree = "<group>";
+		};
+		5A000000000000000000090B /* Documents */ = {
+			isa = PBXGroup;
+			children = (
+				5A0000000000000000000131 /* MatterDocumentsView.swift */,
+			);
+			path = Documents;
 			sourceTree = "<group>";
 		};
 		5A0000000000000000000905 /* SupraRuntimeService */ = {
@@ -423,6 +434,7 @@
 				5A000000000000000000002C /* MatterAuthoritiesView.swift in Sources */,
 				5A000000000000000000002D /* AuthorityDetailView.swift in Sources */,
 				5A000000000000000000002E /* MatterOutputsView.swift in Sources */,
+				5A00000000000000000000E3 /* MatterDocumentsView.swift in Sources */,
 				5A000000000000000000002F /* OutputDetailView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

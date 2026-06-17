@@ -60,20 +60,16 @@ final class AppEnvironment: ObservableObject {
             fetcher: HuggingFaceClient()
         )
         self.settingsController = SettingsController(store: store, appVersion: appVersion)
-        self.mattersController = MattersController(
-            store: store,
-            runtimeClient: runtimeClient,
-            defaultSystemPrompt: systemPrompt
-        )
-        self.documentSetupController = DocumentIntelligenceSetupController(
-            store: store,
-            runtimeClient: runtimeClient
-        )
+
+        // Document intelligence controllers must exist before MattersController so
+        // it can vend a per-matter Documents controller wired to the queue + gate.
+        let documentSetup = DocumentIntelligenceSetupController(store: store, runtimeClient: runtimeClient)
+        self.documentSetupController = documentSetup
         self.embeddingDownloadController = EmbeddingModelDownloadController(
             store: store,
             fetcher: HuggingFaceClient()
         )
-        self.documentQueue = DocumentProcessingQueue(
+        let queue = DocumentProcessingQueue(
             store: store,
             importService: DocumentImportService(store: store),
             makeIndexingService: {
@@ -83,6 +79,14 @@ final class AppEnvironment: ObservableObject {
                 let embedder = model.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
                 return DocumentIndexingService(store: store, embedder: embedder)
             }
+        )
+        self.documentQueue = queue
+        self.mattersController = MattersController(
+            store: store,
+            runtimeClient: runtimeClient,
+            defaultSystemPrompt: systemPrompt,
+            documentQueue: queue,
+            isImportReady: { documentSetup.isReadyForImport }
         )
     }
 
