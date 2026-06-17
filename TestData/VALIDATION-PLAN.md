@@ -5,10 +5,18 @@ Seeded test corpus + answer keys for putting the app through its paces. Three ma
 ## Prerequisites
 1. **Settings → Document Intelligence**: chat model loaded (Models tab), an embedding model downloaded + test-loaded, storage initialized → *Setup complete*.
 2. Create a matter per section below and import the corresponding `TestData/<matter>/` folder. Wait for the processing queue to finish (all docs **Ready**).
-3. CourtListener: add your API token in **Settings → CourtListener** to run the research scenarios.
+3. CourtListener: add your API token in **Settings → CourtListener** to run the research scenarios. Every "Expected authorities" case below was verified live against the CourtListener v4 API on 2026-06-17 and links to its real opinion.
 
 ## Automated pre-check (no chat model needed)
 `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift test --package-path Packages/SupraTestKit` regenerates each matter, imports with **real OCR**, indexes, and asserts every planted fact is extractable (incl. OCR-only docs) and that `.msg` is reported unsupported.
+
+### Live CourtListener connection test (opt-in)
+The app's own CourtListener client (`CourtListenerClient` → `AuthorizedHTTPClient`, host-allowlisted + rate-limited + audited) is exercised end-to-end against the live API by `CourtListenerLiveTests`. It is **skipped** unless a token is present, so it never blocks normal runs:
+```
+COURTLISTENER_API_TOKEN=<your-token> \
+DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
+  swift test --package-path Packages/SupraTestKit --filter CourtListenerLiveTests
+```
 
 ## Format / OCR coverage
 
@@ -66,7 +74,10 @@ Subcontractor/supplier Bayfront Steel & Supply, LLC seeks unpaid amounts for str
 ### CourtListener research
 - **Issue:** Whether a subcontractor/supplier's Chapter 713 construction lien can attach to land owned by a public port authority, or whether its exclusive remedy for unpaid materials on a public project is a claim against the Section 255.05, Florida Statutes payment bond; and the strict-compliance requirements (Notice to Owner) governing such claims.
 - **Jurisdiction filter:** Florida (Supreme Court of Florida and District Courts of Appeal)
-- **Expected authorities:** Deen v. Tampa Port Authority, 207 So. 2d 688 (Fla. 1967), City of Gainesville v. Republic Investors Corp., Fla. Stat. § 255.05 (public-project payment bond), Fla. Stat. ch. 713 (Construction Lien Law); § 713.08 (Claim of Lien)
+- **Expected authorities (✅ verified live on CourtListener, 2026-06-17):**
+  - [Deen v. Tampa Port Authority, 207 So. 2d 688 (Fla. 1967)](https://www.courtlistener.com/opinion/7503366/deen-v-tampa-port-authority/) — public property not subject to construction liens.
+  - [City of Gainesville v. Republic Inv. Corp., 480 So. 2d 1344 (Fla. 1st DCA 1985)](https://www.courtlistener.com/opinion/1646365/city-of-gainesville-v-republic-inv-corp/).
+  - Statutes (not on CourtListener): Fla. Stat. § 255.05 (public-project payment bond); Fla. Stat. ch. 713 (Construction Lien Law), § 713.08 (Claim of Lien).
 
 ---
 
@@ -116,7 +127,9 @@ Buyer Marcus Calloway seeks specific performance of a $1,275,000 purchase and sa
 ### CourtListener research
 - **Issue:** Whether a buyer may obtain specific performance of a definite, signed Florida real-estate purchase and sale agreement where financing and inspection contingencies were timely satisfied and the seller repudiated, and the related question of whether recorded contract/property records implicate public-records access rather than copyright restriction.
 - **Jurisdiction filter:** Florida (Supreme Court of Florida and District Courts of Appeal); 13th Judicial Circuit, Hillsborough County trial venue
-- **Expected authorities:** DK Arena, Inc. v. EB Acquisitions I, LLC, 112 So. 3d 85 (Fla. 2013), Microdecisions, Inc. v. Skinner, 889 So. 2d 871 (Fla. 2d DCA 2004)
+- **Expected authorities (✅ verified live on CourtListener, 2026-06-17):**
+  - [DK Arena, Inc. v. EB Acquisitions I, LLC, 112 So. 3d 85 (Fla. 2013)](https://www.courtlistener.com/opinion/4990945/dk-arena-inc-v-eb-acquisitions-i-llc/) — statute of frauds / specific performance.
+  - [Microdecisions, Inc. v. Skinner, 889 So. 2d 871 (Fla. 2d DCA 2004)](https://www.courtlistener.com/opinion/1874625/microdecisions-inc-v-skinner/) — public-records access (no copyright restriction).
 
 ---
 
@@ -168,4 +181,8 @@ First-party homeowners property claim for storm damage to a Cape Coral residence
 ### CourtListener research
 - **Issue:** Florida sovereign immunity for a tort claim against a county under Fla. Stat. § 768.28, including the planning-level vs. operational-level distinction for negligent operation/maintenance of a stormwater pump station, the statutory $200,000/$300,000 damages caps, and the § 768.28(6) pre-suit written-notice condition precedent.
 - **Jurisdiction filter:** Florida (state courts; Fla. 2d/3d DCA and Florida Supreme Court authority)
-- **Expected authorities:** Dowd v. Monroe County, 557 So. 2d 63 (Fla. 3d DCA 1990), Hirt v. Polk County Bd. of County Comm'rs, 578 So. 2d 415 (Fla. 2d DCA 1991), Commercial Carrier Corp. v. Indian River County, 371 So. 2d 1010 (Fla. 1979), Fla. Stat. § 768.28
+- **Expected authorities (✅ verified live on CourtListener, 2026-06-17):**
+  - [Commercial Carrier Corp. v. Indian River County, 371 So. 2d 1010 (Fla. 1979)](https://www.courtlistener.com/opinion/1961793/commercial-carrier-corp-v-indian-river-cty/) — the planning-level vs. operational-level distinction.
+  - [Dowd v. Monroe County, 557 So. 2d 63 (Fla. 3d DCA 1990)](https://www.courtlistener.com/opinion/7647320/dowd-v-monroe-county/).
+  - [Hirt v. Polk County Bd. of County Comm'rs, 578 So. 2d 415 (Fla. 2d DCA 1991)](https://www.courtlistener.com/opinion/1139194/hirt-v-polk-cty-bd-of-county-comrs/).
+  - Statute (not on CourtListener): Fla. Stat. § 768.28 (sovereign-immunity waiver; $200,000/$300,000 caps; § 768.28(6) pre-suit notice).
