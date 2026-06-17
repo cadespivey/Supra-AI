@@ -11,6 +11,11 @@ public final class SupraStore: @unchecked Sendable {
     public let diagnostics: DiagnosticsRepository
     public let validation: ValidationRepository
     public let exportedReports: ExportedReportsRepository
+    public let networkRequests: NetworkRequestRepository
+    public let research: ResearchRepository
+    public let authorities: AuthorityRepository
+    public let structuredOutputs: StructuredOutputRepository
+    public let auditEvents: AuditEventRepository
 
     public init(database: SupraDatabase) {
         self.database = database
@@ -22,6 +27,11 @@ public final class SupraStore: @unchecked Sendable {
         self.diagnostics = DiagnosticsRepository(writer: database.writer)
         self.validation = ValidationRepository(writer: database.writer)
         self.exportedReports = ExportedReportsRepository(writer: database.writer)
+        self.networkRequests = NetworkRequestRepository(writer: database.writer)
+        self.research = ResearchRepository(writer: database.writer)
+        self.authorities = AuthorityRepository(writer: database.writer)
+        self.structuredOutputs = StructuredOutputRepository(writer: database.writer)
+        self.auditEvents = AuditEventRepository(writer: database.writer)
     }
 
     public convenience init(url: URL) throws {
