@@ -1,10 +1,9 @@
 import SupraSessions
 import SwiftUI
 
-/// The workspace for a single matter: a detail header plus the Milestone 2 tab
-/// set (Chat, Research, Authorities, Outputs, Audit, and a disabled Documents
-/// tab). Chat and Audit have real content here; Research/Authorities/Outputs are
-/// placeholders until their work orders (WO 24–30) land.
+/// The workspace for a single matter: a detail header plus the matter tab set
+/// (Chat, Research, Authorities, Outputs, Documents, and Audit). Audit is placed
+/// last as the least frequently used tab.
 struct MatterWorkspaceView: View {
     @ObservedObject var controller: MattersController
     @ObservedObject var library: ModelLibrary
@@ -20,8 +19,8 @@ struct MatterWorkspaceView: View {
         case research = "Research"
         case authorities = "Authorities"
         case outputs = "Outputs"
-        case audit = "Audit"
         case documents = "Documents"
+        case audit = "Audit"
 
         var id: String { rawValue }
         var label: String { rawValue }
@@ -107,7 +106,7 @@ struct MatterWorkspaceView: View {
         switch tab {
         case .chat:
             if let chatController = controller.chatController {
-                GlobalChatsView(controller: chatController, library: library)
+                GlobalChatsView(controller: chatController, library: library, listStyle: .inline)
             } else {
                 placeholder("Chat unavailable", "Select the matter again to load its chats.", systemImage: "bubble.left.and.bubble.right")
             }

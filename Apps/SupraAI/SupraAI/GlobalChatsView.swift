@@ -5,8 +5,14 @@ import SwiftUI
 /// The first persisted global chat flow: pick or create a chat, send a prompt
 /// to the loaded model, and watch the answer stream in.
 struct GlobalChatsView: View {
+    /// How the chat list is presented in the bar. The global Chats screen uses a
+    /// dropdown; a matter's Chat tab shows its chats inline (no matter selector,
+    /// since every chat here already belongs to this matter).
+    enum ChatListStyle { case picker, inline }
+
     @ObservedObject var controller: GlobalChatController
     @ObservedObject var library: ModelLibrary
+    var listStyle: ChatListStyle = .picker
     @State private var draft = ""
 
     var body: some View {
@@ -30,13 +36,18 @@ struct GlobalChatsView: View {
                 Text("No chats yet")
                     .foregroundStyle(.secondary)
             } else {
-                Picker("Chat", selection: chatSelection) {
-                    ForEach(controller.chats) { chat in
-                        Text(chat.title).tag(chat.id as String?)
+                switch listStyle {
+                case .picker:
+                    Picker("Chat", selection: chatSelection) {
+                        ForEach(controller.chats) { chat in
+                            Text(chat.title).tag(chat.id as String?)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
+                case .inline:
+                    inlineChatList
                 }
-                .labelsHidden()
-                .frame(maxWidth: 280)
             }
             Spacer()
             Button {
@@ -46,6 +57,33 @@ struct GlobalChatsView: View {
             }
         }
         .padding(12)
+    }
+
+    /// A horizontal, always-visible list of this matter's chats (replaces the
+    /// dropdown so the user sees every chat for the matter at a glance).
+    private var inlineChatList: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(controller.chats) { chat in
+                    let selected = controller.selectedChatID == chat.id
+                    Button {
+                        controller.select(chatID: chat.id)
+                    } label: {
+                        Text(chat.title)
+                            .lineLimit(1)
+                            .font(.callout.weight(selected ? .semibold : .regular))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(
+                                selected ? Color.accentColor.opacity(0.15) : Color.clear,
+                                in: Capsule()
+                            )
+                            .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     private var chatSelection: Binding<String?> {
