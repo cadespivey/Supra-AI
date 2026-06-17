@@ -1705,6 +1705,15 @@ These should be resolved during dependency/toolchain work, not left until final 
 - exact validation fixture generation approach for legacy binary formats
 ```
 
+Resolutions (WO 34/33/44/45):
+```text
+- converters: Apple frameworks + in-house parsers + ZIPFoundation 0.9.20 (no third-party binaries)
+- default embedding model: BAAI/bge-base-en-v1.5 (768-d), via MLXEmbedders
+- .heic: probed at runtime (DocumentToolchain.nativeHEICDecodingAvailable)
+- auto-purge default: 30 days (0 disables)
+- legacy binary fixtures: authored programmatically (export builder + junk failure files)
+```
+
 ---
 
 # 18. Progress Log
@@ -2097,3 +2106,39 @@ Bugs found + fixed by the suite: `.xls`/`.msg` now report as `unsupported` (not
 `extraction_failed`); the export XLSX builder now emits cell `r` references (so the
 spreadsheet extractor reads them); scope readiness now excludes terminally-failed
 documents so a failed import can't block Q&A forever.
+
+## WO 46 — Hardening Pass — DONE (2026-06-17)
+
+Status: complete. M3 signoff.
+
+- Full test sweep green: SupraCore 13, SupraStore 20, SupraDocuments 30,
+  SupraResearch 18, SupraRuntimeClient 4, SupraSessions 64, SupraDiagnostics 5,
+  SupraNetworking 6 (160 total, 0 failures). App builds (`xcodebuild -scheme
+  SupraAI`).
+- No hidden network in the document pipeline: `SupraDocuments` and the M3
+  `SupraSessions` document files contain no `URLSession`/`URLRequest`/`dataTask`
+  (the only `http` strings are OOXML namespace URIs, never fetched). Network is
+  confined to the explicit chat/embedding model download controllers (§0.3).
+- `Docs/Architecture/Dependencies.md` documents the full M3 stack (Apple
+  frameworks, MLXEmbedders via mlx-swift-lm, ZIPFoundation 0.9.20, curated
+  embedding models) — all pinned/local.
+
+### M3 Handoff — known limitations / remaining production gaps
+```text
+- App-run Diagnostics validation requires loaded chat + embedding models; it was not
+  executed in the dev environment. The deterministic SwiftPM suite proves the pipeline;
+  the model-dependent Q&A/chronology scenarios depend on real model behavior.
+- Legacy .doc extraction is best-effort via NSAttributedString (main actor). .xls and
+  Outlook .msg are reported unsupported (convert to .xlsx/.eml) — by design.
+- Documents-tab folder sidebar is a flat matter-scoped list; move/copy between folders
+  exists at the controller/repo level but drag-between-folders + a nested tree UI are deferred.
+- Image OCR bounding boxes are captured (boundingBoxesJSON) but not yet drawn over the
+  image preview; PDF page + text-range highlights are implemented.
+- Guided Q&A (manual source selection) is supported in DocumentQAController
+  (guidedChunkIDs); the "Ask" sheet currently exposes auto-source only.
+- Embedding model loads on demand — the first Q&A/index after launch pays model-load latency.
+- Export PDF is plain CoreText pagination (single font, no rich markdown); DOCX/XLSX are
+  minimal OOXML. They open in Word/Excel/Preview and carry output + appendix + warning.
+- Performance targets (§13) were not benchmarked at the ~200-document scale in this env.
+- Real semantic/OCR quality depends on the chosen embedding model and Vision; not benchmarked.
+```
