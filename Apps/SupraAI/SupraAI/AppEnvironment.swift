@@ -12,6 +12,9 @@ import SupraStore
 final class AppEnvironment: ObservableObject {
     @Published var runtimeReadinessState: RuntimeReadinessState = .limited
     @Published var runtimeServiceState: RuntimeServiceState = .disconnected
+    /// Bumped to ask the Matters screen to open its New Matter editor (e.g. from
+    /// the sidebar's New Matter button).
+    @Published var newMatterRequests = 0
     @Published var runtimeStatusMessage = "Checking runtime"
     @Published var activeModelName: String?
 

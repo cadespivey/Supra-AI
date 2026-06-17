@@ -318,7 +318,9 @@ public final class ResearchSessionController: ObservableObject {
         )
 
         var anySuccess = false
+        var lastFailureMessage: String?
         for query in approved {
+            let requestMeta = Self.jsonString(["q": query.text, "type": "o", "highlight": "true"])
             try? store.research.updateQueryExecution(queryID: query.id, status: .running, executedAt: nil)
             do {
                 let response = try await courtListenerClient.searchOpinions(
@@ -330,14 +332,19 @@ public final class ResearchSessionController: ObservableObject {
                 }
                 try? store.research.updateQueryExecution(
                     queryID: query.id, status: .completed,
-                    resultCount: response.count, nextURL: response.next, executedAt: Date()
+                    resultCount: response.count, nextURL: response.next, executedAt: Date(),
+                    requestMetadataJSON: requestMeta,
+                    responseMetadataJSON: Self.responseMeta(response)
                 )
                 anySuccess = true
             } catch {
                 try? store.research.updateQueryExecution(
                     queryID: query.id, status: .failed, executedAt: Date(),
+                    requestMetadataJSON: requestMeta,
                     errorMessage: error.localizedDescription
                 )
+                recordNetworkDiagnostic(error, queryText: query.text)
+                lastFailureMessage = error.localizedDescription
             }
         }
 
@@ -354,7 +361,9 @@ public final class ResearchSessionController: ObservableObject {
             relatedTable: "research_sessions", relatedID: sessionID
         )
         if !anySuccess {
-            runMessage = "Every query failed — check your token and connection."
+            // Surface the specific reason (e.g. the §3.2 blocked / §3.4 rate-limit
+            // message) rather than a generic fallback.
+            runMessage = lastFailureMessage ?? "Every query failed — check your token and connection."
         }
         isRunning = false
         loadSessions()
@@ -382,13 +391,50 @@ public final class ResearchSessionController: ObservableObject {
             let total = (try? store.research.fetchResults(queryID: queryID).count) ?? response.count
             try? store.research.updateQueryExecution(
                 queryID: queryID, status: .completed,
-                resultCount: total, nextURL: response.next, executedAt: Date()
+                resultCount: total, nextURL: response.next, executedAt: Date(),
+                requestMetadataJSON: Self.jsonString(["cursor": "true", "type": "o"]),
+                responseMetadataJSON: Self.responseMeta(response)
             )
         } catch {
+            recordNetworkDiagnostic(error, queryText: query.text)
             runMessage = "Load more failed: \(error.localizedDescription)"
         }
         isRunning = false
         reloadOpenSession()
+    }
+
+    /// Records a network/research diagnostic warning for policy/auth failures
+    /// (spec §3.2 step 3). Transport/server/decode errors are not policy warnings.
+    private func recordNetworkDiagnostic(_ error: Error, queryText: String) {
+        guard let courtListenerError = error as? CourtListenerError else { return }
+        let category: String
+        switch courtListenerError {
+        case .blockedByNetworkPolicy, .localRateLimitExceeded, .invalidCursorHost:
+            category = "network"
+        case .missingToken, .authenticationFailed:
+            category = "research"
+        default:
+            return
+        }
+        try? store.diagnostics.recordDiagnosticEvent(
+            DiagnosticEventRecord(
+                severity: "warning",
+                category: category,
+                message: courtListenerError.localizedDescription,
+                technicalDetails: "Query: \(queryText)"
+            )
+        )
+    }
+
+    private static func responseMeta(_ response: CourtListenerSearchResponse) -> String? {
+        jsonString(["count": String(response.count), "has_next": String(response.next != nil)])
+    }
+
+    /// Encodes a tokenless string map to JSON for research_queries metadata
+    /// (§9.5 5c) — never includes the Authorization header or token.
+    private static func jsonString(_ dict: [String: String]) -> String? {
+        guard let data = try? JSONEncoder().encode(dict) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     // MARK: - Review & completion (WO 26)

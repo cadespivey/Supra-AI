@@ -40,6 +40,7 @@ struct AuthorityDetailView: View {
                 ForEach(authority.citations, id: \.self) { Text($0).font(.callout) }
                 TextField("Preferred citation", text: $citation)
                 Button("Save Citation") { controller.updatePreferredCitation(authorityID: authorityID, citation) }
+                    .disabled(citation.trimmingCharacters(in: .whitespacesAndNewlines) == (authority.preferredCitation ?? ""))
             }
 
             Section("Status") {
@@ -60,6 +61,7 @@ struct AuthorityDetailView: View {
             Section("Notes") {
                 TextField("User notes", text: $notes, axis: .vertical).lineLimit(2...5)
                 Button("Save Notes") { controller.updateUserNotes(authorityID: authorityID, notes) }
+                    .disabled(notes == (authority.userNotes ?? ""))
             }
 
             Section("Raw metadata") {
