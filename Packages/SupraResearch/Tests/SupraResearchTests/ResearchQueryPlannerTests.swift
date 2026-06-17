@@ -77,6 +77,21 @@ final class ResearchQueryPlannerTests: XCTestCase {
         XCTAssertTrue(planner.parseQueries(from: "I could not generate queries.").isEmpty)
     }
 
+    func testCapturesInlineHeadingQueryText() {
+        let output = """
+        ## Query 1: breach of contract damages
+        ## Query 2 — promissory estoppel
+        ## Query 3
+        unjust enrichment restitution
+        """
+        let queries = planner.parseQueries(from: output)
+        XCTAssertEqual(queries, [
+            "breach of contract damages",
+            "promissory estoppel",
+            "unjust enrichment restitution"
+        ])
+    }
+
     func testEchoedPlaceholdersAreIgnored() {
         let output = """
         ## Query 1

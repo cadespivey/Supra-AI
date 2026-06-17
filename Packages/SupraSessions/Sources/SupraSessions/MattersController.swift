@@ -125,6 +125,10 @@ public final class MattersController: ObservableObject {
     /// event, then selects it (spec §8.3).
     @discardableResult
     public func createMatter(_ draft: MatterDraft) throws -> MatterSummary {
+        // Matter + default chat are created atomically by the repository so a
+        // matter never exists without its chat (spec §8.3). The audit row stays
+        // best-effort: an audit hiccup shouldn't fail matter creation.
+        let trimmedName = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let record = try store.matters.createMatter(
             name: draft.name,
             jurisdiction: draft.jurisdiction,
@@ -133,9 +137,9 @@ public final class MattersController: ObservableObject {
             judge: draft.judge,
             docketNumber: draft.docketNumber,
             practiceArea: draft.practiceArea,
-            notes: draft.notes
+            notes: draft.notes,
+            defaultChatTitle: "General — \(trimmedName)"
         )
-        _ = try? store.chats.createMatterChat(matterID: record.id, title: "General — \(record.name)")
         _ = try? store.auditEvents.recordEvent(
             matterID: record.id,
             eventType: "matter_created",
