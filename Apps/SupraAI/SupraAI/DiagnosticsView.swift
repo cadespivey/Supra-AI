@@ -19,8 +19,11 @@ struct DiagnosticsView: View {
 
             Section {
                 if history.runs.isEmpty {
-                    Text("No validation runs yet. Run the suite from the Models tab.")
-                        .foregroundStyle(.secondary)
+                    ContentUnavailableView(
+                        "No Diagnostics",
+                        systemImage: "waveform.path.ecg",
+                        description: Text("Run the Milestone 1 validation suite from the Models tab to see results here.")
+                    )
                 } else {
                     ForEach(history.runs) { run in
                         ValidationRunRow(run: run) { history.tests(forRun: run.id) }

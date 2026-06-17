@@ -61,7 +61,10 @@ final class AppEnvironment: ObservableObject {
     }
 
     var statusBadgeTitle: String {
-        switch runtimeReadinessState {
+        // Exact Milestone 2 §14.2 labels. "Generating" takes precedence over the
+        // readiness-derived label while a generation is in flight.
+        if runtimeServiceState == .generating { return "Generating" }
+        return switch runtimeReadinessState {
         case .unavailable:
             "Runtime Failed"
         case .limited:
@@ -69,7 +72,7 @@ final class AppEnvironment: ObservableObject {
         case .chatReady, .embeddingsReady, .fullyReady:
             "Runtime Ready"
         case .degraded:
-            "Local Mode"
+            "Local"
         }
     }
 
