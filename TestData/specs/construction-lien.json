@@ -1,0 +1,415 @@
+{
+  "matterName": "Bayfront Steel & Supply, LLC v. Coastal Marine Constructors, Inc. (Port Verano Berth 7 Reconstruction)",
+  "jurisdiction": "Florida — 13th Judicial Circuit, Hillsborough County",
+  "partyPerspective": "plaintiff",
+  "practiceArea": "Construction Litigation — Construction Lien & Collection (Public Project / Payment Bond)",
+  "summary": "Subcontractor/supplier Bayfront Steel & Supply, LLC seeks unpaid amounts for structural steel and rebar furnished to general contractor Coastal Marine Constructors, Inc. on the Port Verano Authority's Berth 7 reconstruction. Because the project sits on land owned by a public port authority, the claim implicates whether a Chapter 713 construction lien can attach and whether recovery must instead proceed against the Section 255.05 public payment bond.",
+  "attorneyNotesMarkdown": "# Matter Notes — Bayfront Steel & Supply, LLC\n\n**Client:** Bayfront Steel & Supply, LLC (subcontractor/supplier of structural steel + rebar)\n**Adverse:** Coastal Marine Constructors, Inc. (GC) / Port Verano Authority (owner)\n**Project:** Berth 7 Reconstruction, Port Verano, Hillsborough County, FL\n\n## Posture\n- We represent the supplier. Subcontract value $487,500. We have a balance dispute.\n- **CRITICAL OPEN ISSUE:** The Berth 7 parcel is owned by the **Port Verano Authority**, a public port authority. A standard Chapter 713 construction lien very likely **cannot attach to public/sovereign property** — see *Deen v. Tampa Port Authority*. If true, our real remedy is the **Section 255.05 payment bond**, not the recorded lien. Confirm whether GC actually furnished a 255.05 bond.\n- *Hidden fact (strategy):* Our paralegal believes the GC's 255.05 payment bond may be **defective / never recorded** with the Authority — if so, the lien-vs-bond question becomes existential for recovery. Need to pull the bond from the Authority's records.\n\n## Numbers — WATCH THE CONTRADICTION\n- Demand letter states balance due of **$182,340.00**.\n- BUT our own internal draw ledger nets to **$163,815.00** unpaid. The demand letter overstates by **$18,525.00** — looks like it double-counted the disputed back-charge for the rejected Lot 4 rebar. **Fix before filing; do not repeat the $182,340 figure in the complaint.**\n\n## Deadlines / facts to verify\n- Notice to Owner served early; Claim of Lien recorded **March 11, 2026**, O.R. Book 28714, Page 1902, Hillsborough County. Lien amount on the recorded instrument is **$163,815.00** (matches the ledger, NOT the demand letter).\n- *Hidden fact (buried clause):* Subcontract § 14.3 contains a **\"pay-when-paid\" / conditional payment** provision and a **45-day cure** requirement before suit. Confirm we satisfied the cure notice.\n- One-year action deadline on the lien runs from recording.\n\n## To do\n- Decide lien vs. bond track. Re-run damages off the ledger ($163,815.00).",
+  "documents": [
+    {
+      "filename": "subcontract-agreement.pdf",
+      "folder": "Contracts",
+      "format": "pdf",
+      "purpose": "Born-digital PDF establishing parties, scope, contract sum, the buried pay-when-paid/cure clause, and the public-owner fact that drives the lien-vs-bond analysis.",
+      "hiddenFacts": [
+        "Subcontract No. CMC-BSS-2025-0047",
+        "Contract sum $487,500.00",
+        "Project owner is the Port Verano Authority, a public port authority (drives lien-vs-bond issue)",
+        "Section 14.3 contains a pay-when-paid conditional payment clause and a 45-day written cure requirement before suit",
+        "Section 255.05 payment bond referenced as Bond No. SUR-7741-FL issued by Gulfstream Surety Company"
+      ],
+      "bodyText": "STRUCTURAL STEEL & REBAR SUPPLY SUBCONTRACT\nSubcontract No. CMC-BSS-2025-0047\n\nThis Subcontract is entered into as of August 4, 2025, between COASTAL MARINE CONSTRUCTORS, INC. (\"Contractor\"), as general contractor for the Berth 7 Reconstruction Project, and BAYFRONT STEEL & SUPPLY, LLC (\"Subcontractor\"), a Florida limited liability company.\n\n1. PROJECT. The Project is the reconstruction of Berth 7 at Port Verano, located in Hillsborough County, Florida. The real property on which the Project is constructed is owned by the PORT VERANO AUTHORITY, a public port authority and political subdivision of the State of Florida (\"Owner\").\n\n2. SCOPE OF WORK. Subcontractor shall furnish and deliver all structural steel, reinforcing steel (rebar), and embedded steel assemblies per Drawings S-101 through S-118, including fabrication, delivery, and unloading at the Berth 7 laydown yard.\n\n3. CONTRACT SUM. The total Contract Sum is FOUR HUNDRED EIGHTY-SEVEN THOUSAND FIVE HUNDRED AND 00/100 DOLLARS ($487,500.00), subject to additions and deductions by approved change order.\n\n4. PAYMENT. Contractor shall pay Subcontractor monthly progress payments based on delivered and accepted materials, less ten percent (10%) retainage.\n\n14.3 CONDITIONAL PAYMENT; CURE. Contractor's receipt of payment from the Owner for Subcontractor's materials is a condition precedent to Contractor's obligation to pay Subcontractor (pay-when-paid). Notwithstanding any dispute, before commencing any action, the claiming party shall deliver written notice of default and afford the other party forty-five (45) days to cure.\n\n23. PUBLIC PROJECT BOND. The Project being constructed on public property, Contractor has furnished a payment bond pursuant to Section 255.05, Florida Statutes, identified as Bond No. SUR-7741-FL issued by GULFSTREAM SURETY COMPANY. Claims for unpaid labor and materials shall be made against said bond as provided by law.\n\nIN WITNESS WHEREOF the parties have executed this Subcontract as of the date first written above.\n\nCOASTAL MARINE CONSTRUCTORS, INC.    BAYFRONT STEEL & SUPPLY, LLC\nBy: Raymond T. Holcomb, President        By: Dolores A. Vance, Managing Member"
+    },
+    {
+      "filename": "payment-draw-ledger.xlsx",
+      "folder": "Financials",
+      "format": "xlsx",
+      "purpose": "Spreadsheet whose computed unpaid balance ($163,815.00) deliberately contradicts the $182,340.00 figure in the demand letter; contains ledger-only computation facts (the freight true-up and the net-balance derivation).",
+      "hiddenFacts": [
+        "Net unpaid balance computes to $163,815.00 (contradicts demand letter's $182,340.00)",
+        "The full net-balance derivation (gross billed-less-paid $178,755.00, retainage withheld then released, the back-charge deduction, and the approved $3,585.00 freight true-up) appears only in this ledger",
+        "The disputed Lot 4 rebar back-charge of $18,525.00 is carried here as the deduction that accounts for the $18,525 discrepancy with the demand letter (the back-charge itself is also referenced in the email thread)",
+        "Invoice INV-2026-0214 dated 2026-01-22 for $98,400.00 remains fully unpaid",
+        "10% retainage line of $48,750.00 is being withheld"
+      ],
+      "bodyText": "",
+      "spreadsheet": [
+        {
+          "sheet": "Draw Ledger",
+          "cells": [
+            [
+              "Bayfront Steel & Supply, LLC — Project Draw Ledger",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "Project: Berth 7 Reconstruction (Port Verano)",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "Subcontract No.: CMC-BSS-2025-0047",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "Invoice No.",
+              "Invoice Date",
+              "Description",
+              "Amount Billed",
+              "Amount Paid"
+            ],
+            [
+              "INV-2025-0911",
+              "2025-09-15",
+              "Mobilization + embedded steel Lot 1",
+              "62500.00",
+              "62500.00"
+            ],
+            [
+              "INV-2025-1118",
+              "2025-11-18",
+              "Structural steel Lot 2 delivery",
+              "141000.00",
+              "141000.00"
+            ],
+            [
+              "INV-2025-1220",
+              "2025-12-20",
+              "Rebar Lot 3 delivery",
+              "84600.00",
+              "55260.00"
+            ],
+            [
+              "INV-2026-0214",
+              "2026-01-22",
+              "Structural steel Lot 4 + rebar Lot 4",
+              "98400.00",
+              "0.00"
+            ],
+            [
+              "INV-2026-0228",
+              "2026-02-26",
+              "Final delivery + freight",
+              "51015.00",
+              "0.00"
+            ],
+            [
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            [
+              "",
+              "",
+              "Totals",
+              "437515.00",
+              "258760.00"
+            ],
+            [
+              "",
+              "",
+              "Gross balance billed less paid",
+              "",
+              "178755.00"
+            ],
+            [
+              "",
+              "",
+              "Less: 10% retainage held by GC",
+              "",
+              "48750.00"
+            ],
+            [
+              "",
+              "",
+              "Plus: retainage now earned/released",
+              "",
+              "48750.00"
+            ],
+            [
+              "",
+              "",
+              "Less: disputed Lot 4 rebar back-charge (rejected coils)",
+              "",
+              "18525.00"
+            ],
+            [
+              "",
+              "",
+              "Plus: approved freight true-up",
+              "",
+              "3585.00"
+            ],
+            [
+              "",
+              "",
+              "NET UNPAID BALANCE",
+              "",
+              "163815.00"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "filename": "demand-letter.docx",
+      "folder": "Correspondence",
+      "format": "docx",
+      "purpose": "Word demand letter that overstates the amount due relative to the ledger, creating the deliberate cross-document contradiction; also tests born-digital text extraction.",
+      "hiddenFacts": [
+        "Demand letter states amount due of $182,340.00 (contradicts ledger net of $163,815.00)",
+        "Letter dated March 24, 2026",
+        "Demands payment within 15 days, citing Section 255.05 bond claim rights",
+        "Letter author: Margaret E. Linwood, Esq. of Linwood & Pratt, P.A."
+      ],
+      "bodyText": "LINWOOD & PRATT, P.A.\nAttorneys at Law\n400 N. Ashley Drive, Suite 2600, Tampa, FL 33602\n\nMarch 24, 2026\n\nVIA CERTIFIED MAIL & EMAIL\nMr. Raymond T. Holcomb, President\nCoastal Marine Constructors, Inc.\n1750 Causeway Blvd.\nTampa, FL 33619\n\nRE: DEMAND FOR PAYMENT — Berth 7 Reconstruction, Port Verano\n    Subcontract No. CMC-BSS-2025-0047\n\nDear Mr. Holcomb:\n\nThis firm represents Bayfront Steel & Supply, LLC (\"Bayfront\") in connection with structural steel and reinforcing steel furnished to Coastal Marine Constructors, Inc. for the above-referenced Project. Despite repeated requests, Coastal Marine has failed to pay Bayfront for materials delivered and accepted at the Berth 7 site.\n\nDEMAND IS HEREBY MADE for payment of the outstanding balance of ONE HUNDRED EIGHTY-TWO THOUSAND THREE HUNDRED FORTY AND 00/100 DOLLARS ($182,340.00), representing unpaid invoices, released retainage, and freight charges for materials furnished through February 2026.\n\nBayfront has timely served its Notice to Owner and recorded its Claim of Lien. Because the Project is located on property of the Port Verano Authority, Bayfront further reserves all rights to proceed against the payment bond furnished pursuant to Section 255.05, Florida Statutes.\n\nUnless full payment of $182,340.00 is received within FIFTEEN (15) DAYS of the date of this letter, Bayfront will commence suit to enforce its claim, together with interest, attorneys' fees, and costs as permitted by law.\n\nGovern yourself accordingly.\n\nVery truly yours,\nMargaret E. Linwood, Esq.\nLinwood & Pratt, P.A.\nCounsel for Bayfront Steel & Supply, LLC",
+      "spreadsheet": []
+    },
+    {
+      "filename": "claim-of-lien-recorded.pdf",
+      "folder": "Pleadings",
+      "format": "scanned_pdf",
+      "purpose": "OCR-only scanned image of the recorded Claim of Lien; carries the official recording date, O.R. book/page, and lien amount that match the ledger (not the demand letter). Tests OCR extraction.",
+      "hiddenFacts": [
+        "Recorded March 11, 2026 in Official Records Book 28714, Page 1902, Hillsborough County, FL",
+        "Lien amount stated as $163,815.00 (matches ledger; contradicts demand letter)",
+        "Clerk instrument number 2026000091847",
+        "Lienor's first furnishing date September 12, 2025; last furnishing date February 26, 2026"
+      ],
+      "bodyText": "[SCANNED — RECORDED INSTRUMENT]\n\nThis instrument prepared by and return to:\nLinwood & Pratt, P.A., 400 N. Ashley Drive, Suite 2600, Tampa, FL 33602\n\nINSTR # 2026000091847\nOR BK 28714  PG 1902\nRECORDED 03/11/2026  HILLSBOROUGH COUNTY, FL\nCINDY STUART, CLERK OF COURT\n\nCLAIM OF LIEN\n(Section 713.08, Florida Statutes)\n\nBefore me, the undersigned notary, personally appeared Dolores A. Vance, as Managing Member of BAYFRONT STEEL & SUPPLY, LLC (\"Lienor\"), who, being duly sworn, states:\n\n1. Lienor furnished structural steel and reinforcing steel materials for the improvement of the following described real property in Hillsborough County, Florida: Berth 7 Reconstruction, Port Verano (Parcel No. 18-29-44-0000-Berth7).\n\n2. The materials were furnished under a contract with COASTAL MARINE CONSTRUCTORS, INC.\n\n3. Lienor first furnished materials on September 12, 2025, and last furnished materials on February 26, 2026.\n\n4. There remains unpaid to Lienor the sum of ONE HUNDRED SIXTY-THREE THOUSAND EIGHT HUNDRED FIFTEEN AND 00/100 DOLLARS ($163,815.00), for which Lienor claims a lien on the above-described real property and improvements.\n\nDOLORES A. VANCE, Managing Member\nBayfront Steel & Supply, LLC\n\nSworn to and subscribed before me this 9th day of March, 2026.\n[NOTARY SEAL]",
+      "spreadsheet": []
+    },
+    {
+      "filename": "delivery-receipt-lot4.png",
+      "folder": "Evidence",
+      "format": "image_png",
+      "purpose": "OCR-only photograph of a signed delivery ticket proving the disputed Lot 4 materials were delivered and signed for; the only place the signed delivery ticket number and receiver name appear. Tests OCR.",
+      "hiddenFacts": [
+        "Delivery Ticket No. DT-Lot4-0119 signed on January 19, 2026",
+        "Received and signed by site superintendent Curtis Mealy for Coastal Marine Constructors",
+        "Ticket lists 14 bundles structural steel and 26 coils rebar received in good order",
+        "Handwritten note: 'Lot 4 rebar coils flagged for inspection' (ties to disputed back-charge)"
+      ],
+      "bodyText": "[PHOTOGRAPHED DELIVERY TICKET — OCR]\n\nBAYFRONT STEEL & SUPPLY, LLC\nDELIVERY / RECEIVING TICKET\n\nTicket No.: DT-Lot4-0119\nDate Delivered: 01/19/2026\nProject: Berth 7 Reconstruction — Port Verano\nDeliver To: Coastal Marine Constructors, Inc. — Berth 7 Laydown Yard\n\nMATERIALS DELIVERED:\n  - 14 bundles structural steel (Lot 4)\n  - 26 coils reinforcing steel / rebar (Lot 4)\n\nCondition on arrival: Received in good order.\n\nReceived by (print): CURTIS MEALY — Site Superintendent\nSignature: [signed] C. Mealy\n\nHandwritten note at bottom: \"Lot 4 rebar coils flagged for inspection — QC to review.\"\n\nDriver: Bayfront Truck 12   Time: 10:42 AM",
+      "spreadsheet": []
+    },
+    {
+      "filename": "payment-dispute-thread.eml",
+      "folder": "Correspondence",
+      "format": "eml",
+      "purpose": "Email thread documenting the payment dispute and the pay-when-paid defense raised by the GC, with the lien-notice document attached. Tests eml parsing plus attachment extraction.",
+      "hiddenFacts": [
+        "GC controller Brian Ostrander asserts pay-when-paid: Owner has not released the Lot 4 pay application",
+        "Email confirms Coastal withheld $18,525 as a back-charge for the rejected Lot 4 rebar coils",
+        "Attachment is the served Notice to Owner identifying Bond No. SUR-7741-FL and dated December 30, 2025"
+      ],
+      "bodyText": "",
+      "spreadsheet": [],
+      "email": {
+        "from": "Brian Ostrander <bostrander@coastalmarinecon.com>",
+        "to": "Dolores Vance <dvance@bayfrontsteel.com>",
+        "subject": "RE: Berth 7 — outstanding balance / Lot 4",
+        "date": "2026-03-05T14:18:00-05:00",
+        "body": "Dolores,\n\nFollowing up on your call. Two issues on the balance you're claiming:\n\n1) Pay-when-paid. Under Section 14.3 of CMC-BSS-2025-0047, our payment to you is conditioned on Coastal first receiving payment from the Port Verano Authority. The Authority has NOT released our pay application covering the Lot 4 materials, so that portion is not yet due to you under the subcontract.\n\n2) Lot 4 back-charge. We are withholding $18,525.00 against the Lot 4 rebar coils that QC flagged. Until that inspection clears, that amount stays as a back-charge.\n\nI see you've recorded a lien. As you know, this is the Authority's property, so I'm not sure a lien gets you anywhere here — the right path is the 255.05 bond. I'm attaching the Notice to Owner you served back in December for the file.\n\nBrian Ostrander\nController, Coastal Marine Constructors, Inc.\n\n--- Original Message ---\nFrom: Dolores Vance\nSent: March 4, 2026\nTo: Brian Ostrander\nSubject: Berth 7 — outstanding balance / Lot 4\n\nBrian — We still show a large unpaid balance on Berth 7. INV-2026-0214 ($98,400) is fully unpaid and INV-2026-0228 hasn't been touched. The Lot 4 material was delivered and signed for on January 19. Please advise when we'll be paid. — Dolores",
+        "attachmentFilename": "notice-to-owner.pdf",
+        "attachmentBody": "NOTICE TO OWNER\n(Section 713.06 / 255.05, Florida Statutes)\n\nDate served: December 30, 2025\n\nTO OWNER: Port Verano Authority, 1101 Channelside Drive, Tampa, FL 33602\nTO CONTRACTOR: Coastal Marine Constructors, Inc.\n\nThe undersigned hereby notifies you that BAYFRONT STEEL & SUPPLY, LLC has furnished, or is furnishing, structural steel and reinforcing steel materials for the improvement of the real property identified as Berth 7 Reconstruction, Port Verano, under an order given by Coastal Marine Constructors, Inc.\n\nThe Project being on public property, the surety payment bond on this Project is Bond No. SUR-7741-FL, GULFSTREAM SURETY COMPANY, principal Coastal Marine Constructors, Inc.\n\nFlorida law prescribes the serving of this notice and restricts your right to make payments under your contract in accordance with Section 713.06, Florida Statutes.\n\nBAYFRONT STEEL & SUPPLY, LLC, by Dolores A. Vance, Managing Member."
+      }
+    },
+    {
+      "filename": "pm-status-update.msg",
+      "folder": "Correspondence",
+      "format": "msg",
+      "purpose": "Outlook .msg from the project manager; the app reports this format as UNSUPPORTED. Used to exercise the unsupported-import-report path. No required Q&A answer depends on it.",
+      "hiddenFacts": [
+        "Purports to come from project manager Tomas Reyes",
+        "Mentions an internal schedule slip that intentionally is NOT relied upon by any answer-key question",
+        "Format is intentionally unsupported by the app"
+      ],
+      "bodyText": "",
+      "spreadsheet": [],
+      "email": {
+        "from": "Tomas Reyes <treyes@coastalmarinecon.com>",
+        "to": "Brian Ostrander <bostrander@coastalmarinecon.com>",
+        "subject": "Berth 7 — field status & Bayfront steel",
+        "date": "2026-02-10T08:05:00-05:00",
+        "body": "Brian — Field update on Berth 7. Bayfront's Lot 4 steel and rebar are on site; rebar coils got tagged by QC pending a mill cert review. Schedule slipped about 9 days on the pour sequence. We should sort out the Bayfront balance before it becomes a lien problem with the Authority. — Tomas Reyes, Project Manager",
+        "attachmentFilename": "",
+        "attachmentBody": ""
+      }
+    },
+    {
+      "filename": "lien-vs-bond-research-memo.pdf",
+      "folder": "Pleadings",
+      "format": "pdf",
+      "purpose": "Born-digital internal research memo framing the public-property lien-vs-bond question and the strict-compliance issue; supports the cross-document synthesis question and the CourtListener legal issue.",
+      "hiddenFacts": [
+        "Memo concludes a Chapter 713 lien likely cannot attach to Port Verano Authority's public property",
+        "Recommends pursuing the Section 255.05 payment bond (Bond No. SUR-7741-FL) as primary remedy",
+        "Notes the one-year deadline to enforce runs from the March 11, 2026 recording date",
+        "Flags that any complaint should plead $163,815.00 per the ledger, not the $182,340.00 in the demand letter"
+      ],
+      "bodyText": "PRIVILEGED & CONFIDENTIAL — ATTORNEY WORK PRODUCT\n\nMEMORANDUM\nTO: File — Bayfront Steel & Supply (Berth 7 / Port Verano)\nFROM: Margaret E. Linwood, Esq.\nDATE: April 2, 2026\nRE: Lien vs. Section 255.05 bond on a public port project\n\nISSUE. May Bayfront enforce its recorded Chapter 713 Claim of Lien against the Berth 7 parcel, or must it instead recover against the Section 255.05 payment bond, where the parcel is owned by the Port Verano Authority, a public port authority?\n\nSHORT ANSWER. The lien almost certainly cannot attach. Florida construction liens under Chapter 713 do not attach to public or sovereign property; for improvements to public projects the lienor's remedy is a claim against the statutory payment bond under Section 255.05. See Deen v. Tampa Port Authority. Our primary track should be the 255.05 bond (Bond No. SUR-7741-FL, Gulfstream Surety), with the recorded lien preserved only as a precaution.\n\nDISCUSSION. (1) Public property is generally immune from construction liens; the Legislature substituted the public-project payment bond as the materialman's security. (2) Construction-lien and bond-claim rights are statutory and require strict compliance — timely Notice to Owner (served December 30, 2025) and timely notice of nonpayment must be confirmed. (3) The Claim of Lien was recorded March 11, 2026 (O.R. Book 28714, Page 1902); any action to enforce must be commenced within one year of recording.\n\nDAMAGES NOTE. Plead the balance supported by the draw ledger — $163,815.00. Do NOT repeat the $182,340.00 figure used in the March 24, 2026 demand letter; that number appears to double-count the disputed $18,525.00 Lot 4 back-charge.\n\nRECOMMENDATION. Pursue the 255.05 bond claim; confirm the bond was properly furnished and recorded with the Authority before relying on it.",
+      "spreadsheet": []
+    }
+  ],
+  "answerKey": {
+    "qa": [
+      {
+        "question": "What is the total Contract Sum under the steel and rebar subcontract, and what is the subcontract number?",
+        "expectedAnswer": "$487,500.00 under Subcontract No. CMC-BSS-2025-0047.",
+        "sourceFilename": "subcontract-agreement.pdf",
+        "locatorHint": "Section 3 (Contract Sum); header subcontract number",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What does Section 14.3 of the subcontract require before a party may file suit, and what type of payment provision does it contain?",
+        "expectedAnswer": "It contains a pay-when-paid conditional-payment provision (the contractor's receipt of payment from the Owner is a condition precedent) and requires written notice of default with a 45-day opportunity to cure before any action is commenced.",
+        "sourceFilename": "subcontract-agreement.pdf",
+        "locatorHint": "Section 14.3 (Conditional Payment; Cure)",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What net unpaid balance does Bayfront's draw ledger actually compute to?",
+        "expectedAnswer": "$163,815.00 (NET UNPAID BALANCE line).",
+        "sourceFilename": "payment-draw-ledger.xlsx",
+        "locatorHint": "Draw Ledger sheet, final 'NET UNPAID BALANCE' row",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What dollar amount does the demand letter state is owed, and how does it conflict with the draw ledger?",
+        "expectedAnswer": "The demand letter demands $182,340.00, but the draw ledger nets to $163,815.00 — an $18,525.00 overstatement that appears to double-count the disputed Lot 4 rebar back-charge. This is the deliberate cross-document contradiction.",
+        "sourceFilename": "demand-letter.docx",
+        "locatorHint": "Demand paragraph ('$182,340.00') vs. ledger NET UNPAID BALANCE",
+        "requiresOCR": false,
+        "crossDocument": true
+      },
+      {
+        "question": "On what date was the Claim of Lien recorded, and in what Official Records book and page?",
+        "expectedAnswer": "Recorded March 11, 2026, in Official Records Book 28714, Page 1902, Hillsborough County (Instrument No. 2026000091847).",
+        "sourceFilename": "claim-of-lien-recorded.pdf",
+        "locatorHint": "Recording stamp at top of scanned instrument",
+        "requiresOCR": true,
+        "crossDocument": false
+      },
+      {
+        "question": "What lien amount is stated on the recorded Claim of Lien, and does it match the ledger or the demand letter?",
+        "expectedAnswer": "$163,815.00, which matches the draw ledger's net unpaid balance, not the demand letter's $182,340.00.",
+        "sourceFilename": "claim-of-lien-recorded.pdf",
+        "locatorHint": "Paragraph 4 of the Claim of Lien ('$163,815.00')",
+        "requiresOCR": true,
+        "crossDocument": true
+      },
+      {
+        "question": "Who signed for the Lot 4 delivery, on what date, and under what delivery ticket number?",
+        "expectedAnswer": "Curtis Mealy, site superintendent for Coastal Marine Constructors, signed for it on January 19, 2026 under Delivery Ticket No. DT-Lot4-0119.",
+        "sourceFilename": "delivery-receipt-lot4.png",
+        "locatorHint": "Receiving block and ticket number on the photographed ticket",
+        "requiresOCR": true,
+        "crossDocument": false
+      },
+      {
+        "question": "What two defenses to payment does Coastal Marine's controller raise in the email thread, and what is the payment bond identified in the attachment?",
+        "expectedAnswer": "He raises (1) pay-when-paid under Section 14.3 (the Authority has not released the Lot 4 pay application) and (2) an $18,525.00 back-charge for the QC-flagged Lot 4 rebar coils. The attached Notice to Owner identifies Bond No. SUR-7741-FL from Gulfstream Surety Company.",
+        "sourceFilename": "payment-dispute-thread.eml",
+        "locatorHint": "Body items 1 and 2; attachment 'notice-to-owner.pdf' bond reference",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "Given that the Berth 7 parcel is owned by the Port Verano Authority, what is the firm's recommended primary remedy and why?",
+        "expectedAnswer": "Pursue the Section 255.05 payment bond (Bond No. SUR-7741-FL, Gulfstream Surety) as the primary remedy, because a Chapter 713 construction lien cannot attach to public/sovereign property; the recorded lien is preserved only as a precaution. This synthesizes the subcontract's public-owner fact, the bond identified in the NTO attachment, and the research memo's conclusion.",
+        "sourceFilename": "lien-vs-bond-research-memo.pdf",
+        "locatorHint": "SHORT ANSWER and RECOMMENDATION sections",
+        "requiresOCR": false,
+        "crossDocument": true
+      },
+      {
+        "question": "By when must any action to enforce the recorded lien be commenced, per the research memo?",
+        "expectedAnswer": "Within one year of the March 11, 2026 recording date.",
+        "sourceFilename": "lien-vs-bond-research-memo.pdf",
+        "locatorHint": "DISCUSSION point (3) referencing the one-year deadline from recording",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What is the penal sum (maximum coverage) of the Section 255.05 payment bond?",
+        "expectedAnswer": "NOT SUPPORTED — the documents do not answer this. The bond number and surety are identified, but no penal sum / bond amount appears anywhere in the corpus.",
+        "sourceFilename": "lien-vs-bond-research-memo.pdf",
+        "locatorHint": "Bond is named (SUR-7741-FL) but no dollar penal sum is stated in any document",
+        "requiresOCR": false,
+        "crossDocument": false
+      }
+    ],
+    "chronology": [
+      {
+        "date": "2025-08-04",
+        "event": "Bayfront and Coastal Marine execute Subcontract No. CMC-BSS-2025-0047 for Berth 7 steel/rebar ($487,500.00).",
+        "sourceFilename": "subcontract-agreement.pdf"
+      },
+      {
+        "date": "2025-09-12",
+        "event": "Bayfront first furnishes materials to the Berth 7 project (per recorded Claim of Lien).",
+        "sourceFilename": "claim-of-lien-recorded.pdf"
+      },
+      {
+        "date": "2025-12-30",
+        "event": "Bayfront serves its Notice to Owner on the Port Verano Authority, identifying Bond No. SUR-7741-FL.",
+        "sourceFilename": "payment-dispute-thread.eml"
+      },
+      {
+        "date": "2026-01-19",
+        "event": "Lot 4 structural steel and rebar delivered and signed for by superintendent Curtis Mealy (Ticket DT-Lot4-0119).",
+        "sourceFilename": "delivery-receipt-lot4.png"
+      },
+      {
+        "date": "2026-02-26",
+        "event": "Bayfront last furnishes materials (final delivery + freight, INV-2026-0228).",
+        "sourceFilename": "claim-of-lien-recorded.pdf"
+      },
+      {
+        "date": "2026-03-05",
+        "event": "Coastal Marine's controller asserts pay-when-paid and an $18,525.00 Lot 4 back-charge in the email dispute thread.",
+        "sourceFilename": "payment-dispute-thread.eml"
+      },
+      {
+        "date": "2026-03-11",
+        "event": "Claim of Lien recorded in O.R. Book 28714, Page 1902, Hillsborough County (lien amount $163,815.00).",
+        "sourceFilename": "claim-of-lien-recorded.pdf"
+      },
+      {
+        "date": "2026-03-24",
+        "event": "Demand letter sent demanding $182,340.00 (overstated vs. ledger).",
+        "sourceFilename": "demand-letter.docx"
+      }
+    ],
+    "courtListener": {
+      "legalIssue": "Whether a subcontractor/supplier's Chapter 713 construction lien can attach to land owned by a public port authority, or whether its exclusive remedy for unpaid materials on a public project is a claim against the Section 255.05, Florida Statutes payment bond; and the strict-compliance requirements (Notice to Owner) governing such claims.",
+      "jurisdiction": "Florida (Supreme Court of Florida and District Courts of Appeal)",
+      "expectedAuthorityNames": [
+        "Deen v. Tampa Port Authority, 207 So. 2d 688 (Fla. 1967)",
+        "City of Gainesville v. Republic Inv. Corp., 480 So. 2d 1344 (Fla. 1st DCA 1985)",
+        "Fla. Stat. § 255.05 (public-project payment bond)",
+        "Fla. Stat. ch. 713 (Construction Lien Law); § 713.08 (Claim of Lien)"
+      ]
+    }
+  }
+}

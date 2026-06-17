@@ -1,0 +1,157 @@
+{
+  "chronology" : [
+    {
+      "date" : "2023-11-01",
+      "event" : "Tidewater Mutual policy TWM-FL-4471-2290 period begins (runs through 11\/01\/2024).",
+      "sourceFilename" : "tidewater-policy-declarations.pdf"
+    },
+    {
+      "date" : "2024-09-26",
+      "event" : "Per the insured's recorded statement, the loss began the night of September 26, 2024: wind tore roof shingles and water entered through the bedroom ceiling, followed by canal flooding after county pump station #7 went silent.",
+      "sourceFilename" : "calloway-recorded-statement-transcript.docx"
+    },
+    {
+      "date" : "2024-09-28",
+      "event" : "Date of loss as recorded on the scanned first-notice-of-loss form (contradicts the recorded statement's 09\/26 date).",
+      "sourceFilename" : "claim-form-acord-scanned.pdf"
+    },
+    {
+      "date" : "2024-09-30",
+      "event" : "Loss reported to Tidewater Mutual; claim TWM-CLM-2024-100847 opened.",
+      "sourceFilename" : "claim-form-acord-scanned.pdf"
+    },
+    {
+      "date" : "2024-10-03",
+      "event" : "Adjuster Dennis Okafor takes the insured's recorded statement.",
+      "sourceFilename" : "calloway-recorded-statement-transcript.docx"
+    },
+    {
+      "date" : "2024-10-14",
+      "event" : "Adjuster damages worksheet prepared; estimated RCV of $148,750 \/ net ACV payable $126,950.",
+      "sourceFilename" : "adjuster-damages-worksheet.xlsx"
+    },
+    {
+      "date" : "2024-10-22",
+      "event" : "Public adjuster Lorraine Tasker emails loss photos and photo log (31-inch interior water line; sequence timestamps).",
+      "sourceFilename" : "photos-transmittal-from-insured.eml"
+    },
+    {
+      "date" : "2024-11-12",
+      "event" : "Tidewater Mutual issues denial \/ reservation-of-rights letter relying on Exclusion 3(b) (flood\/surface water).",
+      "sourceFilename" : "tidewater-denial-reservation-of-rights.pdf"
+    },
+    {
+      "date" : "2024-12-02",
+      "event" : "Section 768.28(6) pre-suit notice of claim served on Lee County BoCC and Florida DFS for negligent operation of pump station #7.",
+      "sourceFilename" : "sovereign-immunity-presuit-notice.pdf"
+    }
+  ],
+  "courtListener" : {
+    "expectedAuthorityNames" : [
+      "Dowd v. Monroe County, 557 So. 2d 63 (Fla. 3d DCA 1990)",
+      "Hirt v. Polk County Bd. of County Comm'rs, 578 So. 2d 415 (Fla. 2d DCA 1991)",
+      "Commercial Carrier Corp. v. Indian River County, 371 So. 2d 1010 (Fla. 1979)",
+      "Fla. Stat. § 768.28"
+    ],
+    "jurisdiction" : "Florida (state courts; Fla. 2d\/3d DCA and Florida Supreme Court authority)",
+    "legalIssue" : "Florida sovereign immunity for a tort claim against a county under Fla. Stat. § 768.28, including the planning-level vs. operational-level distinction for negligent operation\/maintenance of a stormwater pump station, the statutory $200,000\/$300,000 damages caps, and the § 768.28(6) pre-suit written-notice condition precedent."
+  },
+  "qa" : [
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "Policy number TWM-FL-4471-2290; Coverage A (Dwelling) limit is $410,000.",
+      "locatorHint" : "Declarations header and Section I — Property Coverages and Limits.",
+      "question" : "What is the policy number and the Coverage A (Dwelling) limit on the Tidewater Mutual policy?",
+      "requiresOCR" : false,
+      "sourceFilename" : "tidewater-policy-declarations.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "An All-Other-Perils (AOP) deductible of $2,500 and a separate Hurricane Deductible of 2% of Coverage A, which equals $8,200.",
+      "locatorHint" : "Deductibles section of the declarations page.",
+      "question" : "What deductibles apply, including any separate hurricane deductible?",
+      "requiresOCR" : false,
+      "sourceFilename" : "tidewater-policy-declarations.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "Claim number TWM-CLM-2024-100847; date of loss recorded on the form is 09\/28\/2024.",
+      "locatorHint" : "Top of the scanned property loss notice (claim number) and the Date of Loss field. Image-only, requires OCR.",
+      "question" : "What is the claim number and the date of loss recorded on the first notice of loss form?",
+      "requiresOCR" : true,
+      "sourceFilename" : "claim-form-acord-scanned.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "$148,750 (RCV). After recoverable depreciation of $19,300 and the $2,500 AOP deductible, the net ACV payable is $126,950.",
+      "locatorHint" : "Summary sheet cell B9 (RCV) and B12 (net ACV); also LineItems 'Total RCV'.",
+      "question" : "What total estimated replacement cost value (RCV) did the adjuster assign to the dwelling loss?",
+      "requiresOCR" : false,
+      "sourceFilename" : "adjuster-damages-worksheet.xlsx"
+    },
+    {
+      "crossDocument" : true,
+      "expectedAnswer" : "Yes. The scanned claim form states the date of loss as 09\/28\/2024, but Mrs. Calloway's recorded statement says the damage began the night of September 26, 2024. The two documents conflict on the date of loss.",
+      "locatorHint" : "Compare the recorded statement's '26th' \/ late-husband's-birthday assertion against the claim form's Date of Loss field. Cross-document and requires OCR of the claim form.",
+      "question" : "Is there a contradiction in the date of loss across the file, and what are the two dates?",
+      "requiresOCR" : true,
+      "sourceFilename" : "calloway-recorded-statement-transcript.docx"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "Section I Exclusion 3(b), the Water Damage exclusion barring loss from flood, surface water, and overflow of a body of water (whether or not wind-driven), invoked together with the anti-concurrent-causation lead-in.",
+      "locatorHint" : "Body of the November 12, 2024 denial \/ reservation-of-rights letter quoting Exclusion 3(b).",
+      "question" : "On what policy provision did Tidewater Mutual base its denial?",
+      "requiresOCR" : false,
+      "sourceFilename" : "tidewater-denial-reservation-of-rights.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "An interior water line of 31 inches above the finished floor, documented in the photo log attached to Lorraine Tasker's October 22, 2024 email (it appears only in the attachment, not the email body).",
+      "locatorHint" : "Attachment 'Calloway-photo-log.pdf', Photos 5-9 entry; not stated in the email body.",
+      "question" : "What interior water line measurement is documented, and where does that figure come from?",
+      "requiresOCR" : false,
+      "sourceFilename" : "photos-transmittal-from-insured.eml"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "Florida's sovereign immunity waiver, Fla. Stat. § 768.28, with a damages cap of $200,000 per person and $300,000 per incident absent a legislative claims bill; pre-suit written notice under § 768.28(6) is a condition precedent.",
+      "locatorHint" : "Damages and compliance paragraphs of the § 768.28(6) notice of claim.",
+      "question" : "What statutory basis and damages cap govern the claim against Lee County?",
+      "requiresOCR" : false,
+      "sourceFilename" : "sovereign-immunity-presuit-notice.pdf"
+    },
+    {
+      "crossDocument" : true,
+      "expectedAnswer" : "Yes. The recorded statement and the photo log together show wind-driven rain entered through the roof first (camera stamp ~SEP 26 11:38 PM), then ground\/surface water rose later (camera stamp SEP 27 04:12 AM) after Lee County pump station #7 went silent, supporting a theory that the County's operational negligence contributed to the inundation, independent of the policy's flood exclusion.",
+      "locatorHint" : "Synthesize the recorded statement (roof-first, then canal; pump #7 failure) with the photo-log timestamps in photos-transmittal-from-insured.eml and the § 768.28 notice. Cross-document.",
+      "question" : "Does the sequence and timing of water intrusion support the argument that the County pump station failure, not just flood, contributed to the loss?",
+      "requiresOCR" : false,
+      "sourceFilename" : "calloway-recorded-statement-transcript.docx"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "Priya Venkataraman, Claims Supervisor, signed the denial \/ reservation-of-rights letter dated November 12, 2024.",
+      "locatorHint" : "Signature block and date line of the denial letter.",
+      "question" : "Who is the named claims supervisor who signed the denial letter, and on what date was it issued?",
+      "requiresOCR" : false,
+      "sourceFilename" : "tidewater-denial-reservation-of-rights.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "NOT SUPPORTED — the documents do not answer this. The declarations name Gulfshore Community Bank as mortgagee but no payoff balance appears anywhere in the corpus.",
+      "locatorHint" : "Mortgagee is named on the declarations, but no payoff figure exists in any document.",
+      "question" : "What was the amount of the insured's mortgage payoff balance with Gulfshore Community Bank at the time of loss?",
+      "requiresOCR" : false,
+      "sourceFilename" : "tidewater-policy-declarations.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "NOT SUPPORTED — the documents do not answer this; the storm is referred to only generically as 'the hurricane' and no storm name is stated anywhere in the corpus.",
+      "locatorHint" : "Documents say 'hurricane' generically; no named storm appears in any file.",
+      "question" : "What hurricane name did the National Hurricane Center assign to the storm that caused the loss?",
+      "requiresOCR" : false,
+      "sourceFilename" : "claim-form-acord-scanned.pdf"
+    }
+  ]
+}

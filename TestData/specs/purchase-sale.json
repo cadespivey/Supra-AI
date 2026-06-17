@@ -1,0 +1,380 @@
+{
+  "matterName": "Calloway v. Heron Bay Holdings, LLC — Purchase & Sale of 4412 Bayshore Blvd",
+  "jurisdiction": "Florida — 13th Judicial Circuit, Hillsborough County (Tampa)",
+  "partyPerspective": "plaintiff",
+  "practiceArea": "Real Estate Litigation — Residential/Commercial Purchase & Sale; Specific Performance",
+  "summary": "Buyer Marcus Calloway seeks specific performance of a $1,275,000 purchase and sale agreement for a mixed-use property at 4412 Bayshore Blvd, Tampa, after seller Heron Bay Holdings, LLC refused to close, claiming the financing/inspection contingency lapsed. The matter turns on conflicting closing-date representations and an inspection defect surfaced only by OCR.",
+  "attorneyNotesMarkdown": "## Attorney Working Notes — Calloway v. Heron Bay Holdings, LLC\n**Matter No.:** RE-2026-0418  |  **Lead:** A. Vega, Esq.  |  **Paralegal:** (internal)\n\n### Posture\nWe represent the **buyer, Marcus Calloway**. Seller (**Heron Bay Holdings, LLC**, managing member **Diane Ruelle**) repudiated by email refusing to set a closing table. We intend to file for **specific performance** in the 13th Circuit, Hillsborough County. Earnest money of **$63,750** is held by **Gulfstream Title & Escrow, LLC** (escrow file **GT-58821**).\n\n### Key tension\n- The **PSA (§7.2)** fixes the financing/inspection contingency deadline at **March 14, 2026** and the closing date at **April 10, 2026**.\n- The seller's agent's **email of March 9** asserts the closing date is **March 31, 2026** — this **contradicts the executed PSA**. Run this contradiction to ground; it is the crux of the repudiation defense.\n\n### Hidden / non-obvious items to confirm\n- The **scanned inspection report** appears clean on a quick skim, but OCR pulls a buried line noting an **active roof leak above the second-floor commercial unit (Unit 2C)** — a material defect the seller never disclosed. This only shows on OCR. (Planted fact #1.)\n- The **closing statement spreadsheet** lists a **$4,800 'undisclosed lien payoff — Sunstate Code Enforcement'** in the debits column that nobody flagged in correspondence. Tie this to the title commitment Schedule B-II exceptions. (Planted fact #2.)\n\n### Research targets\n- FL specific-performance standard for land-sale contracts; adequacy of remedy at law; statute of frauds compliance (PSA is signed & definite). See *DK Arena v. EB Acquisitions*.\n- Public-records angle: opposing counsel hinted the county may treat the recorded contract/lis pendens materials as public records — confirm under *Microdecisions v. Skinner* whether the property appraiser's GIS/records carry any copyright restriction. Likely a red herring but address it.\n\n### To do\n1. Confirm earnest-money receipt date vs. PSA effective date.\n2. Pin down whether buyer's lender (Tampa Bay Federal C.U., commitment **TBFCU-LC-99214**) issued the loan commitment before March 14.\n3. Prepare exhibit index; the realtor's .msg may not import — get a clean PDF/eml copy.",
+  "documents": [
+    {
+      "filename": "psa-4412-bayshore-executed.pdf",
+      "folder": "Contracts",
+      "format": "pdf",
+      "purpose": "Born-digital primary contract; tests extraction of purchase price, earnest money, contingency deadline, closing date, parties, and a buried clause. Anchor for the closing-date contradiction.",
+      "hiddenFacts": [
+        "Purchase price: $1,275,000.00",
+        "Earnest money deposit: $63,750.00 held by Gulfstream Title & Escrow, LLC (escrow file GT-58821)",
+        "Financing/inspection contingency deadline: March 14, 2026",
+        "Closing date per PSA §9.1: April 10, 2026",
+        "Buyer: Marcus Calloway; Seller: Heron Bay Holdings, LLC (managing member Diane Ruelle)",
+        "Property: 4412 Bayshore Blvd, Tampa, FL 33611 (Folio 0987654-3210)",
+        "Buried clause §14.6: 'Time is of the essence as to all dates herein except the inspection cure period, which Seller may extend in writing for up to ten (10) days.'"
+      ],
+      "bodyText": "RESIDENTIAL/COMMERCIAL PURCHASE AND SALE AGREEMENT\n\nThis Purchase and Sale Agreement (\"Agreement\") is made effective February 27, 2026 (\"Effective Date\") by and between HERON BAY HOLDINGS, LLC, a Florida limited liability company, by its managing member Diane Ruelle (\"Seller\"), and MARCUS CALLOWAY, an individual (\"Buyer\").\n\n1. PROPERTY. Seller agrees to sell and Buyer agrees to buy the mixed-use real property located at 4412 Bayshore Blvd, Tampa, Florida 33611, Hillsborough County, Folio No. 0987654-3210, together with all improvements (the \"Property\").\n\n2. PURCHASE PRICE. The total purchase price is One Million Two Hundred Seventy-Five Thousand and 00/100 Dollars ($1,275,000.00), payable as set forth herein.\n\n3. EARNEST MONEY. Within three (3) business days of the Effective Date, Buyer shall deposit Sixty-Three Thousand Seven Hundred Fifty and 00/100 Dollars ($63,750.00) (\"Deposit\") with Gulfstream Title & Escrow, LLC, as escrow agent (Escrow File GT-58821). The Deposit shall be credited to Buyer at Closing.\n\n7. CONTINGENCIES.\n7.1 Buyer's obligations are contingent upon Buyer obtaining a written loan commitment and completing all inspections to Buyer's satisfaction.\n7.2 The financing and inspection contingency period shall expire on March 14, 2026 (the \"Contingency Deadline\"). If Buyer does not deliver written notice of termination on or before the Contingency Deadline, the contingencies are deemed waived.\n\n9. CLOSING.\n9.1 Closing shall occur on April 10, 2026, at the offices of the escrow agent, or such other date as the parties may agree in writing.\n9.2 Seller shall convey marketable title by statutory warranty deed, free of liens except permitted exceptions.\n\n14. MISCELLANEOUS.\n14.6 TIME IS OF THE ESSENCE as to all dates herein except the inspection cure period, which Seller may extend in writing for up to ten (10) days.\n14.9 This Agreement constitutes the entire agreement and may be modified only by a writing signed by both parties.\n\nIN WITNESS WHEREOF, the parties have executed this Agreement as of the Effective Date.\n\nSELLER: Heron Bay Holdings, LLC  By: Diane Ruelle, Managing Member\nBUYER: Marcus Calloway",
+      "hiddenFactsNote": "Closing date here (April 10, 2026) directly contradicts the realtor email and the financing email."
+    },
+    {
+      "filename": "closing-statement-settlement-sheet.xlsx",
+      "folder": "Financials",
+      "format": "xlsx",
+      "purpose": "Settlement/closing figures; tests numeric extraction from spreadsheet cells, including a spreadsheet-only hidden fact (undisclosed lien payoff line) and reconciliation against the PSA price and earnest money.",
+      "hiddenFacts": [
+        "Spreadsheet-only fact: '$4,800.00 Undisclosed Lien Payoff — Sunstate Code Enforcement' debit to Seller (cell exists ONLY here)",
+        "Total purchase price reconciles to $1,275,000.00 matching PSA",
+        "Earnest money credit to Buyer $63,750.00 matching PSA",
+        "Cash to close from Buyer: $262,750.00",
+        "Loan amount: $956,250.00 (Tampa Bay Federal C.U.)",
+        "Estimated net to Seller: $1,183,600.00"
+      ],
+      "spreadsheet": [
+        {
+          "sheet": "Settlement",
+          "cells": [
+            [
+              "GULFSTREAM TITLE & ESCROW, LLC — ESTIMATED CLOSING STATEMENT",
+              "",
+              ""
+            ],
+            [
+              "Escrow File:",
+              "GT-58821",
+              ""
+            ],
+            [
+              "Property:",
+              "4412 Bayshore Blvd, Tampa, FL 33611",
+              ""
+            ],
+            [
+              "Buyer:",
+              "Marcus Calloway",
+              ""
+            ],
+            [
+              "Seller:",
+              "Heron Bay Holdings, LLC",
+              ""
+            ],
+            [
+              "Estimated Closing Date:",
+              "2026-04-10",
+              ""
+            ],
+            [
+              "",
+              "",
+              ""
+            ],
+            [
+              "LINE ITEM",
+              "BUYER DEBIT",
+              "SELLER DEBIT"
+            ],
+            [
+              "Contract Sales Price",
+              "1275000.00",
+              ""
+            ],
+            [
+              "Earnest Money Deposit (credit to Buyer)",
+              "-63750.00",
+              ""
+            ],
+            [
+              "Loan Amount (Tampa Bay Federal C.U.)",
+              "-956250.00",
+              ""
+            ],
+            [
+              "Title Insurance Premium (Owner's)",
+              "6362.50",
+              ""
+            ],
+            [
+              "Documentary Stamps on Deed",
+              "",
+              "8925.00"
+            ],
+            [
+              "Recording Fees",
+              "212.50",
+              ""
+            ],
+            [
+              "Undisclosed Lien Payoff - Sunstate Code Enforcement",
+              "",
+              "4800.00"
+            ],
+            [
+              "Real Estate Commission (6%)",
+              "",
+              "76500.00"
+            ],
+            [
+              "Prorated Property Taxes",
+              "1175.00",
+              "1175.00"
+            ],
+            [
+              "",
+              "",
+              ""
+            ],
+            [
+              "ESTIMATED CASH TO CLOSE FROM BUYER",
+              "262750.00",
+              ""
+            ],
+            [
+              "ESTIMATED NET PROCEEDS TO SELLER",
+              "",
+              "1183600.00"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "filename": "inspection-report-scanned.pdf",
+      "folder": "Evidence",
+      "format": "scanned_pdf",
+      "purpose": "OCR-only scanned home/commercial inspection. Tests OCR extraction of a material defect that appears nowhere else and is not disclosed in correspondence. Any Q&A relying on the roof-leak defect MUST set requiresOCR:true.",
+      "hiddenFacts": [
+        "OCR-only fact: 'ACTIVE ROOF LEAK observed above second-floor commercial Unit 2C; water staining and soft decking; estimated repair $18,500'",
+        "Inspection performed March 6, 2026 by Bayfront Property Inspections, license HI-7741",
+        "Inspector: Raymond Ostrander",
+        "Report flags HVAC condenser at end of service life (Unit 1A)"
+      ],
+      "bodyText": "BAYFRONT PROPERTY INSPECTIONS\nLicensed Florida Home & Commercial Inspector — License No. HI-7741\nInspection Date: March 6, 2026\nInspector: Raymond Ostrander\n\nPROPERTY INSPECTED: 4412 Bayshore Blvd, Tampa, FL 33611 (mixed-use, ground-floor retail + second-floor commercial suites)\nCLIENT: Marcus Calloway\n\nSUMMARY OF FINDINGS\n\n1. STRUCTURE / FOUNDATION: Slab-on-grade foundation observed in satisfactory condition. No significant settlement cracking noted.\n\n2. ROOFING: Modified-bitumen flat roof, approximately 12 years old. **ACTIVE ROOF LEAK observed above second-floor commercial Unit 2C; visible water staining on ceiling and soft roof decking detected on probe. Estimated repair cost $18,500. Recommend licensed roofer evaluation prior to closing.** Membrane seams near the rear parapet show ponding and alligatoring.\n\n3. HVAC: Two split systems. Unit 1A condenser is at the end of its service life and should be budgeted for replacement. Unit 2C system operational.\n\n4. ELECTRICAL: 400-amp service, copper branch wiring. GFCI protection absent at three exterior receptacles — recommend correction.\n\n5. PLUMBING: Copper supply, cast-iron drain stacks. Minor corrosion at water-heater fittings.\n\n6. EXTERIOR / SITE: Stucco facade in fair condition with hairline cracking. Parking lot striping faded.\n\nThis report reflects visual, non-invasive observation only. Latent defects may exist that are not discoverable by such inspection. Items noted above as material defects should be evaluated by appropriate licensed trades before the buyer waives contingencies.\n\nEnd of Report — Bayfront Property Inspections."
+    },
+    {
+      "filename": "addendum-no-1-financing-extension.docx",
+      "folder": "Contracts",
+      "format": "docx",
+      "purpose": "Editable addendum; tests docx extraction and whether the app links an amendment back to the base PSA. Reinforces the April 10 closing date and adds an addendum-specific identifier.",
+      "hiddenFacts": [
+        "Addendum No. 1 dated March 4, 2026",
+        "Confirms closing date remains April 10, 2026 (consistent with PSA, inconsistent with realtor/financing emails)",
+        "Adds Seller credit of $7,500 toward Buyer's closing costs",
+        "References PSA Effective Date February 27, 2026",
+        "Addendum control number ADD-4412-001"
+      ],
+      "bodyText": "ADDENDUM NO. 1 TO PURCHASE AND SALE AGREEMENT\nAddendum Control No. ADD-4412-001\n\nThis Addendum No. 1 (\"Addendum\") is entered into March 4, 2026, and amends that certain Purchase and Sale Agreement dated effective February 27, 2026 (the \"Agreement\") between HERON BAY HOLDINGS, LLC (\"Seller\") and MARCUS CALLOWAY (\"Buyer\") for the property at 4412 Bayshore Blvd, Tampa, FL 33611.\n\nThe parties agree as follows:\n\n1. CLOSING DATE CONFIRMED. The parties confirm that the Closing Date under Section 9.1 of the Agreement remains April 10, 2026. No change to the Closing Date is made by this Addendum.\n\n2. SELLER CLOSING-COST CREDIT. At Closing, Seller shall credit Buyer the sum of Seven Thousand Five Hundred and 00/100 Dollars ($7,500.00) toward Buyer's closing costs.\n\n3. CONTINGENCY DEADLINE UNCHANGED. The financing and inspection Contingency Deadline of March 14, 2026 under Section 7.2 of the Agreement remains in full force.\n\n4. RATIFICATION. Except as expressly modified herein, all terms of the Agreement remain in full force and effect. In the event of any conflict between this Addendum and the Agreement, this Addendum controls.\n\nAGREED AND ACCEPTED:\nSeller: Heron Bay Holdings, LLC, by Diane Ruelle, Managing Member — Date: March 4, 2026\nBuyer: Marcus Calloway — Date: March 4, 2026"
+    },
+    {
+      "filename": "financing-contingency-status.eml",
+      "folder": "Correspondence",
+      "format": "eml",
+      "purpose": "Email with attachment; tests eml parsing AND attachment extraction. Plants the deliberate closing-date CONTRADICTION (states closing as March 31, 2026) against the PSA/Addendum (April 10, 2026). Attachment is the lender loan commitment.",
+      "hiddenFacts": [
+        "Email asserts closing date of March 31, 2026 — CONTRADICTS PSA §9.1 (April 10, 2026) and Addendum No. 1",
+        "Loan commitment issued March 11, 2026 — BEFORE the March 14 contingency deadline (supports Buyer's position)",
+        "Lender commitment number TBFCU-LC-99214, loan amount $956,250.00",
+        "Sender is Buyer's loan officer at Tampa Bay Federal Credit Union"
+      ],
+      "email": {
+        "from": "j.harmon@tampabayfedcu.example.com",
+        "to": "marcus.calloway@example.com",
+        "subject": "Re: Loan Commitment Issued — 4412 Bayshore (closing 3/31)",
+        "date": "Wed, 11 Mar 2026 14:22:07 -0400",
+        "body": "Marcus,\n\nGood news — your file cleared underwriting and our written loan commitment is attached (commitment no. TBFCU-LC-99214, loan amount $956,250.00). The commitment was issued today, March 11, 2026, which is ahead of your contingency deadline, so you are fully covered on financing.\n\nMy notes show closing scheduled for March 31, 2026. Please confirm with the title company so we can coordinate the wire and final figures. If anything on the closing date changed on your side, let me know right away.\n\nBest,\nJulia Harmon\nSenior Loan Officer, Tampa Bay Federal Credit Union\nNMLS #441902",
+        "attachmentFilename": "loan-commitment-TBFCU-LC-99214.pdf",
+        "attachmentBody": "TAMPA BAY FEDERAL CREDIT UNION — CONDITIONAL LOAN COMMITMENT\nCommitment No.: TBFCU-LC-99214\nDate Issued: March 11, 2026\nBorrower: Marcus Calloway\nProperty: 4412 Bayshore Blvd, Tampa, FL 33611\nLoan Amount: $956,250.00\nLoan Type: Commercial/Mixed-Use, 7/1 ARM, 25-yr amortization\nInterest Rate: 6.875% (locked through April 15, 2026)\nConditions: (1) satisfactory appraisal supporting value of $1,275,000; (2) clear title commitment; (3) evidence of hazard insurance. This commitment is valid through April 15, 2026, and constitutes a written loan commitment for purposes of the buyer's financing contingency.\nAuthorized by: Julia Harmon, Senior Loan Officer, NMLS #441902."
+      }
+    },
+    {
+      "filename": "title-commitment-gulfstream.pdf",
+      "folder": "Contracts",
+      "format": "pdf",
+      "purpose": "Born-digital title commitment; tests extraction of legal description, exceptions, and cross-reference of the Schedule B-II code-enforcement lien to the spreadsheet's undisclosed lien payoff line (cross-document synthesis).",
+      "hiddenFacts": [
+        "Commitment No. GT-TC-58821-A, effective March 5, 2026",
+        "Schedule B-II Exception 7: 'Code Enforcement Lien recorded by City of Tampa / Sunstate Code Enforcement, O.R. Book 28114, Page 0042, in the amount of $4,800.00' — ties to spreadsheet payoff line",
+        "Proposed insured: Marcus Calloway; amount $1,275,000.00",
+        "Legal description: Lot 12, Block 4, BAYSHORE GARDENS UNIT TWO, Plat Book 41, Page 18",
+        "Title underwriter: Old Republic National Title; agent Gulfstream Title & Escrow, LLC"
+      ],
+      "bodyText": "ALTA COMMITMENT FOR TITLE INSURANCE\nIssued by Old Republic National Title Insurance Company\nThrough its agent: Gulfstream Title & Escrow, LLC\nCommitment No.: GT-TC-58821-A\nCommitment Effective Date: March 5, 2026\n\nSCHEDULE A\n1. Proposed Insured (Owner's Policy): Marcus Calloway\n2. Policy Amount: $1,275,000.00\n3. Estate or interest: Fee Simple\n4. Title is vested in: Heron Bay Holdings, LLC\n5. Legal Description: Lot 12, Block 4, BAYSHORE GARDENS UNIT TWO, according to the plat thereof recorded in Plat Book 41, Page 18, Public Records of Hillsborough County, Florida. Property address: 4412 Bayshore Blvd, Tampa, FL 33611.\n\nSCHEDULE B-I — REQUIREMENTS\n1. Pay the agreed amounts for the interest to be insured.\n2. Execute and record a Statutory Warranty Deed from Heron Bay Holdings, LLC to Marcus Calloway.\n3. Satisfy and obtain release of the code enforcement lien identified in Schedule B-II, Exception 7.\n\nSCHEDULE B-II — EXCEPTIONS\n1. Taxes for the year 2026 and subsequent years, not yet due and payable.\n2. Restrictions, covenants and easements of record as shown on the plat of Bayshore Gardens Unit Two.\n3. Rights of tenants in possession under unrecorded leases (commercial suites).\n4. Standard survey exceptions until a current survey is furnished.\n5. Riparian and littoral rights are neither guaranteed nor insured.\n6. Any lien for unrecorded municipal utility services.\n7. Code Enforcement Lien recorded by the City of Tampa / Sunstate Code Enforcement, recorded in Official Records Book 28114, Page 0042, Public Records of Hillsborough County, Florida, in the amount of $4,800.00. Must be satisfied at or before closing.\n\nThis commitment is preliminary to the issuance of an owner's title policy and is subject to the conditions and stipulations of the policy jacket."
+    },
+    {
+      "filename": "realtor-message-from-coastline.msg",
+      "folder": "Correspondence",
+      "format": "msg",
+      "purpose": "Unsupported format; exercises the unsupported-import / parse-failure reporting path. NO required Q&A answer is placed behind this file. Mirrors (but is not the source of record for) the closing-date contradiction.",
+      "hiddenFacts": [
+        "Realtor: Tessa Lindqvist, Coastline Realty Group",
+        "Casually repeats an incorrect March 31, 2026 closing date (decoy, not the source of record)",
+        "Mentions seller 'getting cold feet' — color only, not an answer-key fact"
+      ],
+      "email": {
+        "from": "tessa@coastlinerealtygroup.example.com",
+        "to": "marcus.calloway@example.com",
+        "subject": "quick note re: Bayshore closing",
+        "date": "Mon, 09 Mar 2026 09:05:00 -0400",
+        "body": "Hi Marcus — circling back on 4412 Bayshore. I have the closing penciled for March 31. Honestly Diane on the seller side seems to be getting cold feet, so let's keep everything buttoned up and in writing. Call me when you have a sec.\n\nTessa Lindqvist\nCoastline Realty Group",
+        "attachmentFilename": "",
+        "attachmentBody": ""
+      }
+    }
+  ],
+  "answerKey": {
+    "qa": [
+      {
+        "question": "What is the total purchase price for 4412 Bayshore Blvd?",
+        "expectedAnswer": "$1,275,000.00",
+        "sourceFilename": "psa-4412-bayshore-executed.pdf",
+        "locatorHint": "Section 2 (Purchase Price)",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "How much earnest money was deposited and who holds it?",
+        "expectedAnswer": "$63,750.00, held by Gulfstream Title & Escrow, LLC under escrow file GT-58821.",
+        "sourceFilename": "psa-4412-bayshore-executed.pdf",
+        "locatorHint": "Section 3 (Earnest Money)",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What is the financing/inspection contingency deadline?",
+        "expectedAnswer": "March 14, 2026.",
+        "sourceFilename": "psa-4412-bayshore-executed.pdf",
+        "locatorHint": "Section 7.2 (Contingencies)",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "Is there a contradiction in the documents about the closing date, and what is it?",
+        "expectedAnswer": "Yes. The executed PSA (§9.1) and Addendum No. 1 set the closing date as April 10, 2026, but the loan officer's financing email (and the realtor .msg) state the closing date as March 31, 2026. The PSA/Addendum is the controlling written agreement; the emails are inconsistent.",
+        "sourceFilename": "financing-contingency-status.eml",
+        "locatorHint": "Compare email subject/body (March 31, 2026) against PSA §9.1 and Addendum No. 1 (April 10, 2026)",
+        "requiresOCR": false,
+        "crossDocument": true
+      },
+      {
+        "question": "Was the buyer's written loan commitment issued before the contingency deadline?",
+        "expectedAnswer": "Yes. Commitment TBFCU-LC-99214 for $956,250.00 was issued March 11, 2026, which is before the March 14, 2026 contingency deadline.",
+        "sourceFilename": "financing-contingency-status.eml",
+        "locatorHint": "Email body and attached loan-commitment-TBFCU-LC-99214.pdf, compared to PSA §7.2",
+        "requiresOCR": false,
+        "crossDocument": true
+      },
+      {
+        "question": "What material roof defect did the inspection identify, and what is the estimated repair cost?",
+        "expectedAnswer": "An active roof leak above second-floor commercial Unit 2C, with water staining and soft decking, estimated to cost $18,500 to repair.",
+        "sourceFilename": "inspection-report-scanned.pdf",
+        "locatorHint": "Section 2 (Roofing) — only recoverable via OCR of the scanned report",
+        "requiresOCR": true,
+        "crossDocument": false
+      },
+      {
+        "question": "Who performed the inspection and under what license number?",
+        "expectedAnswer": "Raymond Ostrander of Bayfront Property Inspections, Florida inspector license No. HI-7741.",
+        "sourceFilename": "inspection-report-scanned.pdf",
+        "locatorHint": "Report header — requires OCR",
+        "requiresOCR": true,
+        "crossDocument": false
+      },
+      {
+        "question": "What undisclosed lien appears on the closing statement, and does it match a title exception?",
+        "expectedAnswer": "The closing statement shows a $4,800.00 'Undisclosed Lien Payoff — Sunstate Code Enforcement' debited to Seller. This matches Schedule B-II, Exception 7 of the title commitment: a City of Tampa / Sunstate Code Enforcement lien recorded at O.R. Book 28114, Page 0042, for $4,800.00.",
+        "sourceFilename": "closing-statement-settlement-sheet.xlsx",
+        "locatorHint": "Settlement sheet 'Undisclosed Lien Payoff' line; cross-reference title-commitment Schedule B-II Exception 7",
+        "requiresOCR": false,
+        "crossDocument": true
+      },
+      {
+        "question": "What is the estimated cash to close from the buyer?",
+        "expectedAnswer": "$262,750.00.",
+        "sourceFilename": "closing-statement-settlement-sheet.xlsx",
+        "locatorHint": "Settlement sheet 'ESTIMATED CASH TO CLOSE FROM BUYER' line",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What closing-cost credit did the seller agree to in Addendum No. 1?",
+        "expectedAnswer": "A $7,500.00 credit toward the buyer's closing costs (Addendum Control No. ADD-4412-001, dated March 4, 2026).",
+        "sourceFilename": "addendum-no-1-financing-extension.docx",
+        "locatorHint": "Addendum Section 2 (Seller Closing-Cost Credit)",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What is the recorded legal description of the property?",
+        "expectedAnswer": "Lot 12, Block 4, Bayshore Gardens Unit Two, per Plat Book 41, Page 18, Public Records of Hillsborough County, Florida.",
+        "sourceFilename": "title-commitment-gulfstream.pdf",
+        "locatorHint": "Schedule A, item 5 (Legal Description)",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What is the buyer's homeowners' association membership or HOA monthly fee for the property?",
+        "expectedAnswer": "NOT SUPPORTED — the documents do not answer this.",
+        "sourceFilename": "psa-4412-bayshore-executed.pdf",
+        "locatorHint": "No HOA membership or fee is stated in any document; refusal expected.",
+        "requiresOCR": false,
+        "crossDocument": false
+      }
+    ],
+    "chronology": [
+      {
+        "date": "2026-02-27",
+        "event": "Purchase and Sale Agreement effective; price $1,275,000, closing set for April 10, 2026.",
+        "sourceFilename": "psa-4412-bayshore-executed.pdf"
+      },
+      {
+        "date": "2026-03-04",
+        "event": "Addendum No. 1 (ADD-4412-001) executed; confirms April 10, 2026 closing and adds $7,500 seller credit.",
+        "sourceFilename": "addendum-no-1-financing-extension.docx"
+      },
+      {
+        "date": "2026-03-05",
+        "event": "Title commitment GT-TC-58821-A effective; discloses $4,800 code-enforcement lien (Schedule B-II Exception 7).",
+        "sourceFilename": "title-commitment-gulfstream.pdf"
+      },
+      {
+        "date": "2026-03-06",
+        "event": "Property inspection performed; active roof leak above Unit 2C documented (OCR-only).",
+        "sourceFilename": "inspection-report-scanned.pdf"
+      },
+      {
+        "date": "2026-03-09",
+        "event": "Realtor Tessa Lindqvist emails buyer referencing an (incorrect) March 31 closing and seller 'cold feet'.",
+        "sourceFilename": "realtor-message-from-coastline.msg"
+      },
+      {
+        "date": "2026-03-11",
+        "event": "Lender issues written loan commitment TBFCU-LC-99214 ($956,250); email also asserts March 31, 2026 closing (contradicts PSA).",
+        "sourceFilename": "financing-contingency-status.eml"
+      },
+      {
+        "date": "2026-03-14",
+        "event": "Financing/inspection contingency deadline under PSA §7.2.",
+        "sourceFilename": "psa-4412-bayshore-executed.pdf"
+      },
+      {
+        "date": "2026-04-10",
+        "event": "Contractual closing date under PSA §9.1 and Addendum No. 1.",
+        "sourceFilename": "psa-4412-bayshore-executed.pdf"
+      }
+    ],
+    "courtListener": {
+      "legalIssue": "Whether a buyer may obtain specific performance of a definite, signed Florida real-estate purchase and sale agreement where financing and inspection contingencies were timely satisfied and the seller repudiated, and the related question of whether recorded contract/property records implicate public-records access rather than copyright restriction.",
+      "jurisdiction": "Florida (Supreme Court of Florida and District Courts of Appeal); 13th Judicial Circuit, Hillsborough County trial venue",
+      "expectedAuthorityNames": [
+        "DK Arena, Inc. v. EB Acquisitions I, LLC, 112 So. 3d 85 (Fla. 2013)",
+        "Microdecisions, Inc. v. Skinner, 889 So. 2d 871 (Fla. 2d DCA 2004)"
+      ]
+    }
+  }
+}
