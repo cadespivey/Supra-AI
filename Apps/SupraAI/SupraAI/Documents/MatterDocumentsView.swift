@@ -11,11 +11,14 @@ import UniformTypeIdentifiers
 struct MatterDocumentsView: View {
     @ObservedObject var controller: MatterDocumentsController
     @ObservedObject var queue: DocumentProcessingQueue
+    var qaController: DocumentQAController?
+    var loadedModelID: ModelID?
 
     @State private var showImporter = false
     @State private var newFolderName = ""
     @State private var showNewFolder = false
     @State private var showTrash = false
+    @State private var showQA = false
     @State private var dropTargeted = false
     @State private var preview: PreviewItem?
 
@@ -50,6 +53,15 @@ struct MatterDocumentsView: View {
             }
         }
         .sheet(isPresented: $showTrash) { trashSheet }
+        .sheet(isPresented: $showQA) {
+            if let qaController {
+                DocumentQASheet(
+                    qa: qaController,
+                    scopeFolderID: controller.selectedFolderID,
+                    loadedModelID: loadedModelID
+                ) { showQA = false }
+            }
+        }
         .sheet(item: $preview) { item in
             DocumentPreviewView(model: item.model) { preview = nil }
         }
@@ -69,6 +81,8 @@ struct MatterDocumentsView: View {
             Button { showNewFolder = true } label: { Label("New Folder", systemImage: "folder.badge.plus") }
             Button { showImporter = true } label: { Label("Import", systemImage: "square.and.arrow.down") }
                 .disabled(!controller.setupReady)
+            Button { showQA = true } label: { Label("Ask", systemImage: "questionmark.bubble") }
+                .disabled(qaController == nil)
             Button { showTrash = true } label: { Label("Trash", systemImage: "trash") }
         }
     }
@@ -321,6 +335,90 @@ struct MatterDocumentsView: View {
 struct PreviewItem: Identifiable {
     let id = UUID()
     let model: DocumentPreviewModel
+}
+
+/// Source-grounded Q&A over the matter's documents (WO 41). Auto-source by
+/// default; answers are saved to the Outputs tab with their source set.
+struct DocumentQASheet: View {
+    @ObservedObject var qa: DocumentQAController
+    let scopeFolderID: String?
+    let loadedModelID: ModelID?
+    let onClose: () -> Void
+
+    @State private var question = ""
+    @State private var mode: DocumentAnswerMode = .short
+    @State private var scopeThisFolder = false
+
+    private var scope: RetrievalScope {
+        (scopeThisFolder && scopeFolderID != nil) ? RetrievalScope(folderIDs: [scopeFolderID!]) : .wholeMatter
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Ask the Documents").font(.title2.weight(.semibold))
+                Spacer()
+                Button("Done", action: onClose)
+            }
+            .padding()
+            Divider()
+            Form {
+                TextField("Your question", text: $question, axis: .vertical)
+                    .lineLimit(2...4)
+                Picker("Answer style", selection: $mode) {
+                    Text("Short").tag(DocumentAnswerMode.short)
+                    Text("Memo").tag(DocumentAnswerMode.memo)
+                }
+                .pickerStyle(.segmented)
+                if scopeFolderID != nil {
+                    Toggle("Limit to the selected folder", isOn: $scopeThisFolder)
+                }
+                if let readiness = qa.scopeReadiness(scope: scope) {
+                    Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) documents indexed")
+                        .font(.caption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
+                }
+                if loadedModelID == nil {
+                    Text("Load a chat model in the Models tab to ask questions.").font(.caption).foregroundStyle(.orange)
+                }
+                if let message = qa.message {
+                    Text(message).font(.caption).foregroundStyle(.orange)
+                }
+            }
+            .formStyle(.grouped)
+
+            if let result = qa.lastResult {
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if result.status == StructuredOutputStatus.needsReview.rawValue {
+                            Label("Needs review — \(result.warnings.joined(separator: " "))", systemImage: "exclamationmark.triangle")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                        Text(Self.markdown(result.markdown))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding()
+                }
+                .frame(minHeight: 200)
+            }
+
+            Divider()
+            HStack {
+                Spacer()
+                if qa.isGenerating { ProgressView().controlSize(.small) }
+                Button("Ask") { Task { _ = await qa.generate(question: question, scope: scope, mode: mode, modelID: loadedModelID) } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(qa.isGenerating || loadedModelID == nil || question.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding()
+        }
+        .frame(width: 620, height: 600)
+    }
+
+    private static func markdown(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    }
 }
 
 /// In-app source preview (WO 40): PDF page, image, or normalized text with a

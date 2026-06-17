@@ -145,7 +145,12 @@ struct MatterWorkspaceView: View {
             auditTab
         case .documents:
             if let documents = controller.documentsController {
-                MatterDocumentsView(controller: documents, queue: queue)
+                MatterDocumentsView(
+                    controller: documents,
+                    queue: queue,
+                    qaController: controller.documentQAController,
+                    loadedModelID: library.loadedModelID
+                )
             } else {
                 placeholder(
                     "Documents unavailable",

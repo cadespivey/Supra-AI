@@ -1978,3 +1978,28 @@ Delivered:
 Note: image OCR bounding-box overlay is carried in the model
 (`boundingBoxesJSON`) but not yet drawn over the image (page/text highlight is
 implemented); a deferred visual nicety.
+
+## WO 41 — Auto-Source And Guided Q&A — DONE (2026-06-17)
+
+Status: complete; citation tests (8) + Q&A flow tests (4) green; app builds.
+
+Delivered:
+- `SupraDocuments/DocumentGrounding`: `GroundingSource`, `DocumentAnswerMode`
+  (short/memo → `documentQA`/`documentQAMemo`), `DocumentQAPromptBuilder`
+  (inline-citation-required prompt), `CitationCoverage`/`CitationCheckResult`
+  (label parsing, unresolved-label + missing-citation detection, valid
+  "unsupported" handling, low-confidence + incomplete-scope flags, `requiresReview`),
+  and `SourceAppendix` (Markdown).
+- `SupraSessions/DocumentQAController` (@MainActor): readiness-gated generate
+  (blocks until scope fully indexed), auto-source (hybrid retrieval) or guided
+  (caller-selected chunk ids), short/memo modes, citation checks → `complete` vs
+  `needsReview`, persists a `documentQA`/`documentQAMemo` structured output +
+  version + a version-scoped source set + cited output sources (labels/locators/
+  excerpts/warnings), and `regenerate` (new version + fresh source set from the
+  saved scope/question). Audited.
+- App: `MattersController` vends `documentQAController` (embedder from the selected
+  model); Documents-tab "Ask" sheet (`DocumentQASheet`) with question, short/memo,
+  optional folder scope, readiness display, and rendered cited answer.
+- Tests: auto-source cited answer saved with source set; unsupported question does
+  not invent an answer; missing citations → needs review; generation blocked when
+  scope not indexed; plus the 8 citation-coverage unit tests.
