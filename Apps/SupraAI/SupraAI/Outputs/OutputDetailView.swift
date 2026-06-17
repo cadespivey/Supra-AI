@@ -1,3 +1,4 @@
+import AppKit
 import SupraCore
 import SupraSessions
 import SwiftUI
@@ -69,6 +70,19 @@ struct OutputDetailView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            Menu {
+                ForEach(DocumentExportFormat.allCases, id: \.self) { format in
+                    Button(format.fileExtension.uppercased()) {
+                        if let url = controller.exportOutput(outputID: outputID, format: format) {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                    }
+                }
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
             let activeMissing = versions.first { $0.isActive }?.missingSections ?? []
             if !activeMissing.isEmpty {
                 Button("Repair Structure") { Task { await controller.repairOutput(outputID, modelID: loadedModelID) } }
