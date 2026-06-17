@@ -6,6 +6,7 @@ import SwiftUI
 /// Generation defaults, model storage location, and app info.
 struct SettingsView: View {
     @ObservedObject var settings: SettingsController
+    @State private var courtListenerToken = ""
 
     var body: some View {
         Form {
@@ -33,6 +34,26 @@ struct SettingsView: View {
                     in: 128...8192,
                     step: 128
                 )
+            }
+
+            Section {
+                if settings.hasCourtListenerToken {
+                    LabeledContent("API token", value: "•••••• saved")
+                    Button("Clear Token", role: .destructive) {
+                        settings.clearCourtListenerToken()
+                    }
+                } else {
+                    SecureField("CourtListener API token", text: $courtListenerToken)
+                    Button("Save Token") {
+                        settings.saveCourtListenerToken(courtListenerToken)
+                        courtListenerToken = ""
+                    }
+                    .disabled(courtListenerToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            } header: {
+                Text("CourtListener")
+            } footer: {
+                Text("Stored only in your Keychain. Required to run CourtListener research.")
             }
 
             Section("Model Storage") {

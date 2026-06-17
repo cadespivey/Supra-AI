@@ -215,12 +215,222 @@ public enum SupraMigrator {
             try db.create(index: "idx_chats_matter_id", on: "chats", columns: ["matter_id"], ifNotExists: true)
         }
 
+        migrator.registerMigration("v013_enrich_matters") { db in
+            try db.alter(table: "matters") { table in
+                table.add(column: "jurisdiction", .text).notNull().defaults(to: "Unspecified")
+                table.add(column: "party_perspective", .text).notNull().defaults(to: "neutral")
+                table.add(column: "court", .text)
+                table.add(column: "judge", .text)
+                table.add(column: "docket_number", .text)
+                table.add(column: "practice_area", .text)
+                table.add(column: "notes", .text)
+            }
+        }
+
+        migrator.registerMigration("v014_create_research_sessions") { db in
+            try db.create(table: "research_sessions", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("matter_id", .text)
+                    .notNull()
+                    .references("matters", onDelete: .cascade)
+                table.column("title", .text).notNull()
+                table.column("issue_text", .text).notNull()
+                table.column("jurisdiction", .text).notNull()
+                table.column("preferred_courts_json", .text).notNull()
+                table.column("excluded_courts_json", .text).notNull()
+                table.column("date_range_start", .datetime)
+                table.column("date_range_end", .datetime)
+                table.column("status", .text).notNull()
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+                table.column("completed_at", .datetime)
+            }
+            try db.create(index: "idx_research_sessions_matter_id", on: "research_sessions", columns: ["matter_id", "created_at"], ifNotExists: true)
+            try db.create(index: "idx_research_sessions_status", on: "research_sessions", columns: ["status"], ifNotExists: true)
+        }
+
+        migrator.registerMigration("v015_create_network_requests") { db in
+            try db.create(table: "network_requests", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("timestamp", .datetime).notNull()
+                table.column("domain", .text).notNull()
+                table.column("method", .text).notNull()
+                table.column("endpoint", .text).notNull()
+                table.column("approved", .boolean).notNull()
+                table.column("status_code", .integer)
+                table.column("related_research_session_id", .text)
+                    .references("research_sessions", onDelete: .setNull)
+                table.column("blocked_reason", .text)
+                table.column("error_message", .text)
+                table.column("request_metadata_json", .text)
+                table.column("response_metadata_json", .text)
+            }
+            try db.create(index: "idx_network_requests_timestamp", on: "network_requests", columns: ["timestamp"], ifNotExists: true)
+            try db.create(index: "idx_network_requests_related_session", on: "network_requests", columns: ["related_research_session_id"], ifNotExists: true)
+        }
+
+        migrator.registerMigration("v016_create_research_queries") { db in
+            try db.create(table: "research_queries", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("research_session_id", .text)
+                    .notNull()
+                    .references("research_sessions", onDelete: .cascade)
+                table.column("query_text", .text).notNull()
+                table.column("query_index", .integer).notNull()
+                table.column("court_filter", .text)
+                table.column("date_filed_after", .datetime)
+                table.column("date_filed_before", .datetime)
+                table.column("status", .text).notNull()
+                table.column("result_count", .integer)
+                table.column("next_url", .text)
+                table.column("executed_at", .datetime)
+                table.column("request_metadata_json", .text)
+                table.column("response_metadata_json", .text)
+                table.column("error_message", .text)
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.create(index: "idx_research_queries_session_id", on: "research_queries", columns: ["research_session_id", "query_index"], ifNotExists: true)
+        }
+
+        migrator.registerMigration("v017_create_research_results") { db in
+            try db.create(table: "research_results", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("research_query_id", .text)
+                    .notNull()
+                    .references("research_queries", onDelete: .cascade)
+                table.column("courtlistener_id", .text)
+                table.column("cluster_id", .text)
+                table.column("opinion_id", .text)
+                table.column("case_name", .text).notNull()
+                table.column("case_name_full", .text)
+                table.column("citation_json", .text).notNull()
+                table.column("preferred_citation", .text)
+                table.column("court", .text)
+                table.column("court_id", .text)
+                table.column("date_filed", .datetime)
+                table.column("docket_number", .text)
+                table.column("snippet", .text)
+                table.column("absolute_url", .text)
+                table.column("review_state", .text).notNull()
+                table.column("raw_result_json", .text).notNull()
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.create(index: "idx_research_results_query_id", on: "research_results", columns: ["research_query_id"], ifNotExists: true)
+            try db.create(index: "idx_research_results_review_state", on: "research_results", columns: ["review_state"], ifNotExists: true)
+        }
+
+        migrator.registerMigration("v018_create_authorities") { db in
+            try db.create(table: "authorities", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("matter_id", .text)
+                    .notNull()
+                    .references("matters", onDelete: .cascade)
+                table.column("research_session_id", .text)
+                    .notNull()
+                    .references("research_sessions", onDelete: .cascade)
+                table.column("research_result_id", .text)
+                    .notNull()
+                    .references("research_results", onDelete: .cascade)
+                table.column("courtlistener_id", .text)
+                table.column("cluster_id", .text)
+                table.column("opinion_id", .text)
+                table.column("case_name", .text).notNull()
+                table.column("case_name_full", .text)
+                table.column("citation_json", .text).notNull()
+                table.column("preferred_citation", .text)
+                table.column("court", .text)
+                table.column("court_id", .text)
+                table.column("date_filed", .datetime)
+                table.column("docket_number", .text)
+                table.column("absolute_url", .text)
+                table.column("precedential_status", .text)
+                table.column("review_state", .text).notNull()
+                table.column("use_status", .text).notNull()
+                table.column("user_notes", .text)
+                table.column("raw_metadata_json", .text).notNull()
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.create(index: "idx_authorities_matter_id", on: "authorities", columns: ["matter_id", "created_at"], ifNotExists: true)
+            try db.create(index: "idx_authorities_matter_result", on: "authorities", columns: ["matter_id", "research_result_id"], unique: true, ifNotExists: true)
+        }
+
+        migrator.registerMigration("v019_create_structured_outputs") { db in
+            try db.create(table: "structured_outputs", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("matter_id", .text)
+                    .notNull()
+                    .references("matters", onDelete: .cascade)
+                table.column("chat_id", .text)
+                    .references("chats", onDelete: .setNull)
+                table.column("research_session_id", .text)
+                    .references("research_sessions", onDelete: .setNull)
+                table.column("title", .text).notNull()
+                table.column("output_type", .text).notNull()
+                table.column("active_version_id", .text)
+                table.column("status", .text).notNull()
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+                table.column("deleted_at", .datetime)
+            }
+            try db.create(index: "idx_structured_outputs_matter_id", on: "structured_outputs", columns: ["matter_id", "updated_at"], ifNotExists: true)
+        }
+
+        migrator.registerMigration("v020_create_output_versions") { db in
+            try db.create(table: "structured_output_versions", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("structured_output_id", .text)
+                    .notNull()
+                    .references("structured_outputs", onDelete: .cascade)
+                table.column("version_index", .integer).notNull()
+                table.column("parent_version_id", .text)
+                    .references("structured_output_versions", onDelete: .setNull)
+                table.column("content_markdown", .text).notNull()
+                table.column("required_sections_json", .text).notNull()
+                table.column("present_sections_json", .text).notNull()
+                table.column("missing_sections_json", .text).notNull()
+                table.column("repair_reason", .text)
+                table.column("generation_session_id", .text)
+                    .references("generation_sessions", onDelete: .setNull)
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.create(index: "idx_output_versions_output_id", on: "structured_output_versions", columns: ["structured_output_id", "version_index"], unique: true, ifNotExists: true)
+        }
+
+        migrator.registerMigration("v021_create_audit_events_phase2") { db in
+            try db.create(table: "audit_events", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("matter_id", .text)
+                    .references("matters", onDelete: .setNull)
+                table.column("timestamp", .datetime).notNull()
+                table.column("event_type", .text).notNull()
+                table.column("actor", .text).notNull()
+                table.column("summary", .text).notNull()
+                table.column("related_table", .text)
+                table.column("related_id", .text)
+                table.column("metadata_json", .text)
+            }
+            try db.create(index: "idx_audit_events_matter_id", on: "audit_events", columns: ["matter_id", "timestamp"], ifNotExists: true)
+            try db.create(index: "idx_audit_events_event_type", on: "audit_events", columns: ["event_type"], ifNotExists: true)
+        }
+
         return migrator
     }
 
     #if DEBUG
     public static func deleteAllTables(_ db: Database) throws {
         for table in [
+            "audit_events",
+            "structured_output_versions",
+            "structured_outputs",
+            "authorities",
+            "research_results",
+            "research_queries",
+            "network_requests",
+            "research_sessions",
             "exported_reports",
             "model_validation_tests",
             "model_validation_runs",
