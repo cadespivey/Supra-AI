@@ -183,6 +183,72 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertNil(controller.selectedMatterID)
     }
 
+    // MARK: - ResearchSessionController
+
+    func testResearchPlannerGeneratesParsesAndPersistsApprovedQueries() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California", partyPerspective: .plaintiff)
+        let markdown = """
+        # Research Queries
+        ## Query 1
+        first
+        ## Query 2
+        second
+        ## Query 3
+        third
+        ## Query 4
+        fourth
+        ## Query 5
+        fifth
+        """
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .generationStarted),
+                .event(request, 2, .token, token: markdown),
+                .event(request, 3, .generationCompleted)
+            ])
+        }
+        let controller = ResearchSessionController(store: store, runtimeClient: stub, matterID: matter.id)
+
+        let draft = ResearchPlanDraft(title: "Plan A", issueText: "Issue", jurisdiction: "California", partyPerspective: "plaintiff")
+        await controller.generatePlan(draft: draft, modelID: ModelID())
+        XCTAssertEqual(controller.plannedQueries.count, 5)
+        XCTAssertEqual(controller.planState, .ready)
+        XCTAssertTrue(controller.canSavePlan)
+
+        // Unapprove one query; only approved queries persist.
+        controller.setApproved(false, for: controller.plannedQueries[0].id)
+        let sessionID = try controller.savePlan(draft: draft)
+
+        XCTAssertEqual(try store.research.fetchQueries(sessionID: sessionID).count, 4)
+        XCTAssertEqual(controller.sessions.count, 1)
+        XCTAssertTrue(controller.plannedQueries.isEmpty, "plan resets after save")
+        let audit = try store.auditEvents.fetchEvents(matterID: matter.id)
+        XCTAssertTrue(audit.contains { $0.eventType == "research_queries_approved" })
+    }
+
+    func testResearchPlannerWithoutModelAllowsManualEntry() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = ResearchSessionController(store: store, runtimeClient: stub, matterID: matter.id)
+
+        await controller.generatePlan(
+            draft: ResearchPlanDraft(title: "P", issueText: "I", jurisdiction: "CA"),
+            modelID: nil
+        )
+        guard case .incomplete = controller.planState else {
+            return XCTFail("Expected .incomplete without a loaded model, got \(controller.planState)")
+        }
+        XCTAssertFalse(controller.canSavePlan)
+
+        controller.addQuery()
+        controller.updateText("manual query", for: controller.plannedQueries[0].id)
+        XCTAssertTrue(controller.canSavePlan)
+        let sessionID = try controller.savePlan(draft: ResearchPlanDraft(title: "P", issueText: "I", jurisdiction: "CA"))
+        XCTAssertEqual(try store.research.fetchQueries(sessionID: sessionID).count, 1)
+    }
+
     // MARK: - ModelLibrary
 
     func testAddAndActivateLoadsModel() async throws {

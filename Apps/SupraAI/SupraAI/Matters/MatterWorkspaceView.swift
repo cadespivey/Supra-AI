@@ -114,11 +114,15 @@ struct MatterWorkspaceView: View {
                 placeholder("Chat unavailable", "Select the matter again to load its chats.", systemImage: "bubble.left.and.bubble.right")
             }
         case .research:
-            placeholder(
-                "No Research Sessions",
-                "Plan and run CourtListener research for this matter. Arriving in an upcoming work order.",
-                systemImage: "magnifyingglass"
-            )
+            if let research = controller.researchController {
+                MatterResearchView(controller: research, library: library, matter: matter)
+            } else {
+                placeholder(
+                    "Research unavailable",
+                    "Select the matter again to load its research sessions.",
+                    systemImage: "magnifyingglass"
+                )
+            }
         case .authorities:
             placeholder(
                 "No Authorities Saved",

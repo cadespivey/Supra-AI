@@ -20,6 +20,9 @@ let package = Package(
             dependencies: [
                 .product(name: "SupraCore", package: "SupraCore"),
                 .product(name: "SupraNetworking", package: "SupraNetworking")
+            ],
+            resources: [
+                .process("Resources")
             ]
         ),
         .testTarget(
