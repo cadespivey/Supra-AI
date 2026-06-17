@@ -30,6 +30,10 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     private let injectedRemoteService: SupraRuntimeXPCServiceProtocol?
     private let connectionLock = NSLock()
     private var connection: NSXPCConnection?
+    // In-flight generate() streams, keyed so the connection's interruption/
+    // invalidation handlers can fail them if the service dies mid-generation.
+    private let streamsLock = NSLock()
+    private var activeStreamFailures: [UUID: @Sendable (Error) -> Void] = [:]
 
     public convenience init() {
         self.init(serviceName: RuntimeXPCServiceNames.defaultServiceName)
@@ -62,10 +66,20 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
 
     public func generate(_ request: GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error> {
         let requestData = try encode(request)
-        let service = try remoteService()
 
         return AsyncThrowingStream { continuation in
             let streamState = RuntimeGenerationStreamState()
+            let streamID = UUID()
+
+            // Finishes the stream with an error. Safe to call more than once
+            // (the continuation ignores subsequent finishes) and from any
+            // thread — the connection handlers, the proxy error handler, and
+            // the event sink may all race here.
+            let fail: @Sendable (Error) -> Void = { error in
+                streamState.invalidate()
+                continuation.finish(throwing: error)
+            }
+
             streamState.eventSink = RuntimeClientEventSink { result in
                 switch result {
                 case let .success(event):
@@ -81,6 +95,7 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
             }
 
             continuation.onTermination = { [weak self, streamState] termination in
+                self?.unregisterStreamFailure(streamID)
                 streamState.invalidate()
 
                 if case .cancelled = termination {
@@ -92,6 +107,23 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
 
             guard let eventSink = streamState.eventSink else {
                 continuation.finish(throwing: RuntimeClientError.remoteProxyUnavailable)
+                return
+            }
+
+            // Without this, a service that dies mid-generation emits no further
+            // events and the consumer's `for try await` hangs forever. The
+            // connection's interruption/invalidation handler calls this to
+            // surface the drop as a thrown error instead.
+            registerStreamFailure(streamID, fail)
+
+            let service: SupraRuntimeXPCServiceProtocol
+            do {
+                service = try remoteService { error in
+                    fail(RuntimeClientError.remoteInvocationFailed(error.localizedDescription))
+                }
+            } catch {
+                unregisterStreamFailure(streamID)
+                continuation.finish(throwing: error)
                 return
             }
 
@@ -199,9 +231,50 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
 
         let newConnection = NSXPCConnection(serviceName: serviceName)
         newConnection.remoteObjectInterface = RuntimeXPCInterfaces.serviceInterface()
+        // The service crashing/restarting interrupts the connection; the client
+        // tearing it down or the service failing to launch invalidates it.
+        // Either way, in-flight generations are lost and must be failed so the
+        // consumer doesn't hang. Captured weakly to avoid a connection/handler
+        // retain cycle.
+        newConnection.interruptionHandler = { [weak self] in
+            self?.failActiveStreams(
+                RuntimeClientError.remoteInvocationFailed("The runtime service connection was interrupted.")
+            )
+        }
+        newConnection.invalidationHandler = { [weak self, weak newConnection] in
+            guard let self else { return }
+            self.connectionLock.lock()
+            if self.connection === newConnection {
+                self.connection = nil
+            }
+            self.connectionLock.unlock()
+            self.failActiveStreams(RuntimeClientError.remoteProxyUnavailable)
+        }
         newConnection.resume()
         connection = newConnection
         return newConnection
+    }
+
+    private func registerStreamFailure(_ id: UUID, _ handler: @escaping @Sendable (Error) -> Void) {
+        streamsLock.lock()
+        activeStreamFailures[id] = handler
+        streamsLock.unlock()
+    }
+
+    private func unregisterStreamFailure(_ id: UUID) {
+        streamsLock.lock()
+        activeStreamFailures[id] = nil
+        streamsLock.unlock()
+    }
+
+    private func failActiveStreams(_ error: Error) {
+        streamsLock.lock()
+        let handlers = activeStreamFailures
+        activeStreamFailures.removeAll()
+        streamsLock.unlock()
+        for handler in handlers.values {
+            handler(error)
+        }
     }
 
     private func invalidateConnection() -> NSXPCConnection? {
