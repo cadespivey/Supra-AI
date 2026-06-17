@@ -171,9 +171,34 @@ Stored in `Application Support/SupraAI/EmbeddingModels/`. Default favors quality
 | Nomic Embed Text v1.5 | `nomic-ai/nomic-embed-text-v1.5` | 768 | nomic_bert | Apache-2.0 |
 | BGE Small EN v1.5 | `BAAI/bge-small-en-v1.5` | 384 | bert | MIT |
 
-## Conversion / extraction tools (WO 34 — pending)
+## Conversion / extraction tools (WO 34)
 
-Bundled converters for legacy Office (`.doc`, `.xls`) and `.msg` email formats
-will be selected, version-pinned, and licensed here during WO 34. Until then those
-families import best-effort; any failure is captured per file in the import
-report (never a crash).
+M3 extraction deliberately avoids third-party converter binaries. Apple
+frameworks plus in-house deterministic parsers cover the required formats, with
+one pinned pure-Swift library for ZIP containers. Everything runs locally; no
+document content leaves the machine, and every failure is captured per file in
+the import report (never a crash).
+
+| Format | Method | Notes |
+|--------|--------|-------|
+| `.pdf` | PDFKit page text | low-text PDFs flagged for OCR (WO 36) |
+| images (`.png/.jpg/.tif/.heic`) | routed to Vision OCR (WO 36) | no embedded text |
+| `.txt/.md` | Foundation string + normalization | — |
+| `.xml` | `XMLParser` (text + attribute values) | raw-text fallback |
+| `.html/.htm` | in-house tag-strip + entity decode | no WebKit → background-safe |
+| `.rtf` | `NSAttributedString` (`.rtf`, main actor) | — |
+| `.doc` (legacy) | `NSAttributedString` (`.docFormat`, main actor) | — |
+| `.docx/.dotx` | ZIPFoundation + `word/document.xml` SAX | — |
+| `.xlsx` | ZIPFoundation + shared strings / sheet SAX | visible cell values only |
+| `.xls` (legacy) | reported unsupported | convert to `.xlsx` |
+| `.eml` | in-house RFC 822 / MIME parser | body + attachments as child docs |
+| `.msg` (Outlook) | reported unsupported | export as `.eml` |
+
+### ZIPFoundation
+
+| Dependency | Version | Source | License |
+|------------|---------|--------|---------|
+| ZIPFoundation | `0.9.20` (exact) | https://github.com/weichsel/ZIPFoundation | MIT |
+
+Used by `SupraDocuments` to read `.docx`/`.xlsx` archive entries. Pure Swift, no
+network, no external binaries.

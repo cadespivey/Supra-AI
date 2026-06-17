@@ -1791,3 +1791,37 @@ Deviations from the literal plan (kept within plan intent):
   `BAAI/bge-base-en-v1.5`, 768-d, with larger quality options offered).
 - Import gating mechanism (`isReadyForImport`) is in place; the Documents tab that
   consumes it is enabled in WO 39.
+
+## WO 34 — Local Toolchain And Extraction Adapters — DONE (2026-06-17)
+
+Status: complete; SupraDocuments tests green (14), app builds with the new
+transitive dependency.
+
+Delivered (all in `SupraDocuments`):
+- `DocumentExtraction.swift`: `ExtractedPart`/`ExtractionResult`/`ExtractedAttachment`
+  result types, `ExtractionError`, the `DocumentExtractor` protocol, and an
+  `ExtractionService` that dispatches by supported-type family.
+- `TextExtractors.swift`: plain text / markdown, XML (`XMLParser`), HTML
+  (in-house tag-strip + entity decode, no WebKit), shared `TextNormalization`.
+- `OfficeExtractors.swift`: `.docx/.dotx` via ZIPFoundation + OOXML SAX; `.rtf`
+  and legacy `.doc` via `NSAttributedString` on the main actor; a `ZipArchiveReader`.
+- `SpreadsheetExtractor.swift`: `.xlsx` shared-strings + sheet SAX → visible cell
+  values with coordinates and used range; legacy `.xls` reported unsupported.
+- `EmailExtractor.swift`: in-house RFC 822 / MIME parser (multipart, base64,
+  quoted-printable) → body part + attachments as child documents; `.msg` reported
+  unsupported.
+- `PDFImageExtractors.swift`: PDFKit per-page text with low-text `needsOCR`
+  detection; images flagged `needsOCR` (OCR itself in WO 36).
+- `Docs/Architecture/Dependencies.md`: documented the extraction matrix and the
+  one pinned library.
+
+Deviations / decisions (within plan intent):
+- No third-party converter binaries. Apple frameworks + in-house parsers cover the
+  formats; the only added dependency is **ZIPFoundation 0.9.20 (exact, MIT)** for
+  `.docx`/`.xlsx` containers — satisfies §1.5's "pinned, documented, local, no
+  upload" requirements with the least redistribution/licensing risk.
+- Legacy `.xls` and Outlook `.msg` are reported as `unsupportedFormat` (captured in
+  the import report, never silent) rather than supported via a bundled tool — this
+  is the §3.1 / §15.2 "failure reporting" path. `.doc`, `.docx`, `.rtf`, and all
+  text/office/spreadsheet/email families ARE supported.
+- OCR is not performed here (split to WO 36); PDF/image extractors set `needsOCR`.
