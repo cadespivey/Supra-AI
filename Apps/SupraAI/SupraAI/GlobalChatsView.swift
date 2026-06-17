@@ -142,7 +142,19 @@ struct GlobalChatsView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if library.loadedModelID == nil {
+            switch library.loadState {
+            case .loaded:
+                EmptyView()
+            case let .failed(message):
+                Text("Model failed to load: \(message)")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+            case .loading:
+                Text("Loading model…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .idle:
                 Text("Load a model in the Models tab to start chatting.")
                     .font(.caption)
                     .foregroundStyle(.secondary)

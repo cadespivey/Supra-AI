@@ -116,6 +116,10 @@ final class AppEnvironment: ObservableObject {
         modelLibrary.refresh()
         chatController.loadChats()
         await refreshRuntimeStatus()
+        // If the runtime already holds a model from a previous session, re-enable
+        // chat without forcing the user to re-load it (the chat gate keys on
+        // ModelLibrary.loadState, which otherwise starts idle each launch).
+        modelLibrary.reconcileLoadedModel(runtimeStatusController.loadedModelID)
         await documentSetupController.refreshAll()
         // Reconcile any document job interrupted by a previous quit (plan §5.4).
         documentQueue.bootstrap()
