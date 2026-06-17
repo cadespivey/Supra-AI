@@ -515,7 +515,7 @@ final class SupraSessionsTests: XCTestCase {
     func testCreateOutputCompleteWhenAllSectionsPresent() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
-        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)
+        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
         let markdown = contract.requiredHeadings.joined(separator: "\n\nbody\n\n")
         let stub = StubRuntimeClient { request in
             .events([.event(request, 1, .token, token: markdown), .event(request, 2, .generationCompleted)])
@@ -562,7 +562,7 @@ final class SupraSessionsTests: XCTestCase {
     func testRepairCreatesNewVersionPreservingOriginalAndCompletes() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
-        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)
+        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
         let fullMarkdown = contract.requiredHeadings.joined(separator: "\n\nbody\n\n")
         let partialMarkdown = "# Rule Synthesis\n## Rule Statement\npartial"
         // Create returns an incomplete doc; repair (detected by prompt text) returns the full one.
