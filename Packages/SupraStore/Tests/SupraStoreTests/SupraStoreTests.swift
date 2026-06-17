@@ -149,6 +149,29 @@ final class SupraStoreTests: XCTestCase {
         XCTAssertEqual(try store.exportedReports.fetchExportedReports(validationRunID: run.id).single?.format, "markdown")
     }
 
+    func testMarkUnfinishedRunsCancelledReconcilesOnlyStrandedRuns() throws {
+        let store = try makeStore()
+        let model = ModelRecord(id: "m", displayName: "M", path: "/tmp/m")
+        try store.models.upsertModel(model)
+
+        // A finished run (completed_at set) must be left untouched.
+        let finished = try store.validation.createValidationRun(modelID: model.id, suiteID: "s", suiteVersion: 1)
+        try store.validation.completeValidationRun(runID: finished.id, status: .passed)
+
+        // A stranded run: seeded partial with completed_at NULL, never completed.
+        let stranded = try store.validation.createValidationRun(modelID: model.id, suiteID: "s", suiteVersion: 1)
+
+        try store.validation.markUnfinishedRunsCancelled()
+
+        let runs = try store.validation.fetchValidationRuns(modelID: model.id)
+        let finishedRow = try XCTUnwrap(runs.first { $0.id == finished.id })
+        let strandedRow = try XCTUnwrap(runs.first { $0.id == stranded.id })
+
+        XCTAssertEqual(finishedRow.status, ValidationRunStatus.passed.rawValue)
+        XCTAssertEqual(strandedRow.status, ValidationRunStatus.cancelled.rawValue)
+        XCTAssertNotNil(strandedRow.completedAt)
+    }
+
     private func makeStore() throws -> SupraStore {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SupraStoreTests-\(UUID().uuidString)", isDirectory: true)

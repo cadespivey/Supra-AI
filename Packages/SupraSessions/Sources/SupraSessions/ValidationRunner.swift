@@ -64,10 +64,15 @@ public struct ValidationRunner: Sendable {
             )
         } catch {
             // Never leave the run row stranded at its initial 'partial' status.
+            // A cooperative cancellation is recorded as .cancelled; any other
+            // error (including a fail-fast runtime disconnect) as .failed.
+            let cancelled = error is CancellationError
             try? store.validation.completeValidationRun(
                 runID: run.id,
-                status: .failed,
-                summary: "Validation run aborted: \(error.localizedDescription)"
+                status: cancelled ? .cancelled : .failed,
+                summary: cancelled
+                    ? "Validation run cancelled before completion."
+                    : "Validation run aborted: \(error.localizedDescription)"
             )
             throw error
         }
@@ -88,7 +93,12 @@ public struct ValidationRunner: Sendable {
         var representativeMetrics: RuntimeMetrics?
 
         for test in suite.tests {
-            let collected = await collect(
+            // Cooperative cancellation point between tests: a cancelled run
+            // throws here and is finalized as .cancelled by run()'s catch,
+            // rather than being torn down silently mid-suite.
+            try Task.checkCancellation()
+
+            let collected = try await collect(
                 test: test,
                 modelID: modelID,
                 systemPrompt: systemPrompt,
@@ -101,6 +111,13 @@ public struct ValidationRunner: Sendable {
             let evaluation = evaluator.evaluate(test: test, input: collected.input)
             let excerpt = outputExcerpt(collected.input.output)
 
+            // Surface any generation/stream error that the per-test collection
+            // swallowed, so a failed test isn't silently empty.
+            var testErrors = evaluation.errors
+            if let streamError = collected.streamErrorMessage {
+                testErrors.append("Generation error: \(streamError)")
+            }
+
             _ = try store.validation.appendValidationTest(
                 runID: run.id,
                 testID: test.id,
@@ -108,7 +125,7 @@ public struct ValidationRunner: Sendable {
                 status: evaluation.status,
                 outputExcerpt: excerpt,
                 warnings: evaluation.warnings,
-                errors: evaluation.errors
+                errors: testErrors
             )
 
             testResults.append(
@@ -118,11 +135,11 @@ public struct ValidationRunner: Sendable {
                     status: evaluation.status,
                     outputExcerpt: excerpt,
                     warnings: evaluation.warnings,
-                    errors: evaluation.errors
+                    errors: testErrors
                 )
             )
             allWarnings.append(contentsOf: evaluation.warnings)
-            allErrors.append(contentsOf: evaluation.errors)
+            allErrors.append(contentsOf: testErrors)
         }
 
         let overallStatus = overallStatus(for: testResults.map(\.status))
@@ -169,6 +186,7 @@ public struct ValidationRunner: Sendable {
     private struct Collected {
         var input: ValidationEvaluationInput
         var metrics: RuntimeMetrics?
+        var streamErrorMessage: String?
     }
 
     private func collect(
@@ -176,7 +194,7 @@ public struct ValidationRunner: Sendable {
         modelID: ModelID,
         systemPrompt: String?,
         options: GenerationOptions
-    ) async -> Collected {
+    ) async throws -> Collected {
         let isCancellationTest = test.mechanicalChecks.contains(.cancelRequestSent)
             || test.mechanicalChecks.contains(.generationCancelled)
         let generationID = GenerationID()
@@ -184,6 +202,7 @@ public struct ValidationRunner: Sendable {
         var output = ""
         var metrics: RuntimeMetrics?
         var cancelIssued = false
+        var streamErrorMessage: String?
 
         do {
             let request = GenerateRequest(
@@ -226,9 +245,14 @@ public struct ValidationRunner: Sendable {
                     break
                 }
             }
+        } catch is CancellationError {
+            // Let a cooperative cancel abort the whole run (run() records it).
+            throw CancellationError()
         } catch {
             // A rejected/failed stream leaves completedWithoutCrash false, which the
-            // mechanical checks surface as a failed test.
+            // mechanical checks surface as a failed test; record why so the
+            // failed test isn't silently empty.
+            streamErrorMessage = error.localizedDescription
         }
 
         // Grade the user-facing answer, not the model's chain-of-thought: a
@@ -242,7 +266,7 @@ public struct ValidationRunner: Sendable {
         input.partialOutputPreserved = input.generationCancelled
             && !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
-        return Collected(input: input, metrics: metrics)
+        return Collected(input: input, metrics: metrics, streamErrorMessage: streamErrorMessage)
     }
 
     // MARK: - Helpers
