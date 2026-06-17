@@ -1751,3 +1751,43 @@ Deviations from the literal plan (kept within plan intent):
 
 Toolchain note (env, not plan): the default CLI `swift` is broken; build/test with
 `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`.
+
+## WO 33 — Document Intelligence Setup — DONE (2026-06-17)
+
+Status: complete; app builds (`xcodebuild -scheme SupraAI`), all package tests green
+(SupraDocuments 4, SupraRuntimeClient 4, SupraSessions 43 incl. 3 new setup tests).
+
+Delivered:
+- New `SupraDocuments` package (created here, per §1.1; extraction adapters land in
+  WO 34): `SupportedDocumentTypes` (format policy), `DocumentStorage` (managed
+  blob/preview/temp/export layout + sha256 hashing), `DocumentToolchain`
+  (PDFKit/Vision/OCR/HEIC capability detection) + 4 tests.
+- Runtime embedding boundary (§1.4): `EmbeddingDTOs` (Load/Embed/Status +
+  `EmbeddingModelState`), `RuntimeStatus.embeddingModelID`, 3 RPCs added to the
+  Swift + `@objc` XPC service protocols and `RuntimeClientProtocol` (with default
+  impls so non-embedding doubles compile), `RuntimeClient` methods, and a real
+  `MLXEmbeddingModelController` (actor, serialized) backed by **MLXEmbedders**
+  (already in `mlx-swift-lm`; product linked into the runtime target via pbxproj).
+- Sessions: `EmbeddingModelCatalog` (curated, quality-first default
+  `BAAI/bge-base-en-v1.5`), `EmbeddingModelDownloadController`,
+  `DocumentNotifications` (injectable), and `DocumentIntelligenceSetupController`
+  (orchestrates the 6 setup steps, persists state in
+  `document_intelligence_settings`, gates import via `isReadyForImport`, audits
+  setup completed/changed/invalidated).
+- App: `SettingsView` "Document Intelligence" section (per-step status, embedding
+  download/test-load, storage init, notifications, Mark Complete); `AppEnvironment`
+  constructs the controllers and refreshes setup on bootstrap.
+- `Docs/Architecture/Dependencies.md` updated with the M3 embedding stack.
+
+Deviations from the literal plan (kept within plan intent):
+- Setup orchestration lives in a dedicated `DocumentIntelligenceSetupController`
+  rather than being stuffed into `SettingsController`, matching the existing
+  one-controller-per-concern convention (ModelDownloadController, ValidationRun
+  Controller). The plan named SettingsController as a target; intent ("setup lives
+  in Settings") is met via the Settings UI section.
+- `SupraDocuments` is created in WO 33 (not WO 34) because setup's capability checks
+  need it; WO 34 fills in the heavier extraction/conversion adapters.
+- Embedding model uses MLXEmbedders (resolved §17 open decision: curated default
+  `BAAI/bge-base-en-v1.5`, 768-d, with larger quality options offered).
+- Import gating mechanism (`isReadyForImport`) is in place; the Documents tab that
+  consumes it is enabled in WO 39.

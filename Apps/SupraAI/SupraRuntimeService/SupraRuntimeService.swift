@@ -6,6 +6,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     private let stateLock = NSLock()
     private let eventBuffer = GenerationEventBuffer()
     private let modelController: any ChatModelController = MLXModelController()
+    private let embeddingController: any EmbeddingModelController = MLXEmbeddingModelController()
     private lazy var generationCoordinator = RuntimeGenerationCoordinator(
         eventBuffer: eventBuffer,
         modelController: modelController
@@ -13,6 +14,9 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
 
     private var loadedModelID: ModelID?
     private var currentModelRequest: LoadModelRequest?
+    // Milestone 3 embedding state, guarded by stateLock.
+    private var loadedEmbeddingModelID: DocumentEmbeddingModelID?
+    private var embeddingDimension: Int?
 
     func loadChatModel(
         _ request: LoadModelRequest,
@@ -142,15 +146,134 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             state = .modelUnloaded
         }
 
+        stateLock.lock()
+        let loadedEmbeddingModelID = loadedEmbeddingModelID
+        stateLock.unlock()
+
         reply(
             RuntimeStatus(
                 state: state,
                 loadedModelID: loadedModelID,
                 activeGenerationID: activeGenerationID,
                 message: "Runtime service available.",
-                metrics: nil
+                metrics: nil,
+                embeddingModelID: loadedEmbeddingModelID
             )
         )
+    }
+
+    // MARK: - Milestone 3: embeddings
+
+    func loadEmbeddingModel(
+        _ request: LoadEmbeddingModelRequest,
+        reply: @escaping (LoadEmbeddingModelResponse) -> Void
+    ) {
+        guard !request.modelPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            reply(LoadEmbeddingModelResponse(
+                state: .failed,
+                embeddingModelID: request.embeddingModelID,
+                error: RuntimeErrorMapper.invalidRequest("An embedding model path is required.")
+            ))
+            return
+        }
+
+        let reply = RuntimeReply(reply)
+        Task { [weak self, embeddingController, reply] in
+            let startedAt = Date()
+            do {
+                let dimension = try await embeddingController.loadModel(bookmark: request.modelBookmark, path: request.modelPath)
+                if let expected = request.expectedDimension, expected != dimension {
+                    await embeddingController.unload()
+                    self?.clearLoadedEmbeddingModel()
+                    reply(LoadEmbeddingModelResponse(
+                        state: .failed,
+                        embeddingModelID: request.embeddingModelID,
+                        error: RuntimeErrorMapper.invalidRequest(
+                            "Embedding dimension mismatch: expected \(expected), model produced \(dimension)."
+                        )
+                    ))
+                    return
+                }
+                self?.setLoadedEmbeddingModel(request.embeddingModelID, dimension: dimension)
+                reply(LoadEmbeddingModelResponse(
+                    state: .loaded,
+                    embeddingModelID: request.embeddingModelID,
+                    dimension: dimension,
+                    loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000)
+                ))
+            } catch {
+                self?.clearLoadedEmbeddingModel()
+                reply(LoadEmbeddingModelResponse(
+                    state: .failed,
+                    embeddingModelID: request.embeddingModelID,
+                    error: RuntimeErrorMapper.modelLoadFailed(error)
+                ))
+            }
+        }
+    }
+
+    func embedTexts(
+        _ request: EmbedTextRequest,
+        reply: @escaping (EmbedTextResponse) -> Void
+    ) {
+        stateLock.lock()
+        let loadedEmbeddingModelID = loadedEmbeddingModelID
+        let embeddingDimension = embeddingDimension
+        stateLock.unlock()
+
+        guard loadedEmbeddingModelID == request.embeddingModelID else {
+            reply(EmbedTextResponse(
+                state: .unloaded,
+                error: RuntimeErrorMapper.invalidRequest("The requested embedding model is not loaded.")
+            ))
+            return
+        }
+
+        let reply = RuntimeReply(reply)
+        Task { [embeddingController, reply] in
+            do {
+                let vectors = try await embeddingController.embed(texts: request.texts, normalize: request.normalize)
+                reply(EmbedTextResponse(
+                    state: .loaded,
+                    vectors: vectors,
+                    dimension: vectors.first?.count ?? embeddingDimension,
+                    normalized: request.normalize
+                ))
+            } catch {
+                reply(EmbedTextResponse(
+                    state: .failed,
+                    error: RuntimeErrorMapper.modelLoadFailed(error)
+                ))
+            }
+        }
+    }
+
+    func embeddingStatus(reply: @escaping (EmbeddingModelStatus) -> Void) {
+        stateLock.lock()
+        let loadedEmbeddingModelID = loadedEmbeddingModelID
+        let embeddingDimension = embeddingDimension
+        stateLock.unlock()
+
+        reply(EmbeddingModelStatus(
+            state: loadedEmbeddingModelID == nil ? .unloaded : .loaded,
+            embeddingModelID: loadedEmbeddingModelID,
+            dimension: embeddingDimension,
+            message: loadedEmbeddingModelID == nil ? "No embedding model loaded." : "Embedding model loaded."
+        ))
+    }
+
+    private func setLoadedEmbeddingModel(_ id: DocumentEmbeddingModelID, dimension: Int) {
+        stateLock.lock()
+        loadedEmbeddingModelID = id
+        embeddingDimension = dimension
+        stateLock.unlock()
+    }
+
+    private func clearLoadedEmbeddingModel() {
+        stateLock.lock()
+        loadedEmbeddingModelID = nil
+        embeddingDimension = nil
+        stateLock.unlock()
     }
 
     private func setLoadedModel(_ request: LoadModelRequest) {
@@ -290,6 +413,56 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
 
     func runtimeStatus(withReply reply: @escaping (Data) -> Void) {
         runtimeStatus(reply: { status in
+            reply(Self.encoded(status))
+        })
+    }
+
+    func loadEmbeddingModel(_ requestData: Data, withReply reply: @escaping (Data) -> Void) {
+        do {
+            let request = try RuntimeXPCCodec.decode(LoadEmbeddingModelRequest.self, from: requestData)
+            loadEmbeddingModel(request) { response in
+                reply(Self.encoded(response))
+            }
+        } catch {
+            reply(
+                Self.encoded(
+                    LoadEmbeddingModelResponse(
+                        state: .failed,
+                        error: RuntimeError(
+                            category: "invalidRequest",
+                            message: "The embedding load request could not be decoded.",
+                            technicalDetails: error.localizedDescription
+                        )
+                    )
+                )
+            )
+        }
+    }
+
+    func embedTexts(_ requestData: Data, withReply reply: @escaping (Data) -> Void) {
+        do {
+            let request = try RuntimeXPCCodec.decode(EmbedTextRequest.self, from: requestData)
+            embedTexts(request) { response in
+                reply(Self.encoded(response))
+            }
+        } catch {
+            reply(
+                Self.encoded(
+                    EmbedTextResponse(
+                        state: .failed,
+                        error: RuntimeError(
+                            category: "invalidRequest",
+                            message: "The embedding request could not be decoded.",
+                            technicalDetails: error.localizedDescription
+                        )
+                    )
+                )
+            )
+        }
+    }
+
+    func embeddingStatus(withReply reply: @escaping (Data) -> Void) {
+        embeddingStatus(reply: { status in
             reply(Self.encoded(status))
         })
     }

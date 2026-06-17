@@ -20,6 +20,23 @@ public enum ManagedModelStorage {
             .appendingPathComponent("Models", isDirectory: true)
     }
 
+    /// The app-managed directory for downloaded embedding models (Milestone 3),
+    /// kept separate from chat models so the two are never confused.
+    public static func embeddingModelsDirectory(
+        fileManager: FileManager = .default,
+        bundleIdentifier: String = "ai.supra.SupraAI"
+    ) -> URL {
+        let base = (try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        )) ?? fileManager.temporaryDirectory
+        return base
+            .appendingPathComponent(bundleIdentifier, isDirectory: true)
+            .appendingPathComponent("EmbeddingModels", isDirectory: true)
+    }
+
     /// Whether a stored model path lives inside the managed models directory,
     /// meaning the app owns it and can mint a bookmark directly (no security scope).
     public static func isManaged(path: String, fileManager: FileManager = .default) -> Bool {

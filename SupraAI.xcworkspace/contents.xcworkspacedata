@@ -11,6 +11,9 @@
       location = "group:Packages/SupraStore">
    </FileRef>
    <FileRef
+      location = "group:Packages/SupraDocuments">
+   </FileRef>
+   <FileRef
       location = "group:Packages/SupraRuntimeInterface">
    </FileRef>
    <FileRef
