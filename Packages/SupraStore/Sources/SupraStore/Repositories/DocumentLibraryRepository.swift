@@ -427,6 +427,47 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
         }
     }
 
+    /// Resolves a Q&A/search scope (folders/documents/tags/date filters) to the
+    /// set of non-deleted document instance ids it covers (plan §7.2, §8.1). All
+    /// filters nil → every non-deleted document in the matter.
+    public func resolveScopeDocumentIDs(
+        matterID: String,
+        folderIDs: [String]? = nil,
+        documentIDs: [String]? = nil,
+        tagIDs: [String]? = nil,
+        dateStart: Date? = nil,
+        dateEnd: Date? = nil
+    ) throws -> [String] {
+        try writer.read { db in
+            var sql = "SELECT DISTINCT d.id FROM matter_documents d"
+            var clauses = ["d.matter_id = ?", "d.deleted_at IS NULL"]
+            var arguments: [DatabaseValueConvertible] = [matterID]
+            if let tagIDs, !tagIDs.isEmpty {
+                sql += " JOIN document_tag_assignments a ON a.document_id = d.id"
+                clauses.append("a.tag_id IN (\(databaseQuestionMarks(count: tagIDs.count)))")
+                arguments.append(contentsOf: tagIDs)
+            }
+            if let folderIDs, !folderIDs.isEmpty {
+                clauses.append("d.folder_id IN (\(databaseQuestionMarks(count: folderIDs.count)))")
+                arguments.append(contentsOf: folderIDs)
+            }
+            if let documentIDs, !documentIDs.isEmpty {
+                clauses.append("d.id IN (\(databaseQuestionMarks(count: documentIDs.count)))")
+                arguments.append(contentsOf: documentIDs)
+            }
+            if let dateStart {
+                clauses.append("d.metadata_created_at >= ?")
+                arguments.append(dateStart)
+            }
+            if let dateEnd {
+                clauses.append("d.metadata_created_at <= ?")
+                arguments.append(dateEnd)
+            }
+            sql += " WHERE " + clauses.joined(separator: " AND ")
+            return try String.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
+        }
+    }
+
     public func fetchTags(documentID: String) throws -> [DocumentTagRecord] {
         try writer.read { db in
             try DocumentTagRecord.fetchAll(

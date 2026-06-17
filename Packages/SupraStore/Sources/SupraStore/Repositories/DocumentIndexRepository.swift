@@ -76,25 +76,56 @@ public final class DocumentIndexRepository: @unchecked Sendable {
         try writer.read { db in try DocumentChunkRecord.fetchOne(db, key: id) }
     }
 
-    /// Basic matter-scoped full-text search over ready chunks. Richer hybrid
-    /// retrieval and filters arrive in WO 37; this is the FTS foundation.
-    public func searchChunks(matterID: String, query: String, limit: Int = 50) throws -> [DocumentChunkRecord] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
+    /// Matter-scoped full-text search over ready chunks, optionally restricted to
+    /// a set of document instances (the Q&A/search scope). The user query is
+    /// sanitized into a safe FTS5 OR-of-prefixes expression.
+    public func searchChunks(
+        matterID: String,
+        query: String,
+        documentIDs: [String]? = nil,
+        limit: Int = 50
+    ) throws -> [DocumentChunkRecord] {
+        guard let ftsQuery = Self.ftsMatchExpression(query) else { return [] }
+        return try writer.read { db in
+            var sql = """
+            SELECT c.* FROM document_chunk_fts fts
+            JOIN document_chunks c ON c.id = fts.chunk_id
+            JOIN matter_documents d ON d.id = c.document_id
+            WHERE d.matter_id = ? AND d.deleted_at IS NULL AND fts.text MATCH ?
+            """
+            var arguments: [DatabaseValueConvertible] = [matterID, ftsQuery]
+            if let documentIDs {
+                guard !documentIDs.isEmpty else { return [] }
+                sql += " AND d.id IN (\(databaseQuestionMarks(count: documentIDs.count)))"
+                arguments.append(contentsOf: documentIDs)
+            }
+            sql += " ORDER BY fts.rank LIMIT ?"
+            arguments.append(limit)
+            return try DocumentChunkRecord.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
+        }
+    }
+
+    public func fetchChunks(ids: [String]) throws -> [DocumentChunkRecord] {
+        guard !ids.isEmpty else { return [] }
         return try writer.read { db in
             try DocumentChunkRecord.fetchAll(
                 db,
-                sql: """
-                SELECT c.* FROM document_chunk_fts fts
-                JOIN document_chunks c ON c.id = fts.chunk_id
-                JOIN matter_documents d ON d.id = c.document_id
-                WHERE d.matter_id = ? AND d.deleted_at IS NULL AND fts.text MATCH ?
-                ORDER BY fts.rank
-                LIMIT ?
-                """,
-                arguments: [matterID, trimmed, limit]
+                sql: "SELECT * FROM document_chunks WHERE id IN (\(databaseQuestionMarks(count: ids.count)))",
+                arguments: StatementArguments(ids)
             )
         }
+    }
+
+    /// Turns arbitrary user text into a safe FTS5 MATCH expression: alphanumeric
+    /// tokens joined by OR as prefix queries. Returns nil when there are no usable
+    /// tokens (so callers can skip the search).
+    static func ftsMatchExpression(_ query: String) -> String? {
+        let tokens = query
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 2 }
+        guard !tokens.isEmpty else { return nil }
+        return tokens.map { "\"\($0)\"*" }.joined(separator: " OR ")
     }
 
     // MARK: - Embeddings
