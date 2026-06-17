@@ -104,7 +104,10 @@ public final class StructuredOutputController: ObservableObject {
         message = nil
         defer { isGenerating = false }
 
-        let contract = StructuredOutputContracts.contract(for: type)
+        guard let contract = StructuredOutputContracts.contract(for: type) else {
+            message = "Document Q&A and chronologies are generated from the Documents tab."
+            return false
+        }
         do {
             let prompt = try StructuredOutputPromptBuilder.buildPrompt(for: contract, context: context)
             let markdown = ReasoningContent.answer(from: try await collect(prompt: prompt, modelID: modelID))
@@ -151,7 +154,7 @@ public final class StructuredOutputController: ObservableObject {
         message = nil
         defer { isGenerating = false }
 
-        let contract = StructuredOutputContracts.contract(for: type)
+        guard let contract = StructuredOutputContracts.contract(for: type) else { return false }
         do {
             let prompt = try StructuredOutputPromptBuilder.buildRepairPrompt(
                 originalOutput: active.contentMarkdown, requiredHeadings: contract.requiredHeadings
