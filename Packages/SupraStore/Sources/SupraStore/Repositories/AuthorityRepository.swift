@@ -33,6 +33,32 @@ public final class AuthorityRepository: @unchecked Sendable {
         }
     }
 
+    public func updateReviewState(
+        authorityID: String,
+        reviewState: ResearchResultReviewState
+    ) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: """
+                UPDATE authorities
+                SET review_state = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                arguments: [reviewState.rawValue, Date(), authorityID]
+            )
+        }
+    }
+
+    public func fetchAuthority(researchResultID: String) throws -> AuthorityRecord? {
+        try writer.read { db in
+            try AuthorityRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM authorities WHERE research_result_id = ?",
+                arguments: [researchResultID]
+            )
+        }
+    }
+
     public func updatePreferredCitation(
         authorityID: String,
         preferredCitation: String?

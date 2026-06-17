@@ -198,6 +198,16 @@ public final class ResearchRepository: @unchecked Sendable {
         }
     }
 
+    public func fetchResult(resultID: String) throws -> ResearchResultRecord? {
+        try writer.read { db in
+            try ResearchResultRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM research_results WHERE id = ?",
+                arguments: [resultID]
+            )
+        }
+    }
+
     private static func requireNonEmpty(_ value: String, fieldName: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
