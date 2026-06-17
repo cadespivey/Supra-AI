@@ -80,6 +80,48 @@ final class ExtractionTests: XCTestCase {
         XCTAssertTrue(part.text.contains("5000"))
     }
 
+    func testXlsxMapsSheetNamesByRelationshipNotTabOrder() async throws {
+        // Tab order is "Summary" then "Detail", but the r:id targets are deliberately
+        // NOT positional: rId1 -> worksheets/sheet2.xml, rId2 -> worksheets/sheet1.xml
+        // (as happens when tabs are reordered or a sheet is deleted). Per OOXML the
+        // worksheet part is chosen by relationship, not by tab order.
+        let url = tempDir.appendingPathComponent("reordered.xlsx")
+        let archive = try Archive(url: url, accessMode: .create, pathEncoding: nil)
+
+        let workbook = """
+        <workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">\
+        <sheets>\
+        <sheet name="Summary" sheetId="1" r:id="rId1"/>\
+        <sheet name="Detail" sheetId="2" r:id="rId2"/>\
+        </sheets></workbook>
+        """
+        let rels = """
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\
+        <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>\
+        <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>\
+        </Relationships>
+        """
+        // Physical files: sheet1.xml holds Detail's data, sheet2.xml holds Summary's data.
+        let sheet1 = "<worksheet><sheetData><row><c r=\"A1\" t=\"inlineStr\"><is><t>DetailValue</t></is></c></row></sheetData></worksheet>"
+        let sheet2 = "<worksheet><sheetData><row><c r=\"A1\" t=\"inlineStr\"><is><t>SummaryValue</t></is></c></row></sheetData></worksheet>"
+
+        try addEntry(archive, "xl/workbook.xml", workbook)
+        try addEntry(archive, "xl/_rels/workbook.xml.rels", rels)
+        try addEntry(archive, "xl/worksheets/sheet1.xml", sheet1)
+        try addEntry(archive, "xl/worksheets/sheet2.xml", sheet2)
+
+        let result = try await service.extract(fileURL: url)
+        XCTAssertEqual(result.method, "xlsx")
+
+        let summary = try XCTUnwrap(result.parts.first { $0.sheetName == "Summary" })
+        let detail = try XCTUnwrap(result.parts.first { $0.sheetName == "Detail" })
+        // Each tab name must carry the cell values from the worksheet its r:id points at.
+        XCTAssertTrue(summary.text.contains("SummaryValue"), "Summary should resolve to sheet2.xml via r:id; got: \(summary.text)")
+        XCTAssertFalse(summary.text.contains("DetailValue"))
+        XCTAssertTrue(detail.text.contains("DetailValue"), "Detail should resolve to sheet1.xml via r:id; got: \(detail.text)")
+        XCTAssertFalse(detail.text.contains("SummaryValue"))
+    }
+
     func testLegacyXlsReportedUnsupported() async throws {
         let xls = try write("ledger.xls", "binary-ish")
         do {
