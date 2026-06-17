@@ -14,8 +14,14 @@ struct MatterOutputsView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                HStack {
-                    Text("Structured Outputs").font(.headline)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Structured Outputs").font(.headline)
+                        Text("Reusable legal work product the local model drafts from this matter — issue spotting, rule synthesis, and drafting skeletons. Document Q&A and chronologies are created from the Documents tab.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Spacer()
                     Button { showNew = true } label: { Label("New Output", systemImage: "plus") }
                 }
@@ -39,7 +45,7 @@ struct MatterOutputsView: View {
             ContentUnavailableView {
                 Label("No Outputs", systemImage: "doc.text")
             } description: {
-                Text("Generate structured legal outputs (issue spotting, rule synthesis, drafting skeletons) for this matter.")
+                Text("Generate reusable legal outputs — issue spotting, rule synthesis, or drafting skeletons — that the local model drafts from the context you provide. (Document Q&A and chronologies are created from the Documents tab.)")
             } actions: {
                 Button("New Output") { showNew = true }
             }
@@ -86,6 +92,12 @@ private struct NewOutputSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             Text("New Structured Output").font(.title2.weight(.semibold)).padding([.horizontal, .top])
+            Text("Pick a deliverable type and give the model the issue, facts, or notes to work from. It produces a structured, reviewable draft saved to this matter's Outputs.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal)
+                .padding(.top, 2)
             Form {
                 Picker("Type", selection: $type) {
                     // Document Q&A / chronology outputs are generated from the
@@ -94,9 +106,13 @@ private struct NewOutputSheet: View {
                         Text(StructuredOutputLabels.label(type.rawValue)).tag(type)
                     }
                 }
-                Section("Context") {
+                Section {
                     TextField("Issue, facts, or notes for this output", text: $context, axis: .vertical)
                         .lineLimit(4...10)
+                } header: {
+                    Text("Context")
+                } footer: {
+                    Text("Free text the model reasons over. Grounding an output in specific documents is coming soon — for now, paste the relevant facts here.")
                 }
                 if loadedModelID == nil {
                     Text("Load a model in the Models tab to generate.").font(.caption).foregroundStyle(.secondary)
