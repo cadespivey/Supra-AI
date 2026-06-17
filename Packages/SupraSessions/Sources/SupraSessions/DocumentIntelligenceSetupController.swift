@@ -23,6 +23,8 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     @Published public private(set) var embeddingTestPassed = false
     @Published public private(set) var isBusy = false
     @Published public private(set) var message: String?
+    /// Days before soft-deleted documents are auto-purged (0 disables). Plan §12.2.
+    @Published public private(set) var autoPurgeDays: Int = DocumentMaintenance.defaultAutoPurgeDays
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
@@ -43,7 +45,15 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
         self.storage = storage
         self.capabilitiesProvider = capabilitiesProvider
         self.settings = (try? store.documentSettings.loadSettings()) ?? DocumentIntelligenceSettingsRecord()
+        self.autoPurgeDays = (try? store.appSettings.getSetting(DocumentMaintenance.autoPurgeDaysKey, as: Int.self)) ?? DocumentMaintenance.defaultAutoPurgeDays
         reloadLocalState()
+    }
+
+    /// Updates the trash auto-purge retention (days; 0 disables).
+    public func updateAutoPurgeDays(_ days: Int) {
+        let clamped = max(0, days)
+        autoPurgeDays = clamped
+        try? store.appSettings.setSetting(DocumentMaintenance.autoPurgeDaysKey, value: clamped)
     }
 
     // MARK: - Derived gating

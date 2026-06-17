@@ -132,6 +132,11 @@ public final class MatterDocumentsController: ObservableObject {
 
     public func deleteFolder(id: String) {
         try? store.documentLibrary.softDeleteFolder(id: id)
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID, eventType: "folder_soft_deleted", actor: "user",
+            summary: "Moved a folder and its documents to trash",
+            relatedTable: "document_folders", relatedID: id
+        )
         if selectedFolderID == id { selectedFolderID = nil }
         reload()
     }

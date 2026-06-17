@@ -2047,3 +2047,24 @@ Delivered:
 - Tests: each format builder (PDF readable via PDFKit, DOCX/XLSX zip entries
   contain the text, MD/CSV content) and a full service export across all formats
   with persisted export records.
+
+## WO 44 — Trash, Purge, And Audit — DONE (2026-06-17)
+
+Status: complete; maintenance tests (2) green; app builds.
+
+Most of this WO already existed at the repo/controller level from earlier WOs
+(soft-delete/restore/permanent-delete with blob GC in WO 32/39; the Documents-tab
+trash sheet in WO 39; major audit events across import/index/Q&A/chronology/export/
+setup). WO 44 added the auto-purge half:
+- `SupraStore`: `DocumentLibraryRepository.fetchDocumentsDeletedBefore(_:)`.
+- `SupraSessions/DocumentMaintenance`: reads the configurable retention from
+  `app_settings` (`documents.auto_purge_days`, default 30 — §17 decision resolved;
+  0 disables), and `purgeExpired()` permanently deletes documents soft-deleted past
+  the cutoff, cleans now-unreferenced blobs, and audits each as
+  `document_permanently_deleted`.
+- `DocumentIntelligenceSetupController.autoPurgeDays`/`updateAutoPurgeDays`; Settings
+  "Auto-purge trash after N days" stepper. `AppEnvironment.bootstrap` runs
+  `purgeExpired()` on launch. `folder_soft_deleted` audit added to the Documents
+  controller.
+- Tests: expired purge (keeps a recent instance + its still-referenced blob);
+  retention 0 disables.
