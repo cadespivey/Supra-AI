@@ -1926,3 +1926,31 @@ Delivered:
 
 Note: the UI that enqueues imports (drag-drop) and surfaces progress/resume prompts
 is WO 39; the queue + `pauseActiveForQuit` hook are ready for it.
+
+## WO 39 — Documents Tab UI — DONE (2026-06-17)
+
+Status: complete; app builds with the enabled Documents tab.
+
+Delivered:
+- `SupraSessions/MatterDocumentsController` (@MainActor): per-matter folders,
+  documents, trashed docs, tags, search hits; import gating + enqueue through the
+  queue; folder/tag CRUD; soft-delete/restore/permanent-delete (audited); FTS
+  search with duplicate-content collapse; `allowedContentTypes` for the picker.
+  `MattersController` now vends a `documentsController` on select (wired to the
+  queue + a setup-ready gate); both are optional so existing call sites/tests are
+  unaffected.
+- `Apps/SupraAI/SupraAI/Documents/MatterDocumentsView.swift`: folder sidebar,
+  document list with status badges/OCR-confidence/tags/per-row tag + delete menus,
+  attachment indentation, file-importer + drag-and-drop import, live job-progress
+  bar, search results, trash sheet (restore/permanent delete), and a setup-gating
+  banner. `MatterWorkspaceView` Documents tab enabled and given the queue;
+  `MattersView` passes `environment.documentQueue`.
+- `AppEnvironment` init reordered so the queue + setup controller precede
+  `MattersController`. pbxproj: new `Documents` group + `MatterDocumentsView.swift`
+  (no SupraDocuments app-target link needed — the view uses SupraSessions/Store/Core
+  types only).
+
+Deviation: folder sidebar is a flat matter-scoped list rather than a nested tree
+for v1 (clean + functional; nested-tree presentation can follow). Move/copy between
+folders is available at the controller/repo level; richer drag-between-folders UI is
+deferred.

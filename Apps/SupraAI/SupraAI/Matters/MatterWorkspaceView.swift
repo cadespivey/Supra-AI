@@ -8,6 +8,7 @@ import SwiftUI
 struct MatterWorkspaceView: View {
     @ObservedObject var controller: MattersController
     @ObservedObject var library: ModelLibrary
+    @ObservedObject var queue: DocumentProcessingQueue
     let matter: MatterSummary
 
     @State private var tab: MatterTab = .chat
@@ -23,8 +24,7 @@ struct MatterWorkspaceView: View {
         case documents = "Documents"
 
         var id: String { rawValue }
-        var isEnabled: Bool { self != .documents }
-        var label: String { self == .documents ? "Documents — coming in next phase" : rawValue }
+        var label: String { rawValue }
     }
 
     var body: some View {
@@ -77,7 +77,7 @@ struct MatterWorkspaceView: View {
         HStack(spacing: 4) {
             ForEach(MatterTab.allCases) { item in
                 Button {
-                    if item.isEnabled { tab = item }
+                    tab = item
                 } label: {
                     Text(item.label)
                         .font(.callout.weight(tab == item ? .semibold : .regular))
@@ -90,8 +90,7 @@ struct MatterWorkspaceView: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .disabled(!item.isEnabled)
-                .help(item.isEnabled ? item.rawValue : "Documents are coming in a future phase.")
+                .help(item.rawValue)
             }
             Spacer()
         }
@@ -100,8 +99,7 @@ struct MatterWorkspaceView: View {
     }
 
     private func tabForeground(_ item: MatterTab) -> Color {
-        if !item.isEnabled { return .secondary.opacity(0.6) }
-        return tab == item ? .accentColor : .primary
+        tab == item ? .accentColor : .primary
     }
 
     @ViewBuilder
@@ -146,11 +144,15 @@ struct MatterWorkspaceView: View {
         case .audit:
             auditTab
         case .documents:
-            placeholder(
-                "Documents — coming in next phase",
-                "Document ingestion isn't part of this milestone.",
-                systemImage: "doc.on.doc"
-            )
+            if let documents = controller.documentsController {
+                MatterDocumentsView(controller: documents, queue: queue)
+            } else {
+                placeholder(
+                    "Documents unavailable",
+                    "Select the matter again to load its documents.",
+                    systemImage: "doc.on.doc"
+                )
+            }
         }
     }
 
