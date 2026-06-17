@@ -137,6 +137,47 @@ final class ValidationRunnerTests: XCTestCase {
         XCTAssertFalse(result.report.warnings.isEmpty)
     }
 
+    func testReasoningTraceIsStrippedBeforeGrading() async throws {
+        let store = try makeStore()
+        let suite = ValidationSuite(
+            id: "reasoning",
+            version: 1,
+            name: "Reasoning",
+            description: "",
+            passPolicy: "core_pass",
+            tests: [
+                ValidationTest(
+                    id: "one_sentence",
+                    name: "One sentence",
+                    prompt: "ONE",
+                    expectedBehavior: "",
+                    mechanicalChecks: [.generationStarted, .streamingStarted, .nonemptyOutput, .completedWithoutCrash],
+                    ruleChecks: [ValidationRuleCheck(type: .roughSentenceLimit, severity: .warning, maxSentences: 2)]
+                )
+            ]
+        )
+        // A verbose chain-of-thought (many sentences) then a one-sentence answer.
+        // Grading the raw stream would warn; grading the answer must pass.
+        let reasoning = "First I analyze the request. Then I weigh the options. Then I decide carefully."
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .generationStarted),
+                .event(request, 2, .token, token: "\(reasoning)\n</think>\n\nSupra AI runtime is working."),
+                .event(request, 3, .generationCompleted)
+            ])
+        }
+        let runner = ValidationRunner(runtimeClient: stub, store: store)
+
+        let result = try await runner.run(suite: suite, modelID: try seedModel(store), modelName: "M", modelPath: nil)
+
+        let test = try XCTUnwrap(result.report.testResults.first)
+        XCTAssertEqual(test.status, .passed, "the one-sentence answer must be graded, not the reasoning trace")
+        XCTAssertEqual(result.report.overallStatus, .passed)
+        XCTAssertFalse(test.outputExcerpt.contains("</think>"))
+        XCTAssertFalse(test.outputExcerpt.contains("analyze"))
+        XCTAssertTrue(test.outputExcerpt.contains("Supra AI runtime is working."))
+    }
+
     func testRejectedGenerationProducesFailedRun() async throws {
         let store = try makeStore()
         let suite = ValidationSuite(

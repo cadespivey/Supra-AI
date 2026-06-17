@@ -38,6 +38,10 @@ actor MLXModelController: ChatModelController {
     private var container: ModelContainer?
     private var loadedPath: String?
     private var cancellationRequested = false
+    /// True when the loaded model's chat template honors an `enable_thinking`
+    /// flag (Qwen3-style reasoning models). For those we suppress the reasoning
+    /// trace at generation time so it never reaches the chat or the validator.
+    private var templateSupportsThinkingToggle = false
 
     func loadModel(bookmark: Data?, path: String) async throws -> RuntimeMetrics {
         let startedAt = Date()
@@ -76,6 +80,7 @@ actor MLXModelController: ChatModelController {
         container = loadedContainer
         loadedPath = resolvedURL.path
         cancellationRequested = false
+        templateSupportsThinkingToggle = Self.templateSupportsThinkingToggle(in: resolvedURL)
 
         return RuntimeMetrics(loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000))
     }
@@ -96,7 +101,8 @@ actor MLXModelController: ChatModelController {
             container: container,
             prompt: prompt,
             systemPrompt: systemPrompt,
-            options: options
+            options: options,
+            disableThinking: templateSupportsThinkingToggle
         )
 
         var generatedTokenCount = 0
@@ -154,15 +160,43 @@ actor MLXModelController: ChatModelController {
             metrics: nil
         )
     }
+
+    /// Detects whether the model's chat template references `enable_thinking`,
+    /// which Qwen3-style reasoning templates use to gate the `<think>` block.
+    /// The template lives in `chat_template.jinja` or, failing that, the
+    /// `chat_template` field of `tokenizer_config.json`. Models without it
+    /// (e.g. Qwen2.5 Instruct) are left untouched.
+    private static func templateSupportsThinkingToggle(in modelDirectory: URL) -> Bool {
+        let jinjaURL = modelDirectory.appendingPathComponent("chat_template.jinja")
+        if let template = try? String(contentsOf: jinjaURL, encoding: .utf8) {
+            return template.contains("enable_thinking")
+        }
+        let configURL = modelDirectory.appendingPathComponent("tokenizer_config.json")
+        if let data = try? Data(contentsOf: configURL),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let template = json["chat_template"] as? String {
+            return template.contains("enable_thinking")
+        }
+        return false
+    }
 }
 
 private func generationStream(
     container: ModelContainer,
     prompt: String,
     systemPrompt: String?,
-    options: GenerationOptions
+    options: GenerationOptions,
+    disableThinking: Bool
 ) async throws -> AsyncStream<Generation> {
-    let userInput = UserInput(chat: chatMessages(prompt: prompt, systemPrompt: systemPrompt))
+    // `enable_thinking: false` is read by Qwen3-style chat templates, which then
+    // emit an empty `<think></think>` block so the model produces only its
+    // answer. It flows through UserInput.additionalContext ->
+    // applyChatTemplate; templates that don't define the variable ignore it.
+    let additionalContext: [String: any Sendable]? = disableThinking ? ["enable_thinking": false] : nil
+    let userInput = UserInput(
+        chat: chatMessages(prompt: prompt, systemPrompt: systemPrompt),
+        additionalContext: additionalContext
+    )
     let input = try await container.prepare(input: userInput)
 
     return try await container.generate(
