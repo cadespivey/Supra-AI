@@ -17,6 +17,10 @@ struct DiagnosticsView: View {
                     .textSelection(.enabled)
             }
 
+            Section("Document Intelligence Validation") {
+                m3ValidationContent
+            }
+
             Section {
                 if history.runs.isEmpty {
                     ContentUnavailableView(
@@ -48,6 +52,41 @@ struct DiagnosticsView: View {
         .onChange(of: validation.isRunning) { _, _ in
             history.refresh()
         }
+        .onChange(of: environment.documentValidationController.isRunning) { _, _ in
+            history.refresh()
+        }
+    }
+
+    @ViewBuilder
+    private var m3ValidationContent: some View {
+        let controller = environment.documentValidationController
+        let setupReady = environment.documentSetupController.isReadyForImport
+        let loadedModelID = environment.modelLibrary.loadedModelID
+        let canRun = setupReady && loadedModelID != nil && !controller.isRunning
+
+        switch controller.state {
+        case .idle:
+            Text("Runs the M3 pipeline over a synthetic validation matter and saves a report below.")
+                .font(.caption).foregroundStyle(.secondary)
+        case let .running(scenario):
+            HStack { ProgressView().controlSize(.small); Text("Running: \(scenario)…").font(.caption) }
+        case let .finished(_, passed, total):
+            Label("\(passed)/\(total) scenarios passed", systemImage: passed == total ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(passed == total ? .green : .orange)
+        case let .failed(message):
+            Label(message, systemImage: "xmark.octagon").foregroundStyle(.red).font(.caption)
+        }
+
+        if !setupReady {
+            Text("Complete Document Intelligence setup and load a chat model first.")
+                .font(.caption).foregroundStyle(.orange)
+        }
+        Button("Run M3 Document Validation") {
+            if let id = loadedModelID {
+                controller.run(chatModelID: id, chatModelName: environment.modelLibrary.activeModel?.displayName ?? "Model")
+            }
+        }
+        .disabled(!canRun)
     }
 }
 

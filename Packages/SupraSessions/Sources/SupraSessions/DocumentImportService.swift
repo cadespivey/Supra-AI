@@ -289,9 +289,13 @@ public final class DocumentImportService: @unchecked Sendable {
         } catch {
             try store.documentLibrary.updateStatus(documentID: document.id, status: .failed)
             try? markExtractionFailed(documentID: document.id, error: error)
+            // A type we recognize but cannot extract locally (e.g. legacy .xls,
+            // Outlook .msg) is "unsupported"; anything else is an extraction error.
+            let disposition: DocumentImportDisposition
+            if case ExtractionError.unsupportedFormat = error { disposition = .unsupported } else { disposition = .extractionFailed }
             report.items.append(DocumentImportReportItem(
                 displayName: displayName, sourceDisplayPath: sourceDisplayPath,
-                disposition: DocumentImportDisposition.extractionFailed.rawValue,
+                disposition: disposition.rawValue,
                 reason: error.localizedDescription, documentID: document.id, parentDocumentID: parentDocumentID
             ))
         }

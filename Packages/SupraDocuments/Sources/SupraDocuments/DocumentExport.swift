@@ -174,13 +174,15 @@ public enum DocumentExportBuilder {
             throw ExtractionError.fileUnreadable("Could not create XLSX.")
         }
         var rowsXML = ""
-        func row(_ values: [String]) -> String {
-            let cells = values.map { "<c t=\"inlineStr\"><is><t xml:space=\"preserve\">\(xmlEscape($0))</t></is></c>" }.joined()
-            return "<row>\(cells)</row>"
+        func row(_ number: Int, _ values: [String]) -> String {
+            let cells = values.enumerated().map { index, value in
+                "<c r=\"\(columnLetter(index))\(number)\" t=\"inlineStr\"><is><t xml:space=\"preserve\">\(xmlEscape(value))</t></is></c>"
+            }.joined()
+            return "<row r=\"\(number)\">\(cells)</row>"
         }
-        rowsXML += row(["Label", "Document", "Locator", "Warnings", "Excerpt"])
-        for source in payload.sources {
-            rowsXML += row([source.label, source.documentName, source.locator, source.warnings, source.excerpt])
+        rowsXML += row(1, ["Label", "Document", "Locator", "Warnings", "Excerpt"])
+        for (offset, source) in payload.sources.enumerated() {
+            rowsXML += row(offset + 2, [source.label, source.documentName, source.locator, source.warnings, source.excerpt])
         }
         let sheet = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -223,5 +225,15 @@ public enum DocumentExportBuilder {
         value.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    private static func columnLetter(_ index: Int) -> String {
+        var n = index
+        var letters = ""
+        repeat {
+            letters = String(UnicodeScalar(UInt8(65 + n % 26))) + letters
+            n = n / 26 - 1
+        } while n >= 0
+        return letters
     }
 }
