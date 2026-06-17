@@ -5,6 +5,7 @@ import SwiftUI
 /// detail editor (spec §11).
 struct MatterAuthoritiesView: View {
     @ObservedObject var controller: AuthoritiesController
+    var onNewResearch: () -> Void = {}
 
     var body: some View {
         NavigationStack {
@@ -14,6 +15,8 @@ struct MatterAuthoritiesView: View {
                         Label("No Authorities Saved", systemImage: "books.vertical")
                     } description: {
                         Text("Save reviewed CourtListener results to build this matter's authority library.")
+                    } actions: {
+                        Button("New Research Session") { onNewResearch() }
                     }
                 } else {
                     List(controller.authorities) { authority in

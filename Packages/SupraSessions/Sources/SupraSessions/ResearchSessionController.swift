@@ -465,8 +465,22 @@ public final class ResearchSessionController: ObservableObject {
         reviewState: ResearchResultReviewState, useStatus: AuthorityUseStatus
     ) {
         if let existing = try? store.authorities.fetchAuthority(researchResultID: result.id) {
+            // The review classification (review_state) always reflects the latest
+            // action. Use-status, however, is library-managed: on an existing
+            // authority it may only change along the §11.4 transition graph, so a
+            // re-review never silently downgrades a user-set status (e.g.
+            // user_marked_verified → unverified). Legal changes are audited like
+            // any other status change; illegal ones are preserved.
             try? store.authorities.updateReviewState(authorityID: existing.id, reviewState: reviewState)
-            try? store.authorities.updateUseStatus(authorityID: existing.id, useStatus: useStatus)
+            let current = AuthorityUseStatus(rawValue: existing.useStatus) ?? .unverified
+            if current != useStatus, current.canTransition(to: useStatus) {
+                try? store.authorities.updateUseStatus(authorityID: existing.id, useStatus: useStatus)
+                _ = try? store.auditEvents.recordEvent(
+                    matterID: matterID, eventType: "authority_status_changed", actor: "user",
+                    summary: "“\(existing.caseName)”: \(current.rawValue) → \(useStatus.rawValue)",
+                    relatedTable: "authorities", relatedID: existing.id
+                )
+            }
             return
         }
         let authority = AuthorityRecord(

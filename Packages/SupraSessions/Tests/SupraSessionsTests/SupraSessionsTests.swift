@@ -448,6 +448,30 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.authorities[0].userNotes, "key holding")
     }
 
+    func testReReviewDoesNotIllegallyDowngradeVerifiedAuthority() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let sessionID = try seedApprovedSession(store, matterID: matter.id)
+        let dto = CourtListenerSearchResultDTO(caseName: "Roe", rawResultJSON: "{}")
+        let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
+        let controller = makeRunController(store: store, matterID: matter.id, client: client)
+        controller.openSession(sessionID)
+        await controller.runApprovedSearches()
+
+        let resultID = controller.resultsByQuery.values.flatMap { $0 }[0].id
+        controller.reviewResult(resultID, as: .saveAsAuthority)
+        let authority = try XCTUnwrap(store.authorities.fetchAuthority(researchResultID: resultID))
+        // The user verifies it in the Authorities tab (a legal transition).
+        try store.authorities.updateUseStatus(authorityID: authority.id, useStatus: .userMarkedVerified)
+
+        // Re-reviewing as Needs Later Review would set unverified — an illegal
+        // §11.4 transition that must NOT silently downgrade the verified status.
+        controller.reviewResult(resultID, as: .needsLaterReview)
+        let after = try XCTUnwrap(store.authorities.fetchAuthority(researchResultID: resultID))
+        XCTAssertEqual(after.useStatus, AuthorityUseStatus.userMarkedVerified.rawValue)
+        XCTAssertEqual(after.reviewState, ResearchResultReviewState.needsLaterReview.rawValue, "review classification still updates")
+    }
+
     // MARK: - Structured outputs (WO 28)
 
     func testCreateOutputCompleteWhenAllSectionsPresent() async throws {
