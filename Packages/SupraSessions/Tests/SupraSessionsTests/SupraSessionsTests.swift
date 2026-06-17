@@ -495,6 +495,40 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertNotNil(controller.message)
     }
 
+    // MARK: - Structure repair (WO 29)
+
+    func testRepairCreatesNewVersionPreservingOriginalAndCompletes() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)
+        let fullMarkdown = contract.requiredHeadings.joined(separator: "\n\nbody\n\n")
+        let partialMarkdown = "# Rule Synthesis\n## Rule Statement\npartial"
+        // Create returns an incomplete doc; repair (detected by prompt text) returns the full one.
+        let stub = StubRuntimeClient { request in
+            let token = request.prompt.contains("repairing the structure") ? fullMarkdown : partialMarkdown
+            return .events([.event(request, 1, .token, token: token), .event(request, 2, .generationCompleted)])
+        }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+
+        _ = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: ModelID())
+        let outputID = controller.outputs[0].id
+        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.needsReview.rawValue)
+
+        let repaired = await controller.repairOutput(outputID, modelID: ModelID())
+        XCTAssertTrue(repaired)
+        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.complete.rawValue)
+        XCTAssertEqual(controller.outputs[0].missingCount, 0)
+
+        let versions = try store.structuredOutputs.fetchVersions(structuredOutputID: outputID)
+            .sorted { $0.versionIndex < $1.versionIndex }
+        XCTAssertEqual(versions.count, 2)
+        XCTAssertEqual(versions[0].contentMarkdown, partialMarkdown, "original version preserved")
+        XCTAssertEqual(versions[1].versionIndex, 2)
+        XCTAssertEqual(versions[1].parentVersionID, versions[0].id)
+        XCTAssertEqual(versions[1].repairReason, "missing_required_sections")
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "structured_output_repaired" })
+    }
+
     // MARK: - ModelLibrary
 
     func testAddAndActivateLoadsModel() async throws {

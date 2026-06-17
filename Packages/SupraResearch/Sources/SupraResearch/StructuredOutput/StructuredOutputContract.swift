@@ -128,4 +128,19 @@ public enum StructuredOutputPromptBuilder {
             with: context.trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }
+
+    /// Builds the structure-repair prompt (spec §12.5): fills the original output
+    /// and the exact required heading structure into repair-structure-v1.
+    public static func buildRepairPrompt(originalOutput: String, requiredHeadings: [String]) throws -> String {
+        let resource = "repair-structure-v1"
+        guard
+            let url = Bundle.module.url(forResource: resource, withExtension: "md"),
+            let template = try? String(contentsOf: url, encoding: .utf8)
+        else {
+            throw StructuredOutputPromptError.templateUnavailable(resource)
+        }
+        return template
+            .replacingOccurrences(of: "{{original_output}}", with: originalOutput)
+            .replacingOccurrences(of: "{{required_sections}}", with: requiredHeadings.joined(separator: "\n"))
+    }
 }

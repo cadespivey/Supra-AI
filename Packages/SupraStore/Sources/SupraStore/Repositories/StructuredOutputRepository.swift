@@ -82,6 +82,15 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         }
     }
 
+    public func updateStatus(outputID: String, status: StructuredOutputStatus) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE structured_outputs SET status = ?, updated_at = ? WHERE id = ?",
+                arguments: [status.rawValue, Date(), outputID]
+            )
+        }
+    }
+
     public func fetchOutputs(matterID: String) throws -> [StructuredOutputRecord] {
         try writer.read { db in
             try StructuredOutputRecord.fetchAll(
