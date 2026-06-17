@@ -1873,3 +1873,32 @@ Delivered:
 
 Re-chunk/re-embed of `stale` docs is performed by the indexing pass in WO 37; the
 edit path here sets the trigger.
+
+## WO 37 — Chunking, FTS, Embeddings, And Hybrid Retrieval — DONE (2026-06-17)
+
+Status: complete; SupraDocuments 17, SupraStore 20, SupraSessions 48 (verified
+deterministic across repeated runs).
+
+Delivered:
+- `SupraDocuments/DocumentChunker`: deterministic chunking — natural part
+  boundaries first, then char-bounded windows with overlap, preferring paragraph/
+  sentence/space breaks; preserves locators + char ranges. `DocumentSourceLocator`
+  (Codable locator model with `displayString`/`encodedJSON`).
+- `SupraSessions`: `VectorMath` (Float32-LE encode/decode, normalize, dot);
+  `TextEmbedder` protocol + `RuntimeTextEmbedder` (loads the embedding model on
+  demand, batches `embedTexts`); `DocumentIndexingService` (chunk → `replaceChunks`
+  writes FTS + cascades stale embeddings → embed → advance index status; re-indexes
+  `stale` docs); `DocumentRetrievalService` (hybrid FTS + cosine, folder/tag/date/
+  document filters, duplicate-content collapse with noted locations, source
+  diversity cap, semantic-similarity threshold, scope-readiness gating + incomplete-
+  scope warning).
+- `SupraStore`: `DocumentLibraryRepository.resolveScopeDocumentIDs(...)`;
+  `DocumentIndexRepository.searchChunks(...)` now takes a document-id filter and
+  sanitizes user text into a safe FTS5 OR-of-prefixes expression; `fetchChunks(ids:)`.
+- Tests: chunker determinism/overlap/locators; index→retrieve with FTS + semantic,
+  folder filter scoping, duplicate collapse, and text-only readiness without an
+  embedder.
+
+Decision: index status without an embedder stays `text_indexed` (searchable);
+semantic readiness requires embeddings. Q&A/chronology readiness uses
+`DocumentRetrievalService.scopeReadiness`.
