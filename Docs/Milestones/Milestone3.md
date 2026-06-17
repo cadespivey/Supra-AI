@@ -1704,3 +1704,50 @@ These should be resolved during dependency/toolchain work, not left until final 
 - final auto-purge default value for deleted documents
 - exact validation fixture generation approach for legacy binary formats
 ```
+
+---
+
+# 18. Progress Log
+
+Implementation tracking for M3. Each entry is one work order / commit point.
+Branch: `feat/milestone3` (off `main`).
+
+## WO 32 — M3 Schema And Core Types — DONE (2026-06-17)
+
+Status: complete; `swift test` green for SupraCore (13) and SupraStore (20, incl. 11 new M3 tests).
+
+Delivered:
+- `SupraCore/IDs.swift`: added all 12 document ID wrappers.
+- `SupraCore/DocumentDomainTypes.swift`: new file with `MatterDocumentStatus`,
+  `DocumentExtractionStatus`, `DocumentIndexStatus`, `DocumentProcessingPhase`,
+  `DocumentSourceKind`, `DocumentGeneratedOutputKind`, plus helper enums
+  (`DocumentProcessingJobStatus`, `DocumentImportBatchStatus`,
+  `DocumentSourceSetStatus`, `DocumentSourceSetMode`, `DocumentImportDisposition`).
+- `SupraCore/LegalDomainTypes.swift`: extended `StructuredOutputType` with the 4
+  document cases.
+- `SupraStore/Database/SupraMigrator.swift`: migrations v022–v037 (all 16 tables
+  from §14, including the FTS5 virtual table) + updated DEBUG `deleteAllTables`
+  to drop M3 children before parents.
+- `SupraStore/Records/Document*.swift`: 15 record types.
+- `SupraStore/Repositories/Document*.swift`: 5 repositories + wired into `SupraStore`.
+- `SupraStore/Tests/SupraStoreTests/Milestone3SchemaTests.swift`: 11 focused tests
+  (dedup, folder cascade soft-delete/restore, move/copy, permanent-delete blob GC,
+  tags, chunk/FTS replacement + embedding cascade, soft-delete search exclusion,
+  embedding-model selection + setup state, FIFO job queue + resume reconcile,
+  source-set attach + exports, import-batch report).
+
+Deviations from the literal plan (kept within plan intent):
+- Repositories are grouped into 5 cohesive types rather than one-per-table, matching
+  the existing convention where `ChatRepository`/`ResearchRepository` own several
+  tables: `DocumentSettingsRepository` (settings + embedding models),
+  `DocumentLibraryRepository` (blobs/folders/documents/tags), `DocumentIndexRepository`
+  (parts/chunks/FTS/embeddings), `DocumentJobRepository` (batches/jobs),
+  `DocumentSourceRepository` (source sets/output sources/exports).
+- `matter_documents.import_batch_id` is a plain TEXT column (no SQL FK) because
+  `document_import_batches` is created later at v033; avoids a forward reference.
+- Per-document extraction metadata (method, checksum, warnings/errors, page count,
+  OCR confidence summary, user-edited flag) lives on `matter_documents` since §14's
+  table list has no separate extraction table.
+
+Toolchain note (env, not plan): the default CLI `swift` is broken; build/test with
+`DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`.
