@@ -47,6 +47,16 @@ public final class ModelLibrary: ObservableObject {
         models = (try? store.models.fetchModels())?.map(ModelSummary.init) ?? []
     }
 
+    /// Reconciles the published load state with a model the runtime already holds
+    /// from a previous session, so chat is enabled on launch without a manual
+    /// re-load. No-op unless we're idle and the id matches a registered model.
+    public func reconcileLoadedModel(_ runtimeModelID: ModelID?) {
+        guard case .idle = loadState, let runtimeModelID else { return }
+        let idString = runtimeModelID.rawValue.uuidString
+        guard (try? store.models.fetchModel(id: idString)) != nil else { return }
+        loadState = .loaded(modelID: idString)
+    }
+
     /// Registers a newly selected model folder and returns its summary.
     @discardableResult
     public func addModel(displayName: String, path: String, bookmarkData: Data?) throws -> ModelSummary {
