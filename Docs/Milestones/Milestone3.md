@@ -1825,3 +1825,28 @@ Deviations / decisions (within plan intent):
   is the §3.1 / §15.2 "failure reporting" path. `.doc`, `.docx`, `.rtf`, and all
   text/office/spreadsheet/email families ARE supported.
 - OCR is not performed here (split to WO 36); PDF/image extractors set `needsOCR`.
+
+## WO 35 — Managed Storage, Folders, Tags, And Import — DONE (2026-06-17)
+
+Status: complete; deterministic import tests green (SupraSessions 45 total incl. 2
+new import tests; SupraStore 20).
+
+Delivered:
+- `SupraSessions/DocumentImportService`: the import engine. Recursively walks
+  files/folders, preserves hierarchy as `document_folders`, copies each file into
+  content-addressed managed storage with sha256 dedup (blob reused across
+  instances), creates `matter_documents`, runs `ExtractionService`, persists
+  `document_pages_parts` + extraction metadata, expands email attachments as child
+  documents (a failed attachment never fails the parent), records unsupported/
+  corrupt files as failed instances + report lines, and finalizes the batch with a
+  `DocumentImportReport` (per-file dispositions + counts). Audits import
+  completed/with-failures.
+- `SupraStore/DocumentLibraryRepository`: added `updateExtraction(...)` and
+  `markTextEdited(...)` (edits → `edited` + `stale` for re-index).
+- Tests: recursive hierarchy + dedup (one blob, two instances) + managed-storage
+  copy + originals untouched + email attachment child docs + unsupported reporting
+  + batch report; and edited-text → stale.
+
+Notes: tags repo capability already exists (WO 32); the Documents-tab UI for
+folders/tags/drag-drop is WO 39. Import gating consumes
+`DocumentIntelligenceSetupController.isReadyForImport` (WO 33) at the UI layer.
