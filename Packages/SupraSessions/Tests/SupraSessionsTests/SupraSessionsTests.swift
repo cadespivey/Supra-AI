@@ -144,13 +144,43 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.matters.count, 1)
         XCTAssertEqual(controller.selectedMatterID, matter.id)
 
+        // Creating a matter also creates a default matter chat and a
+        // matter_created audit event (WO 23 / spec §8.3).
+        XCTAssertEqual(try store.chats.fetchMatterChats(matterID: matter.id).count, 1)
+        XCTAssertEqual(try store.chats.fetchMatterChats(matterID: matter.id).first?.title, "General — Acme v. Roe")
+        let auditEvents = try store.auditEvents.fetchEvents(matterID: matter.id)
+        XCTAssertTrue(auditEvents.contains { $0.eventType == "matter_created" })
+
         let chat = try XCTUnwrap(controller.chatController)
         _ = try chat.createChat(title: "Issue 1")
 
-        // The chat is scoped to the matter, not the global list.
-        XCTAssertEqual(chat.chats.count, 1)
+        // The chats are scoped to the matter (default + new), not the global list.
+        XCTAssertEqual(chat.chats.count, 2)
         XCTAssertTrue(try store.chats.fetchGlobalChats().isEmpty)
-        XCTAssertEqual(try store.chats.fetchMatterChats(matterID: matter.id).count, 1)
+        XCTAssertEqual(try store.chats.fetchMatterChats(matterID: matter.id).count, 2)
+    }
+
+    func testMattersControllerCreateEditDeleteFlow() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = MattersController(store: store, runtimeClient: stub)
+
+        let matter = try controller.createMatter(
+            MatterDraft(name: "Doe v. Roe", jurisdiction: "California", partyPerspective: .plaintiff)
+        )
+        XCTAssertEqual(controller.selectedMatter?.jurisdiction, "California")
+        XCTAssertEqual(controller.selectedMatter?.partyPerspective, .plaintiff)
+
+        var draft = try XCTUnwrap(controller.draft(forMatter: matter.id))
+        draft.partyPerspective = .defendant
+        draft.court = "N.D. Cal."
+        try controller.updateMatter(id: matter.id, draft: draft)
+        XCTAssertEqual(controller.selectedMatter?.partyPerspective, .defendant)
+        XCTAssertEqual(controller.draft(forMatter: matter.id)?.court, "N.D. Cal.")
+
+        controller.deleteMatter(id: matter.id)
+        XCTAssertTrue(controller.matters.isEmpty)
+        XCTAssertNil(controller.selectedMatterID)
     }
 
     // MARK: - ModelLibrary
