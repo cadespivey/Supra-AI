@@ -1902,3 +1902,27 @@ Delivered:
 Decision: index status without an embedder stays `text_indexed` (searchable);
 semantic readiness requires embeddings. Q&A/chronology readiness uses
 `DocumentRetrievalService.scopeReadiness`.
+
+## WO 38 — Document Processing Queue — DONE (2026-06-17)
+
+Status: complete; SupraSessions queue tests green (FIFO drain, interrupted-job
+reconcile, queued-job cancel); app builds with the queue wired in.
+
+Delivered:
+- `SupraSessions/DocumentProcessingQueue` (@MainActor ObservableObject): single
+  active job, FIFO queue, per-job run of import → indexing with phase progress,
+  completion/failure notifications (`DocumentNotifying`), queued-job cancellation,
+  `pauseActiveForQuit()`, and `bootstrap()` relaunch reconciliation (interrupted
+  active jobs → paused/`resumableJobs`, `resume(jobID:)`). `waitUntilIdle()` drives
+  deterministic draining. Import sources are held in-memory per job; jobs whose
+  sources are lost across relaunch fall back to store-only re-index reconciliation.
+- `SupraStore/DocumentJobRepository.fetchPausedJobs()`.
+- `AppEnvironment`: constructs the queue (import service + an indexing factory that
+  builds a `RuntimeTextEmbedder` from the selected embedding model) and calls
+  `documentQueue.bootstrap()` on launch.
+- Tests: two import jobs drain FIFO to completion with per-job notifications and
+  indexed chunks; interrupted active job becomes resumable on bootstrap; queued job
+  cancels.
+
+Note: the UI that enqueues imports (drag-drop) and surfaces progress/resume prompts
+is WO 39; the queue + `pauseActiveForQuit` hook are ready for it.

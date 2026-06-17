@@ -123,6 +123,16 @@ public final class DocumentJobRepository: @unchecked Sendable {
         }
     }
 
+    public func fetchPausedJobs() throws -> [DocumentProcessingJobRecord] {
+        try writer.read { db in
+            try DocumentProcessingJobRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM document_processing_jobs WHERE status = ? ORDER BY updated_at DESC",
+                arguments: [DocumentProcessingJobStatus.paused.rawValue]
+            )
+        }
+    }
+
     public func fetchJobs(matterID: String) throws -> [DocumentProcessingJobRecord] {
         try writer.read { db in
             try DocumentProcessingJobRecord.fetchAll(
