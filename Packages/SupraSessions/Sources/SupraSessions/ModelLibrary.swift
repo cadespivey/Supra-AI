@@ -137,10 +137,20 @@ public final class ModelLibrary: ObservableObject {
             case .loaded:
                 loadState = .loaded(modelID: record.id)
             case .failed:
-                loadState = .failed(message: response.error?.message ?? "The model could not be loaded.")
+                loadState = .failed(message: Self.failureMessage(response.error))
             }
         } catch {
             loadState = .failed(message: error.localizedDescription)
         }
+    }
+
+    /// Surfaces the runtime's technical detail (the real cause) alongside the
+    /// top-line message, so a failed load explains itself.
+    private static func failureMessage(_ error: RuntimeError?) -> String {
+        guard let error else { return "The model could not be loaded." }
+        if let details = error.technicalDetails, !details.isEmpty {
+            return "\(error.message) — \(details)"
+        }
+        return error.message
     }
 }

@@ -69,6 +69,12 @@ Pinned version/revision:
 Update risk:
 Model-loading/generation APIs may change.
 
+Version posture:
+`mlx-swift` 0.31.4 and `mlx-swift-lm` 3.31.3 are the latest upstream releases (as of June 2026); the project is current, not behind. The pins are `exactVersion` for reproducible builds — bump them deliberately rather than tracking `main`.
+
+Model architecture support:
+The runtime links only `MLXLLM`, whose `LLMModelFactory` dispatches on `config.json`'s `model_type` (looked up in `LLMTypeRegistry`) — not the `architectures` name. The download flow's `ModelCompatibility` mirrors that registry's `model_type` set and rejects unregistered types up front, before downloading weights; its set must be updated whenever `mlx-swift-lm` is bumped. Multimodal/vision-only models (whose `model_type` is absent from the LLM registry) require `MLXVLM` + a `VLMModelFactory` path, which is not linked — a separate runtime capability.
+
 ## MLX LM Tokenizers
 
 Purpose:

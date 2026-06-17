@@ -7,6 +7,9 @@ public protocol ModelRepositoryFetching: Sendable {
     func listModelFiles(repoID: String) async throws -> [String]
     /// Downloads a single repo file to `destination` (parent dirs created by caller).
     func downloadFile(repoID: String, file: String, to destination: URL) async throws
+    /// The repo's `config.json` contents, or `nil` if it has none. Used to check
+    /// architecture compatibility before downloading gigabytes of weights.
+    func fetchConfigJSON(repoID: String) async throws -> Data?
 }
 
 public enum HuggingFaceError: Error, LocalizedError {
@@ -76,6 +79,18 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
             try fileManager.removeItem(at: destination)
         }
         try fileManager.moveItem(at: tempURL, to: destination)
+    }
+
+    public func fetchConfigJSON(repoID: String) async throws -> Data? {
+        try Self.validate(repoID)
+        guard let url = URL(string: "\(host)/\(repoID)/resolve/main/config.json") else {
+            return nil
+        }
+        let (data, response) = try await session.data(from: url)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            return nil
+        }
+        return data
     }
 
     private static func validate(_ repoID: String) throws {
