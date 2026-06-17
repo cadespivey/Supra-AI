@@ -92,6 +92,7 @@ public final class MattersController: ObservableObject {
     @Published public private(set) var selectedMatterID: String?
     @Published public private(set) var chatController: GlobalChatController?
     @Published public private(set) var researchController: ResearchSessionController?
+    @Published public private(set) var authoritiesController: AuthoritiesController?
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
@@ -212,6 +213,7 @@ public final class MattersController: ObservableObject {
         guard let matterID else {
             chatController = nil
             researchController = nil
+            authoritiesController = nil
             return
         }
         let controller = GlobalChatController(
@@ -231,6 +233,10 @@ public final class MattersController: ObservableObject {
         )
         research.loadSessions()
         researchController = research
+
+        let authorities = AuthoritiesController(store: store, matterID: matterID)
+        authorities.load()
+        authoritiesController = authorities
     }
 
     private func reload() {

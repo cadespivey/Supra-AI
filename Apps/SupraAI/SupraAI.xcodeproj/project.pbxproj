@@ -50,6 +50,8 @@
 		5A0000000000000000000029 /* MatterResearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000119 /* MatterResearchView.swift */; };
 		5A000000000000000000002A /* ResearchPlannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011A /* ResearchPlannerView.swift */; };
 		5A000000000000000000002B /* ResearchSessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011B /* ResearchSessionDetailView.swift */; };
+		5A000000000000000000002C /* MatterAuthoritiesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011C /* MatterAuthoritiesView.swift */; };
+		5A000000000000000000002D /* AuthorityDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011D /* AuthorityDetailView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -106,6 +108,8 @@
 		5A0000000000000000000119 /* MatterResearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterResearchView.swift; sourceTree = "<group>"; };
 		5A000000000000000000011A /* ResearchPlannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchPlannerView.swift; sourceTree = "<group>"; };
 		5A000000000000000000011B /* ResearchSessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchSessionDetailView.swift; sourceTree = "<group>"; };
+		5A000000000000000000011C /* MatterAuthoritiesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterAuthoritiesView.swift; sourceTree = "<group>"; };
+		5A000000000000000000011D /* AuthorityDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthorityDetailView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -167,6 +171,7 @@
 				5A0000000000000000000116 /* MattersView.swift */,
 				5A0000000000000000000906 /* Matters */,
 				5A0000000000000000000907 /* Research */,
+				5A0000000000000000000909 /* Authorities */,
 				5A0000000000000000000903 /* Navigation */,
 				5A0000000000000000000904 /* Status */,
 				5A000000000000000000010B /* SupraAI.entitlements */,
@@ -207,6 +212,15 @@
 				5A000000000000000000011B /* ResearchSessionDetailView.swift */,
 			);
 			path = Research;
+			sourceTree = "<group>";
+		};
+		5A0000000000000000000909 /* Authorities */ = {
+			isa = PBXGroup;
+			children = (
+				5A000000000000000000011C /* MatterAuthoritiesView.swift */,
+				5A000000000000000000011D /* AuthorityDetailView.swift */,
+			);
+			path = Authorities;
 			sourceTree = "<group>";
 		};
 		5A0000000000000000000905 /* SupraRuntimeService */ = {
@@ -386,6 +400,8 @@
 				5A0000000000000000000029 /* MatterResearchView.swift in Sources */,
 				5A000000000000000000002A /* ResearchPlannerView.swift in Sources */,
 				5A000000000000000000002B /* ResearchSessionDetailView.swift in Sources */,
+				5A000000000000000000002C /* MatterAuthoritiesView.swift in Sources */,
+				5A000000000000000000002D /* AuthorityDetailView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
