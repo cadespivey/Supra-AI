@@ -17,7 +17,9 @@ struct MatterAuthoritiesView: View {
                         Text("Save reviewed CourtListener results to build this matter's authority library.")
                     } actions: {
                         Button("New Research Session") { onNewResearch() }
+                            .accessibilityIdentifier("authorities.newResearch")
                     }
+                    .accessibilityIdentifier("authorities.empty")
                 } else {
                     List(controller.authorities) { authority in
                         NavigationLink(value: authority.id) { row(authority) }
