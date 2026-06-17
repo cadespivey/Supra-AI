@@ -255,6 +255,60 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
         }
     }
 
+    /// Records the result of an extraction pass on a document instance (M3 §6.1).
+    public func updateExtraction(
+        documentID: String,
+        status: MatterDocumentStatus,
+        extractionStatus: DocumentExtractionStatus,
+        method: String,
+        checksum: String?,
+        pagePartCount: Int,
+        ocrConfidenceSummary: String? = nil,
+        warningsJSON: String? = nil,
+        errorsJSON: String? = nil,
+        metadataCreatedAt: Date? = nil,
+        metadataModifiedAt: Date? = nil
+    ) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: """
+                UPDATE matter_documents
+                SET status = ?, extraction_status = ?, extraction_method = ?,
+                    extracted_text_checksum = ?, page_part_count = ?,
+                    ocr_confidence_summary = ?, extraction_warnings_json = ?,
+                    extraction_errors_json = ?, metadata_created_at = ?,
+                    metadata_modified_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                arguments: [
+                    status.rawValue, extractionStatus.rawValue, method,
+                    checksum, pagePartCount, ocrConfidenceSummary, warningsJSON,
+                    errorsJSON, metadataCreatedAt, metadataModifiedAt, Date(),
+                    documentID
+                ]
+            )
+        }
+    }
+
+    /// Marks a document's extracted text as user-edited and its index stale, so a
+    /// later indexing pass re-chunks/re-embeds it (plan §6.2, §7.1).
+    public func markTextEdited(documentID: String) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: """
+                UPDATE matter_documents
+                SET has_user_edited_text = 1, extraction_status = ?, index_status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                arguments: [
+                    DocumentExtractionStatus.edited.rawValue,
+                    DocumentIndexStatus.stale.rawValue,
+                    Date(), documentID
+                ]
+            )
+        }
+    }
+
     public func softDeleteDocument(id: String) throws {
         try writer.write { db in
             try Self.softDeleteDocuments(db, ids: [id], at: Date())
