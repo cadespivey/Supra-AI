@@ -27,7 +27,7 @@ struct MattersView: View {
         }
         .sheet(isPresented: $showNewMatter) {
             MatterEditorSheet(mode: .create, draft: MatterDraft()) { draft in
-                try? controller.createMatter(draft)
+                _ = try? controller.createMatter(draft)
             }
         }
         .task { controller.loadMatters() }
