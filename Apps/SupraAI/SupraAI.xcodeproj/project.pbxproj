@@ -530,6 +530,7 @@
 				CODE_SIGN_ENTITLEMENTS = SupraRuntimeService/SupraRuntimeService.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SupraRuntimeService/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = SupraRuntimeService;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -550,6 +551,7 @@
 				CODE_SIGN_ENTITLEMENTS = SupraRuntimeService/SupraRuntimeService.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SupraRuntimeService/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = SupraRuntimeService;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
