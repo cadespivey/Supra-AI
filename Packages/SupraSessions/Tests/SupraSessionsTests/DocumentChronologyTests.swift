@@ -44,6 +44,27 @@ final class DocumentChronologyTests: XCTestCase {
         XCTAssertEqual(Set(allSources.map(\.documentID)).count, 2)
     }
 
+    func testRegenerateCreatesNewVersionWithFreshSourceSet() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        try await indexDoc(store, matter.id, nil, "a.txt", "Agreement executed March 3, 2024.")
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([.event(request, 0, .token, token: "| Date | Event | Source |\n| 2024-03-03 | Executed [S1] | [S1] |"), .event(request, 1, .generationCompleted)])
+        })
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let first = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+        let firstResult = try XCTUnwrap(first)
+        let regen = await chronology.regenerate(outputID: firstResult.outputID, modelID: ModelID())
+        let regenResult = try XCTUnwrap(regen)
+
+        // Same output, new version, with its own attached source set.
+        XCTAssertEqual(regenResult.outputID, firstResult.outputID)
+        XCTAssertNotEqual(regenResult.versionID, firstResult.versionID)
+        XCTAssertEqual(try store.structuredOutputs.fetchVersions(structuredOutputID: firstResult.outputID).count, 2)
+        XCTAssertFalse(try store.documentSources.fetchSources(structuredOutputVersionID: regenResult.versionID).isEmpty)
+    }
+
     func testDateExtractionDetectsCommonForms() {
         XCTAssertTrue(DateExtraction.containsDate("Signed on March 3, 2024."))
         XCTAssertTrue(DateExtraction.containsDate("2024-03-03 filing"))

@@ -266,7 +266,19 @@ public final class DocumentImportService: @unchecked Sendable {
             var result = try await extraction.extract(fileURL: url)
             if result.needsOCR, ocr != nil, let format {
                 let blobURL = storage.url(forManagedRelativePath: blob.managedRelativePath)
-                result = try await applyOCR(to: result, blobURL: blobURL, family: format.family)
+                do {
+                    result = try await applyOCR(to: result, blobURL: blobURL, family: format.family)
+                    _ = try? store.auditEvents.recordEvent(
+                        matterID: matterID, eventType: "document_ocr_completed", actor: "system",
+                        summary: "OCR completed for \(displayName)", relatedTable: "matter_documents", relatedID: document.id
+                    )
+                } catch {
+                    _ = try? store.auditEvents.recordEvent(
+                        matterID: matterID, eventType: "document_ocr_failed", actor: "system",
+                        summary: "OCR failed for \(displayName)", relatedTable: "matter_documents", relatedID: document.id
+                    )
+                    throw error
+                }
             }
             try persistExtraction(result, documentID: document.id)
             let disposition: DocumentImportDisposition = result.needsOCR ? .ocrNeeded : .imported

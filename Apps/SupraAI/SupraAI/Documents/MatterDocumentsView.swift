@@ -271,19 +271,34 @@ struct MatterDocumentsView: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Trash").font(.title2.weight(.semibold)).padding()
             Divider()
-            if controller.trashedDocuments.isEmpty {
-                ContentUnavailableView("Trash is Empty", systemImage: "trash", description: Text("Soft-deleted documents appear here."))
-                    .frame(minWidth: 420, minHeight: 240)
+            if controller.trashedDocuments.isEmpty && controller.trashedFolders.isEmpty {
+                ContentUnavailableView("Trash is Empty", systemImage: "trash", description: Text("Soft-deleted documents and folders appear here."))
+                    .frame(minWidth: 460, minHeight: 240)
             } else {
-                List(controller.trashedDocuments) { doc in
-                    HStack {
-                        Text(doc.displayName)
-                        Spacer()
-                        Button("Restore") { controller.restore(documentID: doc.id) }
-                        Button("Delete Permanently", role: .destructive) { controller.permanentlyDelete(documentID: doc.id) }
+                List {
+                    if !controller.trashedFolders.isEmpty {
+                        Section("Folders") {
+                            ForEach(controller.trashedFolders) { folder in
+                                HStack {
+                                    Label(folder.name, systemImage: "folder")
+                                    Spacer()
+                                    Button("Restore") { controller.restoreFolder(id: folder.id) }
+                                }
+                            }
+                        }
+                    }
+                    Section("Documents") {
+                        ForEach(controller.trashedDocuments) { doc in
+                            HStack {
+                                Text(doc.displayName)
+                                Spacer()
+                                Button("Restore") { controller.restore(documentID: doc.id) }
+                                Button("Delete Permanently", role: .destructive) { controller.permanentlyDelete(documentID: doc.id) }
+                            }
+                        }
                     }
                 }
-                .frame(minWidth: 460, minHeight: 300)
+                .frame(minWidth: 480, minHeight: 320)
             }
             Divider()
             HStack { Spacer(); Button("Done") { showTrash = false }.keyboardShortcut(.defaultAction) }.padding()
@@ -418,6 +433,10 @@ struct DocumentQASheet: View {
 
             Divider()
             HStack {
+                if let result = qa.lastResult {
+                    Button("Regenerate") { Task { _ = await qa.regenerate(outputID: result.outputID, modelID: loadedModelID) } }
+                        .disabled(qa.isGenerating || loadedModelID == nil)
+                }
                 Spacer()
                 if qa.isGenerating { ProgressView().controlSize(.small) }
                 Button("Ask") { Task { _ = await qa.generate(question: question, scope: scope, mode: mode, modelID: loadedModelID) } }
@@ -499,6 +518,10 @@ struct DocumentChronologySheet: View {
 
             Divider()
             HStack {
+                if let result = chronology.lastResult {
+                    Button("Regenerate") { Task { _ = await chronology.regenerate(outputID: result.outputID, modelID: loadedModelID) } }
+                        .disabled(chronology.isGenerating || loadedModelID == nil)
+                }
                 Spacer()
                 if chronology.isGenerating { ProgressView().controlSize(.small) }
                 Button("Generate") { Task { _ = await chronology.generate(scope: scope, format: format, modelID: loadedModelID) } }

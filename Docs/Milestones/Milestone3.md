@@ -2123,6 +2123,40 @@ Status: complete. M3 signoff.
   frameworks, MLXEmbedders via mlx-swift-lm, ZIPFoundation 0.9.20, curated
   embedding models) — all pinned/local.
 
+## Pre-merge adversarial review + follow-up fixes (2026-06-17)
+
+A multi-agent adversarial review of the full `main..HEAD` diff (6 dimensions,
+every finding independently verified) returned **0 merge-blockers** and 10
+confirmed non-blocking issues. Fixed before merge:
+```text
+- [high]   Exports rendered the source appendix twice (MD/PDF/DOCX): the export
+           service now strips the embedded "## Sources" block from the saved
+           version and renders the appendix once from the structured source rows.
+- [medium] indexMatter re-indexed already-text-indexed docs every pass (and a dead
+           .semanticIndexed branch): needsIndexing now returns false for
+           text-indexed docs when no embedder is configured; dead branch removed.
+- [low]    FTS5 rows leaked on permanent delete (virtual table has no FK cascade):
+           permanentlyDeleteDocument now deletes document_chunk_fts rows first.
+- [medium] Chronology regeneration was missing: added DocumentChronologyController
+           .regenerate (new version + fresh source set), shared with generate.
+- [medium] Regenerate had no UI: added Regenerate buttons to the Q&A + chronology
+           sheets.
+- [medium] Folder restore + folder_restored audit: added controller.restoreFolder
+           and a Folders section in the trash sheet.
+- [medium] OCR audit events: document_ocr_completed / document_ocr_failed now
+           emitted around the OCR pass.
+- [low]    resume(jobID:) could create two active jobs: resume now re-queues the
+           paused job so the single-active scheduler promotes it only when idle.
+```
+Deferred (tracked / documented, not bugs that produce wrong saved data):
+```text
+- [medium] XLSX extractor maps sheets by position, not by xl/_rels relationship id
+           — wrong locators only for reordered/deleted multi-sheet workbooks.
+           Spun off as a follow-up task.
+- [low]    pauseActiveForQuit() is intentionally not wired to app termination (its
+           code path has a benign race); relaunch reconcile is the durability net.
+```
+
 ### M3 Handoff — known limitations / remaining production gaps
 ```text
 - App-run Diagnostics validation requires loaded chat + embedding models; it was not

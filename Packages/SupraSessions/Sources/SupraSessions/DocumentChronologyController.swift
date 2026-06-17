@@ -50,6 +50,31 @@ public final class DocumentChronologyController: ObservableObject {
         format: DocumentChronologyFormat = .table,
         modelID: ModelID?
     ) async -> DocumentQAController.QAResult? {
+        await produce(scope: scope, format: format, modelID: modelID, existingOutputID: nil)
+    }
+
+    /// Regenerates a saved chronology using its stored scope + format, creating a
+    /// new version with a fresh source set (plan §9.1, §10.1).
+    @discardableResult
+    public func regenerate(outputID: String, modelID: ModelID?) async -> DocumentQAController.QAResult? {
+        guard let output = try? store.structuredOutputs.fetchOutputs(matterID: matterID).first(where: { $0.id == outputID }),
+              let activeVersionID = output.activeVersionID,
+              let sourceSet = try? store.documentSources.fetchSourceSet(structuredOutputVersionID: activeVersionID) else {
+            message = "Could not find the chronology to regenerate."
+            return nil
+        }
+        let scope = (try? JSONDecoder().decode(RetrievalScope.self, from: Data(sourceSet.scopeJSON.utf8))) ?? .wholeMatter
+        let format: DocumentChronologyFormat = output.outputType == StructuredOutputType.factChronologyNarrative.rawValue ? .narrative : .table
+        return await produce(scope: scope, format: format, modelID: modelID, existingOutputID: outputID)
+    }
+
+    @discardableResult
+    private func produce(
+        scope: RetrievalScope,
+        format: DocumentChronologyFormat,
+        modelID: ModelID?,
+        existingOutputID: String?
+    ) async -> DocumentQAController.QAResult? {
         guard let modelID else { message = "Load a chat model in the Models tab to build a chronology."; return nil }
         let readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope)) ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
         guard readiness.isFullyReady else {
@@ -80,19 +105,33 @@ public final class DocumentChronologyController: ObservableObject {
             let markdown = answer + "\n" + appendix.markdown()
             let status: StructuredOutputStatus = check.requiresReview ? .needsReview : .complete
 
-            let title = "Chronology (\(format.rawValue))"
-            let output = try store.structuredOutputs.createOutput(matterID: matterID, title: title, outputType: format.outputType, status: status)
+            let outputID: String
+            let versionIndex: Int
+            let parentVersionID: String?
+            if let existingOutputID {
+                outputID = existingOutputID
+                let versions = (try? store.structuredOutputs.fetchVersions(structuredOutputID: existingOutputID)) ?? []
+                versionIndex = (versions.map(\.versionIndex).max() ?? 0) + 1
+                parentVersionID = versions.first(where: { $0.versionIndex == versionIndex - 1 })?.id
+                try? store.structuredOutputs.updateStatus(outputID: existingOutputID, status: status)
+            } else {
+                let output = try store.structuredOutputs.createOutput(matterID: matterID, title: "Chronology (\(format.rawValue))", outputType: format.outputType, status: status)
+                outputID = output.id
+                versionIndex = 1
+                parentVersionID = nil
+            }
             let version = try store.structuredOutputs.createVersion(
-                structuredOutputID: output.id, versionIndex: 1, contentMarkdown: markdown,
-                requiredSections: [], presentSections: [], missingSections: []
+                structuredOutputID: outputID, versionIndex: versionIndex, contentMarkdown: markdown,
+                requiredSections: [], presentSections: [], missingSections: [], parentVersionID: parentVersionID
             )
             try attachSources(prepared: prepared, scope: scope, versionID: version.id)
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "chronology_generated", actor: "runtime",
-                summary: "Generated \(format.rawValue) chronology", relatedTable: "structured_outputs", relatedID: output.id
+                summary: "\(existingOutputID == nil ? "Generated" : "Regenerated") \(format.rawValue) chronology",
+                relatedTable: "structured_outputs", relatedID: outputID
             )
             let result = DocumentQAController.QAResult(
-                outputID: output.id, versionID: version.id, markdown: markdown, status: status.rawValue,
+                outputID: outputID, versionID: version.id, markdown: markdown, status: status.rawValue,
                 warnings: check.warnings, citationLabels: check.usedLabels, unsupported: check.appearsUnsupported
             )
             lastResult = result

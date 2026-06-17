@@ -80,10 +80,19 @@ public final class DocumentExportService: @unchecked Sendable {
         }
         return DocumentExportPayload(
             title: output.title,
-            contentMarkdown: version.contentMarkdown,
+            // The saved version markdown already embeds a "## Sources" appendix
+            // (generated alongside the answer). The export builder renders the
+            // appendix from the structured `sources` rows, so strip the embedded
+            // one to avoid duplicating it in Markdown/PDF/DOCX.
+            contentMarkdown: rows.isEmpty ? version.contentMarkdown : Self.stripEmbeddedAppendix(version.contentMarkdown),
             reviewWarning: Self.reviewWarning,
             sources: rows
         )
+    }
+
+    private static func stripEmbeddedAppendix(_ markdown: String) -> String {
+        guard let range = markdown.range(of: "\n## Sources", options: .backwards) else { return markdown }
+        return String(markdown[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func sanitize(_ title: String) -> String {

@@ -373,6 +373,10 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                 return PermanentDeleteResult(removedBlobPath: nil)
             }
             let blobID = document.blobID
+            // The FTS5 chunk index is a standalone virtual table (no FK cascade),
+            // so its rows must be removed explicitly before the cascade drops the
+            // chunks, otherwise they leak.
+            try db.execute(sql: "DELETE FROM document_chunk_fts WHERE document_id = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM matter_documents WHERE id = ?", arguments: [id])
 
             let remaining = try Int.fetchOne(

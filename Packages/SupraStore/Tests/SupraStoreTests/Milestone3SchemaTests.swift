@@ -198,6 +198,28 @@ final class Milestone3SchemaTests: XCTestCase {
         XCTAssertEqual(try store.documentIndex.fetchEmbeddings(documentID: doc.id, embeddingModelID: "embed-model").count, 0)
     }
 
+    func testPermanentDeleteRemovesFTSRows() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "fts", byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/fts.txt")
+        ).blob
+        let doc = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "leaky.txt")
+        )
+        try store.documentIndex.replaceChunks(documentID: doc.id, chunks: [
+            DocumentChunkRecord(documentID: doc.id, chunkIndex: 0, sourceKind: DocumentSourceKind.text.rawValue, normalizedText: "unique indemnification term")
+        ])
+        func ftsRows() throws -> Int {
+            try store.database.writer.read { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_chunk_fts WHERE document_id = ?", arguments: [doc.id]) ?? -1
+            }
+        }
+        XCTAssertEqual(try ftsRows(), 1)
+        _ = try store.documentLibrary.permanentlyDeleteDocument(id: doc.id)
+        XCTAssertEqual(try ftsRows(), 0, "FTS rows must be removed on permanent delete")
+    }
+
     func testSearchExcludesSoftDeletedDocuments() throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme v. Roe")

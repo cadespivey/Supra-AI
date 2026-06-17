@@ -22,6 +22,7 @@ public final class MatterDocumentsController: ObservableObject {
     @Published public private(set) var folders: [DocumentFolderRecord] = []
     @Published public private(set) var documents: [MatterDocumentRecord] = []
     @Published public private(set) var trashedDocuments: [MatterDocumentRecord] = []
+    @Published public private(set) var trashedFolders: [DocumentFolderRecord] = []
     @Published public private(set) var tags: [DocumentTagRecord] = []
     @Published public var selectedFolderID: String?
     @Published public var searchText: String = ""
@@ -86,6 +87,7 @@ public final class MatterDocumentsController: ObservableObject {
         folders = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
         documents = (try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []
         trashedDocuments = (try? store.documentLibrary.fetchSoftDeletedDocuments(matterID: matterID)) ?? []
+        trashedFolders = ((try? store.documentLibrary.fetchFolders(matterID: matterID, includeDeleted: true)) ?? []).filter { $0.deletedAt != nil }
         tags = (try? store.documentLibrary.fetchTags(matterID: matterID)) ?? []
     }
 
@@ -138,6 +140,16 @@ public final class MatterDocumentsController: ObservableObject {
             relatedTable: "document_folders", relatedID: id
         )
         if selectedFolderID == id { selectedFolderID = nil }
+        reload()
+    }
+
+    public func restoreFolder(id: String) {
+        try? store.documentLibrary.restoreFolder(id: id)
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID, eventType: "folder_restored", actor: "user",
+            summary: "Restored a folder and its documents from trash",
+            relatedTable: "document_folders", relatedID: id
+        )
         reload()
     }
 
