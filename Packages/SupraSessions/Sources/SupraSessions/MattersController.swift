@@ -252,10 +252,13 @@ public final class MattersController: ObservableObject {
         authorities.load()
         authoritiesController = authorities
 
+        let embedder = (try? store.documentSettings.fetchSelectedEmbeddingModel())
+            .flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
         let outputs = StructuredOutputController(
             store: store,
             runtimeClient: runtimeClient,
             matterID: matterID,
+            embedder: embedder,
             defaultSystemPrompt: defaultSystemPrompt
         )
         outputs.loadOutputs()
@@ -272,8 +275,6 @@ public final class MattersController: ObservableObject {
             documentsController = nil
         }
 
-        let embedder = (try? store.documentSettings.fetchSelectedEmbeddingModel())
-            .flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
         documentQAController = DocumentQAController(
             matterID: matterID,
             store: store,

@@ -88,6 +88,14 @@ private struct NewOutputSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var type: StructuredOutputType = .legalIssueSpotting
     @State private var context = ""
+    @State private var groundInDocuments = false
+    @State private var selectedDocIDs: Set<String> = []
+    @State private var documents: [StructuredOutputController.DocumentChoice] = []
+
+    private var scope: RetrievalScope? {
+        guard groundInDocuments, !selectedDocIDs.isEmpty else { return nil }
+        return RetrievalScope(documentIDs: Array(selectedDocIDs))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -112,7 +120,42 @@ private struct NewOutputSheet: View {
                 } header: {
                     Text("Context")
                 } footer: {
-                    Text("Free text the model reasons over. Grounding an output in specific documents is coming soon — for now, paste the relevant facts here.")
+                    Text("Free text the model reasons over (the issue, key facts, or your notes).")
+                }
+                Section {
+                    Toggle("Ground in specific documents", isOn: $groundInDocuments)
+                    if groundInDocuments {
+                        if documents.isEmpty {
+                            Text("No documents in this matter yet — import them in the Documents tab.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            ForEach(documents) { doc in
+                                Button {
+                                    if selectedDocIDs.contains(doc.id) { selectedDocIDs.remove(doc.id) } else { selectedDocIDs.insert(doc.id) }
+                                } label: {
+                                    HStack {
+                                        Image(systemName: selectedDocIDs.contains(doc.id) ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(selectedDocIDs.contains(doc.id) ? Color.accentColor : Color.secondary)
+                                        Text(doc.name).lineLimit(1)
+                                        Spacer()
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            if !selectedDocIDs.isEmpty,
+                               let readiness = controller.scopeReadiness(scope: RetrievalScope(documentIDs: Array(selectedDocIDs))) {
+                                Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) selected documents indexed")
+                                    .font(.caption)
+                                    .foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Source documents")
+                } footer: {
+                    Text(groundInDocuments
+                         ? "The model is given the most relevant passages from the selected documents and cites them as [S1], [S2], … Generation is blocked until the selection is fully indexed."
+                         : "Optional — ground this output in specific documents instead of only the notes above.")
                 }
                 if loadedModelID == nil {
                     Text("Load a model in the Models tab to generate.").font(.caption).foregroundStyle(.secondary)
@@ -133,7 +176,8 @@ private struct NewOutputSheet: View {
             }
             .padding()
         }
-        .frame(width: 520, height: 520)
+        .frame(width: 520, height: 600)
+        .onAppear { documents = controller.documentChoices() }
     }
 
     private func generate() async {
@@ -143,7 +187,7 @@ private struct NewOutputSheet: View {
         Party perspective: \(matter.partyPerspective.rawValue)
 
         """
-        let ok = await controller.createOutput(type: type, context: prefix + context, modelID: loadedModelID)
+        let ok = await controller.createOutput(type: type, context: prefix + context, scope: scope, modelID: loadedModelID)
         if ok { dismiss() }
     }
 }
