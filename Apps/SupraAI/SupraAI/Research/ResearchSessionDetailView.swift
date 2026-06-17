@@ -1,3 +1,4 @@
+import SupraDesignSystem
 import SupraSessions
 import SwiftUI
 
@@ -35,14 +36,25 @@ struct ResearchSessionDetailView: View {
                     Text(controller.isRunning ? "Running…" : "Run Approved Searches")
                 }
             }
-            .disabled(!controller.canRunOpenSession || controller.isRunning)
+            .disabled(!controller.canRunOpenSession || controller.isRunning || !controller.hasCourtListenerToken)
+            researchStatusBadge
             if !controller.hasCourtListenerToken {
-                Text("No CourtListener token — add one in Settings.")
+                Text("Add a CourtListener API token in Settings to run research.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
         }
         .padding()
+    }
+
+    /// §14.2 research badges: active during a run, blocked when no token exists.
+    @ViewBuilder
+    private var researchStatusBadge: some View {
+        if controller.isRunning {
+            SupraStatusBadge("Research Network Active")
+        } else if !controller.hasCourtListenerToken {
+            SupraStatusBadge("Research Blocked")
+        }
     }
 
     @ViewBuilder
@@ -224,6 +236,7 @@ private struct ResultDetailSheet: View {
             }
             .formStyle(.grouped)
         }
-        .frame(width: 520, height: 600)
+        // §14.4 inspector-panel width behavior.
+        .frame(minWidth: 320, idealWidth: 420, maxWidth: 560, minHeight: 480, idealHeight: 600)
     }
 }
