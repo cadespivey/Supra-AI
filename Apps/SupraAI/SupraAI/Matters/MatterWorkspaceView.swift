@@ -134,11 +134,15 @@ struct MatterWorkspaceView: View {
                 )
             }
         case .outputs:
-            placeholder(
-                "No Outputs",
-                "Generate structured legal outputs (issue spotting, rule synthesis, drafting skeletons) for this matter.",
-                systemImage: "doc.text"
-            )
+            if let outputs = controller.outputsController {
+                MatterOutputsView(controller: outputs, matter: matter, loadedModelID: library.loadedModelID)
+            } else {
+                placeholder(
+                    "Outputs unavailable",
+                    "Select the matter again to load its structured outputs.",
+                    systemImage: "doc.text"
+                )
+            }
         case .audit:
             auditTab
         case .documents:
