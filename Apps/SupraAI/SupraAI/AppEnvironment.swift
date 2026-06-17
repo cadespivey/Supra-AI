@@ -30,6 +30,7 @@ final class AppEnvironment: ObservableObject {
     let documentSetupController: DocumentIntelligenceSetupController
     let embeddingDownloadController: EmbeddingModelDownloadController
     let documentQueue: DocumentProcessingQueue
+    let documentValidationController: DocumentValidationRunController
 
     private let runtimeStatusController: RuntimeStatusController
 
@@ -88,6 +89,7 @@ final class AppEnvironment: ObservableObject {
             documentQueue: queue,
             isImportReady: { documentSetup.isReadyForImport }
         )
+        self.documentValidationController = DocumentValidationRunController(store: store, runtimeClient: runtimeClient)
     }
 
     var statusBadgeTitle: String {

@@ -2068,3 +2068,32 @@ setup). WO 44 added the auto-purge half:
   controller.
 - Tests: expired purge (keeps a recent instance + its still-referenced blob);
   retention 0 disables.
+
+## WO 45 — M3 Validation Suite — DONE (2026-06-17)
+
+Status: complete; deterministic suite passes; app builds with the Diagnostics
+runner. (The model-dependent app-run scenarios require loaded models and were not
+executed in this environment; the deterministic suite proves the same behavior.)
+
+Delivered (two layers, per §15):
+- Layer 1 — deterministic pipeline validation (SwiftPM, fully runnable):
+  `Milestone3ValidationTests` authors the synthetic Validation Matter (nested
+  folders; born-digital PDF/DOCX/XLSX via the export builder; RTF/HTML/XML/MD/TXT;
+  an email with a base64 attachment; an image for mocked OCR; a byte-identical PDF
+  duplicate; and `.xls`/`.msg`/corrupt-`.docx` failure fixtures) and runs import →
+  mocked OCR → index (stub embedder) → search → Q&A → chronology → export, asserting
+  the §15.5 gates (report accounts for every file + failures; recursive hierarchy;
+  dedup; attachment child docs; originals untouched; extraction text; OCR confidence;
+  FTS; source links resolve; soft-delete search exclusion; resolvable citations in
+  Q&A/chronology; exports with appendix; audit events).
+- Layer 2 — app-run validation in Diagnostics: `Milestone3ValidationFixtures`
+  (shared authoring), `DocumentValidationRunController` (builds the fixture matter,
+  runs the pipeline against the loaded chat + embedding models, persists per-scenario
+  rows to `model_validation_runs`/`model_validation_tests` under suite id
+  `milestone3-document-intelligence-suite`, and audits), and a Diagnostics
+  "Run M3 Document Validation" section gated on completed setup + a loaded model.
+
+Bugs found + fixed by the suite: `.xls`/`.msg` now report as `unsupported` (not
+`extraction_failed`); the export XLSX builder now emits cell `r` references (so the
+spreadsheet extractor reads them); scope readiness now excludes terminally-failed
+documents so a failed import can't block Q&A forever.

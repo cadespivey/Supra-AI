@@ -83,7 +83,11 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     /// embedder is configured). Immediate; no model work (plan §13.3).
     public func scopeReadiness(matterID: String, scope: RetrievalScope) throws -> ScopeReadiness {
         let docIDs = Set(try resolveScope(matterID: matterID, scope: scope))
-        let documents = try store.documentLibrary.fetchDocuments(matterID: matterID).filter { docIDs.contains($0.id) }
+        // Terminally-failed/unsupported documents can never be indexed, so they
+        // are excluded from the readiness denominator rather than blocking forever.
+        let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
+            .filter { docIDs.contains($0.id) }
+            .filter { $0.extractionStatus != DocumentExtractionStatus.failed.rawValue && $0.status != MatterDocumentStatus.failed.rawValue }
         let requiresSemantic = embedder != nil
         let ready = documents.filter { Self.isReady($0, requiresSemantic: requiresSemantic) }.count
         return ScopeReadiness(
