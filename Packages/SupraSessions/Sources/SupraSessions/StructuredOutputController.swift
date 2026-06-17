@@ -18,7 +18,19 @@ public final class StructuredOutputController: ObservableObject {
         public let outputType: String
         public let status: String
         public let missingCount: Int
+        public let createdAt: Date
         public let updatedAt: Date
+        public let researchSessionID: String?
+    }
+
+    /// A version of a structured output for the detail view's version picker.
+    public struct VersionItem: Identifiable, Sendable, Equatable {
+        public let id: String
+        public let index: Int
+        public let isActive: Bool
+        public let markdown: String
+        public let missingSections: [String]
+        public let repairReason: String?
     }
 
     @Published public private(set) var outputs: [OutputItem] = []
@@ -50,9 +62,28 @@ public final class StructuredOutputController: ObservableObject {
                 outputType: record.outputType,
                 status: record.status,
                 missingCount: missingCount(for: record),
-                updatedAt: record.updatedAt
+                createdAt: record.createdAt,
+                updatedAt: record.updatedAt,
+                researchSessionID: record.researchSessionID
             )
         }
+    }
+
+    /// The output's versions (oldest first) for the detail view's picker.
+    public func versions(forOutput outputID: String) -> [VersionItem] {
+        guard let record = outputRecord(outputID) else { return [] }
+        return ((try? store.structuredOutputs.fetchVersions(structuredOutputID: outputID)) ?? [])
+            .sorted { $0.versionIndex < $1.versionIndex }
+            .map { version in
+                VersionItem(
+                    id: version.id,
+                    index: version.versionIndex,
+                    isActive: version.id == record.activeVersionID,
+                    markdown: version.contentMarkdown,
+                    missingSections: (try? JSONDecoder().decode([String].self, from: Data(version.missingSectionsJSON.utf8))) ?? [],
+                    repairReason: version.repairReason
+                )
+            }
     }
 
     /// Generates an output: prompt → local model → section detection → persist.
