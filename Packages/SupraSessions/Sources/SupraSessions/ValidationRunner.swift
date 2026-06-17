@@ -231,7 +231,14 @@ public struct ValidationRunner: Sendable {
             // mechanical checks surface as a failed test.
         }
 
-        input.output = output
+        // Grade the user-facing answer, not the model's chain-of-thought: a
+        // reasoning model streams "<reasoning></think><answer>", and counting
+        // sentences/bullets over the reasoning trace would make the rule checks
+        // un-gradeable. Non-reasoning output has no </think> and passes through.
+        input.output = ReasoningContent.answer(from: output)
+        // Partial-output preservation is about whether the cancelled generation
+        // produced *anything*, so it inspects the raw stream (which may be all
+        // reasoning at the point of cancellation).
         input.partialOutputPreserved = input.generationCancelled
             && !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 

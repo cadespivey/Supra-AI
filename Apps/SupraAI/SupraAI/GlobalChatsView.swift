@@ -183,10 +183,18 @@ private struct MessageRow: View {
     }
 
     private var displayContent: String {
-        if message.content.isEmpty && message.isStreaming {
-            return "…"
+        if message.content.isEmpty {
+            return message.isStreaming ? "…" : message.content
         }
-        return message.content
+        // Show the answer, not the model's chain-of-thought. The full raw text
+        // (reasoning included) stays persisted; we only strip it for display.
+        // While a reasoning model is still inside its <think> block the answer
+        // is empty, so show a thinking placeholder.
+        let answer = ReasoningContent.answer(from: message.content)
+        if answer.isEmpty {
+            return message.isStreaming ? "Thinking…" : message.content
+        }
+        return answer
     }
 
     @ViewBuilder
