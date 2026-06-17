@@ -4,6 +4,7 @@ import SwiftUI
 /// Matters are legal workspaces. The left column lists matters; selecting one
 /// opens its workspace (Chat, Research, Authorities, Outputs, Audit, Documents).
 struct MattersView: View {
+    @EnvironmentObject private var environment: AppEnvironment
     @ObservedObject var controller: MattersController
     @ObservedObject var library: ModelLibrary
     @State private var showNewMatter = false
@@ -30,6 +31,7 @@ struct MattersView: View {
             }
         }
         .task { controller.loadMatters() }
+        .onChange(of: environment.newMatterRequests) { _, _ in showNewMatter = true }
     }
 
     private var matterList: some View {
