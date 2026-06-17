@@ -362,6 +362,59 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.sessionQueries[0].status, ResearchQueryStatus.approved.rawValue, "queries stay approved when no token")
     }
 
+    // MARK: - Result review (WO 26)
+
+    func testReviewActionsCreateAuthoritiesAndGateCompletion() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let sessionID = try seedApprovedSession(store, matterID: matter.id)
+        let dto = CourtListenerSearchResultDTO(caseName: "Roe v. Doe", citation: ["1 U.S. 1"], rawResultJSON: "{}")
+        let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
+        let controller = makeRunController(store: store, matterID: matter.id, client: client)
+
+        controller.openSession(sessionID)
+        await controller.runApprovedSearches()
+        XCTAssertEqual(controller.resultCount, 2)            // one result per query
+        XCTAssertEqual(controller.unreviewedResultCount, 2)
+        XCTAssertFalse(controller.canCompleteSession, "blocked while results are unreviewed")
+
+        let results = controller.resultsByQuery.values.flatMap { $0 }
+        controller.reviewResult(results[0].id, as: .saveAsAuthority)
+        XCTAssertFalse(controller.canCompleteSession, "still one unreviewed")
+        controller.reviewResult(results[1].id, as: .potentiallyAdverse)
+
+        let authorities = try store.authorities.fetchAuthorities(matterID: matter.id)
+        XCTAssertEqual(authorities.count, 2, "both review actions created authorities")
+        XCTAssertTrue(authorities.contains { $0.useStatus == AuthorityUseStatus.retrievedFromCourtListener.rawValue })
+        XCTAssertTrue(authorities.contains { $0.useStatus == AuthorityUseStatus.needsCitatorCheck.rawValue })
+
+        XCTAssertEqual(controller.unreviewedResultCount, 0)
+        XCTAssertTrue(controller.canCompleteSession)
+        controller.completeSession()
+        XCTAssertEqual(
+            try store.research.fetchSessions(matterID: matter.id).first { $0.id == sessionID }?.status,
+            ResearchSessionStatus.complete.rawValue
+        )
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "authority_saved" })
+    }
+
+    func testSkipDoesNotCreateAuthority() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let sessionID = try seedApprovedSession(store, matterID: matter.id)
+        let dto = CourtListenerSearchResultDTO(caseName: "Roe v. Doe", rawResultJSON: "{}")
+        let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
+        let controller = makeRunController(store: store, matterID: matter.id, client: client)
+
+        controller.openSession(sessionID)
+        await controller.runApprovedSearches()
+        for result in controller.resultsByQuery.values.flatMap({ $0 }) {
+            controller.reviewResult(result.id, as: .skip)
+        }
+        XCTAssertTrue(try store.authorities.fetchAuthorities(matterID: matter.id).isEmpty)
+        XCTAssertTrue(controller.canCompleteSession)
+    }
+
     // MARK: - ModelLibrary
 
     func testAddAndActivateLoadsModel() async throws {

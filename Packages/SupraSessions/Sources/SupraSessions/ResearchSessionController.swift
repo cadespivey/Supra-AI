@@ -101,12 +101,15 @@ public final class ResearchSessionController: ObservableObject {
     public struct SessionResult: Identifiable, Sendable, Equatable {
         public let id: String
         public let caseName: String
+        public let caseNameFull: String?
         public let citation: String?
         public let court: String?
         public let dateFiled: Date?
+        public let docketNumber: String?
         public let snippet: String?
         public let reviewState: String
         public let absoluteURL: String?
+        public let rawResultJSON: String
     }
 
     @Published public private(set) var sessions: [ResearchSessionSummary] = []
@@ -388,6 +391,114 @@ public final class ResearchSessionController: ObservableObject {
         reloadOpenSession()
     }
 
+    // MARK: - Review & completion (WO 26)
+
+    public enum ResultReviewAction: Sendable {
+        case saveAsAuthority
+        case skip
+        case potentiallyAdverse
+        case notAdverse
+        case needsLaterReview
+    }
+
+    public var resultCount: Int {
+        resultsByQuery.values.reduce(0) { $0 + $1.count }
+    }
+
+    public var unreviewedResultCount: Int {
+        resultsByQuery.values.flatMap { $0 }
+            .filter { $0.reviewState == ResearchResultReviewState.unreviewed.rawValue }
+            .count
+    }
+
+    /// A session can be completed only once it has results and none remain
+    /// unreviewed (spec §10.4).
+    public var canCompleteSession: Bool {
+        resultCount > 0 && unreviewedResultCount == 0
+    }
+
+    /// Applies a review action to a result: updates its review state, creates or
+    /// updates the matter authority as the action dictates, and audits it. No
+    /// result is ever saved automatically (spec §10.3).
+    public func reviewResult(_ resultID: String, as action: ResultReviewAction) {
+        guard let sessionID = openSessionID,
+              let result = try? store.research.fetchResult(resultID: resultID) else { return }
+
+        switch action {
+        case .saveAsAuthority:
+            try? store.research.updateResultReviewState(resultID: resultID, reviewState: .saved)
+            upsertAuthority(from: result, sessionID: sessionID, reviewState: .saved, useStatus: .retrievedFromCourtListener)
+            recordReviewAudit("authority_saved", result: result, summary: "Saved authority “\(result.caseName)”")
+        case .skip:
+            try? store.research.updateResultReviewState(resultID: resultID, reviewState: .skipped)
+            recordReviewAudit("research_result_reviewed", result: result, summary: "Skipped “\(result.caseName)”")
+        case .potentiallyAdverse:
+            try? store.research.updateResultReviewState(resultID: resultID, reviewState: .potentiallyAdverse)
+            upsertAuthority(from: result, sessionID: sessionID, reviewState: .potentiallyAdverse, useStatus: .needsCitatorCheck)
+            recordReviewAudit("authority_saved", result: result, summary: "Flagged potentially adverse: “\(result.caseName)”")
+        case .needsLaterReview:
+            try? store.research.updateResultReviewState(resultID: resultID, reviewState: .needsLaterReview)
+            upsertAuthority(from: result, sessionID: sessionID, reviewState: .needsLaterReview, useStatus: .unverified)
+            recordReviewAudit("authority_saved", result: result, summary: "Marked needs-later-review: “\(result.caseName)”")
+        case .notAdverse:
+            try? store.research.updateResultReviewState(resultID: resultID, reviewState: .notAdverse)
+            // §10.3: only update an existing authority — do not create one.
+            if let existing = try? store.authorities.fetchAuthority(researchResultID: resultID) {
+                try? store.authorities.updateReviewState(authorityID: existing.id, reviewState: .notAdverse)
+            }
+            recordReviewAudit("research_result_reviewed", result: result, summary: "Marked not adverse: “\(result.caseName)”")
+        }
+        reloadOpenSession()
+    }
+
+    /// Marks the open session complete; no-op (UI also blocks) when any result
+    /// is still unreviewed.
+    public func completeSession() {
+        guard let sessionID = openSessionID, canCompleteSession else { return }
+        try? store.research.updateSessionStatus(sessionID: sessionID, status: .complete, completedAt: Date())
+        loadSessions()
+        reloadOpenSession()
+    }
+
+    private func upsertAuthority(
+        from result: ResearchResultRecord, sessionID: String,
+        reviewState: ResearchResultReviewState, useStatus: AuthorityUseStatus
+    ) {
+        if let existing = try? store.authorities.fetchAuthority(researchResultID: result.id) {
+            try? store.authorities.updateReviewState(authorityID: existing.id, reviewState: reviewState)
+            try? store.authorities.updateUseStatus(authorityID: existing.id, useStatus: useStatus)
+            return
+        }
+        let authority = AuthorityRecord(
+            matterID: matterID,
+            researchSessionID: sessionID,
+            researchResultID: result.id,
+            courtlistenerID: result.courtlistenerID,
+            clusterID: result.clusterID,
+            opinionID: result.opinionID,
+            caseName: result.caseName,
+            caseNameFull: result.caseNameFull,
+            citationJSON: result.citationJSON,
+            preferredCitation: result.preferredCitation,
+            court: result.court,
+            courtID: result.courtID,
+            dateFiled: result.dateFiled,
+            docketNumber: result.docketNumber,
+            absoluteURL: result.absoluteURL,
+            reviewState: reviewState.rawValue,
+            useStatus: useStatus.rawValue,
+            rawMetadataJSON: result.rawResultJSON
+        )
+        _ = try? store.authorities.insertAuthority(authority)
+    }
+
+    private func recordReviewAudit(_ eventType: String, result: ResearchResultRecord, summary: String) {
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID, eventType: eventType, actor: "user",
+            summary: summary, relatedTable: "research_results", relatedID: result.id
+        )
+    }
+
     private func reloadOpenSession() {
         guard let sessionID = openSessionID else { return }
         let queries = ((try? store.research.fetchQueries(sessionID: sessionID)) ?? [])
@@ -402,9 +513,11 @@ public final class ResearchSessionController: ObservableObject {
         for query in queries {
             grouped[query.id] = ((try? store.research.fetchResults(queryID: query.id)) ?? []).map { record in
                 SessionResult(
-                    id: record.id, caseName: record.caseName, citation: record.preferredCitation,
-                    court: record.court, dateFiled: record.dateFiled, snippet: record.snippet,
-                    reviewState: record.reviewState, absoluteURL: record.absoluteURL
+                    id: record.id, caseName: record.caseName, caseNameFull: record.caseNameFull,
+                    citation: record.preferredCitation, court: record.court, dateFiled: record.dateFiled,
+                    docketNumber: record.docketNumber, snippet: record.snippet,
+                    reviewState: record.reviewState, absoluteURL: record.absoluteURL,
+                    rawResultJSON: record.rawResultJSON
                 )
             }
         }
