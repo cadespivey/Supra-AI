@@ -37,9 +37,12 @@ struct ResearchPlannerView: View {
             Form {
                 Section("Issue") {
                     TextField("Title", text: $draft.title)
+                        .accessibilityIdentifier("planner.title")
                     TextField("Legal issue or question", text: $draft.issueText, axis: .vertical)
                         .lineLimit(3...6)
+                        .accessibilityIdentifier("planner.issue")
                     TextField("Jurisdiction", text: $draft.jurisdiction)
+                        .accessibilityIdentifier("planner.jurisdiction")
                 }
 
                 Section("Filters (optional)") {
@@ -60,6 +63,7 @@ struct ResearchPlannerView: View {
                         }
                     }
                     .disabled(!draft.isValid || isGenerating)
+                    .accessibilityIdentifier("planner.generate")
                     if let message = planMessage {
                         Text(message).font(.caption).foregroundStyle(.secondary)
                     }
@@ -72,7 +76,9 @@ struct ResearchPlannerView: View {
                         ForEach($controller.plannedQueries) { $query in
                             HStack(spacing: 8) {
                                 Toggle("Approved", isOn: $query.approved).labelsHidden()
+                                    .accessibilityIdentifier("planner.approved")
                                 TextField("Query", text: $query.text)
+                                    .accessibilityIdentifier("planner.query")
                                 Button(role: .destructive) {
                                     controller.deleteQuery(id: query.id)
                                 } label: {
@@ -84,6 +90,7 @@ struct ResearchPlannerView: View {
                         Button { controller.addQuery() } label: {
                             Label("Add Query", systemImage: "plus")
                         }
+                        .accessibilityIdentifier("planner.addQuery")
                     }
                 }
             }
@@ -104,6 +111,7 @@ struct ResearchPlannerView: View {
                 Button("Save Plan") { save() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!controller.canSavePlan)
+                    .accessibilityIdentifier("planner.save")
             }
             .padding()
         }

@@ -90,6 +90,7 @@ struct MatterWorkspaceView: View {
                 }
                 .buttonStyle(.plain)
                 .help(item.rawValue)
+                .accessibilityIdentifier("matterTab.\(item.rawValue)")
             }
             Spacer()
         }
