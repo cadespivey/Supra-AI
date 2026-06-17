@@ -95,6 +95,7 @@ public final class MattersController: ObservableObject {
     @Published public private(set) var authoritiesController: AuthoritiesController?
     @Published public private(set) var outputsController: StructuredOutputController?
     @Published public private(set) var documentsController: MatterDocumentsController?
+    @Published public private(set) var documentQAController: DocumentQAController?
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
@@ -224,6 +225,7 @@ public final class MattersController: ObservableObject {
             authoritiesController = nil
             outputsController = nil
             documentsController = nil
+            documentQAController = nil
             return
         }
         let controller = GlobalChatController(
@@ -267,6 +269,16 @@ public final class MattersController: ObservableObject {
         } else {
             documentsController = nil
         }
+
+        let embedder = (try? store.documentSettings.fetchSelectedEmbeddingModel())
+            .flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+        documentQAController = DocumentQAController(
+            matterID: matterID,
+            store: store,
+            runtimeClient: runtimeClient,
+            embedder: embedder,
+            defaultSystemPrompt: defaultSystemPrompt
+        )
     }
 
     private func reload() {
