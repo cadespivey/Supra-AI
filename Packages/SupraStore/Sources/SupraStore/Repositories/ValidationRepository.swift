@@ -87,6 +87,25 @@ public final class ValidationRepository: @unchecked Sendable {
         }
     }
 
+    /// Marks any run that never reached a terminal state (no `completed_at`) as
+    /// cancelled. A `completed_at` of NULL is the seed state set by
+    /// `createValidationRun`; only `completeValidationRun` clears it. A run left
+    /// in that state was abandoned — typically because the app quit or the
+    /// runtime service died mid-suite. Call at launch so such rows don't linger
+    /// indistinguishable from in-progress runs.
+    public func markUnfinishedRunsCancelled(completedAt: Date = Date()) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: """
+                UPDATE model_validation_runs
+                SET status = ?, completed_at = ?, updated_at = ?
+                WHERE completed_at IS NULL
+                """,
+                arguments: [ValidationRunStatus.cancelled.rawValue, completedAt, completedAt]
+            )
+        }
+    }
+
     public func fetchValidationRuns(modelID: String? = nil) throws -> [ModelValidationRunRecord] {
         try writer.read { db in
             if let modelID {

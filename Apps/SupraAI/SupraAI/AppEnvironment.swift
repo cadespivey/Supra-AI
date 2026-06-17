@@ -73,6 +73,9 @@ final class AppEnvironment: ObservableObject {
 
     /// Loads persisted state and refreshes runtime status on launch.
     func bootstrap() async {
+        // Reconcile any validation run abandoned by a previous quit/crash so it
+        // surfaces as cancelled rather than lingering as in-progress.
+        try? store.validation.markUnfinishedRunsCancelled()
         modelLibrary.refresh()
         chatController.loadChats()
         await refreshRuntimeStatus()
