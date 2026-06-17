@@ -1850,3 +1850,26 @@ Delivered:
 Notes: tags repo capability already exists (WO 32); the Documents-tab UI for
 folders/tags/drag-drop is WO 39. Import gating consumes
 `DocumentIntelligenceSetupController.isReadyForImport` (WO 33) at the UI layer.
+
+## WO 36 — Extraction, OCR, And Editable Text — DONE (2026-06-17)
+
+Status: complete; SupraDocuments 14, SupraSessions 46, SupraStore 20 — all green.
+
+Delivered:
+- `SupraDocuments/OCRService`: `DocumentOCRService` protocol + `OCRTextResult` +
+  Vision-backed `VisionOCRService` (image files via ImageIO; scanned PDF pages
+  rendered via CoreGraphics → `VNRecognizeTextRequest`), capturing mean confidence
+  and normalized bounding boxes. `OCRPolicy.lowConfidenceThreshold`. `ExtractedPart`
+  gained `boundingBoxesJSON`.
+- `DocumentImportService`: OCR injected (default `VisionOCRService`, mockable). After
+  extraction, documents flagged `needsOCR` are OCR'd over the managed blob and
+  merged into page parts. `persistExtraction` computes an OCR confidence summary and
+  routes low-confidence results to `needs_review` with a warning; OCR'd docs become
+  `ocr_complete`. Added `updateExtractedText(documentID:partID:text:)` (edit → part
+  text replaced, doc marked edited + index stale for re-index).
+- `SupraStore/DocumentIndexRepository.updatePartText(...)`.
+- Tests: mocked OCR fills image text, low confidence → `needs_review` + summary, and
+  edit → stale + new part text.
+
+Re-chunk/re-embed of `stale` docs is performed by the indexing pass in WO 37; the
+edit path here sets the trigger.

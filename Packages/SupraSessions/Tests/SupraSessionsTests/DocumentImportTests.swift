@@ -70,6 +70,35 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertNotNil(batch.reportJSON)
     }
 
+    func testMockedOCRFillsImageTextWithLowConfidenceReview() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let imageURL = sourceRoot.appendingPathComponent("Images/scanned-notice.png")
+        try FileManager.default.createDirectory(at: imageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fake-png-bytes".utf8).write(to: imageURL)
+
+        let ocr = MockOCRService(imageResult: OCRTextResult(text: "Notice of default dated 2024-05-01.", confidence: 0.40))
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([imageURL], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        // Low-confidence OCR routes to needs_review and records a summary.
+        XCTAssertEqual(doc.status, MatterDocumentStatus.needsReview.rawValue)
+        XCTAssertEqual(doc.extractionStatus, DocumentExtractionStatus.ocrComplete.rawValue)
+        XCTAssertTrue(doc.ocrConfidenceSummary?.contains("low") ?? false)
+
+        let parts = try store.documentIndex.fetchParts(documentID: doc.id)
+        XCTAssertEqual(parts.first?.normalizedText, "Notice of default dated 2024-05-01.")
+        XCTAssertEqual(parts.first?.ocrConfidence ?? 1, 0.40, accuracy: 0.001)
+
+        // Editing the OCR text marks the doc edited + stale for re-index.
+        try service.updateExtractedText(documentID: doc.id, partID: parts[0].id, text: "Notice of default dated May 1, 2024.")
+        let edited = try XCTUnwrap(store.documentLibrary.fetchDocument(id: doc.id))
+        XCTAssertEqual(edited.indexStatus, DocumentIndexStatus.stale.rawValue)
+        XCTAssertTrue(edited.hasUserEditedText)
+        XCTAssertEqual(try store.documentIndex.fetchParts(documentID: doc.id).first?.normalizedText, "Notice of default dated May 1, 2024.")
+    }
+
     func testEditedTextMarksDocumentStaleForReindex() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme v. Roe")
@@ -127,5 +156,13 @@ final class DocumentImportTests: XCTestCase {
             .appendingPathComponent("ImportStore-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
+    }
+}
+
+private struct MockOCRService: DocumentOCRService {
+    let imageResult: OCRTextResult
+    func recognizeImage(at url: URL) async throws -> OCRTextResult { imageResult }
+    func recognizePDFPages(at url: URL, pageIndices: [Int]?) async throws -> [Int: OCRTextResult] {
+        [0: imageResult]
     }
 }

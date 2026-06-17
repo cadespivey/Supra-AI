@@ -24,6 +24,16 @@ public final class DocumentIndexRepository: @unchecked Sendable {
         }
     }
 
+    /// Replaces the normalized text of a single part (user edit, plan §6.2).
+    public func updatePartText(partID: String, text: String) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE document_pages_parts SET normalized_text = ?, char_count = ?, updated_at = ? WHERE id = ?",
+                arguments: [text, text.count, Date(), partID]
+            )
+        }
+    }
+
     public func fetchParts(documentID: String) throws -> [DocumentPagePartRecord] {
         try writer.read { db in
             try DocumentPagePartRecord.fetchAll(
