@@ -660,7 +660,7 @@ CREATE TABLE structured_outputs (
     status TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    soft_deleted_at TEXT
+    deleted_at TEXT
 );
 ```
 
@@ -1705,7 +1705,6 @@ Sidebar order:
 Global Chats
 Matters
 Models
-Tasks
 Diagnostics
 Settings
 ```
