@@ -2025,3 +2025,25 @@ Delivered:
   scope, readiness, and the rendered chronology.
 - Tests: scope-only facts (notes-folder narrative excludes the contract date;
   whole-matter table references both docs) + date-form detection.
+
+## WO 43 — Output Exports — DONE (2026-06-17)
+
+Status: complete; export tests (builders 5 + service 1) green; app builds.
+
+Delivered:
+- `SupraDocuments/DocumentExport`: `DocumentExportFormat` (pdf/markdown/docx/csv/
+  xlsx), `DocumentExportPayload`, and `DocumentExportBuilder` writing each format —
+  Markdown, CSV (source-appendix table), paginated PDF via CoreText, and minimal
+  Office Open XML DOCX/XLSX via ZIPFoundation. Each carries the generated output +
+  inline citations + source appendix + a review warning; no raw documents embedded.
+- `SupraSessions/DocumentExportService`: assembles the payload from a saved
+  output's active version + its source set (locators decoded to display strings,
+  document names resolved), writes into managed `exports/<matter>/`, records a
+  `document_exports` row, and audits `export_completed`.
+- App: `StructuredOutputController.exportOutput(outputID:format:)`; Outputs-tab
+  detail view gains an Export menu (PDF/MD/DOCX/CSV/XLSX) that writes the file and
+  reveals it in Finder. (Outputs is the canonical saved-output surface per §10.1,
+  covering document Q&A/chronology outputs too.)
+- Tests: each format builder (PDF readable via PDFKit, DOCX/XLSX zip entries
+  contain the text, MD/CSV content) and a full service export across all formats
+  with persisted export records.

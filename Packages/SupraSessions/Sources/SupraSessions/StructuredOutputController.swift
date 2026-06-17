@@ -54,6 +54,18 @@ public final class StructuredOutputController: ObservableObject {
         self.defaultSystemPrompt = defaultSystemPrompt
     }
 
+    /// Exports an output's active version to the given format, returning the
+    /// written file URL (plan §10.2). Applies to document Q&A/chronology outputs
+    /// and any structured output.
+    public func exportOutput(outputID: String, format: DocumentExportFormat) -> URL? {
+        do {
+            return try DocumentExportService(store: store).export(matterID: matterID, structuredOutputID: outputID, format: format)
+        } catch {
+            message = "Export failed: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     public func loadOutputs() {
         outputs = ((try? store.structuredOutputs.fetchOutputs(matterID: matterID)) ?? []).map { record in
             OutputItem(
