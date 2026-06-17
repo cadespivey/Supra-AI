@@ -1,0 +1,1625 @@
+{\rtf1 \ansi 
+{\colortbl;
+\red0\green0\blue0;
+\red255\green255\blue255;
+\red255\green0\blue0;
+\red0\green255\blue0;
+\red0\green0\blue255;
+\red0\green255\blue255;
+\red255\green0\blue255;
+\red255\green255\blue0;
+\red0\green0\blue128;
+\red0\green128\blue128;
+\red0\green128\blue0;
+\red128\green0\blue128;
+\red128\green0\blue0;
+\red128\green128\blue0;
+\red128\green128\blue128;
+\red192\green192\blue192;
+\red170\green170\blue170;
+\red85\green85\blue85;
+\red203\green203\blue203;
+\red245\green245\blue245;
+\red255\green255\blue102;
+\red229\green243\blue255;
+\red179\green218\blue255;
+\red227\green227\blue227;
+\red240\green240\blue240;
+\red20\green93\blue164;
+\red105\green105\blue105;
+\red254\green254\blue0;
+\red110\green112\blue118;
+\red204\green65\blue0;
+\red31\green31\blue31;
+\red214\green214\blue214;
+\red0\green111\blue196;
+\red33\green33\blue33;
+\red246\green246\blue246;
+\red119\green119\blue119;
+\red238\green238\blue238;
+\red37\green37\blue37;
+\red247\green247\blue247;
+\red255\green248\blue96;
+\red218\green218\blue218;
+\red80\green80\blue80;
+\red204\green204\blue204;
+\red127\green127\blue127;
+\red71\green120\blue194;
+\red248\green161\blue28;
+\red111\green34\blue109;
+\red245\green147\blue0;
+\red107\green107\blue106;
+\red112\green112\blue112;
+\red102\green102\blue102;
+\red61\green61\blue61;
+\red86\green86\blue86;
+\red181\green79\blue104;
+\red151\green151\blue151;
+\red255\green255\blue204;
+\red255\green204\blue0;
+\red243\green243\blue243;
+\red255\green255\blue174;
+\red106\green144\blue39;
+\red232\green233\blue232;
+\red249\green249\blue249;
+\red220\green220\blue220;
+\red190\green190\blue252;
+\red221\green195\blue236;
+\red183\green242\blue206;
+\red182\green231\blue243;
+\red255\green194\blue211;
+\red229\green244\blue255;
+\red0\green93\blue162;
+\red14\green86\blue140;
+\red143\green34\blue26;
+\red190\green237\blue228;
+\red118\green118\blue118;
+\red188\green41\blue30;
+\red255\green210\blue183;
+\red56\green124\blue43;
+\red187\green187\blue187;
+\red240\green248\blue255;
+\red227\green232\blue250;
+\red70\green70\blue68;
+\red250\green250\blue250;
+\red70\green70\blue70;
+\red250\green222\blue100;
+\red61\green61\blue60;
+\red186\green186\blue186;
+\red209\green213\blue219;
+\red55\green65\blue81;
+\red107\green114\blue128;
+\red255\green204\blue153;
+\red23\green94\blue146;
+}
+{\fonttbl {
+\f0 Arial;}{
+\f1 Symbol;}{
+\f2 Times New Roman;}{
+\f3 sans-serif;}{
+\f4 serif;}{
+\f5 Source Sans Pro;}{
+\f6 Georgia;}
+}
+{\*\generator Apache XML Graphics RTF Library;}
+\fet0 \ftnbj \paperw12240 \paperh15840 \margt1080 \margb1080 \margl1080 \margr1080 \headery720 \footery720 \itap0 \cols2 
+\sectd {\header {
+{\trowd \ltrrow \trleft0 
+\clpadb60 \clpadfb3 \clpadl400 \clpadfl3 \clbrdrt \clbrdrb \brdrcf17 \brdrw20 \brdrs \clbrdrl \trql \clvertalb \clwWidth9380 \cellx9380 
+\clpadb60 \clpadfb3 \clpadl400 \clpadfl3 \clbrdrt \clbrdrb \brdrcf17 \brdrw20 \brdrs \clbrdrr \trql \clwWidth700 \cellx10080 
+\intbl 
+{\b0 \cf1 \f0 \ri0 \i0 \ql \fs18 \li0 
+{\b0 \cf1 \f0 \ul0 \strike0 \i0 \fs18 
+}
+{\b1 \cf18 \f0 \i0 \fs18 
+{\b1 \cf18 \f0 \ul0 \strike0 \i0 \fs18 \sa0 \sb0 
+City of Gainesville v. Republic Inv. Corp., 480 So.2d 1344 (1985)
+}
+}
+{\b0 \cf1 \f0 \ul0 \strike0 \i0 \fs18 
+}
+}\b0 \cf1 \f0 \ri0 \ul0 \strike0 \i0 \ql \fs18 \li0 \sa0 \sb0 \intbl \cell \intbl 
+{\qr \b0 \cf1 \f0 \ri0 \i0 \fs18 \li0 
+}\qr \b0 \cf1 \f0 \ri0 \i0 \fs18 \li0 \intbl \cell \row }
+{\trowd \lastrow \trleft0 
+\clbrdrb \clbrdrl \trql \clwWidth10080 \cellx10080 
+\intbl 
+{\b0 \cf1 \f0 \ri0 \i0 \ql \fs18 \li0 
+{\b0 \cf1 \f0 \ul0 \strike0 \i0 \fs18 \sa0 \sb0 
+10 Fla. L. Weekly 2693
+}
+}\b0 \cf1 \f0 \ri0 \ul0 \strike0 \i0 \ql \fs18 \li0 \sa0 \sb0 \intbl \cell \row }}\par }{\footer {
+{\trowd \lastrow \trleft0 
+\clpadl60 \clpadfl3 \clbrdrt \brdrcf17 \brdrw20 \brdrs \clbrdrb \clbrdrl \trql \clvertalb \clwWidth9300 \cellx9300 
+\clpadl60 \clpadfl3 \clbrdrt \brdrcf17 \brdrw20 \brdrs \clbrdrb \clbrdrr \trql \clwWidth700 \cellx10000 
+\intbl 
+{\b0 \cf29 \f0 \ri0 \i0 \ql \fs20 \li0 
+{\b0 \cf29 \f0 \ul0 \strike0 \i0 \fs20 
+}
+{\b0 \cf30 \f5 \i0 \fs22 
+{\b0 \cf30 \f5 \ul0 \strike0 \i0 \fs22 \sa0 \sb0 
+\u8194\'3fWESTLAW\u8194\'3f
+}
+}
+{\b0 \cf29 \f0 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ \u8194\'3f\u169\'3f\u8194\'3f2026\u8194\'3fThomson Reuters. No claim to original U.S. Government Works.
+}
+}\b0 \cf29 \f0 \ri0 \ul0 \strike0 \i0 \ql \fs20 \li0 \sa0 \sb0 \intbl \cell \intbl 
+{\qr \b0 \cf29 \f0 \ri0 \i0 \fs20 \li0 
+{\b0 \i0 \ul0 \fs20 \f0 \chpgn }
+}\qr \b0 \cf29 \f0 \ri0 \ul0 \strike0 \i0 \fs20 \li0 \intbl \cell \row }}\par }
+{\b0 \cf31 \f2 \ri0 \par}\sect\sbknone\pgncont\cols2{\ids0 \i0 \qj \fs20 \li0 
+{\*\bkmkstart co_document_1}{\*\bkmkend co_document_1}
+{\b0 \cf31 \f2 \i0 \fs20 
+{\*\bkmkstart I0304b6450d9c11d99830b5efa1ded32a_Target}{\*\bkmkend I0304b6450d9c11d99830b5efa1ded32a_Target}
+\par 
+}
+{\b0 \qc \cf31 \f6 \ri0 \i0 \fs20 \li0 
+{\b0 \cf31 \f6 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+480 So.2d 1344
+\par 
+}
+}
+{\b0 \qc \cf31 \f6 \ri0 \i0 \fs20 \li0 
+{\b0 \qc \cf31 \f6 \ri0 \i0 \fs20 \li0 
+{\b0 \qc \cf31 \f6 \ri0 \i0 \fs20 \li0 
+{\b0 \cf31 \f6 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+District Court of Appeal of Florida,
+\par 
+}
+}
+{\b0 \qc \cf31 \f6 \ri0 \i0 \fs20 \li0 
+{\b0 \cf31 \f6 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+First District.
+\par 
+}
+}
+}
+}
+{\b0 \qc \cf34 \f6 \ri100 \i0 \fs20 \li100 
+{\b0 \qc \cf34 \f6 \ri100 \i0 \fs20 \li100 
+{\b0 \qc \cf34 \f6 \ri100 \i0 \fs20 \li100 
+{\b0 \cf34 \f6 \ul0 \strike0 \i0 \fs20 \sa0 \sb200 
+CITY OF GAINESVILLE, Appellant,
+\par 
+}
+}
+{\b0 \qc \cf34 \f6 \ri100 \i0 \fs20 \li100 
+{\b0 \cf34 \f6 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+v.
+\par 
+}
+}
+{\b0 \qc \cf34 \f6 \ri100 \i0 \fs20 \li100 
+{\b0 \cf34 \f6 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+REPUBLIC INVESTMENT CORPORATION, Appellee.
+\par 
+}
+}
+}
+}
+{\b0 \qc \cf31 \f2 \ri0 \i0 \fs20 \li0 
+{\b0 \cf31 \f2 \i0 \fs20 
+{\b0 \qc \cf31 \f6 \ri0 \i0 \fs20 \li200 
+{\b0 \cf31 \f6 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+No. BC\u8211\'3f227.
+\par 
+}
+}
+}
+{\b0 \cf31 \f6 \i0 \fs20 
+{\b0 \qc \cf31 \f6 \ri0 \i0 \fs20 \li200 
+{\b0 \cf31 \f6 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+|
+\par 
+}
+}
+{\b0 \qc \cf31 \f6 \ri0 \i0 \fs20 \li200 
+{\b0 \cf31 \f6 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Dec. 6, 1985.
+\par 
+}
+}
+{\b0 \qc \cf31 \f6 \ri0 \i0 \fs20 \li200 
+{\b0 \cf31 \f6 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+|
+\par 
+}
+}
+{\b0 \qc \cf31 \f6 \ri0 \i0 \fs20 \li200 
+{\b0 \cf31 \f6 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+Rehearing Denied Jan. 20, 1986.
+\par 
+}
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b1 \cf34 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\*\bkmkstart co_synopsis_1}{\*\bkmkend co_synopsis_1}
+{\b1 \cf34 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb400 
+Synopsis
+\par 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Developer brought declaratory judgment action against city for approval of its development plans. The Circuit Court, Alachua County, George H. Pierce, J., rendered final declaratory judgment and city appealed. The District Court of Appeal, Ervin, J., held that: (1) city never took final action in its approval process and Circuit Court lacked subject matter jurisdiction over action, and (2) it could not be said that developer\rquote s further pursuit of remedies within city\rquote s plan development approval process would have been to no avail.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Reversed.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b1 \cf31 \f2 \i0 \fs20 
+{\b1 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Procedural Posture(s):
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ On Appeal.
+\par 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\*\bkmkstart co_headnotes_1}{\*\bkmkend co_headnotes_1}
+\par 
+{\b0 \cf34 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\*\bkmkstart co_headnoteHeader_1}{\*\bkmkend co_headnoteHeader_1}
+\par 
+{\shading10000 \b0 \cf38 \cfpat2 \f2 \ri200 \i0 \qj \fs20 \li100 
+{\b0 \cf38 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb200 
+West Headnotes (3)
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\*\bkmkstart co_expandedHeadnotes_1}{\*\bkmkend co_expandedHeadnotes_1}
+\par 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\*\bkmkstart co_anchor_1985159427001_1}{\*\bkmkend co_anchor_1985159427001_1}
+\par 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 {
+{\trowd \ltrrow \trleft0 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrt \clbrdrl \trql \clwWidth600 \cellx600 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrt \clbrdrr \trql \clwWidth4040 \cellx4640 
+\intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b1 \cf31 \f2 \i0 \fs20 
+{\*\bkmkstart co_anchor_F11985159427_1}{\*\bkmkend co_anchor_F11985159427_1}
+{\b1 \cf31 \f2 \i0 \fs20 
+{\*\bkmkstart co_anchor_headNote_[1]_1}{\*\bkmkend co_anchor_headNote_[1]_1}
+{\field {\*\fldinst HYPERLINK "#co_pp_HNF1_1" }{\fldrslt 
+{\b1 \cf33 \f2 \i0 \fs20 
+{\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+[1]
+}
+}\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\par 
+}
+}
+}
+}\b1 \cf31 \f2 \ri30 \i0 \ql \li30 \fs20 \intbl \cell \intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \i0 \fs20 
+{\b1 \cf31 \f2 \i0 \fs20 
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Browse/Home/KeyNumber/30/View.html?docGuid=I0304b6450d9c11d99830b5efa1ded32a&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Appeal and Error
+}\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+}
+}
+{\b0 \cf31 \f2 \i0 \fs20 
+{\b0 \cf31 \f2 \i0 \fs20 
+{\*\shppict {\pict \pngblip \picw28 \pich16 \picwgoal210 \pichgoal120 89504e470d0a1a0a0000000d494844520000001c0000001008020000008aad88b80000001974455874536f6674776172650041646f626520496d616765526561647971c9653c000002e34944415478da9c545d48544114be737fdc7bddd6c515b4754dd3f52f220343594b4bb01efa219f2b1f82900884a09e82887e885e0a0a7ae9cd1284a2872228a1b25283224d89c872575d4cb3d48dd55deedc75efcc74e6deddad8724edc0cc7c67eedc6fbe3973ce20c69890361c9d7dd3758450260a02cc06daba9c7945c2da0d6548e3f313a33d172bab9672dc1a7046a3e4ddebd95dc71f389c9eb5928af6c0189d1a7ae42b8cb87d65c8b99fb99adc1b9a6b1bcac2ef7bfe43698a7461fc2d9eefcd2ff61183527191ea5fa8fed9e95ef773ec61b0fff65a4965682faf3541bfb9a15a921c4cad10a9db3413943109b1adf539e1c9519234fe1d47248a72560abfb8da58d752a2e5ef887d1b74ba65334921168c521e12c6904007eef7ad5260cde1ce82eae69452db865f8dd900f61028a50cd8f906f507b609901096cb272901cc5deef1c6181118a126f9d07db47cdf95d2c0214e4a96f5f8f4530081f67bc1de1ba171b2d11784a592a2c5e6425e7fd52a957afdfe67dd67288e7052d388a702ec70157a46e0c83ca49424710c26a7c666890923d765e925964cf01924b3aa201121f882314522f357158726c29c3469c46cce819b7b61d8b4c564f619290137383295d13239836c50ea632bcc44b79f7a6c9126e05a84f2ca65594ec0452531e56a2c21b2e6f8f380edb7262c11f1ce93353651dbf58f181bbaae3fb9b453aa39d1b8a735168ba1e8d791e1bb1d3c22ebf56c354e89049723589704202b57fb34146d391be28e005923653648a40debd848189228a99aea72b99cd9d9a932fd3eda3bd37f214f9b839ff9a199556454c44a8552d25add7ccc26a23cd504d33431c6c9b429b2ac6a9aaaaa8a0250fe5dfb8c98cf2f5778f33d9ab49812cb7840c30b74f7b9c9742933a00046e8092122c89624396d08a1bf3c28c6d28f81eb81028f5ba13a57aae44c2f446a3b067373530f8a6919d001b645a1b4adf84af130c523774ed765dc83e7fb0abc459905c00818d48146ab2ed14a09fb4b800100952bb3962ee31a410000000049454e44ae426082}}
+}
+}
+{\b0 \cf31 \f2 \i0 \fs20 
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Browse/Home/KeyNumber/30k4098(2)/View.html?docGuid=I0304b6450d9c11d99830b5efa1ded32a&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Jurisdiction
+}\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\par 
+}
+}
+}
+}\b0 \cf31 \f2 \ri30 \i0 \ql \li30 \fs20 \intbl \cell \row }
+{\trowd \lastrow \trleft0 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrb \clbrdrl \trql \clwWidth600 \cellx600 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrb \clbrdrr \trql \clwWidth4040 \cellx4640 
+\intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 
+}
+}
+}\b0 \cf31 \f2 \ri30 \ul0 \strike0 \i0 \ql \li30 \fs20 \intbl \cell \intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+Issue of whether circuit court lacked subject matter jurisdiction could be considered by reviewing court even though appellant did not specifically raise it on appeal, where appellant consistently argued that lower court erred in granting partial summary judgment when only question set for hearing before court was appellant\rquote s motion to dismiss appellee\rquote s complaint on ground that appellee had sought judicial relief before exhausting its administrative remedies.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\*\bkmkstart co_headnoteId_19851594270012018020612213}{\*\bkmkend co_headnoteId_19851594270012018020612213}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/RelatedInformation/DocHeadnoteLink?docGuid=I0304b6450d9c11d99830b5efa1ded32a&headnoteId=198515942700120180206122132&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=CitingReferences&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+5 Cases that cite this headnote
+}\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\sb200 
+\par 
+}
+}
+}
+}\b0 \cf31 \f2 \strike0 \i0 \fs20 \sa200 \sb0 \ri30 \ul0 \qj \ql \li30 \intbl \cell \row }}\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \brdrt \brdrcf32 \brdrw0 \brdrs \fs20 \li0 
+{\*\bkmkstart co_anchor_1985159427002_1}{\*\bkmkend co_anchor_1985159427002_1}
+\par 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 {
+{\trowd \ltrrow \trleft0 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrt \clbrdrl \trql \clwWidth600 \cellx600 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrt \clbrdrr \trql \clwWidth4040 \cellx4640 
+\intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b1 \cf31 \f2 \i0 \fs20 
+{\*\bkmkstart co_anchor_F21985159427_1}{\*\bkmkend co_anchor_F21985159427_1}
+{\b1 \cf31 \f2 \i0 \fs20 
+{\*\bkmkstart co_anchor_headNote_[2]_1}{\*\bkmkend co_anchor_headNote_[2]_1}
+{\field {\*\fldinst HYPERLINK "#co_pp_HNF2_1" }{\fldrslt 
+{\b1 \cf33 \f2 \i0 \fs20 
+{\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+[2]
+}
+}\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\par 
+}
+}
+}
+}\b1 \cf31 \f2 \ri30 \i0 \ql \li30 \fs20 \intbl \cell \intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \i0 \fs20 
+{\b1 \cf31 \f2 \i0 \fs20 
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Browse/Home/KeyNumber/118A/View.html?docGuid=I0304b6450d9c11d99830b5efa1ded32a&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Declaratory Judgment
+}\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+}
+}
+{\b0 \cf31 \f2 \i0 \fs20 
+{\b0 \cf31 \f2 \i0 \fs20 
+{\*\shppict {\pict \pngblip \picw28 \pich16 \picwgoal210 \pichgoal120 89504e470d0a1a0a0000000d494844520000001c0000001008020000008aad88b80000001974455874536f6674776172650041646f626520496d616765526561647971c9653c000002e34944415478da9c545d48544114be737fdc7bddd6c515b4754dd3f52f220343594b4bb01efa219f2b1f82900884a09e82887e885e0a0a7ae9cd1284a2872228a1b25283224d89c872575d4cb3d48dd55deedc75efcc74e6deddad8724edc0cc7c67eedc6fbe3973ce20c69890361c9d7dd3758450260a02cc06daba9c7945c2da0d6548e3f313a33d172bab9672dc1a7046a3e4ddebd95dc71f389c9eb5928af6c0189d1a7ae42b8cb87d65c8b99fb99adc1b9a6b1bcac2ef7bfe43698a7461fc2d9eefcd2ff61183527191ea5fa8fed9e95ef773ec61b0fff65a4965682faf3541bfb9a15a921c4cad10a9db3413943109b1adf539e1c9519234fe1d47248a72560abfb8da58d752a2e5ef887d1b74ba65334921168c521e12c6904007eef7ad5260cde1ce82eae69452db865f8dd900f61028a50cd8f906f507b609901096cb272901cc5deef1c6181118a126f9d07db47cdf95d2c0214e4a96f5f8f4530081f67bc1de1ba171b2d11784a592a2c5e6425e7fd52a957afdfe67dd67288e7052d388a702ec70157a46e0c83ca49424710c26a7c666890923d765e925964cf01924b3aa201121f882314522f357158726c29c3469c46cce819b7b61d8b4c564f619290137383295d13239836c50ea632bcc44b79f7a6c9126e05a84f2ca65594ec0452531e56a2c21b2e6f8f380edb7262c11f1ce93353651dbf58f181bbaae3fb9b453aa39d1b8a735168ba1e8d791e1bb1d3c22ebf56c354e89049723589704202b57fb34146d391be28e005923653648a40debd848189228a99aea72b99cd9d9a932fd3eda3bd37f214f9b839ff9a199556454c44a8552d25add7ccc26a23cd504d33431c6c9b429b2ac6a9aaaaa8a0250fe5dfb8c98cf2f5778f33d9ab49812cb7840c30b74f7b9c9742933a00046e8092122c89624396d08a1bf3c28c6d28f81eb81028f5ba13a57aae44c2f446a3b067373530f8a6919d001b645a1b4adf84af130c523774ed765dc83e7fb0abc459905c00818d48146ab2ed14a09fb4b800100952bb3962ee31a410000000049454e44ae426082}}
+}
+}
+{\b0 \cf31 \f2 \i0 \fs20 
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Browse/Home/KeyNumber/118Ak209/View.html?docGuid=I0304b6450d9c11d99830b5efa1ded32a&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Counties and municipalities and their officers
+}\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\par 
+}
+}
+}
+}\b0 \cf31 \f2 \ri30 \i0 \ql \li30 \fs20 \intbl \cell \row }
+{\trowd \lastrow \trleft0 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrb \clbrdrl \trql \clwWidth600 \cellx600 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrb \clbrdrr \trql \clwWidth4040 \cellx4640 
+\intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 
+}
+}
+}\b0 \cf31 \f2 \ri30 \ul0 \strike0 \i0 \ql \li30 \fs20 \intbl \cell \intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+Circuit court lacked subject matter jurisdiction over declaratory judgment action brought by developer against city regarding development plans, where city\rquote s approval process for planned development under zoning code called for city review of preliminary and final site plans, developer instituted suit before city entities had opportunity to review preliminary site plan of one lot and final site plan for both lots, and developer did not allege errors so egregious or devastating that completion of site plan approval process and subsequent judicial appeal would provide remedy that was too little or too late.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\*\bkmkstart co_headnoteId_19851594270022018020612213}{\*\bkmkend co_headnoteId_19851594270022018020612213}
+\par 
+}
+}
+}
+}\b0 \cf31 \f2 \strike0 \i0 \fs20 \sa200 \sb0 \ri30 \ul0 \qj \ql \li30 \intbl \cell \row }}\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \brdrt \brdrcf32 \brdrw0 \brdrs \fs20 \li0 
+{\*\bkmkstart co_anchor_1985159427003_1}{\*\bkmkend co_anchor_1985159427003_1}
+\par 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 {
+{\trowd \ltrrow \trleft0 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrt \clbrdrl \trql \clwWidth600 \cellx600 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrt \clbrdrr \trql \clwWidth4040 \cellx4640 
+\intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b1 \cf31 \f2 \i0 \fs20 
+{\*\bkmkstart co_anchor_F31985159427_1}{\*\bkmkend co_anchor_F31985159427_1}
+{\b1 \cf31 \f2 \i0 \fs20 
+{\*\bkmkstart co_anchor_headNote_[3]_1}{\*\bkmkend co_anchor_headNote_[3]_1}
+{\field {\*\fldinst HYPERLINK "#co_pp_HNF3_1" }{\fldrslt 
+{\b1 \cf33 \f2 \i0 \fs20 
+{\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+[3]
+}
+}\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\par 
+}
+}
+}
+}\b1 \cf31 \f2 \ri30 \i0 \ql \li30 \fs20 \intbl \cell \intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \i0 \fs20 
+{\b1 \cf31 \f2 \i0 \fs20 
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Browse/Home/KeyNumber/118A/View.html?docGuid=I0304b6450d9c11d99830b5efa1ded32a&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Declaratory Judgment
+}\b1 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+}
+}
+{\b0 \cf31 \f2 \i0 \fs20 
+{\b0 \cf31 \f2 \i0 \fs20 
+{\*\shppict {\pict \pngblip \picw28 \pich16 \picwgoal210 \pichgoal120 89504e470d0a1a0a0000000d494844520000001c0000001008020000008aad88b80000001974455874536f6674776172650041646f626520496d616765526561647971c9653c000002e34944415478da9c545d48544114be737fdc7bddd6c515b4754dd3f52f220343594b4bb01efa219f2b1f82900884a09e82887e885e0a0a7ae9cd1284a2872228a1b25283224d89c872575d4cb3d48dd55deedc75efcc74e6deddad8724edc0cc7c67eedc6fbe3973ce20c69890361c9d7dd3758450260a02cc06daba9c7945c2da0d6548e3f313a33d172bab9672dc1a7046a3e4ddebd95dc71f389c9eb5928af6c0189d1a7ae42b8cb87d65c8b99fb99adc1b9a6b1bcac2ef7bfe43698a7461fc2d9eefcd2ff61183527191ea5fa8fed9e95ef773ec61b0fff65a4965682faf3541bfb9a15a921c4cad10a9db3413943109b1adf539e1c9519234fe1d47248a72560abfb8da58d752a2e5ef887d1b74ba65334921168c521e12c6904007eef7ad5260cde1ce82eae69452db865f8dd900f61028a50cd8f906f507b609901096cb272901cc5deef1c6181118a126f9d07db47cdf95d2c0214e4a96f5f8f4530081f67bc1de1ba171b2d11784a592a2c5e6425e7fd52a957afdfe67dd67288e7052d388a702ec70157a46e0c83ca49424710c26a7c666890923d765e925964cf01924b3aa201121f882314522f357158726c29c3469c46cce819b7b61d8b4c564f619290137383295d13239836c50ea632bcc44b79f7a6c9126e05a84f2ca65594ec0452531e56a2c21b2e6f8f380edb7262c11f1ce93353651dbf58f181bbaae3fb9b453aa39d1b8a735168ba1e8d791e1bb1d3c22ebf56c354e89049723589704202b57fb34146d391be28e005923653648a40debd848189228a99aea72b99cd9d9a932fd3eda3bd37f214f9b839ff9a199556454c44a8552d25add7ccc26a23cd504d33431c6c9b429b2ac6a9aaaaa8a0250fe5dfb8c98cf2f5778f33d9ab49812cb7840c30b74f7b9c9742933a00046e8092122c89624396d08a1bf3c28c6d28f81eb81028f5ba13a57aae44c2f446a3b067373530f8a6919d001b645a1b4adf84af130c523774ed765dc83e7fb0abc459905c00818d48146ab2ed14a09fb4b800100952bb3962ee31a410000000049454e44ae426082}}
+}
+}
+{\b0 \cf31 \f2 \i0 \fs20 
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Browse/Home/KeyNumber/118Ak209/View.html?docGuid=I0304b6450d9c11d99830b5efa1ded32a&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Counties and municipalities and their officers
+}\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\par 
+}
+}
+}
+}\b0 \cf31 \f2 \ri30 \i0 \ql \li30 \fs20 \intbl \cell \row }
+{\trowd \lastrow \trleft0 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrb \clbrdrl \trql \clwWidth600 \cellx600 
+\clpadt30 \clpadft3 \clpadr30 \clpadfr3 \clbrdrb \clbrdrr \trql \clwWidth4040 \cellx4640 
+\intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 
+}
+}
+}\b0 \cf31 \f2 \ri30 \ul0 \strike0 \i0 \ql \li30 \fs20 \intbl \cell \intbl 
+{\ri30 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \ql \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+Developer which brought declaratory judgment action against city regarding development plans had remedies within city\rquote s planned redevelopment approval process, the further pursuit of which could not be said to have been to no avail, and thus, circuit court lacked subject matter jurisdiction over action, where developer had right to present evidence and arguments regarding development at public hearings prior to final action by city on developer\rquote s site plans.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri30 \i0 \qj \fs20 \li30 
+{\*\bkmkstart co_headnoteId_19851594270032018020612213}{\*\bkmkend co_headnoteId_19851594270032018020612213}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/RelatedInformation/DocHeadnoteLink?docGuid=I0304b6450d9c11d99830b5efa1ded32a&headnoteId=198515942700320180206122132&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=CitingReferences&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+1 Case that cites this headnote
+}\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\sb200 
+\par 
+}
+}
+}
+}\b0 \cf31 \f2 \strike0 \i0 \fs20 \sa200 \sb0 \ri30 \ul0 \qj \ql \li30 \intbl \cell \row }}\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+}
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 
+}
+}
+}
+{\b0 \cf33 \f2 \i0 \fs20 
+{\*\bkmkstart co_headnotesEnd_1}{\*\bkmkend co_headnotesEnd_1}
+\par 
+}
+{\b1 \cf34 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\*\bkmkstart co_attorneysAndLawFirms_1}{\*\bkmkend co_attorneysAndLawFirms_1}
+{\b1 \cf34 \f2 \ul0 \strike0 \i0 \fs20 \sa200 \sb200 
+Attorneys and Law Firms
+\par 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 
+}
+{\b1 \cf1 \f2 \i0 \fs20 
+{\*\bkmkstart co_pp_sp_735_1345_1}{\*\bkmkend co_pp_sp_735_1345_1}
+{\b1 \cf1 \f2 \i0 \fs20 
+{\b1 \cf1 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+*1345
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ Marion J. Radson, Deputy City Atty., Gainesville, for appellant.
+\par 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb200 
+James E. Clayton of Clayton, Johnston, Quincey, Ireland, Felder & Gadd, Gainesville, for appellee.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b1 \cf34 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\*\bkmkstart co_opinion_1}{\*\bkmkend co_opinion_1}
+{\b1 \cf34 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb200 
+Opinion
+\par 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\*\bkmkstart co_anchor_I55102c83eba711eabea4f0dc9fb69}{\*\bkmkend co_anchor_I55102c83eba711eabea4f0dc9fb69}
+\par 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa200 \sb200 
+ERVIN, Judge.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\*\bkmkstart co_anchor_I55102c85eba711eabea4f0dc9fb69}{\*\bkmkend co_anchor_I55102c85eba711eabea4f0dc9fb69}
+\par 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+City of Gainesville appeals from a final declaratory judgment ruling that appellee Republic has the right to combine buildings and add parking spaces on its property, subject to certain conditions. We reverse, upon finding that under the circumstances the trial court did not have subject matter jurisdiction.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+On October 17, 1983, the Gainesville City Commission adopted Ordinance 83\u8211\'3f94 which (1) rezoned appellee\rquote s land to the category of \u8220\'3fplanned development\u8221\'3f; (2) incorporated a development plan, consisting of a development report, an existing site plan, a development plan map and a concept layout plan map; and (3) required site plan approval of the development pursuant to the procedure set out in Chapter 29 of the City\rquote s Zoning Code.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+The development plan shows twelve lots with approximately one acre in each. The development report essentially provides: (1) On lots 6\u8211\'3f12, the maximum building ground coverage on each lot will be 8,000 sq. ft., and the total maximum building area, 8,000 sq. ft.; (2) on lots 1\u8211\'3f5, the maximum building ground coverage on each lot will be 10,000 sq. ft., and the total maximum building area, 12,000 sq. ft.; (3) eventual development may combine two or more lots into one parcel, 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+but the level of intensity of these potentially combined parcels shall not exceed the sum total of the individual lots;
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ (4) standard City requirements for parking will apply; and (5) as each lot or combination thereof is proposed for development, preliminary and final site plan approval must be obtained.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Pursuant to the Zoning Code, the second basic step of the approval process for a planned development is detail approval, including subdivision and site plan approval. On April 16, 1984, the City Commission approved appellee\rquote s subdivision plat for recording. The subdivision plat divided the property into only four lots, rather than twelve. Relevant to this appeal, the plat combines former lots 1\u8211\'3f5 into lot four, and renumbered lot twelve to lot one. Over appellee\rquote s apparent objection, the City Commission ordered the following restrictions be set out on the plat:
+\par 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb200 
+BUILDINGS
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb200 
+As to Lots 1, 2 and 3:
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Maximum of seven (7) buildings, maximum building area of 8000 square feet each, maximum one (1) story height (not to exceed 25 feet). 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb200 
+Buildings not to be combined.
+\par 
+}
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+As to 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb200 
+lot 4:
+\par 
+}
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Maximum of five (5) buildings, maximum building area of 12,000 square feet 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+each,
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb200 
+ maximum two (2) story height (not to exceed 35 feet).
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb200 
+(e.s.) Appellee recorded the plat with those restrictions on April 17, 1984.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Even with an accepted subdivision plat, appellee could not begin development except in accordance with an approved site plan. Section 29\u8211\'3f56(c)(2), Gainesville Zoning Code. The purpose of the site plan approval process is
+\par 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ri800 \i0 \qj \fs20 \li1000 
+{\b0 \cf31 \f2 \ri800 \i0 \qj \fs20 \li1000 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+to promote 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+harmonious,
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ functional 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+relationships
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ among the various elements within any development such as the location of activities, vehicular and pedestrian circulation systems, and visual form to insure physical, social and economic compatibility with neighboring developments and conditions, as well as with the community at large and 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+to prevent detrimental impact to the natural environment
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ on and off the site by providing for review and evaluation of site plans for all developments of the types listed in Section 29\u8211\'3f86 and others as specified elsewhere in this Chapter. Although certain minimum standards are prescribed by specific provisions of this Chapter, 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+site plan review will permit maximum flexibility
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa400 \sb600 
+ in evaluating each plan on its merits and encourage variety and innovation within the intent and purpose specified for each district while insuring privacy and safety on all levels.
+\par 
+}
+}
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 
+}
+{\b1 \cf1 \f2 \i0 \fs20 
+{\*\bkmkstart co_pp_sp_735_1346_1}{\*\bkmkend co_pp_sp_735_1346_1}
+{\b1 \cf1 \f2 \i0 \fs20 
+{\b1 \cf1 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+*1346
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb200 
+ Section 29\u8211\'3f85, Gainesville Zoning Code (e.s.).
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+The first step of the approval process is review of the preliminary site plan, which must show: (1) the location of all proposed parking areas, including the exact number of spaces; (2) the location and gross floor area of all proposed buildings; and (3) the percentage of the site that will be covered by buildings and the percentage that will be covered by streets, drives, parking and loading areas. Section 29\u8211\'3f90(a)(4)(B)(C) and (G), Gainesville Zoning Code. After review by the City Department of Community Development, the City Plan Board reviews all preliminary site plans at a public hearing and determines whether they meet certain criteria.
+}
+{\b0 \cf31 \f2 \i0 \fs16 
+{\*\bkmkstart co_fnRef_B00111985159427_ID0ERPAC_1}{\*\bkmkend co_fnRef_B00111985159427_ID0ERPAC_1}
+{\field {\*\fldinst HYPERLINK "#co_footnote_B00111985159427_1" }{\fldrslt 
+{\super \b0 \cf33 \f2 \ul0 \strike0 \i0 \fs16 \sa0 \sb0 
+1
+}}}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ Section 29\u8211\'3f89(a)(2)(C), Gainesville Zoning Code. If the Plan Board denies approval, it \u8220\'3fshall specify how ..., if at all, the applicant\rquote s site plan may be amended or supplemented in order to meet the requirements of this Chapter.\u8221\'3f Section 29\u8211\'3f89(a)(2)(c), Gainesville Zoning Code. Upon approval by the Plan Board, an applicant has the authority to proceed with its final site plan. Also, following acceptance of the preliminary site plan by the Plan Board, \u8220\'3fno significant changes shall be made during the review of the final plan.\u8221\'3f Section 29\u8211\'3f89(a)(1), Gainesville Zoning Code.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+The final site plan process reviews the details of a final site plan and any minor modifications made as a result of preliminary approval. Section 29\u8211\'3f89(b)(1), Gainesville Zoning Code. The final site plan must include all information previously approved during the preliminary site plan review process. Section 29\u8211\'3f90(b), Gainesville Zoning Code. Again, after the final site plan undergoes Department of Community Development review, the Plan Board
+\par 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ri800 \i0 \qj \fs20 \li1000 
+{\b0 \cf31 \f2 \ri800 \i0 \qj \fs20 \li1000 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+shall review all final site plans at a public hearing and determine whether they meet the intent of this Article, other regulations that may apply, and any requirements established during the preliminary site plan approval process. In denying approval of a final site plan, the board shall specify how or in what respects, if at all, the applicant\rquote s site plan may be 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+amended or supplemented
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa400 \sb600 
+ in order to meet the requirements of this Chapter.
+\par 
+}
+}
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb200 
+Section 29\u8211\'3f89(b)(2)(C) (e.s.).
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+On May 17, 1984, appellee submitted a preliminary site plan for lots one and four. The preliminary site plan for lot one shows one 8,000 sq. ft. office building and 36 parking spaces. On June 12, 1984, the Plan Board granted approval of the preliminary site plan for lot one, but limited the number of parking spaces to the minimum required, twenty.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+The preliminary site plan for lot four submitted on May 17, 1984, reflects two one-story office buildings of 15,000 sq. ft. each, and one two-story office building of 30,000 sq. ft. The parties\rquote  briefs indicate that the Department of Community Development informed appellee that it would recommend to the Plan Board the denial of the preliminary site plan for lot four, because the ground floor area of each of the three buildings exceeded 10,000 sq. ft. On June 4, 1984, before the Plan Board reviewed the preliminary site plan for lot four, appellee withdrew it from further consideration.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+On June 28, 1984\u8212\'3fwith no preliminary site plan for lot four submitted, and with only a conditional approval of the preliminary site plan for lot one\u8212\'3fappellee filed the instant cause in circuit court, for declaratory judgment, requesting that (1) appellee be permitted to combine buildings on 
+}
+{\b1 \cf1 \f2 \i0 \fs20 
+{\*\bkmkstart co_pp_sp_735_1347_1}{\*\bkmkend co_pp_sp_735_1347_1}
+{\b1 \cf1 \f2 \i0 \fs20 
+{\b1 \cf1 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+*1347
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ lot four if the total maximum building ground coverage is less than 50,000 sq. ft. and the total square footage is less than 60,000;
+}
+{\b0 \cf31 \f2 \i0 \fs16 
+{\*\bkmkstart co_fnRef_B00221985159427_ID0ECFAE_1}{\*\bkmkend co_fnRef_B00221985159427_ID0ECFAE_1}
+{\field {\*\fldinst HYPERLINK "#co_footnote_B00221985159427_1" }{\fldrslt 
+{\super \b0 \cf33 \f2 \ul0 \strike0 \i0 \fs16 \sa0 \sb0 
+2
+}}}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ and (2) appellee be permitted to place as many parking spaces on lot one as it desires, provided surface water drainage requirements and limitations on impervious ground coverage are met. On July 13, 1984, the City filed a motion to dismiss, asserting that appellee had failed to exhaust its administrative remedies.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+On July 16, 1984, appellee filed its final site plan for lot one. One day later, appellee filed a new preliminary site plan for lot four, which showed five buildings: four one-story buildings of 10,000 sq. ft. each, and one two-story building of 20,000 sq. ft. of gross floor area. Before the City had an opportunity to act on the submitted plans, however, a hearing was held in circuit court on the motion to dismiss, and an order was entered on July 31, 1984, denying the motion to dismiss and granting a partial summary judgment in appellee\rquote s favor.
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ The latter declared that appellee \u8220\'3fhas the right to combine buildings on Lot 4 of its subdivision so long as the maximum ground coverage of the building or buildings does not exceed 50,000 sq. ft. and the total square footage does not exceed 60,000\u8221\'3f. On August 7, 1984, the Plan Board approved the final site plan for lot one, subject to the modification that appellee reduce the number of parking spaces from the proposed 36 spaces to 28 spaces.
+}
+{\b0 \cf31 \f2 \i0 \fs16 
+{\*\bkmkstart co_fnRef_B00331985159427_ID0EZGAE_1}{\*\bkmkend co_fnRef_B00331985159427_ID0EZGAE_1}
+{\field {\*\fldinst HYPERLINK "#co_footnote_B00331985159427_1" }{\fldrslt 
+{\super \b0 \cf33 \f2 \ul0 \strike0 \i0 \fs16 \sa0 \sb0 
+3
+}}}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ Also on August 7, 1984, the Plan Board voted to continue consideration of the preliminary site plan for lot four until September 1984.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+After a final hearing on August 15, 1984, the court rendered its \u8220\'3fFinal Declaratory Judgment\u8221\'3f. The court reaffirmed its earlier partial summary judgment, and as to lot one ruled that the City could not limit the number of parking spaces which appellee may provide on lot one so long as appellee \u8220\'3fcomplies with the limitations and restrictions of Ordinance 83\u8211\'3f94 providing for maximum building coverage, maximum impervious ground coverage, set back and landscape buffering areas, surface water drainage, and the provisions of Article XIII of the City Code.\u8221\'3f
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\field {\*\fldinst HYPERLINK "#co_hn_anchor_F11985159427_1" }{\fldrslt 
+{\super \b1 \cf38 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+[1]
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ Initially we note that because our examination of the record on appeal reveals that the circuit court lacked subject matter jurisdiction, we may consider the issue even though the City did not specifically raise it on appeal.
+}
+{\b0 \cf31 \f2 \i0 \fs16 
+{\*\bkmkstart co_fnRef_B00441985159427_ID0EPIAE_1}{\*\bkmkend co_fnRef_B00441985159427_ID0EPIAE_1}
+{\field {\*\fldinst HYPERLINK "#co_footnote_B00441985159427_1" }{\fldrslt 
+{\super \b0 \cf33 \f2 \ul0 \strike0 \i0 \fs16 \sa0 \sb0 
+4
+}}}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+See 
+}
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1947106657&pubNum=0000735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b0 \cf33 \f2 \i1 \fs20 
+{\b0 \cf33 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+Roberts v. Seafood Surety Co.,
+}
+}
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 158 Fla. 686, 29 So.2d 743 (1947)
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+; 
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1961192999&pubNum=0000735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&fi=co_pp_sp_735_248&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)#co_pp_sp_735_248" }{\fldrslt 
+{\b0 \cf33 \f2 \i1 \fs20 
+{\b0 \cf33 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+Mendez v. Ortega,
+}
+}
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 134 So.2d 247, 248 (Fla. 3d DCA 1961)
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+. The issue arises here because appellee filed its declaratory judgment action before the City\rquote s approval process for lots one and four had been completed. Specifically, on June 28, 1984, the date appellee filed suit, it had no preliminary or final site plan for lot four submitted for consideration before the City, as required by the City\rquote s Zoning Code, and had received approval, subject to a decrease in the number of parking spaces, of only a preliminary site plan for lot one. Thus, regarding lot four and the building size issue it raised, appellee instituted its suit 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+before
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ the Department of Community Development and the Plan Board had an 
+}
+{\b1 \cf1 \f2 \i0 \fs20 
+{\*\bkmkstart co_pp_sp_735_1348_1}{\*\bkmkend co_pp_sp_735_1348_1}
+{\b1 \cf1 \f2 \i0 \fs20 
+{\b1 \cf1 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+*1348
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ opportunity to review the preliminary site plan. Additionally, the Plan Board had no opportunity to review, at a public hearing, a 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+final
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ site plan for either lot. Even assuming that the Plan Board would have denied approval of the final site plans for both lots, appellee\rquote s suit prevented the Plan Board from specifying, as required, how appellee\rquote s site plans could be amended to gain approval.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\field {\*\fldinst HYPERLINK "#co_hn_anchor_F21985159427_1" }{\fldrslt 
+{\super \b1 \cf38 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+[2]
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 
+}
+{\field {\*\fldinst HYPERLINK "#co_hn_anchor_F31985159427_1" }{\fldrslt 
+{\super \b1 \cf38 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+[3]
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ Therefore, the City never took 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+final
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ action. By analogy, in our construction of the Administrative Procedure Act, Chapter 120, Florida Statutes, we have held that even though an alternative judicial remedy is available, the exhaustion of administrative remedies requirement may not be ignored. 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+See 
+}
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1984149206&pubNum=0000735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&fi=co_pp_sp_735_26&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)#co_pp_sp_735_26" }{\fldrslt 
+{\b0 \cf33 \f2 \i1 \fs20 
+{\b0 \cf33 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+Criterion Insurance Co. v. State, Department of Insurance,
+}
+}
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 458 So.2d 22, 26 (Fla. 1st DCA 1984)
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+. We consider the same rule applies here. In 
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1951114706&pubNum=0000735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b0 \cf33 \f2 \i1 \fs20 
+{\b0 \cf33 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+De Carlo v. Town of West Miami,
+}
+}
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 49 So.2d 596, 596\u8211\'3f97 (Fla.1950)
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+, the court discussed the practicality and necessity of the requirement that administrative remedies be exhausted:
+\par 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf31 \f2 \ri800 \i0 \qj \fs20 \li1000 
+{\b0 \cf31 \f2 \ri800 \i0 \qj \fs20 \li1000 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+The administrative boards usually provided for the consideration and review of zoning problems are made up of local people, having the advantage of full local information as to the reasons behind the various zoning regulations. Their findings, while not conclusive, are indeed helpful in the ultimate determination of the rights of the parties.
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa400 \sb600 
+ Moreover, the inequalities of a zoning ordinance, if called to the attention of such local administrative boards, may frequently be adjusted at that level. Such boards should, at least, be given an opportunity to afford relief, or state their reasons for not doing so.
+\par 
+}
+}
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+See 
+}
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1974134864&pubNum=0000735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b0 \cf33 \f2 \i1 \fs20 
+{\b0 \cf33 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+Medical Arts, Inc. v. Rohrbaugh,
+}
+}
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 293 So.2d 366 (Fla. 4th DCA 1974)
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+; 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+accord 
+}
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1974134248&pubNum=0000735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\b0 \cf33 \f2 \i1 \fs20 
+{\b0 \cf33 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+City of South Miami v. Shirley Homes, Inc.,
+}
+}
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 291 So.2d 40 (Fla. 3d DCA 1974)
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ (since city had not considered and ruled on the merits of an application for a variance, a suit for injunctive relief was premature). Appellee had the right to present evidence and arguments regarding combining buildings on lot four, and adding parking spaces on lot one to the Plan Board at public hearings prior to final action on the site plans. We cannot say that appellee\rquote s further pursuit of remedies within the City\rquote s planned development approval process would have been to no avail. 
+}
+{\b0 \cf31 \f2 \i0 \fs20 
+{\field {\*\fldinst HYPERLINK "https://1.next.westlaw.com/Link/RelatedInformation/Flag?documentGuid=I5e241b910c7211d9bc18e8274af85244&transitionType=InlineKeyCiteFlags&originationContext=docHeaderFlag&Rank=0&ppcid=435229e0db4c4dfc9e0624b254288dec&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\*\shppict {\pict \pngblip \picw16 \pich16 \picwgoal255 \pichgoal255 89504e470d0a1a0a0000000d49484452000000100000001008060000001ff3ff6100000009704859730000113900001139011bd99346000000d249444154388d633cdda6f59f0107606464f8f7ff3f83ae49e5d56bb8d4b0303030302859ff656066c534e7cd3d66c68f4f19e733303098e3358099f53f03330ba601a22a7f193fbf603138d3ae8dd59526955719597099ccc0c0c0c0c4f49f41c9e60fdbff7f9872b70fb0205c40c81006263cf2840c2068c1801bc0c2c08008107420acf8efbfa8f25f46625da0c0c0c0208884adde3d60faf3f32b5efd28b1f0d1a4f2ea0724fef1735dda73ef1f67c920d60518e0df5f865c3457a163fce9c0a4f2ea1f0606860ff8d40c7c34526c00000b5b3855307f6c300000000049454e44ae426082}}}}
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1974134296&pubNum=0000735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&fi=co_pp_sp_735_201&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)#co_pp_sp_735_201" }{\fldrslt 
+{\b0 \cf33 \f2 \i1 \fs20 
+{\b0 \cf33 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+Southern Bell Telephone & Telegraph Co. v. Mobile America Corporation, Inc.,
+}
+}
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 291 So.2d 199, 201 (Fla.1974)
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+; 
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1963130645&pubNum=0000735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&fi=co_pp_sp_735_68&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)#co_pp_sp_735_68" }{\fldrslt 
+{\b0 \cf33 \f2 \i1 \fs20 
+{\b0 \cf33 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+Hillsborough Co. v. Twin Lakes Mobile Homes Village,
+}
+}
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 153 So.2d 64, 68 (Fla. 2d DCA 1963)
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb200 
+.
+}
+{\b0 \cf31 \f2 \i0 \fs16 
+{\*\bkmkstart co_fnRef_B00551985159427_ID0E3PAE_1}{\*\bkmkend co_fnRef_B00551985159427_ID0E3PAE_1}
+{\field {\*\fldinst HYPERLINK "#co_footnote_B00551985159427_1" }{\fldrslt 
+{\super \b0 \cf33 \f2 \ul0 \strike0 \i0 \fs16 \sa0 \sb0 
+5
+}}}
+\sb200 
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+Even if the Plan Board had rubber-stamped, during final site plan review, its decision regarding the preliminary site plan for lot one, its action would not obviate the necessity of giving the Plan Board the opportunity to consider any objections made to its prior decision. 
+}
+{\b0 \cf31 \f2 \i0 \fs20 
+{\field {\*\fldinst HYPERLINK "https://1.next.westlaw.com/Link/RelatedInformation/Flag?documentGuid=Icd7bf45b0d3911d99830b5efa1ded32a&transitionType=InlineKeyCiteFlags&originationContext=docHeaderFlag&Rank=0&ppcid=435229e0db4c4dfc9e0624b254288dec&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\*\shppict {\pict \pngblip \picw16 \pich16 \picwgoal255 \pichgoal255 89504e470d0a1a0a0000000d49484452000000100000001008060000001ff3ff6100000009704859730000113900001139011bd99346000000d249444154388d633cdda6f59f0107606464f8f7ff3f83ae49e5d56bb8d4b0303030302859ff656066c534e7cd3d66c68f4f19e733303098e3358099f53f03330ba601a22a7f193fbf603138d3ae8dd59526955719597099ccc0c0c0c0c4f49f41c9e60fdbff7f9872b70fb0205c40c81006263cf2840c2068c1801bc0c2c08008107420acf8efbfa8f25f46625da0c0c0c0208884adde3d60faf3f32b5efd28b1f0d1a4f2ea0724fef1735dda73ef1f67c920d60518e0df5f865c3457a163fce9c0a4f2ea1f0606860ff8d40c7c34526c00000b5b3855307f6c300000000049454e44ae426082}}}}
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1976120015&pubNum=0000735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&fi=co_pp_sp_735_115&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)#co_pp_sp_735_115" }{\fldrslt 
+{\b0 \cf33 \f2 \i1 \fs20 
+{\b0 \cf33 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+Skaggs-Albertson\rquote s Properties, Inc. v. Michels Belleair Bluffs Pharmacy, Inc.,
+}
+}
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 332 So.2d 113, 115 (Fla. 2d DCA 1976)
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+. Perhaps more importantly, the Board should have the opportunity to explain why, if it adhered to its original decisions, the combining of buildings on lot four into more than 10,000 square feet of maximum building ground coverage area would be contrary to the site plan approval process, or the City\rquote s Zoning Code. Would one building, for example, with a maximum coverage area of 50,000 square feet, have an adverse effect on \u8220\'3fharmonious, functional relationships among the various elements within ... [the] development\u8221\'3f, or a \u8220\'3fdetrimental impact to the natural environmental on and off the site\u8221\'3f, as opposed to five buildings having no more than 10,000 square feet each of ground floor area on the same parcel? Additional subsidiary questions might arise, such as whether the number of units or persons who would occupy a building or buildings having more than 10,000 square feet of ground floor area on lot four would be greater than 
+}
+{\b1 \cf1 \f2 \i0 \fs20 
+{\*\bkmkstart co_pp_sp_735_1349_1}{\*\bkmkend co_pp_sp_735_1349_1}
+{\b1 \cf1 \f2 \i0 \fs20 
+{\b1 \cf1 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+*1349
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ those within buildings having no more than 10,000 sq. ft. of ground coverage, and, if so, would the increased numbers have a greater potential detrimental effect on the site and the surrounding areas than would exist if the development were limited to the ground floor area recommended by the Department of Community Development? Another possible question is whether an increased number of parking spaces on lot one, over the number approved by the Board, might adversely impact on the environment on and off the site? There are obviously many conditions\u8212\'3fnot limited simply to those stated in the lower court\rquote s order\u8212\'3fthat necessarily play a part in the Board\rquote s approval of the final site plan.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+The lower court\rquote s decision, uninformed by the review process required by the City Code, was premature. It erroneously assumed that the issues raised in the pleadings were questions only of law and not of fact. A reasoned decision depended upon the City\rquote s exposition of its reasons for the action taken. And, if the court had first required compliance with the exhaustion of administrative remedies doctrine, it may have discovered the extent to which the City\rquote s action depended upon conventional proof methods, or upon 
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u8220\'3fpolicy considerations for which the agency has special responsibility\u8221\'3f, carefully expounded by the agency upon a fully developed record. 
+}
+{\b0 \cf31 \f2 \i0 \fs20 
+{\field {\*\fldinst HYPERLINK "https://1.next.westlaw.com/Link/RelatedInformation/Flag?documentGuid=I500b6dcd0d3e11d9821e9512eb7d7b26&transitionType=InlineKeyCiteFlags&originationContext=docHeaderFlag&Rank=0&ppcid=435229e0db4c4dfc9e0624b254288dec&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\*\shppict {\pict \pngblip \picw16 \pich16 \picwgoal255 \pichgoal255 89504e470d0a1a0a0000000d49484452000000100000001008060000001ff3ff6100000009704859730000113900001139011bd99346000000cb49444154388dc592310ac2401045ff264b7a05d3a9a089da08768220781c1bc955146bf11ed68a275084c5080b62112141b10971d7528d9b643b1f4cf5673eaf183275aa12d908005d8ff17dd602058051c755867e109073785b02e8e71658a6a90c1ddb2697e8de9bb935a5a5c738a159cd00400d03c356d312f2fb3e790aacd9f16d505492477eaac1ff0b2800ac760765d8a894a563db44d7a0949ac1e91a268f382e3600008ff128956de7edfa62c3fcb1aec10f42c889c2ec73f2ffc0633c019036d337d0e1ff052ff50138becc7319b00000000049454e44ae426082}}}}
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1977118303&pubNum=0000735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&fi=co_pp_sp_735_579&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)#co_pp_sp_735_579" }{\fldrslt 
+{\b0 \cf33 \f2 \i1 \fs20 
+{\b0 \cf33 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+McDonald v. Department of Banking and Finance,
+}
+}
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 346 So.2d 569, 579 (Fla. 1st DCA 1977)
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+. Judicial deference to administrative remedies could immeasurably aid the court in reaching an appropriate judgment with due consideration to the City\rquote s special responsibilities delegated it by the Zoning Code. Finally, appellee has not alleged errors so egregious or devastating that the completion of the site plan approval process and a subsequent judicial appeal will provide a remedy that is too little or too late. 
+}
+{\b0 \cf31 \f2 \i1 \fs20 
+{\b0 \cf31 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+See 
+}
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1977118302&pubNum=0000735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&fi=co_pp_sp_735_568&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)#co_pp_sp_735_568" }{\fldrslt 
+{\b0 \cf33 \f2 \i1 \fs20 
+{\b0 \cf33 \f2 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+School Board of Leon County v. Mitchell,
+}
+}
+{\b0 \cf33 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 346 So.2d 562, 568 (Fla. 1st DCA 1977)
+}}}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+We conclude that the circuit court lacked subject matter jurisdiction to entertain the cause, and that its final declaratory judgment must be
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+REVERSED.
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+\u160\'3f
+\par 
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb600 
+SHIVERS and JOANOS, JJ., concur.
+\par 
+}
+}
+}
+}
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\b1 \cf34 \f2 \ri0 \i0 \qj \fs20 \li0 
+{\*\bkmkstart co_allCitations_1}{\*\bkmkend co_allCitations_1}
+{\b1 \cf34 \f2 \ul0 \strike0 \i0 \fs20 \sa200 \sb200 
+All Citations
+\par 
+}
+}
+{\b0 \cf31 \f2 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+480 So.2d 1344, 10 Fla. L. Weekly 2693
+\par 
+}
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+}
+}
+{\b0 \cf1 \f3 \ri0 \i0 \ql \fs24 \li0 \par}\sect\sbknone\pgncont\cols1{\ids0 {
+{\trowd \ltrrow \trleft0 
+\clpadb400 \clpadfb3 \clbrdrt \brdrcf41 \brdrw60 \brdrs \clbrdrl \trql \clwWidth10080 \cellx10080 
+\intbl 
+{\ri0 \li0 
+{\b1 \qc \cf1 \f3 \ri0 \i0 \fs22 \li0 
+{\b1 \cf1 \f3 \i0 \fs22 
+{\b1 \cf1 \f3 \ul0 \strike0 \i0 \fs22 \sa0 \sb0 
+Footnotes
+\par 
+}
+}
+}
+}\b1 \qc \cf1 \f3 \ri0 \ul0 \strike0 \i0 \li0 \fs22 \sa0 \sb0 \intbl \cell \row }
+{\trowd \ltrrow \trleft0 
+\clbrdrl \trql \clvertalt \clwWidth600 \cellx600 
+\clbrdrr \trql \clwWidth9480 \cellx10080 
+\intbl 
+{\ri0 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \ql \fs20 \li0 
+{\b0 \cf1 \f3 \i0 \fs20 
+{\*\bkmkstart co_footnote_B00111985159427_1}{\*\bkmkend co_footnote_B00111985159427_1}
+{\field {\*\fldinst HYPERLINK "#co_fnRef_B00111985159427_ID0ERPAC_1" }{\fldrslt 
+{\super \b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+1
+}\super \b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\par 
+}
+}
+}\b0 \cf1 \f3 \ri0 \i0 \ql \li0 \fs20 \intbl \cell \intbl 
+{\ri0 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+Section 29\u8211\'3f88, Gainesville Zoning Code, states in pertinent part:
+\par 
+}
+}
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+No site plan shall be approved unless and until the board has made findings that the plan will meet the following criteria:
+\par 
+}
+}
+}
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+(a) Enhance and protect the public health, safety and welfare;
+\par 
+}
+}
+}
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+(b) Result in the least possible detrimental impact to the site and surrounding areas and not reduce the safety, light or general convenience of neighboring developments;
+\par 
+}
+}
+}
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+(c) Assure safe and convenient ingress to and egress from the property and internal circulation, including access of service and emergency vehicles and design of off-street parking and loading areas;
+\par 
+}
+}
+}
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+(d) Provide safe location and orderly arrangements and spacing of all buildings and structures;
+\par 
+}
+}
+}
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+(e) Minimize environmental damages caused by needless destruction of natural vegetation and natural features on the site....
+\par 
+}
+}
+}
+}
+}
+}\b0 \cf1 \f3 \ri0 \ul0 \strike0 \i0 \qj \li200 \fs20 \sa200 \sb0 \intbl \cell \row }
+{\trowd \ltrrow \trleft0 
+\clbrdrl \trql \clvertalt \clwWidth600 \cellx600 
+\clbrdrr \trql \clwWidth9480 \cellx10080 
+\intbl 
+{\ri0 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \ql \fs20 \li0 
+{\b0 \cf1 \f3 \i0 \fs20 
+{\*\bkmkstart co_footnote_B00221985159427_1}{\*\bkmkend co_footnote_B00221985159427_1}
+{\field {\*\fldinst HYPERLINK "#co_fnRef_B00221985159427_ID0ECFAE_1" }{\fldrslt 
+{\super \b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+2
+}\super \b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\par 
+}
+}
+}\b0 \cf1 \f3 \ri0 \i0 \ql \li0 \fs20 \intbl \cell \intbl 
+{\ri0 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+The above square footage was the total amount originally specified in the development report for all of lots 1\u8211\'3f5, later combined into lot four.
+\par 
+}
+}
+}
+}
+}\b0 \cf1 \f3 \ri0 \ul0 \strike0 \i0 \qj \li0 \fs20 \sa200 \sb0 \intbl \cell \row }
+{\trowd \ltrrow \trleft0 
+\clbrdrl \trql \clvertalt \clwWidth600 \cellx600 
+\clbrdrr \trql \clwWidth9480 \cellx10080 
+\intbl 
+{\ri0 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \ql \fs20 \li0 
+{\b0 \cf1 \f3 \i0 \fs20 
+{\*\bkmkstart co_footnote_B00331985159427_1}{\*\bkmkend co_footnote_B00331985159427_1}
+{\field {\*\fldinst HYPERLINK "#co_fnRef_B00331985159427_ID0EZGAE_1" }{\fldrslt 
+{\super \b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+3
+}\super \b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\par 
+}
+}
+}\b0 \cf1 \f3 \ri0 \i0 \ql \li0 \fs20 \intbl \cell \intbl 
+{\ri0 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+Since the Plan Board gave final site plan approval with modifications, the Plan Board directed appellee to submit a revised set of plans and make all modifications within 60 days, or the site plan approval would become void.
+\par 
+}
+}
+}
+}
+}\b0 \cf1 \f3 \ri0 \ul0 \strike0 \i0 \qj \li0 \fs20 \sa200 \sb0 \intbl \cell \row }
+{\trowd \ltrrow \trleft0 
+\clbrdrl \trql \clvertalt \clwWidth600 \cellx600 
+\clbrdrr \trql \clwWidth9480 \cellx10080 
+\intbl 
+{\ri0 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \ql \fs20 \li0 
+{\b0 \cf1 \f3 \i0 \fs20 
+{\*\bkmkstart co_footnote_B00441985159427_1}{\*\bkmkend co_footnote_B00441985159427_1}
+{\field {\*\fldinst HYPERLINK "#co_fnRef_B00441985159427_ID0EPIAE_1" }{\fldrslt 
+{\super \b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+4
+}\super \b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\par 
+}
+}
+}\b0 \cf1 \f3 \ri0 \i0 \ql \li0 \fs20 \intbl \cell \intbl 
+{\ri0 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+Appellant raised the following points on appeal:
+\par 
+}
+}
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+I. Whether the court erred in entering a \u8220\'3fpartial summary judgment\u8221\'3f on its own motion without notice and hearing, and when there are genuine issues of material fact.
+\par 
+}
+}
+}
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li200 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+II. Whether the court erred in not applying the fairly debatable rule when it interpreted the application of a zoning ordinance.
+\par 
+}
+}
+}
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+Although appellant did not list as a specific issue the question of whether the court had subject matter jurisdiction to grant judicial relief, it has consistently argued that the lower court erred in granting partial summary judgment, on its own motion and without prior notice of its intention to so act, when the only question set for hearing before the court was the City\rquote s motion to dismiss appellee\rquote s complaint, on the ground that appellee had sought judicial relief before exhausting its administrative remedies.
+\par 
+}
+}
+}
+}
+}
+}\b0 \cf1 \f3 \ri0 \ul0 \strike0 \i0 \qj \li0 \fs20 \sa200 \sb0 \intbl \cell \row }
+{\trowd \lastrow \trleft0 
+\clbrdrb \clbrdrl \trql \clvertalt \clwWidth600 \cellx600 
+\clbrdrb \clbrdrr \trql \clwWidth9480 \cellx10080 
+\intbl 
+{\ri0 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \ql \fs20 \li0 
+{\b0 \cf1 \f3 \i0 \fs20 
+{\*\bkmkstart co_footnote_B00551985159427_1}{\*\bkmkend co_footnote_B00551985159427_1}
+{\field {\*\fldinst HYPERLINK "#co_fnRef_B00551985159427_ID0E3PAE_1" }{\fldrslt 
+{\super \b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+5
+}\super \b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+\par 
+}
+}
+}\b0 \cf1 \f3 \ri0 \i0 \ql \li0 \fs20 \intbl \cell \intbl 
+{\ri0 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ri0 \i0 \qj \fs20 \li0 
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+We note that appellee could have made a general attack on the validity of a relevant zoning ordinance through a suit for injunctive relief in circuit court, without exhausting its administrative remedies. 
+}
+{\b0 \cf1 \f3 \i0 \fs20 
+{\field {\*\fldinst HYPERLINK "https://1.next.westlaw.com/Link/RelatedInformation/Flag?documentGuid=I032361d80d9c11d99830b5efa1ded32a&transitionType=InlineKeyCiteFlags&originationContext=docHeaderFlag&Rank=0&ppcid=435229e0db4c4dfc9e0624b254288dec&contextData=(sc.CustomDigest)" }{\fldrslt 
+{\*\shppict {\pict \pngblip \picw16 \pich16 \picwgoal255 \pichgoal255 89504e470d0a1a0a0000000d49484452000000100000001008060000001ff3ff6100000009704859730000113900001139011bd99346000000d249444154388d633cdda6f59f0107606464f8f7ff3f83ae49e5d56bb8d4b0303030302859ff656066c534e7cd3d66c68f4f19e733303098e3358099f53f03330ba601a22a7f193fbf603138d3ae8dd59526955719597099ccc0c0c0c0c4f49f41c9e60fdbff7f9872b70fb0205c40c81006263cf2840c2068c1801bc0c2c08008107420acf8efbfa8f25f46625da0c0c0c0208884adde3d60faf3f32b5efd28b1f0d1a4f2ea0724fef1735dda73ef1f67c920d60518e0df5f865c3457a163fce9c0a4f2ea1f0606860ff8d40c7c34526c00000b5b3855307f6c300000000049454e44ae426082}}}}
+}
+{\field {\*\fldinst HYPERLINK "https://www.westlaw.com/Link/Document/FullText?findType=Y&serNum=1985140289&pubNum=735&originatingDoc=I0304b6450d9c11d99830b5efa1ded32a&refType=RP&fi=co_pp_sp_735_306&originationContext=document&vr=3.0&rs=cblt1.0&transitionType=DocumentItem&contextData=(sc.CustomDigest)#co_pp_sp_735_306" }{\fldrslt 
+{\b0 \cf33 \f3 \i1 \fs20 
+{\b0 \cf33 \f3 \ul0 \strike0 \i1 \fs20 \sa0 \sb0 
+ David v. City of Dunedin,
+}
+}
+{\b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 
+ 473 So.2d 304, 306 (Fla. 2d DCA 1985)
+}\b0 \cf33 \f3 \ul0 \strike0 \i0 \fs20 \sa0 \sb0 }}
+{\b0 \cf1 \f3 \ul0 \strike0 \i0 \fs20 \sa200 \sb0 
+. No general attack has been made on the validity of the ordinances under which the City purports to act; rather on certain action taken by the City pursuant to the ordinances.
+\par 
+}
+}
+}
+}
+}\b0 \cf1 \f3 \ri0 \ul0 \strike0 \i0 \qj \li0 \fs20 \sa200 \sb0 \intbl \cell \row }}\par 
+}
+{\b0 \cf31 \f2 \ri0 \par}\sect\sbknone\pgncont\cols2{\ids0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+}
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+}
+}
+{\b0 \cf1 \f3 \ri0 \i0 \ql \fs24 \li0 \par}\sect\sbknone\pgncont\cols1{\ids0 {
+{\trowd \lastrow \trleft0 
+\clpadt24 \clpadft3 \clpadl100 \clpadfl3 \clpadr24 \clpadfr3 \clbrdrt \brdrcf36 \brdrw10 \brdrs \clbrdrb \clbrdrl \trql \clvertalt \clwWidth4320 \cellx4320 
+\clpadt24 \clpadft3 \clpadl100 \clpadfl3 \clpadr24 \clpadfr3 \clbrdrt \brdrcf36 \brdrw10 \brdrs \clbrdrb \clbrdrr \trql \clvertalt \clwWidth5760 \cellx10080 
+\intbl 
+{\ri24 \li24 
+{\b1 \cf36 \f3 \ri24 \i0 \ql \fs16 \li24 
+{\b1 \cf36 \f3 \ul0 \strike0 \i0 \fs16 \sa0 \sb0 
+End of Document
+\par 
+}
+}
+}\b1 \cf36 \f3 \ri24 \ul0 \strike0 \i0 \ql \li24 \fs16 \sa0 \sb0 \intbl \cell \intbl 
+{\ri24 \li24 
+{\qr \b0 \cf36 \f3 \ri24 \i0 \fs16 \li24 
+{\b0 \cf36 \f3 \ul0 \strike0 \i0 \fs16 \sa0 \sb0 
+\u169\'3f 2026 Thomson Reuters. No claim to original U.S. Government Works.
+\par 
+}
+}
+}\qr \b0 \cf36 \f3 \ri24 \ul0 \strike0 \i0 \li24 \fs16 \sa0 \sb0 \intbl \cell \row }}\par 
+}
+{\b0 \cf31 \f2 \ri0 \par}\sect\sbknone\pgncont\cols2{\ids0 \i0 \qj \fs20 \li0 
+{\b0 \cf31 \f2 \ri0 \i0 \qj \fs20 \li0 
+}
+}\sect }

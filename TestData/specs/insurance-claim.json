@@ -1,0 +1,429 @@
+{
+  "matterName": "Calloway v. Lee County & Tidewater Mutual Insurance Co. (Hurricane Wind/Flood Property Claim)",
+  "jurisdiction": "Florida — 20th Judicial Circuit, Lee County",
+  "partyPerspective": "plaintiff",
+  "practiceArea": "First-Party Property Insurance / Florida Sovereign Immunity (Tort Claim Against County)",
+  "summary": "First-party homeowners property claim for storm damage to a Cape Coral residence that Tidewater Mutual denied under a flood exclusion, paired with a related tort claim against Lee County for negligent operation of a stormwater pump station alleged to have worsened the flooding. The matter tests coverage interpretation, an OCR-only claim form, a spreadsheet-buried loss figure, a date-of-loss contradiction, and Florida sovereign-immunity pre-suit notice under Fla. Stat. § 768.28.",
+  "attorneyNotesMarkdown": "# Attorney Working Notes — Calloway Matter (INTERNAL / PRIVILEGED)\n\n**Client:** Margaret Calloway, 1487 Coronado Pkwy, Cape Coral, FL 33904\n**Insurer:** Tidewater Mutual Insurance Co.\n**Co-defendant target:** Lee County (stormwater utility)\n\n## Theory of the case\nTidewater denied the claim on a **flood exclusion**. Our position: the predominant cause was **wind-driven rain through a failed roof**, not surface flood, so the exclusion shouldn't bar the dwelling claim (concurrent-causation / efficient-proximate-cause argument). The County angle is separate: the **Coronado Canal stormwater pump station #7** allegedly went offline during the storm and backed water into the neighborhood.\n\n## Open issues / watch items\n- **DATE-OF-LOSS DISCREPANCY (critical):** The claim form states date of loss **09/28/2024**, but Mrs. Calloway's recorded statement says the water came in **the night of September 26, 2024**. Need to reconcile before EUO — insurer may argue late/inconsistent reporting. Likely the 9/26 date is correct (storm made landfall night of the 26th).\n- Hidden fact for our file: the prior adjuster, **Dennis Okafor**, told me by phone the reserve was set at **$92,400** internally — not in any letter. (Do not disclose source.)\n- Sovereign immunity: § 768.28 caps recovery at **$200,000 per person / $300,000 per incident** absent a claims bill. **Pre-suit written notice to the County and to DFS is mandatory** and we have a **3-year** notice window for the County. Calendar it.\n- Authority to pull: *Commercial Carrier* planning-vs-operational; *Dowd v. Monroe County*; *Hirt v. Polk County*.\n\n## To do\n- [ ] Confirm policy deductible vs. separate hurricane deductible.\n- [ ] Get the adjuster's full damages worksheet (only have the summary tab).\n- [ ] Serve § 768.28 notice on Lee County BoCC + Florida DFS.",
+  "documents": [
+    {
+      "filename": "tidewater-policy-declarations.pdf",
+      "folder": "Policy",
+      "format": "pdf",
+      "purpose": "Born-digital PDF that should be fully text-extractable. Tests retrieval of policy number, limits, deductible, the separate hurricane deductible, and a buried coverage EXCLUSION clause that the denial relies on.",
+      "hiddenFacts": [
+        "Policy number TWM-FL-4471-2290",
+        "Dwelling (Coverage A) limit $410,000",
+        "Personal Property (Coverage C) limit $205,000",
+        "All-Other-Perils deductible $2,500",
+        "Separate Hurricane Deductible of 2% of Coverage A ($8,200)",
+        "Buried Exclusion 3(b): 'Water Damage' exclusion barring loss from flood, surface water, waves, tidal water, overflow of a body of water, or spray from any of these, whether or not driven by wind",
+        "Named insured Margaret A. Calloway; policy period 11/01/2023 to 11/01/2024"
+      ],
+      "bodyText": "TIDEWATER MUTUAL INSURANCE COMPANY\nHomeowners Policy — Declarations Page\n\nNamed Insured: Margaret A. Calloway\nInsured Location: 1487 Coronado Pkwy, Cape Coral, FL 33904\nPolicy Number: TWM-FL-4471-2290\nPolicy Period: 11/01/2023 12:01 a.m. to 11/01/2024 12:01 a.m. (Standard Time)\nForm: HO-3 Special Form (Florida Amendatory Endorsement FL-220)\n\nSECTION I — PROPERTY COVERAGES AND LIMITS\n  Coverage A — Dwelling .......................... $410,000\n  Coverage B — Other Structures .................. $ 41,000\n  Coverage C — Personal Property ................. $205,000\n  Coverage D — Loss of Use ....................... $ 82,000\n\nDEDUCTIBLES\n  All Other Perils (AOP) Deductible .............. $2,500\n  Hurricane Deductible ........................... 2% of Coverage A ($8,200), applicable per the Calendar-Year Hurricane Deductible Endorsement when a hurricane is declared by the National Hurricane Center for any part of Florida.\n\nSECTION I — EXCLUSIONS (excerpt)\nWe do not insure for loss caused directly or indirectly by any of the following. Such loss is excluded regardless of any other cause or event contributing concurrently or in any sequence to the loss.\n  3(a) Earth Movement.\n  3(b) Water Damage, meaning: (1) Flood, surface water, waves, tidal water, overflow of a body of water, or spray from any of these, whether or not driven by wind; (2) Water which backs up through sewers or drains; or (3) Water below the surface of the ground. This exclusion applies whether or not the water damage is caused by or results from human or animal forces or any act of nature.\n\nDIRECT-WRITTEN PREMIUM: $4,318 annual. Mortgagee: Gulfshore Community Bank, ISAOA/ATIMA.\n\nThis Declarations Page, together with the policy form and all endorsements, completes the above-numbered policy. Countersigned at Fort Myers, Florida.",
+      "spreadsheet": [],
+      "email": null
+    },
+    {
+      "filename": "claim-form-acord-scanned.pdf",
+      "folder": "Claim File",
+      "format": "scanned_pdf",
+      "purpose": "Image-only scanned ACORD-style first notice of loss with NO text layer. Tests OCR extraction of the claim number and the (contradicted) date of loss. Any answer-key question depending on this must set requiresOCR:true.",
+      "hiddenFacts": [
+        "Claim number TWM-CLM-2024-100847",
+        "Date of loss stated on the form: 09/28/2024 (THIS CONTRADICTS the recorded statement, which says 09/26/2024)",
+        "Reported by Margaret A. Calloway on 09/30/2024",
+        "Cause of loss described as 'Hurricane - wind and water intrusion'",
+        "Assigned adjuster: Dennis Okafor"
+      ],
+      "bodyText": "PROPERTY LOSS NOTICE\n(Scanned — handwritten/typed form, image only)\n\nINSURER: Tidewater Mutual Insurance Company\nCLAIM NUMBER: TWM-CLM-2024-100847\nDATE REPORTED: 09/30/2024\n\nINSURED: Margaret A. Calloway\nPOLICY NUMBER: TWM-FL-4471-2290\nRISK / LOSS LOCATION: 1487 Coronado Pkwy, Cape Coral, FL 33904\nHOME PHONE: (239) 555-0148\n\nDATE OF LOSS: 09/28/2024     TIME OF LOSS: approx. 11:00 PM\nTYPE OF LOSS: Hurricane - wind and water intrusion\n\nDESCRIPTION OF LOSS / DAMAGE:\nRoof shingles torn off over the master bedroom and living room during the hurricane. Water came through the ceiling and walls. Standing water in the living room, kitchen, and garage. Drywall, flooring, and personal property damaged. Insured reports a stormwater pump on the canal behind the property stopped working and water rose into the yard and home.\n\nESTIMATED AMOUNT OF LOSS: Unknown at this time\nPOLICE / FIRE REPORT FILED: No\nASSIGNED ADJUSTER: Dennis Okafor\n\nSIGNATURE OF INSURED: Margaret A. Calloway\n(End of scanned image — no embedded text layer.)",
+      "spreadsheet": [],
+      "email": null
+    },
+    {
+      "filename": "adjuster-damages-worksheet.xlsx",
+      "folder": "Claim File",
+      "format": "xlsx",
+      "purpose": "Adjuster's damages worksheet. The total estimated dwelling loss figure appears ONLY in a spreadsheet cell (not in any prose document). Tests spreadsheet cell extraction and computed/located totals.",
+      "hiddenFacts": [
+        "Total estimated replacement cost value (RCV) of dwelling loss = $148,750 (appears only in cell B9 of the Summary sheet)",
+        "Recoverable depreciation withheld = $19,300 (cell B10)",
+        "Actual Cash Value (ACV) net of depreciation and deductible = $126,950 (cell B12)",
+        "Line item: Roof replacement $46,500",
+        "Adjuster Dennis Okafor; estimate date 10/14/2024"
+      ],
+      "bodyText": "",
+      "spreadsheet": [
+        {
+          "sheet": "Summary",
+          "cells": [
+            [
+              "Tidewater Mutual — Adjuster Damages Worksheet",
+              "",
+              ""
+            ],
+            [
+              "Claim Number",
+              "TWM-CLM-2024-100847",
+              ""
+            ],
+            [
+              "Insured",
+              "Margaret A. Calloway",
+              ""
+            ],
+            [
+              "Adjuster",
+              "Dennis Okafor",
+              ""
+            ],
+            [
+              "Estimate Date",
+              "2024-10-14",
+              ""
+            ],
+            [
+              "",
+              "",
+              ""
+            ],
+            [
+              "Summary of Loss",
+              "Amount (USD)",
+              "Notes"
+            ],
+            [
+              "",
+              "",
+              ""
+            ],
+            [
+              "Estimated Replacement Cost Value (RCV)",
+              "148750",
+              "Dwelling, Coverage A scope"
+            ],
+            [
+              "Less: Recoverable Depreciation",
+              "19300",
+              "Held back pending repair completion"
+            ],
+            [
+              "Less: AOP Deductible",
+              "2500",
+              "Applied per declarations"
+            ],
+            [
+              "Net Actual Cash Value (ACV) Payable",
+              "126950",
+              "RCV - depreciation - deductible"
+            ],
+            [
+              "",
+              "",
+              ""
+            ],
+            [
+              "Coverage Determination",
+              "PENDING - flood exclusion under review",
+              ""
+            ]
+          ]
+        },
+        {
+          "sheet": "LineItems",
+          "cells": [
+            [
+              "Room / Scope",
+              "Line Item",
+              "RCV (USD)"
+            ],
+            [
+              "Roof",
+              "Tear-off and replace architectural shingles, 22 sq",
+              "46500"
+            ],
+            [
+              "Master Bedroom",
+              "Drywall, insulation, paint, flooring",
+              "21800"
+            ],
+            [
+              "Living Room",
+              "Drywall, flooring, ceiling, trim",
+              "27450"
+            ],
+            [
+              "Kitchen",
+              "Cabinets (lower), flooring, drywall",
+              "31200"
+            ],
+            [
+              "Garage",
+              "Drywall, epoxy floor, door panel",
+              "9600"
+            ],
+            [
+              "Personal Property",
+              "Furniture, electronics (Coverage C)",
+              "12200"
+            ],
+            [
+              "Total RCV",
+              "",
+              "148750"
+            ]
+          ]
+        }
+      ],
+      "email": null
+    },
+    {
+      "filename": "calloway-recorded-statement-transcript.docx",
+      "folder": "Claim File",
+      "format": "docx",
+      "purpose": "Recorded statement transcript whose stated date of loss CONTRADICTS the claim form. Tests cross-document contradiction detection and narrative facts (the pump station allegation supporting the County claim).",
+      "hiddenFacts": [
+        "Insured states date of loss as the night of September 26, 2024 (CONTRADICTS claim form's 09/28/2024)",
+        "Insured states water entered through the roof first (wind), then rose from the ground later",
+        "Insured names Lee County stormwater pump station #7 on the Coronado Canal as having failed/gone silent that night",
+        "Transcript taken by adjuster Dennis Okafor on 10/03/2024",
+        "Insured says a neighbor, Raymond Estes, also saw the pump stop running"
+      ],
+      "bodyText": "TIDEWATER MUTUAL INSURANCE COMPANY\nRECORDED STATEMENT — TRANSCRIPT\n\nClaim No.: TWM-CLM-2024-100847\nInsured: Margaret A. Calloway\nTaken by: Dennis Okafor, Field Adjuster\nDate of Statement: October 3, 2024\nLocation: By telephone\n\nOKAFOR: This is a recorded statement taken with permission. Mrs. Calloway, do you understand this is being recorded?\nCALLOWAY: Yes, I do.\nOKAFOR: Tell me, in your own words, when the damage happened.\nCALLOWAY: It was the night of September 26th. The storm came in hard after dark. Around eleven at night I heard the roof going — shingles ripping off — and then water started coming straight down through the bedroom ceiling. That was the 26th, I'm sure, because it was my late husband's birthday.\nOKAFOR: And the standing water in the house?\nCALLOWAY: That came up from the ground later, in the early morning hours. The canal behind us just kept rising. The county runs a pump station back there — pump station number 7 on the Coronado Canal — and it normally hums all night. That night it went dead silent. My neighbor Raymond Estes was out there with a flashlight and he saw it too; the pump just stopped. The water came up into the yard, then the garage, then the house.\nOKAFOR: So the roof first, then the ground water?\nCALLOWAY: Right. Roof first from the wind and rain, then the flooding from the canal after the pump quit.\nOKAFOR: Anything else you want to add?\nCALLOWAY: Just that if that pump had been running, half this water never gets in my house.\nOKAFOR: Thank you. This concludes the statement at 2:18 p.m.\n(End of transcript.)",
+      "spreadsheet": [],
+      "email": null
+    },
+    {
+      "filename": "tidewater-denial-reservation-of-rights.pdf",
+      "folder": "Correspondence",
+      "format": "pdf",
+      "purpose": "Born-digital denial / reservation-of-rights letter. Tests extraction of the basis for denial (citing the buried exclusion clause), the denial date, and the reservation-of-rights posture.",
+      "hiddenFacts": [
+        "Denial / reservation-of-rights letter dated 11/12/2024",
+        "Denial relies on Section I Exclusion 3(b), the Water Damage (flood/surface water) exclusion",
+        "Letter references claim TWM-CLM-2024-100847 and policy TWM-FL-4471-2290",
+        "Letter states the carrier reserves all rights including the right to deny under the concurrent-causation anti-stacking lead-in",
+        "Signed by Claims Supervisor Priya Venkataraman"
+      ],
+      "bodyText": "TIDEWATER MUTUAL INSURANCE COMPANY\nClaims Department — 2200 Edison Ave, Fort Myers, FL 33901\n\nNovember 12, 2024\n\nMargaret A. Calloway\n1487 Coronado Pkwy\nCape Coral, FL 33904\n\nRe: Claim No. TWM-CLM-2024-100847\n    Policy No. TWM-FL-4471-2290\n    Date of Loss: 09/28/2024\n    Insured Location: 1487 Coronado Pkwy, Cape Coral, FL 33904\n\nDear Ms. Calloway:\n\nWe have completed our investigation of the above claim. Based on that investigation, Tidewater Mutual Insurance Company must DENY the portion of your claim attributable to water that entered your home from surface water and from the rising canal, and we issue this letter under a full RESERVATION OF RIGHTS.\n\nYour policy contains the following provision under Section I — Exclusions:\n\n  \"We do not insure for loss caused directly or indirectly by ... Water Damage, meaning flood, surface water, waves, tidal water, overflow of a body of water, or spray from any of these, whether or not driven by wind ... This exclusion applies regardless of any other cause or event contributing concurrently or in any sequence to the loss.\" (Exclusion 3(b))\n\nOur field inspection and the recorded statement indicate that standing water rose from the adjacent Coronado Canal and entered the dwelling. Loss arising from flood and surface water is excluded under Exclusion 3(b), and the anti-concurrent-causation lead-in bars coverage even where a covered peril (such as wind) contributes to the same loss.\n\nThis letter is not a waiver. Tidewater Mutual reserves all rights and defenses under the policy and at law, including the right to deny coverage in whole or in part and to require an Examination Under Oath. To the extent any portion of the roof/wind loss is covered, that portion remains under review.\n\nIf you have additional information, please submit it within 60 days.\n\nSincerely,\nPriya Venkataraman\nClaims Supervisor, Tidewater Mutual Insurance Company",
+      "spreadsheet": [],
+      "email": null
+    },
+    {
+      "filename": "photos-transmittal-from-insured.eml",
+      "folder": "Correspondence",
+      "format": "eml",
+      "purpose": "Email from the insured's public adjuster transmitting loss photos as an attachment. Tests email parsing AND attachment-body extraction (a fact lives only in the attachment).",
+      "hiddenFacts": [
+        "Email from public adjuster Lorraine Tasker (Gulf Coast Public Adjusting) dated 10/22/2024",
+        "Photo log attachment states the water line inside the home measured 31 inches above the floor",
+        "Attachment notes a date/time stamp on the camera reading 'SEP 27 2024 04:12 AM' for the ground-water photos",
+        "References claim TWM-CLM-2024-100847"
+      ],
+      "bodyText": "",
+      "spreadsheet": [],
+      "email": {
+        "from": "Lorraine Tasker <ltasker@gulfcoastpa.com>",
+        "to": "Dennis Okafor <dokafor@tidewatermutual.com>",
+        "subject": "Calloway / Claim TWM-CLM-2024-100847 — Loss Photos and Photo Log",
+        "date": "Tue, 22 Oct 2024 09:41:00 -0400",
+        "body": "Dennis,\n\nAttached is the photo log for the Calloway loss at 1487 Coronado Pkwy. The images document both the roof/ceiling damage and the standing-water line in the interior. Please confirm receipt and let me know if you need native files.\n\nNote the interior water line measurement and the camera timestamp on the ground-water shots — they are relevant to the cause-and-sequence question your file raises.\n\nRegards,\nLorraine Tasker, Licensed Public Adjuster (FL Lic. W-481209)\nGulf Coast Public Adjusting",
+        "attachmentFilename": "Calloway-photo-log.pdf",
+        "attachmentBody": "CALLOWAY LOSS — PHOTO LOG\nClaim TWM-CLM-2024-100847 | 1487 Coronado Pkwy, Cape Coral, FL\n\nPhoto 1-4: Master bedroom ceiling, shingles missing, water staining radiating from roof penetration. Camera timestamp SEP 26 2024 11:38 PM. Damage consistent with wind-driven rain entering through the roof.\n\nPhoto 5-9: Living room and kitchen. Visible interior WATER LINE measured at 31 inches above finished floor. Camera timestamp SEP 27 2024 04:12 AM. Damage consistent with ground/surface water intrusion occurring AFTER the roof event.\n\nPhoto 10-12: Rear yard and Coronado Canal seawall; county stormwater pump station #7 visible, no visible discharge. Camera timestamp SEP 27 2024 04:30 AM.\n\nPrepared by: Lorraine Tasker, FL Public Adjuster Lic. W-481209."
+      }
+    },
+    {
+      "filename": "adjuster-internal-note.msg",
+      "folder": "Correspondence",
+      "format": "msg",
+      "purpose": "Outlook .msg the app cannot parse. Exercises the unsupported-import-report path. NO required answer-key Q&A depends on this file's content.",
+      "hiddenFacts": [
+        "Purports to contain an internal note from adjuster Dennis Okafor about the reserve, but is intentionally unparseable by the app (.msg unsupported)"
+      ],
+      "bodyText": "",
+      "spreadsheet": [],
+      "email": {
+        "from": "Dennis Okafor <dokafor@tidewatermutual.com>",
+        "to": "Priya Venkataraman <pvenkataraman@tidewatermutual.com>",
+        "subject": "INTERNAL — Calloway reserve and coverage posture",
+        "date": "Mon, 04 Nov 2024 16:05:00 -0500",
+        "body": "Priya — recommending we deny the water-intrusion portion under 3(b) and reserve on the wind. Internal reserve currently set at 92,400. Public adjuster (Tasker) is pushing the sequence-of-events angle and the county pump-station theory. Will route the ROR letter for your signature. — Dennis",
+        "attachmentFilename": "",
+        "attachmentBody": ""
+      }
+    },
+    {
+      "filename": "sovereign-immunity-presuit-notice.pdf",
+      "folder": "Pleadings",
+      "format": "pdf",
+      "purpose": "Born-digital § 768.28 pre-suit notice to Lee County and the Florida DFS. Tests extraction of the sovereign-immunity statutory basis, the damages cap, and ties the County tort theory to the insurance facts (supports cross-document synthesis).",
+      "hiddenFacts": [
+        "Pre-suit notice dated 12/02/2024 under Fla. Stat. § 768.28(6)",
+        "Asserts negligent operation/maintenance of Lee County stormwater pump station #7 on the Coronado Canal",
+        "States the statutory liability cap of $200,000 per person / $300,000 per incident absent a legislative claims bill",
+        "Alleges date of loss the night of September 26, 2024 (consistent with the recorded statement, not the claim form)",
+        "Served on Lee County Board of County Commissioners and the Florida Department of Financial Services"
+      ],
+      "bodyText": "NOTICE OF CLAIM PURSUANT TO SECTION 768.28(6), FLORIDA STATUTES\n\nDate: December 2, 2024\n\nTO:  Lee County Board of County Commissioners, P.O. Box 398, Fort Myers, FL 33902\n     Florida Department of Financial Services, 200 East Gaines Street, Tallahassee, FL 32399\n\nFROM: Margaret A. Calloway, Claimant, 1487 Coronado Pkwy, Cape Coral, FL 33904\n\nRE: Notice of Claim — Negligent Operation of Stormwater Pump Station\n\nPlease take notice that Claimant Margaret A. Calloway intends to assert a claim against Lee County, a political subdivision of the State of Florida, pursuant to Section 768.28, Florida Statutes.\n\nNATURE OF CLAIM: On the night of September 26, 2024, during the hurricane, Lee County stormwater pump station #7 located on the Coronado Canal adjacent to Claimant's residence ceased operating. The County's negligent operation and maintenance of the pump station — an operational-level function — caused or substantially contributed to canal overflow and the inundation of Claimant's property at 1487 Coronado Pkwy, Cape Coral, Florida.\n\nDAMAGES: Property damage to the dwelling and contents, loss of use, and related consequential damages. Claimant acknowledges that recovery against the County is subject to the statutory limits of Section 768.28(5), which cap liability at $200,000 per person and $300,000 per incident, absent a legislative claims bill.\n\nThis notice is presented in compliance with Section 768.28(6)(a), Florida Statutes, which requires written notice to the appropriate agency and to the Department of Financial Services as a condition precedent to suit. Claimant has not yet filed suit and will not do so until the statutory pre-suit period has elapsed or the claim is finally denied.\n\nRespectfully submitted,\nCounsel for Claimant Margaret A. Calloway",
+      "spreadsheet": [],
+      "email": null
+    }
+  ],
+  "answerKey": {
+    "qa": [
+      {
+        "question": "What is the policy number and the Coverage A (Dwelling) limit on the Tidewater Mutual policy?",
+        "expectedAnswer": "Policy number TWM-FL-4471-2290; Coverage A (Dwelling) limit is $410,000.",
+        "sourceFilename": "tidewater-policy-declarations.pdf",
+        "locatorHint": "Declarations header and Section I — Property Coverages and Limits.",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What deductibles apply, including any separate hurricane deductible?",
+        "expectedAnswer": "An All-Other-Perils (AOP) deductible of $2,500 and a separate Hurricane Deductible of 2% of Coverage A, which equals $8,200.",
+        "sourceFilename": "tidewater-policy-declarations.pdf",
+        "locatorHint": "Deductibles section of the declarations page.",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What is the claim number and the date of loss recorded on the first notice of loss form?",
+        "expectedAnswer": "Claim number TWM-CLM-2024-100847; date of loss recorded on the form is 09/28/2024.",
+        "sourceFilename": "claim-form-acord-scanned.pdf",
+        "locatorHint": "Top of the scanned property loss notice (claim number) and the Date of Loss field. Image-only, requires OCR.",
+        "requiresOCR": true,
+        "crossDocument": false
+      },
+      {
+        "question": "What total estimated replacement cost value (RCV) did the adjuster assign to the dwelling loss?",
+        "expectedAnswer": "$148,750 (RCV). After recoverable depreciation of $19,300 and the $2,500 AOP deductible, the net ACV payable is $126,950.",
+        "sourceFilename": "adjuster-damages-worksheet.xlsx",
+        "locatorHint": "Summary sheet cell B9 (RCV) and B12 (net ACV); also LineItems 'Total RCV'.",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "Is there a contradiction in the date of loss across the file, and what are the two dates?",
+        "expectedAnswer": "Yes. The scanned claim form states the date of loss as 09/28/2024, but Mrs. Calloway's recorded statement says the damage began the night of September 26, 2024. The two documents conflict on the date of loss.",
+        "sourceFilename": "calloway-recorded-statement-transcript.docx",
+        "locatorHint": "Compare the recorded statement's '26th' / late-husband's-birthday assertion against the claim form's Date of Loss field. Cross-document and requires OCR of the claim form.",
+        "requiresOCR": true,
+        "crossDocument": true
+      },
+      {
+        "question": "On what policy provision did Tidewater Mutual base its denial?",
+        "expectedAnswer": "Section I Exclusion 3(b), the Water Damage exclusion barring loss from flood, surface water, and overflow of a body of water (whether or not wind-driven), invoked together with the anti-concurrent-causation lead-in.",
+        "sourceFilename": "tidewater-denial-reservation-of-rights.pdf",
+        "locatorHint": "Body of the November 12, 2024 denial / reservation-of-rights letter quoting Exclusion 3(b).",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What interior water line measurement is documented, and where does that figure come from?",
+        "expectedAnswer": "An interior water line of 31 inches above the finished floor, documented in the photo log attached to Lorraine Tasker's October 22, 2024 email (it appears only in the attachment, not the email body).",
+        "sourceFilename": "photos-transmittal-from-insured.eml",
+        "locatorHint": "Attachment 'Calloway-photo-log.pdf', Photos 5-9 entry; not stated in the email body.",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What statutory basis and damages cap govern the claim against Lee County?",
+        "expectedAnswer": "Florida's sovereign immunity waiver, Fla. Stat. § 768.28, with a damages cap of $200,000 per person and $300,000 per incident absent a legislative claims bill; pre-suit written notice under § 768.28(6) is a condition precedent.",
+        "sourceFilename": "sovereign-immunity-presuit-notice.pdf",
+        "locatorHint": "Damages and compliance paragraphs of the § 768.28(6) notice of claim.",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "Does the sequence and timing of water intrusion support the argument that the County pump station failure, not just flood, contributed to the loss?",
+        "expectedAnswer": "Yes. The recorded statement and the photo log together show wind-driven rain entered through the roof first (camera stamp ~SEP 26 11:38 PM), then ground/surface water rose later (camera stamp SEP 27 04:12 AM) after Lee County pump station #7 went silent, supporting a theory that the County's operational negligence contributed to the inundation, independent of the policy's flood exclusion.",
+        "sourceFilename": "calloway-recorded-statement-transcript.docx",
+        "locatorHint": "Synthesize the recorded statement (roof-first, then canal; pump #7 failure) with the photo-log timestamps in photos-transmittal-from-insured.eml and the § 768.28 notice. Cross-document.",
+        "requiresOCR": false,
+        "crossDocument": true
+      },
+      {
+        "question": "Who is the named claims supervisor who signed the denial letter, and on what date was it issued?",
+        "expectedAnswer": "Priya Venkataraman, Claims Supervisor, signed the denial / reservation-of-rights letter dated November 12, 2024.",
+        "sourceFilename": "tidewater-denial-reservation-of-rights.pdf",
+        "locatorHint": "Signature block and date line of the denial letter.",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What was the amount of the insured's mortgage payoff balance with Gulfshore Community Bank at the time of loss?",
+        "expectedAnswer": "NOT SUPPORTED — the documents do not answer this. The declarations name Gulfshore Community Bank as mortgagee but no payoff balance appears anywhere in the corpus.",
+        "sourceFilename": "tidewater-policy-declarations.pdf",
+        "locatorHint": "Mortgagee is named on the declarations, but no payoff figure exists in any document.",
+        "requiresOCR": false,
+        "crossDocument": false
+      },
+      {
+        "question": "What hurricane name did the National Hurricane Center assign to the storm that caused the loss?",
+        "expectedAnswer": "NOT SUPPORTED — the documents do not answer this; the storm is referred to only generically as 'the hurricane' and no storm name is stated anywhere in the corpus.",
+        "sourceFilename": "claim-form-acord-scanned.pdf",
+        "locatorHint": "Documents say 'hurricane' generically; no named storm appears in any file.",
+        "requiresOCR": false,
+        "crossDocument": false
+      }
+    ],
+    "chronology": [
+      {
+        "date": "2023-11-01",
+        "event": "Tidewater Mutual policy TWM-FL-4471-2290 period begins (runs through 11/01/2024).",
+        "sourceFilename": "tidewater-policy-declarations.pdf"
+      },
+      {
+        "date": "2024-09-26",
+        "event": "Per the insured's recorded statement, the loss began the night of September 26, 2024: wind tore roof shingles and water entered through the bedroom ceiling, followed by canal flooding after county pump station #7 went silent.",
+        "sourceFilename": "calloway-recorded-statement-transcript.docx"
+      },
+      {
+        "date": "2024-09-28",
+        "event": "Date of loss as recorded on the scanned first-notice-of-loss form (contradicts the recorded statement's 09/26 date).",
+        "sourceFilename": "claim-form-acord-scanned.pdf"
+      },
+      {
+        "date": "2024-09-30",
+        "event": "Loss reported to Tidewater Mutual; claim TWM-CLM-2024-100847 opened.",
+        "sourceFilename": "claim-form-acord-scanned.pdf"
+      },
+      {
+        "date": "2024-10-03",
+        "event": "Adjuster Dennis Okafor takes the insured's recorded statement.",
+        "sourceFilename": "calloway-recorded-statement-transcript.docx"
+      },
+      {
+        "date": "2024-10-14",
+        "event": "Adjuster damages worksheet prepared; estimated RCV of $148,750 / net ACV payable $126,950.",
+        "sourceFilename": "adjuster-damages-worksheet.xlsx"
+      },
+      {
+        "date": "2024-10-22",
+        "event": "Public adjuster Lorraine Tasker emails loss photos and photo log (31-inch interior water line; sequence timestamps).",
+        "sourceFilename": "photos-transmittal-from-insured.eml"
+      },
+      {
+        "date": "2024-11-12",
+        "event": "Tidewater Mutual issues denial / reservation-of-rights letter relying on Exclusion 3(b) (flood/surface water).",
+        "sourceFilename": "tidewater-denial-reservation-of-rights.pdf"
+      },
+      {
+        "date": "2024-12-02",
+        "event": "Section 768.28(6) pre-suit notice of claim served on Lee County BoCC and Florida DFS for negligent operation of pump station #7.",
+        "sourceFilename": "sovereign-immunity-presuit-notice.pdf"
+      }
+    ],
+    "courtListener": {
+      "legalIssue": "Florida sovereign immunity for a tort claim against a county under Fla. Stat. § 768.28, including the planning-level vs. operational-level distinction for negligent operation/maintenance of a stormwater pump station, the statutory $200,000/$300,000 damages caps, and the § 768.28(6) pre-suit written-notice condition precedent.",
+      "jurisdiction": "Florida (state courts; Fla. 2d/3d DCA and Florida Supreme Court authority)",
+      "expectedAuthorityNames": [
+        "Dowd v. Monroe County, 557 So. 2d 63 (Fla. 3d DCA 1990)",
+        "Hirt v. Polk County Bd. of County Comm'rs, 578 So. 2d 415 (Fla. 2d DCA 1991)",
+        "Commercial Carrier Corp. v. Indian River County, 371 So. 2d 1010 (Fla. 1979)",
+        "Fla. Stat. § 768.28"
+      ]
+    }
+  }
+}
