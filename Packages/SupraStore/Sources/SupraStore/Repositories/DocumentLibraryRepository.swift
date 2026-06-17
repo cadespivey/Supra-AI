@@ -328,6 +328,22 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
         }
     }
 
+    /// All soft-deleted document instances (across matters) whose deletion is
+    /// older than the cutoff — candidates for auto-purge (plan §12.2).
+    public func fetchDocumentsDeletedBefore(_ cutoff: Date) throws -> [MatterDocumentRecord] {
+        try writer.read { db in
+            try MatterDocumentRecord.fetchAll(
+                db,
+                sql: """
+                SELECT * FROM matter_documents
+                WHERE deleted_at IS NOT NULL AND deleted_at < ?
+                ORDER BY deleted_at ASC
+                """,
+                arguments: [cutoff]
+            )
+        }
+    }
+
     public func fetchSoftDeletedDocuments(matterID: String) throws -> [MatterDocumentRecord] {
         try writer.read { db in
             try MatterDocumentRecord.fetchAll(

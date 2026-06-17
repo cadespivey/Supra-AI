@@ -139,6 +139,13 @@ private struct DocumentIntelligenceSection: View {
                 }
             }
 
+            Stepper(
+                "Auto-purge trash after \(setup.autoPurgeDays == 0 ? "never" : "\(setup.autoPurgeDays) days")",
+                value: Binding(get: { setup.autoPurgeDays }, set: { setup.updateAutoPurgeDays($0) }),
+                in: 0...365,
+                step: 5
+            )
+
             HStack {
                 Button("Re-check") { Task { await setup.refreshAll() } }
                 Spacer()

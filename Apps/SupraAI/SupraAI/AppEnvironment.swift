@@ -117,6 +117,8 @@ final class AppEnvironment: ObservableObject {
         await documentSetupController.refreshAll()
         // Reconcile any document job interrupted by a previous quit (plan §5.4).
         documentQueue.bootstrap()
+        // Auto-purge documents soft-deleted past the retention window (plan §12.2).
+        DocumentMaintenance(store: store).purgeExpired()
     }
 
     func refreshRuntimeStatus() async {
