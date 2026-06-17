@@ -25,6 +25,34 @@ final class RuntimeClientTests: XCTestCase {
         XCTAssertEqual(status.loadedModelID, modelID)
     }
 
+    func testEmbeddingLoadEmbedAndStatusRoundTrip() async throws {
+        let service = FakeRuntimeXPCService()
+        let client = RuntimeClient(remoteService: service)
+        let embeddingModelID = DocumentEmbeddingModelID()
+
+        let load = try await client.loadEmbeddingModel(
+            LoadEmbeddingModelRequest(
+                embeddingModelID: embeddingModelID,
+                modelPath: "/tmp/embedder",
+                displayName: "Local Embedder"
+            )
+        )
+        XCTAssertEqual(load.state, .loaded)
+        XCTAssertEqual(load.embeddingModelID, embeddingModelID)
+        XCTAssertEqual(load.dimension, 8)
+
+        let embed = try await client.embedTexts(
+            EmbedTextRequest(embeddingModelID: embeddingModelID, texts: ["alpha", "beta"])
+        )
+        XCTAssertEqual(embed.state, .loaded)
+        XCTAssertEqual(embed.vectors.count, 2)
+        XCTAssertEqual(embed.vectors.first?.count, 8)
+
+        let status = try await client.embeddingStatus()
+        XCTAssertEqual(status.state, .loaded)
+        XCTAssertEqual(status.embeddingModelID, embeddingModelID)
+    }
+
     func testGenerationStreamAndRecentEventsRoundTripThroughInjectedXPCService() async throws {
         let service = FakeRuntimeXPCService()
         let client = RuntimeClient(remoteService: service)
@@ -204,10 +232,55 @@ private final class FakeRuntimeXPCService: NSObject, SupraRuntimeXPCServiceProto
                     loadedModelID: loadedModelID,
                     activeGenerationID: nil,
                     message: nil,
-                    metrics: nil
+                    metrics: nil,
+                    embeddingModelID: loadedEmbeddingModelID
                 )
             )
         )
+    }
+
+    private var loadedEmbeddingModelID: DocumentEmbeddingModelID?
+    private let embeddingDimension = 8
+
+    func loadEmbeddingModel(_ requestData: Data, withReply reply: @escaping (Data) -> Void) {
+        guard let request = try? RuntimeXPCCodec.decode(LoadEmbeddingModelRequest.self, from: requestData) else {
+            reply(encoded(LoadEmbeddingModelResponse(state: .failed)))
+            return
+        }
+        loadedEmbeddingModelID = request.embeddingModelID
+        reply(encoded(LoadEmbeddingModelResponse(
+            state: .loaded,
+            embeddingModelID: request.embeddingModelID,
+            dimension: embeddingDimension,
+            loadTimeMs: 1
+        )))
+    }
+
+    func embedTexts(_ requestData: Data, withReply reply: @escaping (Data) -> Void) {
+        guard let request = try? RuntimeXPCCodec.decode(EmbedTextRequest.self, from: requestData) else {
+            reply(encoded(EmbedTextResponse(state: .failed)))
+            return
+        }
+        // Deterministic unit vectors so cosine math is exercised without a model.
+        let vectors = request.texts.map { text -> [Float] in
+            var vector = [Float](repeating: 0, count: embeddingDimension)
+            vector[abs(text.hashValue) % embeddingDimension] = 1
+            return vector
+        }
+        reply(encoded(EmbedTextResponse(
+            state: .loaded,
+            vectors: vectors,
+            dimension: embeddingDimension,
+            normalized: request.normalize
+        )))
+    }
+
+    func embeddingStatus(withReply reply: @escaping (Data) -> Void) {
+        reply(encoded(EmbeddingModelStatus(
+            state: loadedEmbeddingModelID == nil ? .unloaded : .loaded,
+            embeddingModelID: loadedEmbeddingModelID,
+            dimension: loadedEmbeddingModelID == nil ? nil : embeddingDimension
+        )))
     }
 
     private func encoded<T: Encodable>(_ value: T) -> Data {

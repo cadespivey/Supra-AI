@@ -94,19 +94,28 @@ public final class MattersController: ObservableObject {
     @Published public private(set) var researchController: ResearchSessionController?
     @Published public private(set) var authoritiesController: AuthoritiesController?
     @Published public private(set) var outputsController: StructuredOutputController?
+    @Published public private(set) var documentsController: MatterDocumentsController?
+    @Published public private(set) var documentQAController: DocumentQAController?
+    @Published public private(set) var documentChronologyController: DocumentChronologyController?
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
     private let defaultSystemPrompt: String?
+    private let documentQueue: DocumentProcessingQueue?
+    private let isImportReady: (@MainActor () -> Bool)?
 
     public init(
         store: SupraStore,
         runtimeClient: any RuntimeClientProtocol,
-        defaultSystemPrompt: String? = nil
+        defaultSystemPrompt: String? = nil,
+        documentQueue: DocumentProcessingQueue? = nil,
+        isImportReady: (@MainActor () -> Bool)? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.defaultSystemPrompt = defaultSystemPrompt
+        self.documentQueue = documentQueue
+        self.isImportReady = isImportReady
     }
 
     public var selectedMatter: MatterSummary? {
@@ -216,6 +225,9 @@ public final class MattersController: ObservableObject {
             researchController = nil
             authoritiesController = nil
             outputsController = nil
+            documentsController = nil
+            documentQAController = nil
+            documentChronologyController = nil
             return
         }
         let controller = GlobalChatController(
@@ -248,6 +260,33 @@ public final class MattersController: ObservableObject {
         )
         outputs.loadOutputs()
         outputsController = outputs
+
+        if let documentQueue {
+            documentsController = MatterDocumentsController(
+                matterID: matterID,
+                store: store,
+                queue: documentQueue,
+                isImportReady: isImportReady ?? { true }
+            )
+        } else {
+            documentsController = nil
+        }
+
+        let embedder = (try? store.documentSettings.fetchSelectedEmbeddingModel())
+            .flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+        documentQAController = DocumentQAController(
+            matterID: matterID,
+            store: store,
+            runtimeClient: runtimeClient,
+            embedder: embedder,
+            defaultSystemPrompt: defaultSystemPrompt
+        )
+        documentChronologyController = DocumentChronologyController(
+            matterID: matterID,
+            store: store,
+            runtimeClient: runtimeClient,
+            defaultSystemPrompt: defaultSystemPrompt
+        )
     }
 
     private func reload() {

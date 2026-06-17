@@ -53,7 +53,11 @@ struct MainShellView: View {
         case .diagnostics:
             DiagnosticsView(history: environment.validationHistory, validation: environment.validationController)
         case .settings:
-            SettingsView(settings: environment.settingsController)
+            SettingsView(
+                settings: environment.settingsController,
+                documentSetup: environment.documentSetupController,
+                embeddingDownloader: environment.embeddingDownloadController
+            )
         }
     }
 }

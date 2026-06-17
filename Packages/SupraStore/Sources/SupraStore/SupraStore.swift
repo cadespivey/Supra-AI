@@ -16,6 +16,12 @@ public final class SupraStore: @unchecked Sendable {
     public let authorities: AuthorityRepository
     public let structuredOutputs: StructuredOutputRepository
     public let auditEvents: AuditEventRepository
+    // Milestone 3: document intelligence repositories.
+    public let documentSettings: DocumentSettingsRepository
+    public let documentLibrary: DocumentLibraryRepository
+    public let documentIndex: DocumentIndexRepository
+    public let documentJobs: DocumentJobRepository
+    public let documentSources: DocumentSourceRepository
 
     public init(database: SupraDatabase) {
         self.database = database
@@ -32,6 +38,11 @@ public final class SupraStore: @unchecked Sendable {
         self.authorities = AuthorityRepository(writer: database.writer)
         self.structuredOutputs = StructuredOutputRepository(writer: database.writer)
         self.auditEvents = AuditEventRepository(writer: database.writer)
+        self.documentSettings = DocumentSettingsRepository(writer: database.writer)
+        self.documentLibrary = DocumentLibraryRepository(writer: database.writer)
+        self.documentIndex = DocumentIndexRepository(writer: database.writer)
+        self.documentJobs = DocumentJobRepository(writer: database.writer)
+        self.documentSources = DocumentSourceRepository(writer: database.writer)
     }
 
     public convenience init(url: URL) throws {

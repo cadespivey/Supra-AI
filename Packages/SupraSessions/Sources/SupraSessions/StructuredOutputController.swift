@@ -54,6 +54,18 @@ public final class StructuredOutputController: ObservableObject {
         self.defaultSystemPrompt = defaultSystemPrompt
     }
 
+    /// Exports an output's active version to the given format, returning the
+    /// written file URL (plan §10.2). Applies to document Q&A/chronology outputs
+    /// and any structured output.
+    public func exportOutput(outputID: String, format: DocumentExportFormat) -> URL? {
+        do {
+            return try DocumentExportService(store: store).export(matterID: matterID, structuredOutputID: outputID, format: format)
+        } catch {
+            message = "Export failed: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     public func loadOutputs() {
         outputs = ((try? store.structuredOutputs.fetchOutputs(matterID: matterID)) ?? []).map { record in
             OutputItem(
@@ -104,7 +116,10 @@ public final class StructuredOutputController: ObservableObject {
         message = nil
         defer { isGenerating = false }
 
-        let contract = StructuredOutputContracts.contract(for: type)
+        guard let contract = StructuredOutputContracts.contract(for: type) else {
+            message = "Document Q&A and chronologies are generated from the Documents tab."
+            return false
+        }
         do {
             let prompt = try StructuredOutputPromptBuilder.buildPrompt(for: contract, context: context)
             let markdown = ReasoningContent.answer(from: try await collect(prompt: prompt, modelID: modelID))
@@ -151,7 +166,7 @@ public final class StructuredOutputController: ObservableObject {
         message = nil
         defer { isGenerating = false }
 
-        let contract = StructuredOutputContracts.contract(for: type)
+        guard let contract = StructuredOutputContracts.contract(for: type) else { return false }
         do {
             let prompt = try StructuredOutputPromptBuilder.buildRepairPrompt(
                 originalOutput: active.contentMarkdown, requiredHeadings: contract.requiredHeadings

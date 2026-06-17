@@ -88,7 +88,9 @@ private struct NewOutputSheet: View {
             Text("New Structured Output").font(.title2.weight(.semibold)).padding([.horizontal, .top])
             Form {
                 Picker("Type", selection: $type) {
-                    ForEach(StructuredOutputType.allCases, id: \.self) { type in
+                    // Document Q&A / chronology outputs are generated from the
+                    // Documents tab, so they are excluded from this research sheet.
+                    ForEach(StructuredOutputType.allCases.filter { !$0.isDocumentOutput }, id: \.self) { type in
                         Text(StructuredOutputLabels.label(type.rawValue)).tag(type)
                     }
                 }

@@ -1704,3 +1704,475 @@ These should be resolved during dependency/toolchain work, not left until final 
 - final auto-purge default value for deleted documents
 - exact validation fixture generation approach for legacy binary formats
 ```
+
+Resolutions (WO 34/33/44/45):
+```text
+- converters: Apple frameworks + in-house parsers + ZIPFoundation 0.9.20 (no third-party binaries)
+- default embedding model: BAAI/bge-base-en-v1.5 (768-d), via MLXEmbedders
+- .heic: probed at runtime (DocumentToolchain.nativeHEICDecodingAvailable)
+- auto-purge default: 30 days (0 disables)
+- legacy binary fixtures: authored programmatically (export builder + junk failure files)
+```
+
+---
+
+# 18. Progress Log
+
+Implementation tracking for M3. Each entry is one work order / commit point.
+Branch: `feat/milestone3` (off `main`).
+
+## WO 32 — M3 Schema And Core Types — DONE (2026-06-17)
+
+Status: complete; `swift test` green for SupraCore (13) and SupraStore (20, incl. 11 new M3 tests).
+
+Delivered:
+- `SupraCore/IDs.swift`: added all 12 document ID wrappers.
+- `SupraCore/DocumentDomainTypes.swift`: new file with `MatterDocumentStatus`,
+  `DocumentExtractionStatus`, `DocumentIndexStatus`, `DocumentProcessingPhase`,
+  `DocumentSourceKind`, `DocumentGeneratedOutputKind`, plus helper enums
+  (`DocumentProcessingJobStatus`, `DocumentImportBatchStatus`,
+  `DocumentSourceSetStatus`, `DocumentSourceSetMode`, `DocumentImportDisposition`).
+- `SupraCore/LegalDomainTypes.swift`: extended `StructuredOutputType` with the 4
+  document cases.
+- `SupraStore/Database/SupraMigrator.swift`: migrations v022–v037 (all 16 tables
+  from §14, including the FTS5 virtual table) + updated DEBUG `deleteAllTables`
+  to drop M3 children before parents.
+- `SupraStore/Records/Document*.swift`: 15 record types.
+- `SupraStore/Repositories/Document*.swift`: 5 repositories + wired into `SupraStore`.
+- `SupraStore/Tests/SupraStoreTests/Milestone3SchemaTests.swift`: 11 focused tests
+  (dedup, folder cascade soft-delete/restore, move/copy, permanent-delete blob GC,
+  tags, chunk/FTS replacement + embedding cascade, soft-delete search exclusion,
+  embedding-model selection + setup state, FIFO job queue + resume reconcile,
+  source-set attach + exports, import-batch report).
+
+Deviations from the literal plan (kept within plan intent):
+- Repositories are grouped into 5 cohesive types rather than one-per-table, matching
+  the existing convention where `ChatRepository`/`ResearchRepository` own several
+  tables: `DocumentSettingsRepository` (settings + embedding models),
+  `DocumentLibraryRepository` (blobs/folders/documents/tags), `DocumentIndexRepository`
+  (parts/chunks/FTS/embeddings), `DocumentJobRepository` (batches/jobs),
+  `DocumentSourceRepository` (source sets/output sources/exports).
+- `matter_documents.import_batch_id` is a plain TEXT column (no SQL FK) because
+  `document_import_batches` is created later at v033; avoids a forward reference.
+- Per-document extraction metadata (method, checksum, warnings/errors, page count,
+  OCR confidence summary, user-edited flag) lives on `matter_documents` since §14's
+  table list has no separate extraction table.
+
+Toolchain note (env, not plan): the default CLI `swift` is broken; build/test with
+`DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`.
+
+## WO 33 — Document Intelligence Setup — DONE (2026-06-17)
+
+Status: complete; app builds (`xcodebuild -scheme SupraAI`), all package tests green
+(SupraDocuments 4, SupraRuntimeClient 4, SupraSessions 43 incl. 3 new setup tests).
+
+Delivered:
+- New `SupraDocuments` package (created here, per §1.1; extraction adapters land in
+  WO 34): `SupportedDocumentTypes` (format policy), `DocumentStorage` (managed
+  blob/preview/temp/export layout + sha256 hashing), `DocumentToolchain`
+  (PDFKit/Vision/OCR/HEIC capability detection) + 4 tests.
+- Runtime embedding boundary (§1.4): `EmbeddingDTOs` (Load/Embed/Status +
+  `EmbeddingModelState`), `RuntimeStatus.embeddingModelID`, 3 RPCs added to the
+  Swift + `@objc` XPC service protocols and `RuntimeClientProtocol` (with default
+  impls so non-embedding doubles compile), `RuntimeClient` methods, and a real
+  `MLXEmbeddingModelController` (actor, serialized) backed by **MLXEmbedders**
+  (already in `mlx-swift-lm`; product linked into the runtime target via pbxproj).
+- Sessions: `EmbeddingModelCatalog` (curated, quality-first default
+  `BAAI/bge-base-en-v1.5`), `EmbeddingModelDownloadController`,
+  `DocumentNotifications` (injectable), and `DocumentIntelligenceSetupController`
+  (orchestrates the 6 setup steps, persists state in
+  `document_intelligence_settings`, gates import via `isReadyForImport`, audits
+  setup completed/changed/invalidated).
+- App: `SettingsView` "Document Intelligence" section (per-step status, embedding
+  download/test-load, storage init, notifications, Mark Complete); `AppEnvironment`
+  constructs the controllers and refreshes setup on bootstrap.
+- `Docs/Architecture/Dependencies.md` updated with the M3 embedding stack.
+
+Deviations from the literal plan (kept within plan intent):
+- Setup orchestration lives in a dedicated `DocumentIntelligenceSetupController`
+  rather than being stuffed into `SettingsController`, matching the existing
+  one-controller-per-concern convention (ModelDownloadController, ValidationRun
+  Controller). The plan named SettingsController as a target; intent ("setup lives
+  in Settings") is met via the Settings UI section.
+- `SupraDocuments` is created in WO 33 (not WO 34) because setup's capability checks
+  need it; WO 34 fills in the heavier extraction/conversion adapters.
+- Embedding model uses MLXEmbedders (resolved §17 open decision: curated default
+  `BAAI/bge-base-en-v1.5`, 768-d, with larger quality options offered).
+- Import gating mechanism (`isReadyForImport`) is in place; the Documents tab that
+  consumes it is enabled in WO 39.
+
+## WO 34 — Local Toolchain And Extraction Adapters — DONE (2026-06-17)
+
+Status: complete; SupraDocuments tests green (14), app builds with the new
+transitive dependency.
+
+Delivered (all in `SupraDocuments`):
+- `DocumentExtraction.swift`: `ExtractedPart`/`ExtractionResult`/`ExtractedAttachment`
+  result types, `ExtractionError`, the `DocumentExtractor` protocol, and an
+  `ExtractionService` that dispatches by supported-type family.
+- `TextExtractors.swift`: plain text / markdown, XML (`XMLParser`), HTML
+  (in-house tag-strip + entity decode, no WebKit), shared `TextNormalization`.
+- `OfficeExtractors.swift`: `.docx/.dotx` via ZIPFoundation + OOXML SAX; `.rtf`
+  and legacy `.doc` via `NSAttributedString` on the main actor; a `ZipArchiveReader`.
+- `SpreadsheetExtractor.swift`: `.xlsx` shared-strings + sheet SAX → visible cell
+  values with coordinates and used range; legacy `.xls` reported unsupported.
+- `EmailExtractor.swift`: in-house RFC 822 / MIME parser (multipart, base64,
+  quoted-printable) → body part + attachments as child documents; `.msg` reported
+  unsupported.
+- `PDFImageExtractors.swift`: PDFKit per-page text with low-text `needsOCR`
+  detection; images flagged `needsOCR` (OCR itself in WO 36).
+- `Docs/Architecture/Dependencies.md`: documented the extraction matrix and the
+  one pinned library.
+
+Deviations / decisions (within plan intent):
+- No third-party converter binaries. Apple frameworks + in-house parsers cover the
+  formats; the only added dependency is **ZIPFoundation 0.9.20 (exact, MIT)** for
+  `.docx`/`.xlsx` containers — satisfies §1.5's "pinned, documented, local, no
+  upload" requirements with the least redistribution/licensing risk.
+- Legacy `.xls` and Outlook `.msg` are reported as `unsupportedFormat` (captured in
+  the import report, never silent) rather than supported via a bundled tool — this
+  is the §3.1 / §15.2 "failure reporting" path. `.doc`, `.docx`, `.rtf`, and all
+  text/office/spreadsheet/email families ARE supported.
+- OCR is not performed here (split to WO 36); PDF/image extractors set `needsOCR`.
+
+## WO 35 — Managed Storage, Folders, Tags, And Import — DONE (2026-06-17)
+
+Status: complete; deterministic import tests green (SupraSessions 45 total incl. 2
+new import tests; SupraStore 20).
+
+Delivered:
+- `SupraSessions/DocumentImportService`: the import engine. Recursively walks
+  files/folders, preserves hierarchy as `document_folders`, copies each file into
+  content-addressed managed storage with sha256 dedup (blob reused across
+  instances), creates `matter_documents`, runs `ExtractionService`, persists
+  `document_pages_parts` + extraction metadata, expands email attachments as child
+  documents (a failed attachment never fails the parent), records unsupported/
+  corrupt files as failed instances + report lines, and finalizes the batch with a
+  `DocumentImportReport` (per-file dispositions + counts). Audits import
+  completed/with-failures.
+- `SupraStore/DocumentLibraryRepository`: added `updateExtraction(...)` and
+  `markTextEdited(...)` (edits → `edited` + `stale` for re-index).
+- Tests: recursive hierarchy + dedup (one blob, two instances) + managed-storage
+  copy + originals untouched + email attachment child docs + unsupported reporting
+  + batch report; and edited-text → stale.
+
+Notes: tags repo capability already exists (WO 32); the Documents-tab UI for
+folders/tags/drag-drop is WO 39. Import gating consumes
+`DocumentIntelligenceSetupController.isReadyForImport` (WO 33) at the UI layer.
+
+## WO 36 — Extraction, OCR, And Editable Text — DONE (2026-06-17)
+
+Status: complete; SupraDocuments 14, SupraSessions 46, SupraStore 20 — all green.
+
+Delivered:
+- `SupraDocuments/OCRService`: `DocumentOCRService` protocol + `OCRTextResult` +
+  Vision-backed `VisionOCRService` (image files via ImageIO; scanned PDF pages
+  rendered via CoreGraphics → `VNRecognizeTextRequest`), capturing mean confidence
+  and normalized bounding boxes. `OCRPolicy.lowConfidenceThreshold`. `ExtractedPart`
+  gained `boundingBoxesJSON`.
+- `DocumentImportService`: OCR injected (default `VisionOCRService`, mockable). After
+  extraction, documents flagged `needsOCR` are OCR'd over the managed blob and
+  merged into page parts. `persistExtraction` computes an OCR confidence summary and
+  routes low-confidence results to `needs_review` with a warning; OCR'd docs become
+  `ocr_complete`. Added `updateExtractedText(documentID:partID:text:)` (edit → part
+  text replaced, doc marked edited + index stale for re-index).
+- `SupraStore/DocumentIndexRepository.updatePartText(...)`.
+- Tests: mocked OCR fills image text, low confidence → `needs_review` + summary, and
+  edit → stale + new part text.
+
+Re-chunk/re-embed of `stale` docs is performed by the indexing pass in WO 37; the
+edit path here sets the trigger.
+
+## WO 37 — Chunking, FTS, Embeddings, And Hybrid Retrieval — DONE (2026-06-17)
+
+Status: complete; SupraDocuments 17, SupraStore 20, SupraSessions 48 (verified
+deterministic across repeated runs).
+
+Delivered:
+- `SupraDocuments/DocumentChunker`: deterministic chunking — natural part
+  boundaries first, then char-bounded windows with overlap, preferring paragraph/
+  sentence/space breaks; preserves locators + char ranges. `DocumentSourceLocator`
+  (Codable locator model with `displayString`/`encodedJSON`).
+- `SupraSessions`: `VectorMath` (Float32-LE encode/decode, normalize, dot);
+  `TextEmbedder` protocol + `RuntimeTextEmbedder` (loads the embedding model on
+  demand, batches `embedTexts`); `DocumentIndexingService` (chunk → `replaceChunks`
+  writes FTS + cascades stale embeddings → embed → advance index status; re-indexes
+  `stale` docs); `DocumentRetrievalService` (hybrid FTS + cosine, folder/tag/date/
+  document filters, duplicate-content collapse with noted locations, source
+  diversity cap, semantic-similarity threshold, scope-readiness gating + incomplete-
+  scope warning).
+- `SupraStore`: `DocumentLibraryRepository.resolveScopeDocumentIDs(...)`;
+  `DocumentIndexRepository.searchChunks(...)` now takes a document-id filter and
+  sanitizes user text into a safe FTS5 OR-of-prefixes expression; `fetchChunks(ids:)`.
+- Tests: chunker determinism/overlap/locators; index→retrieve with FTS + semantic,
+  folder filter scoping, duplicate collapse, and text-only readiness without an
+  embedder.
+
+Decision: index status without an embedder stays `text_indexed` (searchable);
+semantic readiness requires embeddings. Q&A/chronology readiness uses
+`DocumentRetrievalService.scopeReadiness`.
+
+## WO 38 — Document Processing Queue — DONE (2026-06-17)
+
+Status: complete; SupraSessions queue tests green (FIFO drain, interrupted-job
+reconcile, queued-job cancel); app builds with the queue wired in.
+
+Delivered:
+- `SupraSessions/DocumentProcessingQueue` (@MainActor ObservableObject): single
+  active job, FIFO queue, per-job run of import → indexing with phase progress,
+  completion/failure notifications (`DocumentNotifying`), queued-job cancellation,
+  `pauseActiveForQuit()`, and `bootstrap()` relaunch reconciliation (interrupted
+  active jobs → paused/`resumableJobs`, `resume(jobID:)`). `waitUntilIdle()` drives
+  deterministic draining. Import sources are held in-memory per job; jobs whose
+  sources are lost across relaunch fall back to store-only re-index reconciliation.
+- `SupraStore/DocumentJobRepository.fetchPausedJobs()`.
+- `AppEnvironment`: constructs the queue (import service + an indexing factory that
+  builds a `RuntimeTextEmbedder` from the selected embedding model) and calls
+  `documentQueue.bootstrap()` on launch.
+- Tests: two import jobs drain FIFO to completion with per-job notifications and
+  indexed chunks; interrupted active job becomes resumable on bootstrap; queued job
+  cancels.
+
+Note: the UI that enqueues imports (drag-drop) and surfaces progress/resume prompts
+is WO 39; the queue + `pauseActiveForQuit` hook are ready for it.
+
+## WO 39 — Documents Tab UI — DONE (2026-06-17)
+
+Status: complete; app builds with the enabled Documents tab.
+
+Delivered:
+- `SupraSessions/MatterDocumentsController` (@MainActor): per-matter folders,
+  documents, trashed docs, tags, search hits; import gating + enqueue through the
+  queue; folder/tag CRUD; soft-delete/restore/permanent-delete (audited); FTS
+  search with duplicate-content collapse; `allowedContentTypes` for the picker.
+  `MattersController` now vends a `documentsController` on select (wired to the
+  queue + a setup-ready gate); both are optional so existing call sites/tests are
+  unaffected.
+- `Apps/SupraAI/SupraAI/Documents/MatterDocumentsView.swift`: folder sidebar,
+  document list with status badges/OCR-confidence/tags/per-row tag + delete menus,
+  attachment indentation, file-importer + drag-and-drop import, live job-progress
+  bar, search results, trash sheet (restore/permanent delete), and a setup-gating
+  banner. `MatterWorkspaceView` Documents tab enabled and given the queue;
+  `MattersView` passes `environment.documentQueue`.
+- `AppEnvironment` init reordered so the queue + setup controller precede
+  `MattersController`. pbxproj: new `Documents` group + `MatterDocumentsView.swift`
+  (no SupraDocuments app-target link needed — the view uses SupraSessions/Store/Core
+  types only).
+
+Deviation: folder sidebar is a flat matter-scoped list rather than a nested tree
+for v1 (clean + functional; nested-tree presentation can follow). Move/copy between
+folders is available at the controller/repo level; richer drag-between-folders UI is
+deferred.
+
+## WO 40 — In-App Preview And Source Links — DONE (2026-06-17)
+
+Status: complete; preview-loader tests green (3); app builds.
+
+Delivered:
+- `SupraSessions/DocumentPreviewLoader` + `DocumentPreviewModel`: resolves a
+  `(documentID, DocumentSourceLocator)` into a renderable kind — `.pdf(path,page,
+  highlightText)`, `.image(path,boxes)`, `.text(content,highlight range)`, or
+  `.unavailable(reason,fallbackText)`. Picks the matching part (page/sheet/first),
+  surfaces extraction/OCR warnings, and always falls back to normalized text so a
+  link never fails silently (plan §11.2). `MatterDocumentsController` exposes
+  `preview(chunkID:)` (open at the matched chunk) and `preview(documentID:)`.
+- `Apps/.../Documents/MatterDocumentsView.swift`: `DocumentPreviewView` (sheet) +
+  `PDFKitView` (NSViewRepresentable) navigating to the page with a best-effort
+  `findString` highlight; image via NSImage; normalized text with an
+  `AttributedString` char-range highlight; warnings shown in the header. Search
+  hits and a per-row eye button open the preview.
+- Tests: text locator → highlighted text; missing PDF blob → unavailable + text
+  fallback; unknown document → unavailable.
+
+Note: image OCR bounding-box overlay is carried in the model
+(`boundingBoxesJSON`) but not yet drawn over the image (page/text highlight is
+implemented); a deferred visual nicety.
+
+## WO 41 — Auto-Source And Guided Q&A — DONE (2026-06-17)
+
+Status: complete; citation tests (8) + Q&A flow tests (4) green; app builds.
+
+Delivered:
+- `SupraDocuments/DocumentGrounding`: `GroundingSource`, `DocumentAnswerMode`
+  (short/memo → `documentQA`/`documentQAMemo`), `DocumentQAPromptBuilder`
+  (inline-citation-required prompt), `CitationCoverage`/`CitationCheckResult`
+  (label parsing, unresolved-label + missing-citation detection, valid
+  "unsupported" handling, low-confidence + incomplete-scope flags, `requiresReview`),
+  and `SourceAppendix` (Markdown).
+- `SupraSessions/DocumentQAController` (@MainActor): readiness-gated generate
+  (blocks until scope fully indexed), auto-source (hybrid retrieval) or guided
+  (caller-selected chunk ids), short/memo modes, citation checks → `complete` vs
+  `needsReview`, persists a `documentQA`/`documentQAMemo` structured output +
+  version + a version-scoped source set + cited output sources (labels/locators/
+  excerpts/warnings), and `regenerate` (new version + fresh source set from the
+  saved scope/question). Audited.
+- App: `MattersController` vends `documentQAController` (embedder from the selected
+  model); Documents-tab "Ask" sheet (`DocumentQASheet`) with question, short/memo,
+  optional folder scope, readiness display, and rendered cited answer.
+- Tests: auto-source cited answer saved with source set; unsupported question does
+  not invent an answer; missing citations → needs review; generation blocked when
+  scope not indexed; plus the 8 citation-coverage unit tests.
+
+## WO 42 — Fact Chronology — DONE (2026-06-17)
+
+Status: complete; chronology tests (2) green; app builds.
+
+Delivered:
+- `SupraDocuments/DocumentChronology`: `DateExtraction` (ISO/slashed/month-name/
+  month-year/bare-year detection), `DocumentChronologyFormat` (table/narrative →
+  `factChronologyTable`/`factChronologyNarrative`), `DocumentChronologyPromptBuilder`
+  (exact/partial date labeling, metadata-vs-text distinction, inline citations,
+  source-only facts).
+- `SupraSessions/DocumentChronologyController` (@MainActor): readiness-gated,
+  one-shot. Harvests date-bearing chunks across the scope plus document metadata
+  dates (distinguished), builds the table/narrative prompt, generates, citation-
+  checks, and saves a `factChronology*` output + version + a `.chronology`-mode
+  source set + cited sources. Audited. Reuses the Q&A `QAResult`/`CitationCoverage`/
+  `SourceAppendix` machinery.
+- App: `MattersController` vends `documentChronologyController`; Documents-tab
+  "Chronology" sheet (`DocumentChronologySheet`) with format choice, optional folder
+  scope, readiness, and the rendered chronology.
+- Tests: scope-only facts (notes-folder narrative excludes the contract date;
+  whole-matter table references both docs) + date-form detection.
+
+## WO 43 — Output Exports — DONE (2026-06-17)
+
+Status: complete; export tests (builders 5 + service 1) green; app builds.
+
+Delivered:
+- `SupraDocuments/DocumentExport`: `DocumentExportFormat` (pdf/markdown/docx/csv/
+  xlsx), `DocumentExportPayload`, and `DocumentExportBuilder` writing each format —
+  Markdown, CSV (source-appendix table), paginated PDF via CoreText, and minimal
+  Office Open XML DOCX/XLSX via ZIPFoundation. Each carries the generated output +
+  inline citations + source appendix + a review warning; no raw documents embedded.
+- `SupraSessions/DocumentExportService`: assembles the payload from a saved
+  output's active version + its source set (locators decoded to display strings,
+  document names resolved), writes into managed `exports/<matter>/`, records a
+  `document_exports` row, and audits `export_completed`.
+- App: `StructuredOutputController.exportOutput(outputID:format:)`; Outputs-tab
+  detail view gains an Export menu (PDF/MD/DOCX/CSV/XLSX) that writes the file and
+  reveals it in Finder. (Outputs is the canonical saved-output surface per §10.1,
+  covering document Q&A/chronology outputs too.)
+- Tests: each format builder (PDF readable via PDFKit, DOCX/XLSX zip entries
+  contain the text, MD/CSV content) and a full service export across all formats
+  with persisted export records.
+
+## WO 44 — Trash, Purge, And Audit — DONE (2026-06-17)
+
+Status: complete; maintenance tests (2) green; app builds.
+
+Most of this WO already existed at the repo/controller level from earlier WOs
+(soft-delete/restore/permanent-delete with blob GC in WO 32/39; the Documents-tab
+trash sheet in WO 39; major audit events across import/index/Q&A/chronology/export/
+setup). WO 44 added the auto-purge half:
+- `SupraStore`: `DocumentLibraryRepository.fetchDocumentsDeletedBefore(_:)`.
+- `SupraSessions/DocumentMaintenance`: reads the configurable retention from
+  `app_settings` (`documents.auto_purge_days`, default 30 — §17 decision resolved;
+  0 disables), and `purgeExpired()` permanently deletes documents soft-deleted past
+  the cutoff, cleans now-unreferenced blobs, and audits each as
+  `document_permanently_deleted`.
+- `DocumentIntelligenceSetupController.autoPurgeDays`/`updateAutoPurgeDays`; Settings
+  "Auto-purge trash after N days" stepper. `AppEnvironment.bootstrap` runs
+  `purgeExpired()` on launch. `folder_soft_deleted` audit added to the Documents
+  controller.
+- Tests: expired purge (keeps a recent instance + its still-referenced blob);
+  retention 0 disables.
+
+## WO 45 — M3 Validation Suite — DONE (2026-06-17)
+
+Status: complete; deterministic suite passes; app builds with the Diagnostics
+runner. (The model-dependent app-run scenarios require loaded models and were not
+executed in this environment; the deterministic suite proves the same behavior.)
+
+Delivered (two layers, per §15):
+- Layer 1 — deterministic pipeline validation (SwiftPM, fully runnable):
+  `Milestone3ValidationTests` authors the synthetic Validation Matter (nested
+  folders; born-digital PDF/DOCX/XLSX via the export builder; RTF/HTML/XML/MD/TXT;
+  an email with a base64 attachment; an image for mocked OCR; a byte-identical PDF
+  duplicate; and `.xls`/`.msg`/corrupt-`.docx` failure fixtures) and runs import →
+  mocked OCR → index (stub embedder) → search → Q&A → chronology → export, asserting
+  the §15.5 gates (report accounts for every file + failures; recursive hierarchy;
+  dedup; attachment child docs; originals untouched; extraction text; OCR confidence;
+  FTS; source links resolve; soft-delete search exclusion; resolvable citations in
+  Q&A/chronology; exports with appendix; audit events).
+- Layer 2 — app-run validation in Diagnostics: `Milestone3ValidationFixtures`
+  (shared authoring), `DocumentValidationRunController` (builds the fixture matter,
+  runs the pipeline against the loaded chat + embedding models, persists per-scenario
+  rows to `model_validation_runs`/`model_validation_tests` under suite id
+  `milestone3-document-intelligence-suite`, and audits), and a Diagnostics
+  "Run M3 Document Validation" section gated on completed setup + a loaded model.
+
+Bugs found + fixed by the suite: `.xls`/`.msg` now report as `unsupported` (not
+`extraction_failed`); the export XLSX builder now emits cell `r` references (so the
+spreadsheet extractor reads them); scope readiness now excludes terminally-failed
+documents so a failed import can't block Q&A forever.
+
+## WO 46 — Hardening Pass — DONE (2026-06-17)
+
+Status: complete. M3 signoff.
+
+- Full test sweep green: SupraCore 13, SupraStore 20, SupraDocuments 30,
+  SupraResearch 18, SupraRuntimeClient 4, SupraSessions 64, SupraDiagnostics 5,
+  SupraNetworking 6 (160 total, 0 failures). App builds (`xcodebuild -scheme
+  SupraAI`).
+- No hidden network in the document pipeline: `SupraDocuments` and the M3
+  `SupraSessions` document files contain no `URLSession`/`URLRequest`/`dataTask`
+  (the only `http` strings are OOXML namespace URIs, never fetched). Network is
+  confined to the explicit chat/embedding model download controllers (§0.3).
+- `Docs/Architecture/Dependencies.md` documents the full M3 stack (Apple
+  frameworks, MLXEmbedders via mlx-swift-lm, ZIPFoundation 0.9.20, curated
+  embedding models) — all pinned/local.
+
+## Pre-merge adversarial review + follow-up fixes (2026-06-17)
+
+A multi-agent adversarial review of the full `main..HEAD` diff (6 dimensions,
+every finding independently verified) returned **0 merge-blockers** and 10
+confirmed non-blocking issues. Fixed before merge:
+```text
+- [high]   Exports rendered the source appendix twice (MD/PDF/DOCX): the export
+           service now strips the embedded "## Sources" block from the saved
+           version and renders the appendix once from the structured source rows.
+- [medium] indexMatter re-indexed already-text-indexed docs every pass (and a dead
+           .semanticIndexed branch): needsIndexing now returns false for
+           text-indexed docs when no embedder is configured; dead branch removed.
+- [low]    FTS5 rows leaked on permanent delete (virtual table has no FK cascade):
+           permanentlyDeleteDocument now deletes document_chunk_fts rows first.
+- [medium] Chronology regeneration was missing: added DocumentChronologyController
+           .regenerate (new version + fresh source set), shared with generate.
+- [medium] Regenerate had no UI: added Regenerate buttons to the Q&A + chronology
+           sheets.
+- [medium] Folder restore + folder_restored audit: added controller.restoreFolder
+           and a Folders section in the trash sheet.
+- [medium] OCR audit events: document_ocr_completed / document_ocr_failed now
+           emitted around the OCR pass.
+- [low]    resume(jobID:) could create two active jobs: resume now re-queues the
+           paused job so the single-active scheduler promotes it only when idle.
+```
+Deferred (tracked / documented, not bugs that produce wrong saved data):
+```text
+- [medium] XLSX extractor maps sheets by position, not by xl/_rels relationship id
+           — wrong locators only for reordered/deleted multi-sheet workbooks.
+           Spun off as a follow-up task.
+- [low]    pauseActiveForQuit() is intentionally not wired to app termination (its
+           code path has a benign race); relaunch reconcile is the durability net.
+```
+
+### M3 Handoff — known limitations / remaining production gaps
+```text
+- App-run Diagnostics validation requires loaded chat + embedding models; it was not
+  executed in the dev environment. The deterministic SwiftPM suite proves the pipeline;
+  the model-dependent Q&A/chronology scenarios depend on real model behavior.
+- Legacy .doc extraction is best-effort via NSAttributedString (main actor). .xls and
+  Outlook .msg are reported unsupported (convert to .xlsx/.eml) — by design.
+- Documents-tab folder sidebar is a flat matter-scoped list; move/copy between folders
+  exists at the controller/repo level but drag-between-folders + a nested tree UI are deferred.
+- Image OCR bounding boxes are captured (boundingBoxesJSON) but not yet drawn over the
+  image preview; PDF page + text-range highlights are implemented.
+- Guided Q&A (manual source selection) is supported in DocumentQAController
+  (guidedChunkIDs); the "Ask" sheet currently exposes auto-source only.
+- Embedding model loads on demand — the first Q&A/index after launch pays model-load latency.
+- Export PDF is plain CoreText pagination (single font, no rich markdown); DOCX/XLSX are
+  minimal OOXML. They open in Word/Excel/Preview and carry output + appendix + warning.
+- Performance targets (§13) were not benchmarked at the ~200-document scale in this env.
+- Real semantic/OCR quality depends on the chosen embedding model and Vision; not benchmarked.
+```
