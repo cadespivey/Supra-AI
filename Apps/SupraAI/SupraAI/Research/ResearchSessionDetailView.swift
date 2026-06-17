@@ -14,10 +14,8 @@ struct ResearchSessionDetailView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             runBar
+            warningsBanner
             completionBar
-            if let message = controller.runMessage {
-                Text(message).font(.callout).foregroundStyle(.orange).padding([.horizontal, .bottom])
-            }
             Divider()
             queriesList
         }
@@ -38,10 +36,6 @@ struct ResearchSessionDetailView: View {
             }
             .disabled(!controller.canRunOpenSession || controller.isRunning || !controller.hasCourtListenerToken)
             researchStatusBadge
-            if !controller.hasCourtListenerToken {
-                Text("Add a CourtListener API token in Settings to run research.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             Spacer()
         }
         .padding()
@@ -57,21 +51,45 @@ struct ResearchSessionDetailView: View {
         }
     }
 
+    /// §14.3 token/network states + run errors, as §14.5 banners.
+    @ViewBuilder
+    private var warningsBanner: some View {
+        if !controller.hasCourtListenerToken {
+            SupraWarningBanner(
+                .blocking, title: "No CourtListener Token",
+                message: "Add a CourtListener API token in Settings to run research."
+            )
+            .padding([.horizontal, .bottom])
+        } else if let message = controller.runMessage {
+            let blocked = message.localizedCaseInsensitiveContains("blocked")
+            SupraWarningBanner(
+                blocked ? .blocking : .warning,
+                title: blocked ? "Network Blocked" : "Run Incomplete",
+                message: message
+            )
+            .padding([.horizontal, .bottom])
+        }
+    }
+
     @ViewBuilder
     private var completionBar: some View {
         if controller.resultCount > 0 {
-            HStack {
-                if controller.canCompleteSession {
+            if controller.canCompleteSession {
+                HStack {
                     Button("Mark Session Complete") { controller.completeSession() }
-                } else {
-                    Text("Review incomplete: \(controller.unreviewedResultCount) result(s) still unreviewed.")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
+                    Spacer()
                 }
-                Spacer()
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+            } else {
+                // §14.5 Warning level: completion is blocked, but it's a soft gate
+                // (the user just needs to finish reviewing).
+                SupraWarningBanner(
+                    .warning, title: "Review Incomplete",
+                    message: "\(controller.unreviewedResultCount) result(s) still unreviewed."
+                )
+                .padding([.horizontal, .bottom])
             }
-            .padding(.horizontal)
-            .padding(.bottom, 8)
         }
     }
 
