@@ -11,4 +11,33 @@ public protocol RuntimeClientProtocol: Sendable {
     func reloadCurrentModel() async throws -> LoadModelResponse
     func runtimeStatus() async throws -> RuntimeStatus
     func restartRuntimeService() async throws
+
+    // MARK: - Milestone 3: embeddings
+
+    func loadEmbeddingModel(_ request: LoadEmbeddingModelRequest) async throws -> LoadEmbeddingModelResponse
+    func embedTexts(_ request: EmbedTextRequest) async throws -> EmbedTextResponse
+    func embeddingStatus() async throws -> EmbeddingModelStatus
+}
+
+public extension RuntimeClientProtocol {
+    // Default implementations so non-embedding test doubles need not implement
+    // the M3 embedding surface. The real RuntimeClient overrides all three.
+    func loadEmbeddingModel(_ request: LoadEmbeddingModelRequest) async throws -> LoadEmbeddingModelResponse {
+        LoadEmbeddingModelResponse(
+            state: .failed,
+            embeddingModelID: request.embeddingModelID,
+            error: RuntimeError(category: "unsupported", message: "Embeddings are not supported by this runtime client.")
+        )
+    }
+
+    func embedTexts(_ request: EmbedTextRequest) async throws -> EmbedTextResponse {
+        EmbedTextResponse(
+            state: .failed,
+            error: RuntimeError(category: "unsupported", message: "Embeddings are not supported by this runtime client.")
+        )
+    }
+
+    func embeddingStatus() async throws -> EmbeddingModelStatus {
+        EmbeddingModelStatus(state: .unloaded)
+    }
 }

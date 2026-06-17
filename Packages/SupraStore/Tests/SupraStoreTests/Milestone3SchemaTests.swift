@@ -1,0 +1,377 @@
+import Foundation
+import GRDB
+import SupraCore
+@testable import SupraStore
+import XCTest
+
+/// Milestone 3 (Document Intelligence) schema and repository tests (WO 32).
+final class Milestone3SchemaTests: XCTestCase {
+
+    func testMigrationsCreateAllMilestone3Tables() throws {
+        let store = try makeStore()
+        let tableNames = try store.database.writer.read { db in
+            try String.fetchAll(
+                db,
+                sql: """
+                SELECT name FROM sqlite_master
+                WHERE type IN ('table') AND name NOT LIKE 'sqlite_%'
+                ORDER BY name
+                """
+            )
+        }
+
+        // Existing v001-v021 tables remain intact.
+        XCTAssertTrue(tableNames.contains("matters"))
+        XCTAssertTrue(tableNames.contains("structured_output_versions"))
+        XCTAssertTrue(tableNames.contains("audit_events"))
+
+        // Milestone 3 tables.
+        for table in [
+            "document_intelligence_settings",
+            "document_blobs",
+            "document_folders",
+            "matter_documents",
+            "document_tags",
+            "document_tag_assignments",
+            "document_pages_parts",
+            "document_chunks",
+            "document_chunk_fts",
+            "document_embedding_models",
+            "document_chunk_embeddings",
+            "document_import_batches",
+            "document_processing_jobs",
+            "document_source_sets",
+            "document_output_sources",
+            "document_exports"
+        ] {
+            XCTAssertTrue(tableNames.contains(table), "missing table \(table)")
+        }
+    }
+
+    func testBlobDedupCreatesOneBlobWithMultipleDocumentInstances() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let folderA = try store.documentLibrary.createFolder(matterID: matter.id, name: "Contracts")
+        let folderB = try store.documentLibrary.createFolder(matterID: matter.id, name: "Duplicates")
+
+        let first = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "abc123", byteSize: 10, originalExtension: "pdf", managedRelativePath: "blobs/ab/abc123.pdf")
+        )
+        let second = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "abc123", byteSize: 10, originalExtension: "pdf", managedRelativePath: "blobs/ab/abc123.pdf")
+        )
+        XCTAssertFalse(first.reused)
+        XCTAssertTrue(second.reused)
+        XCTAssertEqual(first.blob.id, second.blob.id)
+
+        _ = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: first.blob.id, folderID: folderA.id, displayName: "service-agreement.pdf")
+        )
+        _ = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: first.blob.id, folderID: folderB.id, displayName: "service-agreement-copy.pdf")
+        )
+
+        XCTAssertEqual(try store.documentLibrary.referenceCount(blobID: first.blob.id), 2)
+        XCTAssertEqual(try store.documentLibrary.fetchDocuments(matterID: matter.id).count, 2)
+    }
+
+    func testFolderSoftDeleteCascadesAndRestores() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let parent = try store.documentLibrary.createFolder(matterID: matter.id, name: "Contracts")
+        let child = try store.documentLibrary.createFolder(matterID: matter.id, name: "Amendments", parentFolderID: parent.id)
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "s1", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/s1.pdf")
+        ).blob
+        let doc = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: blob.id, folderID: child.id, displayName: "amendment.pdf", status: MatterDocumentStatus.ready.rawValue)
+        )
+
+        try store.documentLibrary.softDeleteFolder(id: parent.id)
+
+        XCTAssertEqual(try store.documentLibrary.fetchFolders(matterID: matter.id).count, 0)
+        XCTAssertEqual(try store.documentLibrary.fetchDocuments(matterID: matter.id).count, 0)
+        let deletedDoc = try XCTUnwrap(try store.documentLibrary.fetchDocument(id: doc.id))
+        XCTAssertNotNil(deletedDoc.deletedAt)
+        XCTAssertEqual(deletedDoc.status, MatterDocumentStatus.deleted.rawValue)
+
+        try store.documentLibrary.restoreFolder(id: parent.id)
+        XCTAssertEqual(try store.documentLibrary.fetchFolders(matterID: matter.id).count, 2)
+        XCTAssertEqual(try store.documentLibrary.fetchDocuments(matterID: matter.id).count, 1)
+    }
+
+    func testDocumentMoveCopyAndPermanentDelete() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let folderA = try store.documentLibrary.createFolder(matterID: matter.id, name: "A")
+        let folderB = try store.documentLibrary.createFolder(matterID: matter.id, name: "B")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "s2", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/s2.pdf")
+        ).blob
+        let doc = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: blob.id, folderID: folderA.id, displayName: "doc.pdf")
+        )
+
+        try store.documentLibrary.moveDocument(id: doc.id, toFolderID: folderB.id)
+        XCTAssertEqual(try store.documentLibrary.fetchDocument(id: doc.id)?.folderID, folderB.id)
+
+        let copy = try store.documentLibrary.copyDocument(id: doc.id, toFolderID: folderA.id)
+        XCTAssertNotEqual(copy.id, doc.id)
+        XCTAssertEqual(copy.blobID, blob.id)
+        XCTAssertEqual(try store.documentLibrary.referenceCount(blobID: blob.id), 2)
+
+        // Deleting one instance keeps the blob (still referenced by the copy).
+        let firstDelete = try store.documentLibrary.permanentlyDeleteDocument(id: doc.id)
+        XCTAssertNil(firstDelete.removedBlobPath)
+        XCTAssertNotNil(try store.documentLibrary.fetchBlob(id: blob.id))
+
+        // Deleting the last instance removes the now-unreferenced blob.
+        let secondDelete = try store.documentLibrary.permanentlyDeleteDocument(id: copy.id)
+        XCTAssertEqual(secondDelete.removedBlobPath, "blobs/s2.pdf")
+        XCTAssertNil(try store.documentLibrary.fetchBlob(id: blob.id))
+    }
+
+    func testTagsCreateAssignAndFetch() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "s3", byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/s3.txt")
+        ).blob
+        let doc = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "note.txt")
+        )
+        let tag = try store.documentLibrary.createTag(matterID: matter.id, name: "Key Evidence")
+        try store.documentLibrary.assignTag(tagID: tag.id, documentID: doc.id)
+        try store.documentLibrary.assignTag(tagID: tag.id, documentID: doc.id) // idempotent
+
+        XCTAssertEqual(try store.documentLibrary.fetchTags(documentID: doc.id).count, 1)
+        try store.documentLibrary.unassignTag(tagID: tag.id, documentID: doc.id)
+        XCTAssertEqual(try store.documentLibrary.fetchTags(documentID: doc.id).count, 0)
+    }
+
+    func testChunkReplacementUpdatesFTSAndCascadesEmbeddings() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "s4", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/s4.pdf")
+        ).blob
+        let doc = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "agreement.pdf")
+        )
+
+        let chunk = DocumentChunkRecord(
+            documentID: doc.id,
+            chunkIndex: 0,
+            sourceKind: DocumentSourceKind.pdfPage.rawValue,
+            normalizedText: "The indemnification clause survives termination."
+        )
+        try store.documentIndex.replaceChunks(documentID: doc.id, chunks: [chunk])
+
+        // Embedding attached to that chunk.
+        try store.documentIndex.upsertEmbedding(
+            DocumentChunkEmbeddingRecord(
+                chunkID: chunk.id,
+                documentID: doc.id,
+                embeddingModelID: "embed-model",
+                modelDisplayName: "Test Embedder",
+                dimension: 3,
+                vector: floatBlob([1, 0, 0])
+            )
+        )
+
+        let hits = try store.documentIndex.searchChunks(matterID: matter.id, query: "indemnification")
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertEqual(hits.first?.id, chunk.id)
+        XCTAssertEqual(try store.documentIndex.fetchEmbeddings(documentID: doc.id, embeddingModelID: "embed-model").count, 1)
+
+        // Re-chunking replaces chunks, FTS rows, and cascade-deletes embeddings.
+        let newChunk = DocumentChunkRecord(
+            documentID: doc.id,
+            chunkIndex: 0,
+            sourceKind: DocumentSourceKind.pdfPage.rawValue,
+            normalizedText: "Confidentiality obligations remain in effect."
+        )
+        try store.documentIndex.replaceChunks(documentID: doc.id, chunks: [newChunk])
+
+        XCTAssertEqual(try store.documentIndex.searchChunks(matterID: matter.id, query: "indemnification").count, 0)
+        XCTAssertEqual(try store.documentIndex.searchChunks(matterID: matter.id, query: "confidentiality").count, 1)
+        XCTAssertEqual(try store.documentIndex.fetchEmbeddings(documentID: doc.id, embeddingModelID: "embed-model").count, 0)
+    }
+
+    func testPermanentDeleteRemovesFTSRows() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "fts", byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/fts.txt")
+        ).blob
+        let doc = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "leaky.txt")
+        )
+        try store.documentIndex.replaceChunks(documentID: doc.id, chunks: [
+            DocumentChunkRecord(documentID: doc.id, chunkIndex: 0, sourceKind: DocumentSourceKind.text.rawValue, normalizedText: "unique indemnification term")
+        ])
+        func ftsRows() throws -> Int {
+            try store.database.writer.read { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_chunk_fts WHERE document_id = ?", arguments: [doc.id]) ?? -1
+            }
+        }
+        XCTAssertEqual(try ftsRows(), 1)
+        _ = try store.documentLibrary.permanentlyDeleteDocument(id: doc.id)
+        XCTAssertEqual(try ftsRows(), 0, "FTS rows must be removed on permanent delete")
+    }
+
+    func testSearchExcludesSoftDeletedDocuments() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "s5", byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/s5.txt")
+        ).blob
+        let doc = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "witness.txt")
+        )
+        try store.documentIndex.replaceChunks(documentID: doc.id, chunks: [
+            DocumentChunkRecord(documentID: doc.id, chunkIndex: 0, sourceKind: DocumentSourceKind.text.rawValue, normalizedText: "The deposition mentioned a wire transfer.")
+        ])
+        XCTAssertEqual(try store.documentIndex.searchChunks(matterID: matter.id, query: "deposition").count, 1)
+
+        try store.documentLibrary.softDeleteDocument(id: doc.id)
+        XCTAssertEqual(try store.documentIndex.searchChunks(matterID: matter.id, query: "deposition").count, 0)
+
+        try store.documentLibrary.restoreDocument(id: doc.id)
+        XCTAssertEqual(try store.documentIndex.searchChunks(matterID: matter.id, query: "deposition").count, 1)
+    }
+
+    func testEmbeddingModelSelectionAndSettings() throws {
+        let store = try makeStore()
+        _ = try store.documentSettings.loadSettings()
+
+        let modelA = DocumentEmbeddingModelRecord(repoID: "org/embed-a", displayName: "Embed A", dimension: 384, runtimeFamily: "mlx")
+        let modelB = DocumentEmbeddingModelRecord(repoID: "org/embed-b", displayName: "Embed B", dimension: 768, runtimeFamily: "mlx")
+        try store.documentSettings.upsertEmbeddingModel(modelA)
+        try store.documentSettings.upsertEmbeddingModel(modelB)
+        try store.documentSettings.selectEmbeddingModel(id: modelB.id)
+
+        XCTAssertEqual(try store.documentSettings.fetchSelectedEmbeddingModel()?.id, modelB.id)
+        XCTAssertEqual(try store.documentSettings.loadSettings().selectedEmbeddingModelID, modelB.id)
+
+        try store.documentSettings.updateSettings { $0.setupCompletedAt = Date() }
+        XCTAssertNotNil(try store.documentSettings.loadSettings().setupCompletedAt)
+        try store.documentSettings.invalidateSetup(reason: "embedding model changed")
+        let invalidated = try store.documentSettings.loadSettings()
+        XCTAssertNil(invalidated.setupCompletedAt)
+        XCTAssertEqual(invalidated.setupInvalidatedReason, "embedding model changed")
+    }
+
+    func testJobQueueIsFIFOWithSingleActiveAndResumeReconciliation() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+
+        let job1 = try store.documentJobs.enqueueJob(matterID: matter.id)
+        let job2 = try store.documentJobs.enqueueJob(matterID: matter.id)
+        XCTAssertEqual(job1.queuePosition, 0)
+        XCTAssertEqual(job2.queuePosition, 1)
+
+        // First activation promotes job1; second returns the same active job.
+        let active = try store.documentJobs.activateNextJobIfIdle()
+        XCTAssertEqual(active?.id, job1.id)
+        XCTAssertEqual(try store.documentJobs.activateNextJobIfIdle()?.id, job1.id)
+        XCTAssertEqual(try store.documentJobs.fetchQueuedJobs().map(\.id), [job2.id])
+
+        // Simulate an interrupted active job at relaunch: it becomes paused.
+        let reconciled = try store.documentJobs.reconcileInterruptedJobs()
+        XCTAssertEqual(reconciled, [job1.id])
+        XCTAssertNil(try store.documentJobs.fetchActiveJob())
+        XCTAssertEqual(try store.documentJobs.fetchJob(id: job1.id)?.status, DocumentProcessingJobStatus.paused.rawValue)
+
+        try store.documentJobs.completeJob(id: job1.id)
+        XCTAssertEqual(try store.documentJobs.fetchJob(id: job1.id)?.status, DocumentProcessingJobStatus.complete.rawValue)
+    }
+
+    func testSourceSetsAttachToOutputVersionsAndExportsPersist() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "s6", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/s6.pdf")
+        ).blob
+        let doc = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "evidence.pdf")
+        )
+        let chunk = DocumentChunkRecord(documentID: doc.id, chunkIndex: 0, sourceKind: DocumentSourceKind.pdfPage.rawValue, normalizedText: "Payment due on March 3, 2024.")
+        try store.documentIndex.replaceChunks(documentID: doc.id, chunks: [chunk])
+
+        let output = try store.structuredOutputs.createOutput(matterID: matter.id, title: "Q&A: payment date", outputType: .documentQA)
+        let version = try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id,
+            versionIndex: 1,
+            contentMarkdown: "Payment was due March 3, 2024 [S1].",
+            requiredSections: [],
+            presentSections: [],
+            missingSections: []
+        )
+
+        let sourceSet = try store.documentSources.createSourceSet(matterID: matter.id, mode: .autoSource, retrievalQuery: "payment date")
+        try store.documentSources.addOutputSource(
+            DocumentOutputSourceRecord(
+                sourceSetID: sourceSet.id,
+                documentID: doc.id,
+                chunkID: chunk.id,
+                citationLabel: "S1",
+                locatorJSON: #"{"source_kind":"pdf_page","page_index":0}"#,
+                excerpt: "Payment due on March 3, 2024.",
+                rank: 0
+            )
+        )
+        try store.documentSources.attachSourceSet(id: sourceSet.id, structuredOutputVersionID: version.id)
+
+        let attached = try XCTUnwrap(try store.documentSources.fetchSourceSet(structuredOutputVersionID: version.id))
+        XCTAssertEqual(attached.id, sourceSet.id)
+        XCTAssertEqual(attached.status, DocumentSourceSetStatus.attached.rawValue)
+        let sources = try store.documentSources.fetchSources(structuredOutputVersionID: version.id)
+        XCTAssertEqual(sources.count, 1)
+        XCTAssertEqual(sources.first?.citationLabel, "S1")
+
+        let export = try store.documentSources.recordExport(
+            DocumentExportRecord(structuredOutputID: output.id, structuredOutputVersionID: version.id, matterID: matter.id, format: "pdf", managedRelativePath: "exports/\(matter.id)/qa.pdf")
+        )
+        XCTAssertEqual(try store.documentSources.fetchExports(structuredOutputID: output.id).single?.id, export.id)
+    }
+
+    func testImportBatchProgressAndFinalReport() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let batch = try store.documentJobs.createBatch(matterID: matter.id, sourceRootDisplay: "Validation Matter")
+        try store.documentJobs.updateBatchProgress(id: batch.id, discoveredCount: 10, importedCount: 8, failedCount: 1)
+        try store.documentJobs.finalizeBatch(id: batch.id, status: .completeWithFailures, reportJSON: #"{"imported":8,"failed":1}"#)
+
+        let stored = try XCTUnwrap(try store.documentJobs.fetchBatch(id: batch.id))
+        XCTAssertEqual(stored.discoveredCount, 10)
+        XCTAssertEqual(stored.importedCount, 8)
+        XCTAssertEqual(stored.status, DocumentImportBatchStatus.completeWithFailures.rawValue)
+        XCTAssertNotNil(stored.completedAt)
+        XCTAssertEqual(stored.reportJSON, #"{"imported":8,"failed":1}"#)
+    }
+
+    // MARK: - Helpers
+
+    private func floatBlob(_ values: [Float]) -> Data {
+        var data = Data(capacity: values.count * 4)
+        for value in values {
+            var little = value.bitPattern.littleEndian
+            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+        }
+        return data
+    }
+
+    private func makeStore() throws -> SupraStore {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SupraStoreM3Tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
+    }
+}
+
+private extension Array {
+    var single: Element? {
+        count == 1 ? first : nil
+    }
+}

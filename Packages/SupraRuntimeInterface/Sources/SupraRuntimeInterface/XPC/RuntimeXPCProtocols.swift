@@ -35,6 +35,22 @@ public protocol SupraRuntimeXPCServiceProtocol: NSObjectProtocol {
     func runtimeStatus(
         withReply reply: @escaping (Data) -> Void
     )
+
+    // MARK: - Milestone 3: embeddings
+
+    func loadEmbeddingModel(
+        _ requestData: Data,
+        withReply reply: @escaping (Data) -> Void
+    )
+
+    func embedTexts(
+        _ requestData: Data,
+        withReply reply: @escaping (Data) -> Void
+    )
+
+    func embeddingStatus(
+        withReply reply: @escaping (Data) -> Void
+    )
 }
 
 @objc(SupraGenerationEventXPCSinkProtocol)

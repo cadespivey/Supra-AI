@@ -126,3 +126,79 @@ Pinned version/revision:
 
 Pinning note:
 This package is held at `0.5.0` by an exact workspace constraint because `swift-tokenizers-mlx` 0.3.0 does not yet compile against the throwing encode/decode APIs introduced by later `swift-tokenizers` releases.
+
+---
+
+# Milestone 3 — Document Intelligence
+
+Everything below runs locally after an explicit user-initiated download; no
+document content is uploaded (plan §0.3, §1.5).
+
+## Apple frameworks (document baseline)
+
+| Framework | Use |
+|-----------|-----|
+| PDFKit | PDF text extraction, rendering, previews |
+| Vision | On-device OCR (`VNRecognizeTextRequest`) |
+| UniformTypeIdentifiers | Supported file-type policy |
+| ImageIO | Native image decoding / HEIC capability probe |
+| CryptoKit | Content hashing (sha256 blob IDs) |
+| UserNotifications | Import/indexing completion notices |
+
+## MLXEmbedders (WO 33)
+
+Purpose:
+Local sentence-embedding models for semantic search, run inside the existing
+`SupraRuntimeService` XPC process.
+
+SPM product:
+- `MLXEmbedders` (from the already-pinned `mlx-swift-lm` 3.31.3 package — no new
+  remote package was added; only the product was linked into the runtime target)
+
+Update risk:
+Embedder factory / pooling API changes may affect `MLXEmbeddingModelController`.
+
+### Curated embedding models (download on user action)
+
+Stored in `Application Support/SupraAI/EmbeddingModels/`. Default favors quality
+(plan §2.2). Confirm each model card's license at download time.
+
+| Model | Repo ID | Dim | Family | License (as calibrated) |
+|-------|---------|-----|--------|--------------------------|
+| BGE Base EN v1.5 (default) | `BAAI/bge-base-en-v1.5` | 768 | bert | MIT |
+| BGE Large EN v1.5 | `BAAI/bge-large-en-v1.5` | 1024 | bert | MIT |
+| mxbai Embed Large v1 | `mixedbread-ai/mxbai-embed-large-v1` | 1024 | bert | Apache-2.0 |
+| Nomic Embed Text v1.5 | `nomic-ai/nomic-embed-text-v1.5` | 768 | nomic_bert | Apache-2.0 |
+| BGE Small EN v1.5 | `BAAI/bge-small-en-v1.5` | 384 | bert | MIT |
+
+## Conversion / extraction tools (WO 34)
+
+M3 extraction deliberately avoids third-party converter binaries. Apple
+frameworks plus in-house deterministic parsers cover the required formats, with
+one pinned pure-Swift library for ZIP containers. Everything runs locally; no
+document content leaves the machine, and every failure is captured per file in
+the import report (never a crash).
+
+| Format | Method | Notes |
+|--------|--------|-------|
+| `.pdf` | PDFKit page text | low-text PDFs flagged for OCR (WO 36) |
+| images (`.png/.jpg/.tif/.heic`) | routed to Vision OCR (WO 36) | no embedded text |
+| `.txt/.md` | Foundation string + normalization | — |
+| `.xml` | `XMLParser` (text + attribute values) | raw-text fallback |
+| `.html/.htm` | in-house tag-strip + entity decode | no WebKit → background-safe |
+| `.rtf` | `NSAttributedString` (`.rtf`, main actor) | — |
+| `.doc` (legacy) | `NSAttributedString` (`.docFormat`, main actor) | — |
+| `.docx/.dotx` | ZIPFoundation + `word/document.xml` SAX | — |
+| `.xlsx` | ZIPFoundation + shared strings / sheet SAX | visible cell values only |
+| `.xls` (legacy) | reported unsupported | convert to `.xlsx` |
+| `.eml` | in-house RFC 822 / MIME parser | body + attachments as child docs |
+| `.msg` (Outlook) | reported unsupported | export as `.eml` |
+
+### ZIPFoundation
+
+| Dependency | Version | Source | License |
+|------------|---------|--------|---------|
+| ZIPFoundation | `0.9.20` (exact) | https://github.com/weichsel/ZIPFoundation | MIT |
+
+Used by `SupraDocuments` to read `.docx`/`.xlsx` archive entries. Pure Swift, no
+network, no external binaries.

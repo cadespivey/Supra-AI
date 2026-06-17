@@ -35,4 +35,20 @@ public protocol SupraRuntimeServiceProtocol {
     func runtimeStatus(
         reply: @escaping (RuntimeStatus) -> Void
     )
+
+    // MARK: - Milestone 3: embeddings
+
+    func loadEmbeddingModel(
+        _ request: LoadEmbeddingModelRequest,
+        reply: @escaping (LoadEmbeddingModelResponse) -> Void
+    )
+
+    func embedTexts(
+        _ request: EmbedTextRequest,
+        reply: @escaping (EmbedTextResponse) -> Void
+    )
+
+    func embeddingStatus(
+        reply: @escaping (EmbeddingModelStatus) -> Void
+    )
 }

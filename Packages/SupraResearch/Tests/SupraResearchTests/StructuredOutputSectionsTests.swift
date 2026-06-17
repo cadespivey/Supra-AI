@@ -5,7 +5,7 @@ import XCTest
 final class StructuredOutputSectionsTests: XCTestCase {
 
     func testAllRequiredHeadingsPresent() {
-        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)
+        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
         let markdown = contract.requiredHeadings.joined(separator: "\n\nsome body text\n\n")
         let analysis = StructuredOutputSections.analyze(markdown: markdown, requiredHeadings: contract.requiredHeadings)
         XCTAssertTrue(analysis.missing.isEmpty)
@@ -13,7 +13,7 @@ final class StructuredOutputSectionsTests: XCTestCase {
     }
 
     func testCaseAndWhitespaceInsensitiveButSynonymsAndLevelMatter() {
-        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)
+        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
         // Every required heading except "## Distinctions", with case/whitespace noise.
         let markdown = """
         #   rule synthesis
@@ -35,18 +35,24 @@ final class StructuredOutputSectionsTests: XCTestCase {
     }
 
     func testBuildPromptFillsContextAndKeepsHeadings() throws {
-        let contract = StructuredOutputContracts.contract(for: .legalIssueSpotting)
+        let contract = StructuredOutputContracts.contract(for: .legalIssueSpotting)!
         let prompt = try StructuredOutputPromptBuilder.buildPrompt(for: contract, context: "THE ISSUE TEXT")
         XCTAssertTrue(prompt.contains("THE ISSUE TEXT"))
         XCTAssertFalse(prompt.contains("{{context}}"))
         XCTAssertTrue(prompt.contains("## Issues Identified"))
     }
 
-    func testEveryTypeHasH1AndSections() {
-        for type in StructuredOutputType.allCases {
-            let contract = StructuredOutputContracts.contract(for: type)
+    func testEveryTemplatedTypeHasH1AndSections() throws {
+        for type in StructuredOutputContracts.templatedTypes {
+            let contract = try XCTUnwrap(StructuredOutputContracts.contract(for: type))
             XCTAssertTrue(contract.requiredHeadings.first?.hasPrefix("# ") == true, "\(type) needs an H1")
             XCTAssertGreaterThan(contract.requiredHeadings.count, 1, "\(type) needs sections")
+        }
+    }
+
+    func testDocumentOutputTypesHaveNoResearchContract() {
+        for type in StructuredOutputType.allCases where type.isDocumentOutput {
+            XCTAssertNil(StructuredOutputContracts.contract(for: type), "\(type) should have no research contract")
         }
     }
 }

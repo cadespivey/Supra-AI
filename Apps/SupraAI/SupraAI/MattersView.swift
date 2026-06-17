@@ -69,7 +69,7 @@ struct MattersView: View {
     @ViewBuilder
     private var detail: some View {
         if let matter = controller.selectedMatter {
-            MatterWorkspaceView(controller: controller, library: library, matter: matter)
+            MatterWorkspaceView(controller: controller, library: library, queue: environment.documentQueue, matter: matter)
         } else {
             ContentUnavailableView(
                 "Select a Matter",

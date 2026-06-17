@@ -103,3 +103,101 @@ public struct NetworkRequestID: Codable, Hashable, Sendable {
         self.rawValue = rawValue
     }
 }
+
+// MARK: - Milestone 3: Document Intelligence
+
+public struct DocumentBlobID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct MatterDocumentID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct DocumentFolderID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct DocumentTagID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct DocumentPagePartID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct DocumentChunkID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct DocumentEmbeddingModelID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct DocumentImportBatchID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct DocumentProcessingJobID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct DocumentSourceSetID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct DocumentSourceID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+public struct DocumentExportID: Codable, Hashable, Sendable {
+    public let rawValue: UUID
+
+    public init(_ rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}

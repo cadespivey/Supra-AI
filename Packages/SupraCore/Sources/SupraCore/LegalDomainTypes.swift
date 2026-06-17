@@ -58,6 +58,24 @@ public enum StructuredOutputType: String, Codable, CaseIterable, Hashable, Senda
     case ruleSynthesis = "rule_synthesis"
     case argumentOutline = "argument_outline"
     case draftingSkeleton = "drafting_skeleton"
+    // Milestone 3: document intelligence outputs.
+    case documentQA = "document_qa"
+    case documentQAMemo = "document_qa_memo"
+    case factChronologyTable = "fact_chronology_table"
+    case factChronologyNarrative = "fact_chronology_narrative"
+
+    /// Document-intelligence outputs (M3) are produced by the document Q&A /
+    /// chronology flows from the Documents tab, not by the research-template
+    /// contract system used for the other output types.
+    public var isDocumentOutput: Bool {
+        switch self {
+        case .documentQA, .documentQAMemo, .factChronologyTable, .factChronologyNarrative:
+            true
+        case .legalIssueSpotting, .researchPlan, .caseResultSummary, .ruleSynthesis,
+             .argumentOutline, .draftingSkeleton:
+            false
+        }
+    }
 }
 
 public enum StructuredOutputStatus: String, Codable, Hashable, Sendable {
