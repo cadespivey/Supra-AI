@@ -1,3 +1,4 @@
+import PDFKit
 import SupraCore
 import SupraSessions
 import SupraStore
@@ -16,6 +17,7 @@ struct MatterDocumentsView: View {
     @State private var showNewFolder = false
     @State private var showTrash = false
     @State private var dropTargeted = false
+    @State private var preview: PreviewItem?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -48,6 +50,9 @@ struct MatterDocumentsView: View {
             }
         }
         .sheet(isPresented: $showTrash) { trashSheet }
+        .sheet(item: $preview) { item in
+            DocumentPreviewView(model: item.model) { preview = nil }
+        }
         .onAppear { controller.reload() }
     }
 
@@ -153,6 +158,13 @@ struct MatterDocumentsView: View {
                 }
             }
             Spacer()
+            Button {
+                if let model = controller.preview(documentID: doc.id) { preview = PreviewItem(model: model) }
+            } label: {
+                Image(systemName: "eye")
+            }
+            .buttonStyle(.borderless)
+            .help("Preview")
             Menu {
                 ForEach(controller.tags) { tag in
                     Button {
@@ -177,13 +189,20 @@ struct MatterDocumentsView: View {
 
     private var searchResults: some View {
         List(controller.searchHits) { hit in
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(hit.documentName).font(.callout.weight(.medium))
-                    Text(hit.locatorDisplay).font(.caption2).foregroundStyle(.secondary)
+            Button {
+                if let model = controller.preview(chunkID: hit.id) { preview = PreviewItem(model: model) }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(hit.documentName).font(.callout.weight(.medium))
+                        Text(hit.locatorDisplay).font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        Image(systemName: "arrow.up.forward.square").foregroundStyle(.secondary)
+                    }
+                    Text(hit.excerpt).font(.caption).foregroundStyle(.secondary).lineLimit(3)
                 }
-                Text(hit.excerpt).font(.caption).foregroundStyle(.secondary).lineLimit(3)
             }
+            .buttonStyle(.plain)
         }
     }
 
@@ -295,5 +314,119 @@ struct MatterDocumentsView: View {
             if !urls.isEmpty { controller.importItems(urls) }
         }
         return true
+    }
+}
+
+/// Sheet-presentable wrapper for a preview model.
+struct PreviewItem: Identifiable {
+    let id = UUID()
+    let model: DocumentPreviewModel
+}
+
+/// In-app source preview (WO 40): PDF page, image, or normalized text with a
+/// best-effort highlight, plus source metadata/warnings. Never fails silently —
+/// an unavailable visual falls back to normalized text (plan §11.2).
+struct DocumentPreviewView: View {
+    let model: DocumentPreviewModel
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.documentName).font(.headline)
+                    Text(model.locatorDisplay).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done", action: onClose).keyboardShortcut(.defaultAction)
+            }
+            .padding()
+            if !model.warnings.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(model.warnings.joined(separator: " ")).font(.caption).foregroundStyle(.orange)
+                    Spacer()
+                }
+                .padding(.horizontal).padding(.bottom, 6)
+            }
+            Divider()
+            body(for: model.kind)
+                .frame(minWidth: 560, minHeight: 460)
+        }
+    }
+
+    @ViewBuilder
+    private func body(for kind: DocumentPreviewModel.Kind) -> some View {
+        switch kind {
+        case let .pdf(path, pageIndex, highlightText):
+            PDFKitView(url: URL(fileURLWithPath: path), pageIndex: pageIndex, highlightText: highlightText)
+        case let .image(path, _):
+            ScrollView([.horizontal, .vertical]) {
+                if let image = NSImage(contentsOf: URL(fileURLWithPath: path)) {
+                    Image(nsImage: image).resizable().scaledToFit()
+                } else {
+                    Text("Image could not be loaded.").foregroundStyle(.secondary).padding()
+                }
+            }
+        case let .text(content, start, end):
+            ScrollView {
+                Text(Self.highlighted(content, start: start, end: end))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+        case let .unavailable(reason, fallbackText):
+            VStack(alignment: .leading, spacing: 8) {
+                Label(reason, systemImage: "doc.questionmark").font(.callout).foregroundStyle(.secondary)
+                Divider()
+                ScrollView {
+                    Text(fallbackText.isEmpty ? "No extracted text available." : fallbackText)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding()
+        }
+    }
+
+    private static func highlighted(_ text: String, start: Int?, end: Int?) -> AttributedString {
+        var attributed = AttributedString(text)
+        guard let start, let end, start >= 0, start < end, end <= text.count else { return attributed }
+        let lower = attributed.index(attributed.startIndex, offsetByCharacters: start)
+        let upper = attributed.index(attributed.startIndex, offsetByCharacters: end)
+        attributed[lower..<upper].backgroundColor = .yellow.opacity(0.4)
+        return attributed
+    }
+}
+
+/// PDFKit preview navigated to a page, with a best-effort text-match highlight.
+struct PDFKitView: NSViewRepresentable {
+    let url: URL
+    let pageIndex: Int?
+    let highlightText: String?
+
+    func makeNSView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.displayMode = .singlePageContinuous
+        return view
+    }
+
+    func updateNSView(_ view: PDFView, context: Context) {
+        if view.document == nil {
+            view.document = PDFDocument(url: url)
+        }
+        guard let document = view.document else { return }
+        if let pageIndex, pageIndex >= 0, pageIndex < document.pageCount, let page = document.page(at: pageIndex) {
+            view.go(to: PDFDestination(page: page, at: NSPoint(x: 0, y: page.bounds(for: .mediaBox).height)))
+        }
+        if let highlightText, !highlightText.isEmpty {
+            let snippet = String(highlightText.prefix(80))
+            if let selection = document.findString(snippet, withOptions: [.caseInsensitive]).first {
+                selection.color = .yellow
+                view.highlightedSelections = [selection]
+                view.go(to: selection)
+            }
+        }
     }
 }

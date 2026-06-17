@@ -1954,3 +1954,27 @@ Deviation: folder sidebar is a flat matter-scoped list rather than a nested tree
 for v1 (clean + functional; nested-tree presentation can follow). Move/copy between
 folders is available at the controller/repo level; richer drag-between-folders UI is
 deferred.
+
+## WO 40 — In-App Preview And Source Links — DONE (2026-06-17)
+
+Status: complete; preview-loader tests green (3); app builds.
+
+Delivered:
+- `SupraSessions/DocumentPreviewLoader` + `DocumentPreviewModel`: resolves a
+  `(documentID, DocumentSourceLocator)` into a renderable kind — `.pdf(path,page,
+  highlightText)`, `.image(path,boxes)`, `.text(content,highlight range)`, or
+  `.unavailable(reason,fallbackText)`. Picks the matching part (page/sheet/first),
+  surfaces extraction/OCR warnings, and always falls back to normalized text so a
+  link never fails silently (plan §11.2). `MatterDocumentsController` exposes
+  `preview(chunkID:)` (open at the matched chunk) and `preview(documentID:)`.
+- `Apps/.../Documents/MatterDocumentsView.swift`: `DocumentPreviewView` (sheet) +
+  `PDFKitView` (NSViewRepresentable) navigating to the page with a best-effort
+  `findString` highlight; image via NSImage; normalized text with an
+  `AttributedString` char-range highlight; warnings shown in the header. Search
+  hits and a per-row eye button open the preview.
+- Tests: text locator → highlighted text; missing PDF blob → unavailable + text
+  fallback; unknown document → unavailable.
+
+Note: image OCR bounding-box overlay is carried in the model
+(`boundingBoxesJSON`) but not yet drawn over the image (page/text highlight is
+implemented); a deferred visual nicety.
