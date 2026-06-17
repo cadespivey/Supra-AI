@@ -1,0 +1,150 @@
+{
+  "chronology" : [
+    {
+      "date" : "2026-02-27",
+      "event" : "Purchase and Sale Agreement effective; price $1,275,000, closing set for April 10, 2026.",
+      "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+    },
+    {
+      "date" : "2026-03-04",
+      "event" : "Addendum No. 1 (ADD-4412-001) executed; confirms April 10, 2026 closing and adds $7,500 seller credit.",
+      "sourceFilename" : "addendum-no-1-financing-extension.docx"
+    },
+    {
+      "date" : "2026-03-05",
+      "event" : "Title commitment GT-TC-58821-A effective; discloses $4,800 code-enforcement lien (Schedule B-II Exception 7).",
+      "sourceFilename" : "title-commitment-gulfstream.pdf"
+    },
+    {
+      "date" : "2026-03-06",
+      "event" : "Property inspection performed; active roof leak above Unit 2C documented (OCR-only).",
+      "sourceFilename" : "inspection-report-scanned.pdf"
+    },
+    {
+      "date" : "2026-03-09",
+      "event" : "Realtor Tessa Lindqvist emails buyer referencing an (incorrect) March 31 closing and seller 'cold feet'.",
+      "sourceFilename" : "realtor-message-from-coastline.msg"
+    },
+    {
+      "date" : "2026-03-11",
+      "event" : "Lender issues written loan commitment TBFCU-LC-99214 ($956,250); email also asserts March 31, 2026 closing (contradicts PSA).",
+      "sourceFilename" : "financing-contingency-status.eml"
+    },
+    {
+      "date" : "2026-03-14",
+      "event" : "Financing\/inspection contingency deadline under PSA §7.2.",
+      "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+    },
+    {
+      "date" : "2026-04-10",
+      "event" : "Contractual closing date under PSA §9.1 and Addendum No. 1.",
+      "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+    }
+  ],
+  "courtListener" : {
+    "expectedAuthorityNames" : [
+      "DK Arena, Inc. v. EB Acquisitions I, LLC, 112 So. 3d 85 (Fla. 2013)",
+      "Microdecisions, Inc. v. Skinner, 889 So. 2d 871 (Fla. 2d DCA 2004)"
+    ],
+    "jurisdiction" : "Florida (Supreme Court of Florida and District Courts of Appeal); 13th Judicial Circuit, Hillsborough County trial venue",
+    "legalIssue" : "Whether a buyer may obtain specific performance of a definite, signed Florida real-estate purchase and sale agreement where financing and inspection contingencies were timely satisfied and the seller repudiated, and the related question of whether recorded contract\/property records implicate public-records access rather than copyright restriction."
+  },
+  "qa" : [
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "$1,275,000.00",
+      "locatorHint" : "Section 2 (Purchase Price)",
+      "question" : "What is the total purchase price for 4412 Bayshore Blvd?",
+      "requiresOCR" : false,
+      "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "$63,750.00, held by Gulfstream Title & Escrow, LLC under escrow file GT-58821.",
+      "locatorHint" : "Section 3 (Earnest Money)",
+      "question" : "How much earnest money was deposited and who holds it?",
+      "requiresOCR" : false,
+      "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "March 14, 2026.",
+      "locatorHint" : "Section 7.2 (Contingencies)",
+      "question" : "What is the financing\/inspection contingency deadline?",
+      "requiresOCR" : false,
+      "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+    },
+    {
+      "crossDocument" : true,
+      "expectedAnswer" : "Yes. The executed PSA (§9.1) and Addendum No. 1 set the closing date as April 10, 2026, but the loan officer's financing email (and the realtor .msg) state the closing date as March 31, 2026. The PSA\/Addendum is the controlling written agreement; the emails are inconsistent.",
+      "locatorHint" : "Compare email subject\/body (March 31, 2026) against PSA §9.1 and Addendum No. 1 (April 10, 2026)",
+      "question" : "Is there a contradiction in the documents about the closing date, and what is it?",
+      "requiresOCR" : false,
+      "sourceFilename" : "financing-contingency-status.eml"
+    },
+    {
+      "crossDocument" : true,
+      "expectedAnswer" : "Yes. Commitment TBFCU-LC-99214 for $956,250.00 was issued March 11, 2026, which is before the March 14, 2026 contingency deadline.",
+      "locatorHint" : "Email body and attached loan-commitment-TBFCU-LC-99214.pdf, compared to PSA §7.2",
+      "question" : "Was the buyer's written loan commitment issued before the contingency deadline?",
+      "requiresOCR" : false,
+      "sourceFilename" : "financing-contingency-status.eml"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "An active roof leak above second-floor commercial Unit 2C, with water staining and soft decking, estimated to cost $18,500 to repair.",
+      "locatorHint" : "Section 2 (Roofing) — only recoverable via OCR of the scanned report",
+      "question" : "What material roof defect did the inspection identify, and what is the estimated repair cost?",
+      "requiresOCR" : true,
+      "sourceFilename" : "inspection-report-scanned.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "Raymond Ostrander of Bayfront Property Inspections, Florida inspector license No. HI-7741.",
+      "locatorHint" : "Report header — requires OCR",
+      "question" : "Who performed the inspection and under what license number?",
+      "requiresOCR" : true,
+      "sourceFilename" : "inspection-report-scanned.pdf"
+    },
+    {
+      "crossDocument" : true,
+      "expectedAnswer" : "The closing statement shows a $4,800.00 'Undisclosed Lien Payoff — Sunstate Code Enforcement' debited to Seller. This matches Schedule B-II, Exception 7 of the title commitment: a City of Tampa \/ Sunstate Code Enforcement lien recorded at O.R. Book 28114, Page 0042, for $4,800.00.",
+      "locatorHint" : "Settlement sheet 'Undisclosed Lien Payoff' line; cross-reference title-commitment Schedule B-II Exception 7",
+      "question" : "What undisclosed lien appears on the closing statement, and does it match a title exception?",
+      "requiresOCR" : false,
+      "sourceFilename" : "closing-statement-settlement-sheet.xlsx"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "$262,750.00.",
+      "locatorHint" : "Settlement sheet 'ESTIMATED CASH TO CLOSE FROM BUYER' line",
+      "question" : "What is the estimated cash to close from the buyer?",
+      "requiresOCR" : false,
+      "sourceFilename" : "closing-statement-settlement-sheet.xlsx"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "A $7,500.00 credit toward the buyer's closing costs (Addendum Control No. ADD-4412-001, dated March 4, 2026).",
+      "locatorHint" : "Addendum Section 2 (Seller Closing-Cost Credit)",
+      "question" : "What closing-cost credit did the seller agree to in Addendum No. 1?",
+      "requiresOCR" : false,
+      "sourceFilename" : "addendum-no-1-financing-extension.docx"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "Lot 12, Block 4, Bayshore Gardens Unit Two, per Plat Book 41, Page 18, Public Records of Hillsborough County, Florida.",
+      "locatorHint" : "Schedule A, item 5 (Legal Description)",
+      "question" : "What is the recorded legal description of the property?",
+      "requiresOCR" : false,
+      "sourceFilename" : "title-commitment-gulfstream.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "NOT SUPPORTED — the documents do not answer this.",
+      "locatorHint" : "No HOA membership or fee is stated in any document; refusal expected.",
+      "question" : "What is the buyer's homeowners' association membership or HOA monthly fee for the property?",
+      "requiresOCR" : false,
+      "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+    }
+  ]
+}

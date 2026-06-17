@@ -1,0 +1,144 @@
+{
+  "chronology" : [
+    {
+      "date" : "2025-08-04",
+      "event" : "Bayfront and Coastal Marine execute Subcontract No. CMC-BSS-2025-0047 for Berth 7 steel\/rebar ($487,500.00).",
+      "sourceFilename" : "subcontract-agreement.pdf"
+    },
+    {
+      "date" : "2025-09-12",
+      "event" : "Bayfront first furnishes materials to the Berth 7 project (per recorded Claim of Lien).",
+      "sourceFilename" : "claim-of-lien-recorded.pdf"
+    },
+    {
+      "date" : "2025-12-30",
+      "event" : "Bayfront serves its Notice to Owner on the Port Verano Authority, identifying Bond No. SUR-7741-FL.",
+      "sourceFilename" : "payment-dispute-thread.eml"
+    },
+    {
+      "date" : "2026-01-19",
+      "event" : "Lot 4 structural steel and rebar delivered and signed for by superintendent Curtis Mealy (Ticket DT-Lot4-0119).",
+      "sourceFilename" : "delivery-receipt-lot4.png"
+    },
+    {
+      "date" : "2026-02-26",
+      "event" : "Bayfront last furnishes materials (final delivery + freight, INV-2026-0228).",
+      "sourceFilename" : "claim-of-lien-recorded.pdf"
+    },
+    {
+      "date" : "2026-03-05",
+      "event" : "Coastal Marine's controller asserts pay-when-paid and an $18,525.00 Lot 4 back-charge in the email dispute thread.",
+      "sourceFilename" : "payment-dispute-thread.eml"
+    },
+    {
+      "date" : "2026-03-11",
+      "event" : "Claim of Lien recorded in O.R. Book 28714, Page 1902, Hillsborough County (lien amount $163,815.00).",
+      "sourceFilename" : "claim-of-lien-recorded.pdf"
+    },
+    {
+      "date" : "2026-03-24",
+      "event" : "Demand letter sent demanding $182,340.00 (overstated vs. ledger).",
+      "sourceFilename" : "demand-letter.docx"
+    }
+  ],
+  "courtListener" : {
+    "expectedAuthorityNames" : [
+      "Deen v. Tampa Port Authority, 207 So. 2d 688 (Fla. 1967)",
+      "City of Gainesville v. Republic Inv. Corp., 480 So. 2d 1344 (Fla. 1st DCA 1985)",
+      "Fla. Stat. § 255.05 (public-project payment bond)",
+      "Fla. Stat. ch. 713 (Construction Lien Law); § 713.08 (Claim of Lien)"
+    ],
+    "jurisdiction" : "Florida (Supreme Court of Florida and District Courts of Appeal)",
+    "legalIssue" : "Whether a subcontractor\/supplier's Chapter 713 construction lien can attach to land owned by a public port authority, or whether its exclusive remedy for unpaid materials on a public project is a claim against the Section 255.05, Florida Statutes payment bond; and the strict-compliance requirements (Notice to Owner) governing such claims."
+  },
+  "qa" : [
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "$487,500.00 under Subcontract No. CMC-BSS-2025-0047.",
+      "locatorHint" : "Section 3 (Contract Sum); header subcontract number",
+      "question" : "What is the total Contract Sum under the steel and rebar subcontract, and what is the subcontract number?",
+      "requiresOCR" : false,
+      "sourceFilename" : "subcontract-agreement.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "It contains a pay-when-paid conditional-payment provision (the contractor's receipt of payment from the Owner is a condition precedent) and requires written notice of default with a 45-day opportunity to cure before any action is commenced.",
+      "locatorHint" : "Section 14.3 (Conditional Payment; Cure)",
+      "question" : "What does Section 14.3 of the subcontract require before a party may file suit, and what type of payment provision does it contain?",
+      "requiresOCR" : false,
+      "sourceFilename" : "subcontract-agreement.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "$163,815.00 (NET UNPAID BALANCE line).",
+      "locatorHint" : "Draw Ledger sheet, final 'NET UNPAID BALANCE' row",
+      "question" : "What net unpaid balance does Bayfront's draw ledger actually compute to?",
+      "requiresOCR" : false,
+      "sourceFilename" : "payment-draw-ledger.xlsx"
+    },
+    {
+      "crossDocument" : true,
+      "expectedAnswer" : "The demand letter demands $182,340.00, but the draw ledger nets to $163,815.00 — an $18,525.00 overstatement that appears to double-count the disputed Lot 4 rebar back-charge. This is the deliberate cross-document contradiction.",
+      "locatorHint" : "Demand paragraph ('$182,340.00') vs. ledger NET UNPAID BALANCE",
+      "question" : "What dollar amount does the demand letter state is owed, and how does it conflict with the draw ledger?",
+      "requiresOCR" : false,
+      "sourceFilename" : "demand-letter.docx"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "Recorded March 11, 2026, in Official Records Book 28714, Page 1902, Hillsborough County (Instrument No. 2026000091847).",
+      "locatorHint" : "Recording stamp at top of scanned instrument",
+      "question" : "On what date was the Claim of Lien recorded, and in what Official Records book and page?",
+      "requiresOCR" : true,
+      "sourceFilename" : "claim-of-lien-recorded.pdf"
+    },
+    {
+      "crossDocument" : true,
+      "expectedAnswer" : "$163,815.00, which matches the draw ledger's net unpaid balance, not the demand letter's $182,340.00.",
+      "locatorHint" : "Paragraph 4 of the Claim of Lien ('$163,815.00')",
+      "question" : "What lien amount is stated on the recorded Claim of Lien, and does it match the ledger or the demand letter?",
+      "requiresOCR" : true,
+      "sourceFilename" : "claim-of-lien-recorded.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "Curtis Mealy, site superintendent for Coastal Marine Constructors, signed for it on January 19, 2026 under Delivery Ticket No. DT-Lot4-0119.",
+      "locatorHint" : "Receiving block and ticket number on the photographed ticket",
+      "question" : "Who signed for the Lot 4 delivery, on what date, and under what delivery ticket number?",
+      "requiresOCR" : true,
+      "sourceFilename" : "delivery-receipt-lot4.png"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "He raises (1) pay-when-paid under Section 14.3 (the Authority has not released the Lot 4 pay application) and (2) an $18,525.00 back-charge for the QC-flagged Lot 4 rebar coils. The attached Notice to Owner identifies Bond No. SUR-7741-FL from Gulfstream Surety Company.",
+      "locatorHint" : "Body items 1 and 2; attachment 'notice-to-owner.pdf' bond reference",
+      "question" : "What two defenses to payment does Coastal Marine's controller raise in the email thread, and what is the payment bond identified in the attachment?",
+      "requiresOCR" : false,
+      "sourceFilename" : "payment-dispute-thread.eml"
+    },
+    {
+      "crossDocument" : true,
+      "expectedAnswer" : "Pursue the Section 255.05 payment bond (Bond No. SUR-7741-FL, Gulfstream Surety) as the primary remedy, because a Chapter 713 construction lien cannot attach to public\/sovereign property; the recorded lien is preserved only as a precaution. This synthesizes the subcontract's public-owner fact, the bond identified in the NTO attachment, and the research memo's conclusion.",
+      "locatorHint" : "SHORT ANSWER and RECOMMENDATION sections",
+      "question" : "Given that the Berth 7 parcel is owned by the Port Verano Authority, what is the firm's recommended primary remedy and why?",
+      "requiresOCR" : false,
+      "sourceFilename" : "lien-vs-bond-research-memo.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "Within one year of the March 11, 2026 recording date.",
+      "locatorHint" : "DISCUSSION point (3) referencing the one-year deadline from recording",
+      "question" : "By when must any action to enforce the recorded lien be commenced, per the research memo?",
+      "requiresOCR" : false,
+      "sourceFilename" : "lien-vs-bond-research-memo.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "NOT SUPPORTED — the documents do not answer this. The bond number and surety are identified, but no penal sum \/ bond amount appears anywhere in the corpus.",
+      "locatorHint" : "Bond is named (SUR-7741-FL) but no dollar penal sum is stated in any document",
+      "question" : "What is the penal sum (maximum coverage) of the Section 255.05 payment bond?",
+      "requiresOCR" : false,
+      "sourceFilename" : "lien-vs-bond-research-memo.pdf"
+    }
+  ]
+}

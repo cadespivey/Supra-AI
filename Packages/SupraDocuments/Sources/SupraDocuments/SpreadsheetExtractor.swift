@@ -15,29 +15,30 @@ public struct SpreadsheetExtractor: DocumentExtractor {
         }
 
         let sharedStrings = try Self.loadSharedStrings(fileURL: fileURL)
-        let sheetNames = try Self.loadSheetNames(fileURL: fileURL)
+        let sheets = try Self.loadSheets(fileURL: fileURL)
         let workbookName = fileURL.lastPathComponent
 
         var parts: [ExtractedPart] = []
-        // Sheets are stored as xl/worksheets/sheet1.xml, sheet2.xml… in order.
-        for (index, name) in sheetNames.enumerated() {
-            let sheetPath = "xl/worksheets/sheet\(index + 1).xml"
+        for (index, sheet) in sheets.enumerated() {
+            // Resolve each tab to its actual worksheet part via the r:id relationship;
+            // fall back to positional sheet{N}.xml only when relationships are absent.
+            let sheetPath = sheet.path ?? "xl/worksheets/sheet\(index + 1).xml"
             guard let data = try ZipArchiveReader.entryData(in: fileURL, path: sheetPath) else { continue }
             let cells = Self.parseCells(data: data, sharedStrings: sharedStrings)
             guard !cells.isEmpty else { continue }
             let grid = Self.renderGrid(cells)
             let range = Self.usedRange(cells)
-            let header = "\(workbookName) > \(name)\(range.map { "!\($0)" } ?? "")"
+            let header = "\(workbookName) > \(sheet.name)\(range.map { "!\($0)" } ?? "")"
             parts.append(ExtractedPart(
                 sourceKind: .spreadsheetCellRange,
                 text: "\(header)\n\(grid.text)",
-                sheetName: name,
+                sheetName: sheet.name,
                 cellRange: range
             ))
         }
 
         if parts.isEmpty {
-            parts.append(ExtractedPart(sourceKind: .spreadsheetCellRange, text: workbookName, sheetName: sheetNames.first))
+            parts.append(ExtractedPart(sourceKind: .spreadsheetCellRange, text: workbookName, sheetName: sheets.first?.name))
         }
         return ExtractionResult(parts: parts, method: "xlsx")
     }
@@ -55,17 +56,68 @@ public struct SpreadsheetExtractor: DocumentExtractor {
         return collector.strings
     }
 
-    // MARK: - Sheet names
+    // MARK: - Sheet names & worksheet resolution
 
-    private static func loadSheetNames(fileURL: URL) throws -> [String] {
+    /// A workbook tab paired with the worksheet part it actually points at. Per
+    /// OOXML, the physical filename is the sheet's `r:id` relationship target in
+    /// xl/_rels/workbook.xml.rels — NOT the tab order — so reordered or deleted
+    /// sheets don't get cell values attributed to the wrong sheet name. `path`
+    /// is nil when no relationship resolves, signalling positional fallback.
+    private struct SheetRef {
+        let name: String
+        let path: String?
+    }
+
+    private static func loadSheets(fileURL: URL) throws -> [SheetRef] {
         guard let data = try ZipArchiveReader.entryData(in: fileURL, path: "xl/workbook.xml") else {
-            return ["Sheet1"]
+            return [SheetRef(name: "Sheet1", path: nil)]
         }
         let collector = WorkbookSheetsCollector()
         let parser = XMLParser(data: data)
         parser.delegate = collector
         _ = parser.parse()
-        return collector.names.isEmpty ? ["Sheet1"] : collector.names
+        guard !collector.sheets.isEmpty else {
+            return [SheetRef(name: "Sheet1", path: nil)]
+        }
+        let relationships = try Self.loadWorkbookRelationships(fileURL: fileURL)
+        return collector.sheets.map { sheet in
+            let path = sheet.relationshipId
+                .flatMap { relationships[$0] }
+                .map(Self.resolveWorksheetPath)
+            return SheetRef(name: sheet.name, path: path)
+        }
+    }
+
+    /// Parses xl/_rels/workbook.xml.rels into a `[Relationship Id: Target]` map.
+    /// Returns an empty map when the rels part is absent (minimal writers),
+    /// which makes `loadSheets` fall back to positional worksheet mapping.
+    private static func loadWorkbookRelationships(fileURL: URL) throws -> [String: String] {
+        guard let data = try ZipArchiveReader.entryData(in: fileURL, path: "xl/_rels/workbook.xml.rels") else {
+            return [:]
+        }
+        let collector = RelationshipsCollector()
+        let parser = XMLParser(data: data)
+        parser.delegate = collector
+        _ = parser.parse()
+        return collector.targetsById
+    }
+
+    /// Resolves a relationship Target (e.g. "worksheets/sheet2.xml") to an archive
+    /// path. Targets are relative to the workbook part's directory ("xl/"); a
+    /// leading "/" means relative to the package root.
+    private static func resolveWorksheetPath(_ target: String) -> String {
+        if target.hasPrefix("/") {
+            return String(target.dropFirst())
+        }
+        var components = ["xl"]
+        for segment in target.split(separator: "/") {
+            switch segment {
+            case "..": if !components.isEmpty { components.removeLast() }
+            case ".": continue
+            default: components.append(String(segment))
+            }
+        }
+        return components.joined(separator: "/")
     }
 
     // MARK: - Cells
@@ -143,11 +195,31 @@ private final class SharedStringsCollector: NSObject, XMLParserDelegate {
 }
 
 private final class WorkbookSheetsCollector: NSObject, XMLParserDelegate {
-    private(set) var names: [String] = []
+    struct Sheet {
+        let name: String
+        let relationshipId: String?
+    }
+    private(set) var sheets: [Sheet] = []
+
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String]) {
-        if elementName == "sheet", let name = attributeDict["name"] {
-            names.append(name)
-        }
+        guard elementName == "sheet", let name = attributeDict["name"] else { return }
+        sheets.append(Sheet(name: name, relationshipId: Self.relationshipId(in: attributeDict)))
+    }
+
+    /// The sheet's relationship reference. Parsing is namespace-unaware, so the
+    /// attribute key is the literal `r:id`; fall back to any `*:id`/`id` key for
+    /// the rare non-`r` prefix, without matching unrelated keys like `sheetId`.
+    private static func relationshipId(in attributes: [String: String]) -> String? {
+        if let id = attributes["r:id"] { return id }
+        return attributes.first { $0.key == "id" || $0.key.hasSuffix(":id") }?.value
+    }
+}
+
+private final class RelationshipsCollector: NSObject, XMLParserDelegate {
+    private(set) var targetsById: [String: String] = [:]
+    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String]) {
+        guard elementName == "Relationship", let id = attributeDict["Id"], let target = attributeDict["Target"] else { return }
+        targetsById[id] = target
     }
 }
 
