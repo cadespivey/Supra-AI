@@ -14,9 +14,8 @@ import XCTest
 ///     DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
 ///       swift test --package-path Packages/SupraTestKit --filter CourtListenerLiveTests
 ///
-/// The query targets a verified real Florida authority used by the construction-
-/// lien matter (Deen v. Tampa Port Authority, 207 So. 2d 688 (Fla. 1967)), so a
-/// healthy connection returns it.
+/// Each probe is one matter's verified lead authority (confirmed live on
+/// CourtListener 2026-06-17), so a healthy connection returns it as a hit.
 final class CourtListenerLiveTests: XCTestCase {
 
     /// In-memory key store so the live test never touches the real Keychain.
@@ -28,7 +27,26 @@ final class CourtListenerLiveTests: XCTestCase {
         func hasCourtListenerToken() throws -> Bool { !token.isEmpty }
     }
 
-    func testLiveCourtListenerSearchReturnsKnownFloridaAuthority() async throws {
+    /// One verified authority per seeded matter.
+    private struct AuthorityProbe {
+        let matter: String
+        let query: String
+        let expectedCaseSubstring: String
+    }
+
+    private static let probes: [AuthorityProbe] = [
+        AuthorityProbe(matter: "construction-lien",
+                       query: "Deen v. Tampa Port Authority",
+                       expectedCaseSubstring: "Tampa Port Authority"),
+        AuthorityProbe(matter: "purchase-sale",
+                       query: "Microdecisions v. Skinner",
+                       expectedCaseSubstring: "Microdecisions"),
+        AuthorityProbe(matter: "insurance-claim",
+                       query: "Dowd v. Monroe County",
+                       expectedCaseSubstring: "Dowd")
+    ]
+
+    func testLiveCourtListenerSurfacesEachMatterLeadAuthority() async throws {
         let token = (ProcessInfo.processInfo.environment["COURTLISTENER_API_TOKEN"] ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         try XCTSkipIf(token.isEmpty, "Set COURTLISTENER_API_TOKEN to run the live CourtListener test.")
@@ -41,30 +59,34 @@ final class CourtListenerLiveTests: XCTestCase {
         // Production CourtListener stack: token store, host allowlist, rate limiter,
         // and the network-request audit log (backed by a throwaway store).
         let store = try SupraStore(url: base.appendingPathComponent("cl.sqlite"))
-        let logger = NetworkRequestLogger(repository: store.networkRequests)
         let client = CourtListenerClient(
             httpClient: AuthorizedHTTPClient(
                 keyStore: StaticTokenStore(token: token),
                 policy: NetworkPolicyService(),
-                logger: logger
+                logger: NetworkRequestLogger(repository: store.networkRequests)
             )
         )
 
-        let response = try await client.searchOpinions(
-            CourtListenerSearchRequest(query: "Deen v. Tampa Port Authority")
-        )
+        for (index, probe) in Self.probes.enumerated() {
+            // Space requests so the burst stays comfortably under the 5/min limit.
+            if index > 0 { try await Task.sleep(nanoseconds: 1_200_000_000) }
 
-        XCTAssertGreaterThan(response.count, 0, "CourtListener returned no results for a known Florida authority")
-        XCTAssertTrue(
-            response.results.contains { ($0.caseName ?? "").localizedCaseInsensitiveContains("Tampa Port Authority") },
-            "Expected Deen v. Tampa Port Authority among the live results; got: \(response.results.prefix(5).map { $0.caseName ?? "?" })"
-        )
+            let response = try await client.searchOpinions(CourtListenerSearchRequest(query: probe.query))
+            XCTAssertGreaterThan(response.count, 0, "\(probe.matter): CourtListener returned no results for \(probe.query)")
+            XCTAssertTrue(
+                response.results.contains { ($0.caseName ?? "").localizedCaseInsensitiveContains(probe.expectedCaseSubstring) },
+                "\(probe.matter): expected '\(probe.expectedCaseSubstring)' for query '\(probe.query)'; got: \(response.results.prefix(5).map { $0.caseName ?? "?" })"
+            )
+        }
 
-        // The request flowed through the app's audited, allowlisted client.
-        let audited = try store.networkRequests.fetchRecent(limit: 10)
-        XCTAssertTrue(
-            audited.contains { $0.domain.contains("courtlistener.com") && $0.approved && ($0.statusCode ?? 0) / 100 == 2 },
-            "Expected an approved 2xx CourtListener request in the network audit log; got: \(audited.map { "\($0.domain) \($0.statusCode ?? -1)" })"
+        // Every request flowed through the app's audited, allowlisted client.
+        let audited = try store.networkRequests.fetchRecent(limit: 20)
+        let approved2xx = audited.filter {
+            $0.domain.contains("courtlistener.com") && $0.approved && ($0.statusCode ?? 0) / 100 == 2
+        }
+        XCTAssertEqual(
+            approved2xx.count, Self.probes.count,
+            "expected \(Self.probes.count) approved 2xx CourtListener requests in the audit log; got: \(audited.map { "\($0.domain) \($0.statusCode ?? -1)" })"
         )
     }
 }
