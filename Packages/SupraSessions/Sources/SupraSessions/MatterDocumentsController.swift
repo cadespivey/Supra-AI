@@ -24,8 +24,21 @@ public final class MatterDocumentsController: ObservableObject {
     @Published public private(set) var trashedDocuments: [MatterDocumentRecord] = []
     @Published public private(set) var trashedFolders: [DocumentFolderRecord] = []
     @Published public private(set) var tags: [DocumentTagRecord] = []
-    @Published public var selectedFolderID: String?
+    /// Sidebar selection. A non-optional value so the List can always select the
+    /// "All Documents" row — a nil-tagged row in an Optional-bound single-selection
+    /// List can't be re-selected, which is why "All Documents" appeared dead after
+    /// a folder had been picked.
+    @Published public var selectedSidebarID: String = MatterDocumentsController.allDocumentsTag
     @Published public var searchText: String = ""
+
+    /// Sentinel sidebar selection meaning "show every document, no folder filter".
+    public static let allDocumentsTag = "__all_documents__"
+
+    /// The selected folder, or nil when "All Documents" is selected. Preserves the
+    /// existing nil = whole-matter semantics used by scope and folder creation.
+    public var selectedFolderID: String? {
+        selectedSidebarID == Self.allDocumentsTag ? nil : selectedSidebarID
+    }
     @Published public private(set) var searchHits: [DocumentSearchHit] = []
     @Published public var message: String?
 
@@ -91,9 +104,12 @@ public final class MatterDocumentsController: ObservableObject {
         tags = (try? store.documentLibrary.fetchTags(matterID: matterID)) ?? []
     }
 
-    /// Documents in the current folder selection (nil → unfiled root documents).
+    /// Documents for the current sidebar selection: every document for
+    /// "All Documents", otherwise just the selected folder's documents.
     public var visibleDocuments: [MatterDocumentRecord] {
-        documents.filter { $0.folderID == selectedFolderID && $0.parentDocumentID == nil }
+        let roots = documents.filter { $0.parentDocumentID == nil }
+        guard selectedSidebarID != Self.allDocumentsTag else { return roots }
+        return roots.filter { $0.folderID == selectedSidebarID }
     }
 
     public func childAttachments(of documentID: String) -> [MatterDocumentRecord] {
@@ -139,7 +155,7 @@ public final class MatterDocumentsController: ObservableObject {
             summary: "Moved a folder and its documents to trash",
             relatedTable: "document_folders", relatedID: id
         )
-        if selectedFolderID == id { selectedFolderID = nil }
+        if selectedSidebarID == id { selectedSidebarID = Self.allDocumentsTag }
         reload()
     }
 

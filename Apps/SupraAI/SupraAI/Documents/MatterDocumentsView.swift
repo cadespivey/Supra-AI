@@ -1,5 +1,6 @@
 import PDFKit
 import SupraCore
+import SupraDesignSystem
 import SupraSessions
 import SupraStore
 import SwiftUI
@@ -23,6 +24,7 @@ struct MatterDocumentsView: View {
     @State private var showChronology = false
     @State private var dropTargeted = false
     @State private var preview: PreviewItem?
+    @State private var dismissedImportFailureID: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,6 +32,7 @@ struct MatterDocumentsView: View {
                 setupBanner
             }
             jobProgress
+            importFailureBanner
             HSplitView {
                 folderSidebar
                     .frame(minWidth: 200, maxWidth: 280)
@@ -103,11 +106,11 @@ struct MatterDocumentsView: View {
     // MARK: - Sidebar
 
     private var folderSidebar: some View {
-        List(selection: $controller.selectedFolderID) {
-            Label("All Documents", systemImage: "tray.full").tag(String?.none)
+        List(selection: $controller.selectedSidebarID) {
+            Label("All Documents", systemImage: "tray.full").tag(MatterDocumentsController.allDocumentsTag)
             Section("Folders") {
                 ForEach(controller.folders) { folder in
-                    Label(folder.name, systemImage: "folder").tag(String?.some(folder.id))
+                    Label(folder.name, systemImage: "folder").tag(folder.id)
                         .contextMenu {
                             Button("Delete Folder", role: .destructive) { controller.deleteFolder(id: folder.id) }
                         }
@@ -244,6 +247,35 @@ struct MatterDocumentsView: View {
         }
         .padding(8)
         .background(Color.orange.opacity(0.12))
+    }
+
+    /// In-app banner for the most recent import that completed with failures
+    /// (otherwise the only signal is the Audit tab / an easily-missed notification).
+    @ViewBuilder
+    private var importFailureBanner: some View {
+        if let failure = queue.lastImportFailure,
+           failure.matterID == controller.matterID,
+           dismissedImportFailureID != failure.id {
+            SupraWarningBanner(
+                .warning,
+                title: "Some files couldn’t be imported",
+                message: "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see the Audit tab for details."
+            )
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    dismissedImportFailureID = failure.id
+                    queue.clearImportFailure()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .padding(8)
+                .help("Dismiss")
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+        }
     }
 
     @ViewBuilder
