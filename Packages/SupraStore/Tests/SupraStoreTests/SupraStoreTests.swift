@@ -31,6 +31,14 @@ final class SupraStoreTests: XCTestCase {
         XCTAssertTrue(tableNames.contains("model_validation_tests"))
         XCTAssertTrue(tableNames.contains("exported_reports"))
         XCTAssertTrue(tableNames.contains("matters"))
+        XCTAssertTrue(tableNames.contains("network_requests"))
+        XCTAssertTrue(tableNames.contains("research_sessions"))
+        XCTAssertTrue(tableNames.contains("research_queries"))
+        XCTAssertTrue(tableNames.contains("research_results"))
+        XCTAssertTrue(tableNames.contains("authorities"))
+        XCTAssertTrue(tableNames.contains("structured_outputs"))
+        XCTAssertTrue(tableNames.contains("structured_output_versions"))
+        XCTAssertTrue(tableNames.contains("audit_events"))
     }
 
     func testMatterChatsAreScopedSeparatelyFromGlobalChats() throws {
@@ -49,6 +57,116 @@ final class SupraStoreTests: XCTestCase {
         XCTAssertEqual(matterChats.first?.id, matterChat.id)
         XCTAssertEqual(matterChats.first?.matterID, matter.id)
         XCTAssertEqual(try store.matters.fetchMatters().count, 1)
+    }
+
+    func testMatterMetadataRoundTrips() throws {
+        let store = try makeStore()
+
+        let matter = try store.matters.createMatter(
+            name: "  Acme v. Roe  ",
+            jurisdiction: "  Delaware  ",
+            partyPerspective: .plaintiff,
+            court: "Chancery",
+            docketNumber: "2026-001"
+        )
+
+        XCTAssertEqual(matter.name, "Acme v. Roe")
+        XCTAssertEqual(matter.jurisdiction, "Delaware")
+        XCTAssertEqual(matter.partyPerspective, PartyPerspective.plaintiff.rawValue)
+        XCTAssertEqual(matter.court, "Chancery")
+        XCTAssertEqual(matter.docketNumber, "2026-001")
+    }
+
+    func testMilestone2ResearchAuthorityOutputAuditAndNetworkRoundTrip() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(
+            name: "Acme v. Roe",
+            jurisdiction: "Delaware",
+            partyPerspective: .plaintiff
+        )
+
+        let session = try store.research.createSession(
+            matterID: matter.id,
+            title: "Standing research",
+            issueText: "What standard governs standing?",
+            jurisdiction: matter.jurisdiction,
+            preferredCourts: ["delch"],
+            status: .planned
+        )
+        let query = try store.research.createQuery(
+            researchSessionID: session.id,
+            queryText: "standing shareholder derivative",
+            queryIndex: 0,
+            status: .approved
+        )
+        let result = try store.research.insertResult(
+            ResearchResultRecord(
+                researchQueryID: query.id,
+                courtlistenerID: "123",
+                clusterID: "456",
+                caseName: "Acme Corp. v. Roe",
+                citationJSON: #"["1 A.3d 100"]"#,
+                preferredCitation: "1 A.3d 100",
+                court: "Del.",
+                reviewState: ResearchResultReviewState.saved.rawValue,
+                rawResultJSON: #"{"caseName":"Acme Corp. v. Roe"}"#
+            )
+        )
+        let authority = try store.authorities.insertAuthority(
+            AuthorityRecord(
+                matterID: matter.id,
+                researchSessionID: session.id,
+                researchResultID: result.id,
+                courtlistenerID: result.courtlistenerID,
+                clusterID: result.clusterID,
+                caseName: result.caseName,
+                citationJSON: result.citationJSON,
+                preferredCitation: result.preferredCitation,
+                court: result.court,
+                reviewState: ResearchResultReviewState.saved.rawValue,
+                useStatus: AuthorityUseStatus.retrievedFromCourtListener.rawValue,
+                rawMetadataJSON: result.rawResultJSON
+            )
+        )
+        let output = try store.structuredOutputs.createOutput(
+            matterID: matter.id,
+            title: "Rule synthesis",
+            outputType: .ruleSynthesis,
+            researchSessionID: session.id
+        )
+        let version = try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id,
+            versionIndex: 1,
+            contentMarkdown: "# Rule Synthesis",
+            requiredSections: ["# Rule Synthesis"],
+            presentSections: ["# Rule Synthesis"],
+            missingSections: []
+        )
+        let networkRequest = try store.networkRequests.createRequest(
+            domain: "www.courtlistener.com",
+            method: "GET",
+            endpoint: "/api/rest/v4/search/",
+            approved: true,
+            relatedResearchSessionID: session.id
+        )
+        try store.networkRequests.finishRequest(id: networkRequest.id, statusCode: 200)
+        _ = try store.auditEvents.recordEvent(
+            matterID: matter.id,
+            eventType: "authority_saved",
+            actor: "user",
+            summary: "Saved authority",
+            relatedTable: "authorities",
+            relatedID: authority.id
+        )
+
+        XCTAssertEqual(try store.research.fetchSessions(matterID: matter.id).single?.id, session.id)
+        XCTAssertEqual(try store.research.fetchQueries(sessionID: session.id).single?.id, query.id)
+        XCTAssertEqual(try store.research.fetchResults(queryID: query.id).single?.id, result.id)
+        XCTAssertEqual(try store.authorities.fetchAuthorities(matterID: matter.id).single?.id, authority.id)
+        XCTAssertEqual(try store.structuredOutputs.fetchOutputs(matterID: matter.id).single?.id, output.id)
+        XCTAssertEqual(try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).single?.id, version.id)
+        XCTAssertEqual(try store.networkRequests.fetchRecent(limit: 1).single?.statusCode, 200)
+        XCTAssertEqual(try store.auditEvents.fetchEvents(matterID: matter.id).single?.eventType, "authority_saved")
     }
 
     func testSettingsRoundTripCodableValues() throws {
