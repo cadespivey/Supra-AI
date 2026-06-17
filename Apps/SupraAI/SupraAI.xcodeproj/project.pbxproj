@@ -49,6 +49,7 @@
 		5A0000000000000000000028 /* MatterEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000118 /* MatterEditorSheet.swift */; };
 		5A0000000000000000000029 /* MatterResearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000119 /* MatterResearchView.swift */; };
 		5A000000000000000000002A /* ResearchPlannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011A /* ResearchPlannerView.swift */; };
+		5A000000000000000000002B /* ResearchSessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011B /* ResearchSessionDetailView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -104,6 +105,7 @@
 		5A0000000000000000000118 /* MatterEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterEditorSheet.swift; sourceTree = "<group>"; };
 		5A0000000000000000000119 /* MatterResearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterResearchView.swift; sourceTree = "<group>"; };
 		5A000000000000000000011A /* ResearchPlannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchPlannerView.swift; sourceTree = "<group>"; };
+		5A000000000000000000011B /* ResearchSessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchSessionDetailView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -202,6 +204,7 @@
 			children = (
 				5A0000000000000000000119 /* MatterResearchView.swift */,
 				5A000000000000000000011A /* ResearchPlannerView.swift */,
+				5A000000000000000000011B /* ResearchSessionDetailView.swift */,
 			);
 			path = Research;
 			sourceTree = "<group>";
@@ -382,6 +385,7 @@
 				5A0000000000000000000028 /* MatterEditorSheet.swift in Sources */,
 				5A0000000000000000000029 /* MatterResearchView.swift in Sources */,
 				5A000000000000000000002A /* ResearchPlannerView.swift in Sources */,
+				5A000000000000000000002B /* ResearchSessionDetailView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

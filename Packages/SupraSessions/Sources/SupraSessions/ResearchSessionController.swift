@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import SupraCore
+import SupraNetworking
 import SupraResearch
 import SupraRuntimeClient
 import SupraRuntimeInterface
@@ -85,26 +86,75 @@ public final class ResearchSessionController: ObservableObject {
         case failed(String)
     }
 
+    /// A saved query within an open session, plus its run state (WO 25).
+    public struct SessionQuery: Identifiable, Sendable, Equatable {
+        public let id: String
+        public let text: String
+        public let index: Int
+        public var status: String
+        public var resultCount: Int?
+        public var nextURL: String?
+        public var errorMessage: String?
+    }
+
+    /// A stored CourtListener result for display (decoupled from the GRDB record).
+    public struct SessionResult: Identifiable, Sendable, Equatable {
+        public let id: String
+        public let caseName: String
+        public let citation: String?
+        public let court: String?
+        public let dateFiled: Date?
+        public let snippet: String?
+        public let reviewState: String
+        public let absoluteURL: String?
+    }
+
     @Published public private(set) var sessions: [ResearchSessionSummary] = []
     @Published public private(set) var planState: PlanState = .idle
     @Published public var plannedQueries: [PlannedQuery] = []
+
+    // Open-session run/detail state (WO 25).
+    @Published public private(set) var openSessionID: String?
+    @Published public private(set) var sessionQueries: [SessionQuery] = []
+    @Published public private(set) var resultsByQuery: [String: [SessionResult]] = [:]
+    @Published public private(set) var isRunning = false
+    @Published public private(set) var runMessage: String?
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
     private let defaultSystemPrompt: String?
     private let planner = ResearchQueryPlanner()
+    private let tokenStore: any APIKeyStoreProtocol
+    private let courtListenerClient: any CourtListenerClientProtocol
     public let matterID: String
 
     public init(
         store: SupraStore,
         runtimeClient: any RuntimeClientProtocol,
         matterID: String,
-        defaultSystemPrompt: String? = nil
+        defaultSystemPrompt: String? = nil,
+        tokenStore: (any APIKeyStoreProtocol)? = nil,
+        courtListenerClient: (any CourtListenerClientProtocol)? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.matterID = matterID
         self.defaultSystemPrompt = defaultSystemPrompt
+        let resolvedTokenStore = tokenStore ?? KeychainTokenStore()
+        self.tokenStore = resolvedTokenStore
+        // Build the default CourtListener stack from the store; every request is
+        // allowlisted, rate-limited, and logged to network_requests by the client.
+        self.courtListenerClient = courtListenerClient ?? CourtListenerClient(
+            httpClient: AuthorizedHTTPClient(
+                keyStore: resolvedTokenStore,
+                policy: NetworkPolicyService(),
+                logger: NetworkRequestLogger(repository: store.networkRequests)
+            )
+        )
+    }
+
+    public var hasCourtListenerToken: Bool {
+        (try? tokenStore.hasCourtListenerToken()) ?? false
     }
 
     public func loadSessions() {
@@ -215,6 +265,179 @@ public final class ResearchSessionController: ObservableObject {
         resetPlan()
         loadSessions()
         return session.id
+    }
+
+    // MARK: - Run (WO 25)
+
+    /// Loads a saved session's queries + stored results into the detail state.
+    public func openSession(_ sessionID: String) {
+        openSessionID = sessionID
+        runMessage = nil
+        reloadOpenSession()
+    }
+
+    public func closeSession() {
+        openSessionID = nil
+        sessionQueries = []
+        resultsByQuery = [:]
+        runMessage = nil
+    }
+
+    /// Runnable while any approved (not-yet-run) query remains.
+    public var canRunOpenSession: Bool {
+        sessionQueries.contains { $0.status == ResearchQueryStatus.approved.rawValue }
+    }
+
+    /// Runs the open session's approved queries sequentially through
+    /// CourtListener (spec §9.5). Continues past individual failures; session
+    /// ends results_ready if any query succeeded, else failed.
+    public func runApprovedSearches() async {
+        guard let sessionID = openSessionID, !isRunning else { return }
+        guard hasCourtListenerToken else {
+            runMessage = "Add a CourtListener API token in Settings to run searches."
+            return
+        }
+        let approved = sessionQueries
+            .filter { $0.status == ResearchQueryStatus.approved.rawValue }
+            .sorted { $0.index < $1.index }
+        guard !approved.isEmpty else {
+            runMessage = "No approved queries to run."
+            return
+        }
+
+        isRunning = true
+        runMessage = nil
+        try? store.research.updateSessionStatus(sessionID: sessionID, status: .running)
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID, eventType: "courtlistener_search_started", actor: "user",
+            summary: "Started CourtListener search (\(approved.count) quer\(approved.count == 1 ? "y" : "ies"))",
+            relatedTable: "research_sessions", relatedID: sessionID
+        )
+
+        var anySuccess = false
+        for query in approved {
+            try? store.research.updateQueryExecution(queryID: query.id, status: .running, executedAt: nil)
+            do {
+                let response = try await courtListenerClient.searchOpinions(
+                    CourtListenerSearchRequest(query: query.text, highlight: true),
+                    relatedResearchSessionID: sessionID
+                )
+                for dto in response.results {
+                    _ = try? store.research.insertResult(makeResultRecord(dto, queryID: query.id))
+                }
+                try? store.research.updateQueryExecution(
+                    queryID: query.id, status: .completed,
+                    resultCount: response.count, nextURL: response.next, executedAt: Date()
+                )
+                anySuccess = true
+            } catch {
+                try? store.research.updateQueryExecution(
+                    queryID: query.id, status: .failed, executedAt: Date(),
+                    errorMessage: error.localizedDescription
+                )
+            }
+        }
+
+        let finalStatus: ResearchSessionStatus = anySuccess ? .resultsReady : .failed
+        try? store.research.updateSessionStatus(
+            sessionID: sessionID, status: finalStatus,
+            completedAt: anySuccess ? nil : Date()
+        )
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID,
+            eventType: anySuccess ? "courtlistener_search_completed" : "courtlistener_search_failed",
+            actor: "network",
+            summary: anySuccess ? "CourtListener search completed" : "All CourtListener queries failed",
+            relatedTable: "research_sessions", relatedID: sessionID
+        )
+        if !anySuccess {
+            runMessage = "Every query failed — check your token and connection."
+        }
+        isRunning = false
+        loadSessions()
+        reloadOpenSession()
+    }
+
+    /// Fetches the next page for a completed query using its stored cursor URL
+    /// (spec §9.6); host is validated by CourtListenerEndpoint before sending.
+    public func loadMore(queryID: String) async {
+        guard let sessionID = openSessionID, !isRunning,
+              let query = sessionQueries.first(where: { $0.id == queryID }),
+              let next = query.nextURL, let cursorURL = URL(string: next)
+        else { return }
+
+        isRunning = true
+        runMessage = nil
+        do {
+            let response = try await courtListenerClient.searchOpinions(
+                CourtListenerSearchRequest(query: query.text, cursorURL: cursorURL),
+                relatedResearchSessionID: sessionID
+            )
+            for dto in response.results {
+                _ = try? store.research.insertResult(makeResultRecord(dto, queryID: queryID))
+            }
+            let total = (try? store.research.fetchResults(queryID: queryID).count) ?? response.count
+            try? store.research.updateQueryExecution(
+                queryID: queryID, status: .completed,
+                resultCount: total, nextURL: response.next, executedAt: Date()
+            )
+        } catch {
+            runMessage = "Load more failed: \(error.localizedDescription)"
+        }
+        isRunning = false
+        reloadOpenSession()
+    }
+
+    private func reloadOpenSession() {
+        guard let sessionID = openSessionID else { return }
+        let queries = ((try? store.research.fetchQueries(sessionID: sessionID)) ?? [])
+            .sorted { $0.queryIndex < $1.queryIndex }
+        sessionQueries = queries.map {
+            SessionQuery(
+                id: $0.id, text: $0.queryText, index: $0.queryIndex, status: $0.status,
+                resultCount: $0.resultCount, nextURL: $0.nextURL, errorMessage: $0.errorMessage
+            )
+        }
+        var grouped: [String: [SessionResult]] = [:]
+        for query in queries {
+            grouped[query.id] = ((try? store.research.fetchResults(queryID: query.id)) ?? []).map { record in
+                SessionResult(
+                    id: record.id, caseName: record.caseName, citation: record.preferredCitation,
+                    court: record.court, dateFiled: record.dateFiled, snippet: record.snippet,
+                    reviewState: record.reviewState, absoluteURL: record.absoluteURL
+                )
+            }
+        }
+        resultsByQuery = grouped
+    }
+
+    private func makeResultRecord(_ dto: CourtListenerSearchResultDTO, queryID: String) -> ResearchResultRecord {
+        let citationJSON = (try? JSONEncoder().encode(dto.citation))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        return ResearchResultRecord(
+            researchQueryID: queryID,
+            clusterID: dto.clusterID.map(String.init),
+            opinionID: dto.opinions.first?.id.map(String.init),
+            caseName: dto.caseName ?? dto.caseNameFull ?? "Untitled case",
+            caseNameFull: dto.caseNameFull,
+            citationJSON: citationJSON,
+            preferredCitation: CourtListenerMapper.preferredCitation(for: dto),
+            court: dto.court,
+            courtID: dto.courtID,
+            dateFiled: Self.parseDate(dto.dateFiled),
+            docketNumber: dto.docketNumber,
+            snippet: dto.opinions.first?.snippet,
+            absoluteURL: dto.absoluteURL,
+            rawResultJSON: dto.rawResultJSON
+        )
+    }
+
+    private static func parseDate(_ string: String?) -> Date? {
+        guard let string, !string.isEmpty else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: String(string.prefix(10)))
     }
 
     // MARK: - Helpers
