@@ -1,23 +1,87 @@
 import Combine
 import Foundation
+import SupraCore
 import SupraRuntimeClient
 import SupraStore
 
-/// A view-facing snapshot of a matter (a folder that groups chats).
+/// A view-facing snapshot of a matter (a legal workspace that groups chats,
+/// research, authorities, and outputs).
 public struct MatterSummary: Identifiable, Sendable, Equatable {
     public let id: String
     public var name: String
+    public var jurisdiction: String
+    public var partyPerspective: PartyPerspective
     public var updatedAt: Date
 
-    public init(id: String, name: String, updatedAt: Date) {
-        self.id = id
+    init(record: MatterRecord) {
+        self.id = record.id
+        self.name = record.name
+        self.jurisdiction = record.jurisdiction
+        self.partyPerspective = PartyPerspective(rawValue: record.partyPerspective) ?? .neutral
+        self.updatedAt = record.updatedAt
+    }
+}
+
+/// Editable matter fields, used by the create/edit form. Keeps the app layer
+/// off the GRDB record type.
+public struct MatterDraft: Sendable, Equatable {
+    public var name: String
+    public var jurisdiction: String
+    public var partyPerspective: PartyPerspective
+    public var court: String
+    public var judge: String
+    public var docketNumber: String
+    public var practiceArea: String
+    public var notes: String
+
+    public init(
+        name: String = "",
+        jurisdiction: String = "",
+        partyPerspective: PartyPerspective = .neutral,
+        court: String = "",
+        judge: String = "",
+        docketNumber: String = "",
+        practiceArea: String = "",
+        notes: String = ""
+    ) {
         self.name = name
-        self.updatedAt = updatedAt
+        self.jurisdiction = jurisdiction
+        self.partyPerspective = partyPerspective
+        self.court = court
+        self.judge = judge
+        self.docketNumber = docketNumber
+        self.practiceArea = practiceArea
+        self.notes = notes
     }
 
     init(record: MatterRecord) {
-        self.init(id: record.id, name: record.name, updatedAt: record.updatedAt)
+        self.init(
+            name: record.name,
+            jurisdiction: record.jurisdiction,
+            partyPerspective: PartyPerspective(rawValue: record.partyPerspective) ?? .neutral,
+            court: record.court ?? "",
+            judge: record.judge ?? "",
+            docketNumber: record.docketNumber ?? "",
+            practiceArea: record.practiceArea ?? "",
+            notes: record.notes ?? ""
+        )
     }
+
+    /// Required fields per the Milestone 2 spec (§4.1): name + jurisdiction must
+    /// be non-empty; party perspective always has a value via the enum.
+    public var isValid: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !jurisdiction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+/// A view-facing audit-log entry for a matter (decoupled from the GRDB record).
+public struct MatterAuditEntry: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let timestamp: Date
+    public let eventType: String
+    public let actor: String
+    public let summary: String
 }
 
 /// Manages the list of matters and, for the selected matter, vends a
@@ -42,8 +106,13 @@ public final class MattersController: ObservableObject {
         self.defaultSystemPrompt = defaultSystemPrompt
     }
 
+    public var selectedMatter: MatterSummary? {
+        guard let selectedMatterID else { return nil }
+        return matters.first { $0.id == selectedMatterID }
+    }
+
     public func loadMatters() {
-        matters = (try? store.matters.fetchMatters())?.map(MatterSummary.init) ?? []
+        reload()
         if let selectedMatterID, matters.contains(where: { $0.id == selectedMatterID }) {
             if chatController == nil { select(matterID: selectedMatterID) }
         } else {
@@ -51,17 +120,86 @@ public final class MattersController: ObservableObject {
         }
     }
 
+    /// Creates a matter, its default matter chat, and a `matter_created` audit
+    /// event, then selects it (spec §8.3).
+    @discardableResult
+    public func createMatter(_ draft: MatterDraft) throws -> MatterSummary {
+        let record = try store.matters.createMatter(
+            name: draft.name,
+            jurisdiction: draft.jurisdiction,
+            partyPerspective: draft.partyPerspective,
+            court: draft.court,
+            judge: draft.judge,
+            docketNumber: draft.docketNumber,
+            practiceArea: draft.practiceArea,
+            notes: draft.notes
+        )
+        _ = try? store.chats.createMatterChat(matterID: record.id, title: "General — \(record.name)")
+        _ = try? store.auditEvents.recordEvent(
+            matterID: record.id,
+            eventType: "matter_created",
+            actor: "user",
+            summary: "Created matter “\(record.name)”"
+        )
+        reload()
+        select(matterID: record.id)
+        return MatterSummary(record: record)
+    }
+
+    /// Convenience used by callers that only have a name (defaults the required
+    /// jurisdiction); the full create flow uses `createMatter(_:)`.
     @discardableResult
     public func createMatter(name: String = "New Matter") throws -> MatterSummary {
-        let record = try store.matters.createMatter(name: name)
-        let summary = MatterSummary(record: record)
-        matters = (try? store.matters.fetchMatters())?.map(MatterSummary.init) ?? matters
-        // Keep selection consistent even if the refetch failed to include the new row.
-        if !matters.contains(where: { $0.id == summary.id }) {
-            matters.insert(summary, at: 0)
+        try createMatter(MatterDraft(name: name, jurisdiction: "Unspecified"))
+    }
+
+    /// The editable draft for an existing matter, or nil if it no longer exists.
+    public func draft(forMatter id: String) -> MatterDraft? {
+        guard let record = try? store.matters.fetchMatter(id: id) else { return nil }
+        return MatterDraft(record: record)
+    }
+
+    public func updateMatter(id: String, draft: MatterDraft) throws {
+        try store.matters.updateMatter(
+            id: id,
+            name: draft.name,
+            jurisdiction: draft.jurisdiction,
+            partyPerspective: draft.partyPerspective,
+            court: draft.court,
+            judge: draft.judge,
+            docketNumber: draft.docketNumber,
+            practiceArea: draft.practiceArea,
+            notes: draft.notes
+        )
+        _ = try? store.auditEvents.recordEvent(
+            matterID: id,
+            eventType: "matter_updated",
+            actor: "user",
+            summary: "Updated matter details"
+        )
+        reload()
+    }
+
+    /// Soft-deletes a matter. The spec's audit event_type set has no
+    /// matter_deleted, so no audit event is written (stays within the contract).
+    public func deleteMatter(id: String) {
+        try? store.matters.softDeleteMatter(id: id)
+        reload()
+        if selectedMatterID == id || !matters.contains(where: { $0.id == selectedMatterID }) {
+            select(matterID: matters.first?.id)
         }
-        select(matterID: record.id)
-        return summary
+    }
+
+    public func auditEntries(forMatter id: String) -> [MatterAuditEntry] {
+        ((try? store.auditEvents.fetchEvents(matterID: id)) ?? []).map {
+            MatterAuditEntry(
+                id: $0.id,
+                timestamp: $0.timestamp,
+                eventType: $0.eventType,
+                actor: $0.actor,
+                summary: $0.summary
+            )
+        }
     }
 
     public func select(matterID: String?) {
@@ -78,5 +216,9 @@ public final class MattersController: ObservableObject {
         )
         controller.loadChats()
         chatController = controller
+    }
+
+    private func reload() {
+        matters = (try? store.matters.fetchMatters())?.map(MatterSummary.init) ?? matters
     }
 }

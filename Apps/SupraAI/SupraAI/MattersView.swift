@@ -1,20 +1,19 @@
 import SupraSessions
 import SwiftUI
 
-/// Matters are folders that group chats. The left column lists matters; the
-/// right side reuses the chat pane, scoped to the selected matter's chats.
+/// Matters are legal workspaces. The left column lists matters; selecting one
+/// opens its workspace (Chat, Research, Authorities, Outputs, Audit, Documents).
 struct MattersView: View {
     @ObservedObject var controller: MattersController
     @ObservedObject var library: ModelLibrary
     @State private var showNewMatter = false
-    @State private var newMatterName = ""
 
     var body: some View {
         HStack(spacing: 0) {
             matterList
-                .frame(width: 240)
+                .frame(width: 260)
             Divider()
-            conversation
+            detail
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -25,18 +24,10 @@ struct MattersView: View {
                 }
             }
         }
-        .alert("New Matter", isPresented: $showNewMatter) {
-            TextField("Matter name", text: $newMatterName)
-            Button("Create") {
-                let name = newMatterName.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !name.isEmpty {
-                    try? controller.createMatter(name: name)
-                }
-                newMatterName = ""
+        .sheet(isPresented: $showNewMatter) {
+            MatterEditorSheet(mode: .create, draft: MatterDraft()) { draft in
+                try? controller.createMatter(draft)
             }
-            Button("Cancel", role: .cancel) { newMatterName = "" }
-        } message: {
-            Text("Name this matter — e.g. a client or case.")
         }
         .task { controller.loadMatters() }
     }
@@ -44,17 +35,24 @@ struct MattersView: View {
     private var matterList: some View {
         List(selection: matterSelection) {
             ForEach(controller.matters) { matter in
-                Label(matter.name, systemImage: "folder")
-                    .tag(matter.id)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(matter.name)
+                    Text("\(matter.jurisdiction) · \(matter.partyPerspective.rawValue.capitalized)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .tag(matter.id)
             }
         }
         .overlay {
             if controller.matters.isEmpty {
-                ContentUnavailableView(
-                    "No Matters",
-                    systemImage: "folder.badge.gearshape",
-                    description: Text("Create a matter to group related chats.")
-                )
+                ContentUnavailableView {
+                    Label("No Matters", systemImage: "folder.badge.gearshape")
+                } description: {
+                    Text("Create a matter to organize chats, research, and outputs.")
+                } actions: {
+                    Button("New Matter") { showNewMatter = true }
+                }
             }
         }
     }
@@ -67,14 +65,14 @@ struct MattersView: View {
     }
 
     @ViewBuilder
-    private var conversation: some View {
-        if let chatController = controller.chatController {
-            GlobalChatsView(controller: chatController, library: library)
+    private var detail: some View {
+        if let matter = controller.selectedMatter {
+            MatterWorkspaceView(controller: controller, library: library, matter: matter)
         } else {
             ContentUnavailableView(
                 "Select a Matter",
-                systemImage: "bubble.left.and.bubble.right",
-                description: Text("Choose or create a matter to start its chats.")
+                systemImage: "folder",
+                description: Text("Choose or create a matter to open its workspace.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

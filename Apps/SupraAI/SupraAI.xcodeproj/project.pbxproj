@@ -45,6 +45,8 @@
 		5A0000000000000000000024 /* MattersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000116 /* MattersView.swift */; };
 		5A0000000000000000000025 /* SupraNetworking in Frameworks */ = {isa = PBXBuildFile; productRef = 5A0000000000000000000410 /* SupraNetworking */; };
 		5A0000000000000000000026 /* SupraResearch in Frameworks */ = {isa = PBXBuildFile; productRef = 5A0000000000000000000411 /* SupraResearch */; };
+		5A0000000000000000000027 /* MatterWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000117 /* MatterWorkspaceView.swift */; };
+		5A0000000000000000000028 /* MatterEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000118 /* MatterEditorSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -96,6 +98,8 @@
 		5A0000000000000000000114 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000115 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000116 /* MattersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MattersView.swift; sourceTree = "<group>"; };
+		5A0000000000000000000117 /* MatterWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterWorkspaceView.swift; sourceTree = "<group>"; };
+		5A0000000000000000000118 /* MatterEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterEditorSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -155,6 +159,7 @@
 				5A0000000000000000000114 /* DiagnosticsView.swift */,
 				5A0000000000000000000115 /* SettingsView.swift */,
 				5A0000000000000000000116 /* MattersView.swift */,
+				5A0000000000000000000906 /* Matters */,
 				5A0000000000000000000903 /* Navigation */,
 				5A0000000000000000000904 /* Status */,
 				5A000000000000000000010B /* SupraAI.entitlements */,
@@ -176,6 +181,15 @@
 				5A0000000000000000000107 /* RuntimeStatusController.swift */,
 			);
 			path = Status;
+			sourceTree = "<group>";
+		};
+		5A0000000000000000000906 /* Matters */ = {
+			isa = PBXGroup;
+			children = (
+				5A0000000000000000000117 /* MatterWorkspaceView.swift */,
+				5A0000000000000000000118 /* MatterEditorSheet.swift */,
+			);
+			path = Matters;
 			sourceTree = "<group>";
 		};
 		5A0000000000000000000905 /* SupraRuntimeService */ = {
@@ -350,6 +364,8 @@
 				5A0000000000000000000022 /* DiagnosticsView.swift in Sources */,
 				5A0000000000000000000023 /* SettingsView.swift in Sources */,
 				5A0000000000000000000024 /* MattersView.swift in Sources */,
+				5A0000000000000000000027 /* MatterWorkspaceView.swift in Sources */,
+				5A0000000000000000000028 /* MatterEditorSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
