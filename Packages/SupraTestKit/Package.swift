@@ -19,6 +19,8 @@ let package = Package(
         .package(path: "../SupraStore"),
         .package(path: "../SupraDocuments"),
         .package(path: "../SupraSessions"),
+        .package(path: "../SupraResearch"),
+        .package(path: "../SupraNetworking"),
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", exact: "0.9.20")
     ],
     targets: [
@@ -41,7 +43,9 @@ let package = Package(
                 .product(name: "SupraCore", package: "SupraCore"),
                 .product(name: "SupraStore", package: "SupraStore"),
                 .product(name: "SupraDocuments", package: "SupraDocuments"),
-                .product(name: "SupraSessions", package: "SupraSessions")
+                .product(name: "SupraSessions", package: "SupraSessions"),
+                .product(name: "SupraResearch", package: "SupraResearch"),
+                .product(name: "SupraNetworking", package: "SupraNetworking")
             ]
         )
     ]
