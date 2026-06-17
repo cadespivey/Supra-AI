@@ -32,18 +32,41 @@ public final class MatterDocumentsController: ObservableObject {
     private let store: SupraStore
     private let queue: DocumentProcessingQueue
     private let isImportReady: @MainActor () -> Bool
+    private let storage: DocumentStorage
+    private let previewLoader: DocumentPreviewLoader
 
     public init(
         matterID: String,
         store: SupraStore,
         queue: DocumentProcessingQueue,
-        isImportReady: @escaping @MainActor () -> Bool
+        isImportReady: @escaping @MainActor () -> Bool,
+        storage: DocumentStorage = .makeDefault()
     ) {
         self.matterID = matterID
         self.store = store
         self.queue = queue
         self.isImportReady = isImportReady
+        self.storage = storage
+        self.previewLoader = DocumentPreviewLoader(store: store, storage: storage)
         reload()
+    }
+
+    /// Builds an in-app preview for a search hit (opens at the matched chunk).
+    public func preview(chunkID: String) -> DocumentPreviewModel? {
+        guard let chunk = try? store.documentIndex.fetchChunks(ids: [chunkID]).first else { return nil }
+        let locator = DocumentSourceLocator(
+            sourceKind: DocumentSourceKind(rawValue: chunk.sourceKind) ?? .text,
+            pageIndex: chunk.pageIndex, pageLabel: chunk.pageLabel,
+            sheetName: chunk.sheetName, cellRange: chunk.cellRange,
+            emailPartPath: chunk.emailPartPath, charStart: chunk.charStart, charEnd: chunk.charEnd,
+            boundingBoxesJSON: chunk.boundingBoxesJSON
+        )
+        return previewLoader.load(documentID: chunk.documentID, locator: locator, matchText: chunk.normalizedText)
+    }
+
+    /// Builds an in-app preview opening a document at its first part.
+    public func preview(documentID: String) -> DocumentPreviewModel? {
+        previewLoader.loadDocument(documentID: documentID)
     }
 
     public var setupReady: Bool { isImportReady() }
@@ -161,7 +184,7 @@ public final class MatterDocumentsController: ObservableObject {
         reload()
     }
 
-    public func permanentlyDelete(documentID: String, storage: DocumentStorage = .makeDefault()) {
+    public func permanentlyDelete(documentID: String) {
         if let result = try? store.documentLibrary.permanentlyDeleteDocument(id: documentID),
            let path = result.removedBlobPath {
             try? FileManager.default.removeItem(at: storage.url(forManagedRelativePath: path))
