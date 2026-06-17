@@ -40,6 +40,10 @@ struct OutputDetailView: View {
                 if !selected.missingSections.isEmpty {
                     missingBar(selected)
                 }
+                let groundingSources = controller.sources(forVersion: selected.id)
+                if !groundingSources.isEmpty {
+                    sourcesBar(groundingSources)
+                }
             } else {
                 ContentUnavailableView("No content yet", systemImage: "doc")
             }
@@ -99,6 +103,20 @@ struct OutputDetailView: View {
                 .font(.caption.weight(.semibold)).foregroundStyle(.orange)
             Text(version.missingSections.joined(separator: ", "))
                 .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal)
+        .padding(.bottom, 8)
+    }
+
+    private func sourcesBar(_ sources: [StructuredOutputController.SourceItem]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Grounded in \(sources.count) document source\(sources.count == 1 ? "" : "s")", systemImage: "doc.text.magnifyingglass")
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ForEach(sources) { source in
+                Text("[\(source.label)] \(source.documentName)\(source.locatorDisplay.isEmpty ? "" : " — \(source.locatorDisplay)")")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)

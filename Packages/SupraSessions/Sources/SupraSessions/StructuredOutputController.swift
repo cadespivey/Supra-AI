@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import SupraCore
+import SupraDocuments
 import SupraResearch
 import SupraRuntimeClient
 import SupraRuntimeInterface
@@ -39,6 +40,7 @@ public final class StructuredOutputController: ObservableObject {
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
+    private let retrieval: DocumentRetrievalService
     private let defaultSystemPrompt: String?
     public let matterID: String
 
@@ -46,12 +48,65 @@ public final class StructuredOutputController: ObservableObject {
         store: SupraStore,
         runtimeClient: any RuntimeClientProtocol,
         matterID: String,
+        embedder: (any TextEmbedder)? = nil,
         defaultSystemPrompt: String? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
+        self.retrieval = DocumentRetrievalService(store: store, embedder: embedder)
         self.matterID = matterID
         self.defaultSystemPrompt = defaultSystemPrompt
+    }
+
+    // MARK: - Document grounding (spec §12.4)
+
+    /// A document the user can scope an output to (top-level documents only;
+    /// attachments are retrieved with their parent).
+    public struct DocumentChoice: Identifiable, Sendable, Equatable {
+        public let id: String
+        public let name: String
+    }
+
+    /// One grounding source attached to an output version, for the detail view.
+    public struct SourceItem: Identifiable, Sendable, Equatable {
+        public let id: String
+        public let label: String
+        public let documentName: String
+        public let locatorDisplay: String
+        public let excerpt: String
+    }
+
+    /// The matter's documents available to scope an output to.
+    public func documentChoices() -> [DocumentChoice] {
+        ((try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? [])
+            .filter { $0.parentDocumentID == nil }
+            .map { DocumentChoice(id: $0.id, name: $0.displayName) }
+    }
+
+    /// Readiness of a chosen scope (so the sheet can show "X/Y indexed" and block
+    /// generation until indexing finishes, like Document Q&A).
+    public func scopeReadiness(scope: RetrievalScope) -> ScopeReadiness? {
+        try? retrieval.scopeReadiness(matterID: matterID, scope: scope)
+    }
+
+    /// The grounding sources attached to a given output version.
+    public func sources(forVersion versionID: String) -> [SourceItem] {
+        let rows = (try? store.documentSources.fetchSources(structuredOutputVersionID: versionID)) ?? []
+        guard !rows.isEmpty else { return [] }
+        let nameByID = Dictionary(
+            ((try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []).map { ($0.id, $0.displayName) },
+            uniquingKeysWith: { a, _ in a }
+        )
+        return rows.sorted { $0.rank < $1.rank }.map { row in
+            let locator = try? JSONDecoder().decode(DocumentSourceLocator.self, from: Data(row.locatorJSON.utf8))
+            return SourceItem(
+                id: row.id,
+                label: row.citationLabel,
+                documentName: row.documentID.flatMap { nameByID[$0] } ?? "Document",
+                locatorDisplay: locator?.displayString ?? "",
+                excerpt: row.excerpt
+            )
+        }
     }
 
     /// Exports an output's active version to the given format, returning the
@@ -104,6 +159,7 @@ public final class StructuredOutputController: ObservableObject {
     public func createOutput(
         type: StructuredOutputType,
         context: String,
+        scope: RetrievalScope? = nil,
         chatID: String? = nil,
         researchSessionID: String? = nil,
         modelID: ModelID?
@@ -121,7 +177,28 @@ public final class StructuredOutputController: ObservableObject {
             return false
         }
         do {
-            let prompt = try StructuredOutputPromptBuilder.buildPrompt(for: contract, context: context)
+            // When the output is scoped to documents, retrieve the most relevant
+            // passages and prepend them as cited grounding (mirrors Document Q&A).
+            var groundedContext = context
+            var prepared: [PreparedDocSource] = []
+            let retrievalQuery = context.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let scope {
+                let readiness = scopeReadiness(scope: scope)
+                    ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
+                guard readiness.isFullyReady else {
+                    message = "The selected documents are still indexing (\(readiness.readyDocuments)/\(readiness.totalDocuments) ready). Try again once indexing finishes."
+                    return false
+                }
+                let result = try await retrieval.retrieve(matterID: matterID, query: retrievalQuery, scope: scope, limit: 10)
+                prepared = result.sources.map { PreparedDocSource(label: "S\($0.rank + 1)", source: $0) }
+                guard !prepared.isEmpty else {
+                    message = "No matching content was found in the selected documents."
+                    return false
+                }
+                groundedContext = Self.groundingBlock(prepared) + "\n\n---\n\nADDITIONAL CONTEXT:\n" + context
+            }
+
+            let prompt = try StructuredOutputPromptBuilder.buildPrompt(for: contract, context: groundedContext)
             let markdown = ReasoningContent.answer(from: try await collect(prompt: prompt, modelID: modelID))
             let analysis = StructuredOutputSections.analyze(
                 markdown: markdown, requiredHeadings: contract.requiredHeadings
@@ -132,14 +209,18 @@ public final class StructuredOutputController: ObservableObject {
                 matterID: matterID, title: contract.title, outputType: type,
                 chatID: chatID, researchSessionID: researchSessionID, status: status
             )
-            _ = try store.structuredOutputs.createVersion(
+            let version = try store.structuredOutputs.createVersion(
                 structuredOutputID: output.id, versionIndex: 1, contentMarkdown: markdown,
                 requiredSections: contract.requiredHeadings,
                 presentSections: analysis.present, missingSections: analysis.missing
             )
+            if let scope, !prepared.isEmpty {
+                try? attachDocumentSources(prepared, scope: scope, query: retrievalQuery, versionID: version.id)
+            }
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "structured_output_created", actor: "runtime",
-                summary: "Created \(contract.title)", relatedTable: "structured_outputs", relatedID: output.id
+                summary: "Created \(contract.title)\(scope == nil ? "" : " grounded in \(prepared.count) document source(s)")",
+                relatedTable: "structured_outputs", relatedID: output.id
             )
             loadOutputs()
             return true
@@ -147,6 +228,40 @@ public final class StructuredOutputController: ObservableObject {
             message = "Output generation failed: \(error.localizedDescription)"
             return false
         }
+    }
+
+    private struct PreparedDocSource {
+        let label: String
+        let source: RetrievedSource
+    }
+
+    /// Formats retrieved passages as a cited grounding block for the prompt.
+    private static func groundingBlock(_ prepared: [PreparedDocSource]) -> String {
+        var lines = ["SOURCE DOCUMENTS — ground your analysis in these and cite them inline as [S1], [S2], … wherever you rely on them:", ""]
+        for item in prepared {
+            lines.append("[\(item.label)] \(item.source.documentName) — \(item.source.locator.displayString)")
+            lines.append(item.source.text)
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Persists the grounding sources as a version-scoped source set (mirrors
+    /// DocumentQAController.attachSources), so the output records what it cited.
+    private func attachDocumentSources(_ prepared: [PreparedDocSource], scope: RetrievalScope, query: String, versionID: String) throws {
+        let scopeJSON = (try? JSONEncoder().encode(scope)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let sourceSet = try store.documentSources.createSourceSet(
+            matterID: matterID, mode: .autoSource, scopeJSON: scopeJSON, retrievalQuery: query
+        )
+        let rows = prepared.map { item in
+            DocumentOutputSourceRecord(
+                sourceSetID: sourceSet.id, documentID: item.source.documentID, chunkID: item.source.chunkID,
+                citationLabel: item.label, locatorJSON: item.source.locator.encodedJSON(),
+                excerpt: item.source.excerpt, rank: item.source.rank, warningsJSON: nil
+            )
+        }
+        try store.documentSources.addOutputSources(rows)
+        try store.documentSources.attachSourceSet(id: sourceSet.id, structuredOutputVersionID: versionID)
     }
 
     /// Re-runs the structure-repair prompt for an output: preserves the prior
