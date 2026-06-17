@@ -415,6 +415,39 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(controller.canCompleteSession)
     }
 
+    // MARK: - Authority library (WO 27)
+
+    func testAuthorityUseStatusTransitionsEnforcedAndAudited() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "CA", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "Roe"))
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id,
+            caseName: "Roe", useStatus: AuthorityUseStatus.retrievedFromCourtListener.rawValue
+        ))
+
+        let controller = AuthoritiesController(store: store, matterID: matter.id)
+        controller.load()
+        let id = try XCTUnwrap(controller.authorities.first?.id)
+
+        // Disallowed: retrieved_from_courtlistener → unverified.
+        XCTAssertFalse(controller.changeUseStatus(authorityID: id, to: .unverified))
+        XCTAssertEqual(controller.authorities[0].useStatus, .retrievedFromCourtListener)
+
+        // Allowed: retrieved_from_courtlistener → needs_citator_check (+ audit).
+        XCTAssertTrue(controller.changeUseStatus(authorityID: id, to: .needsCitatorCheck))
+        XCTAssertEqual(controller.authorities[0].useStatus, .needsCitatorCheck)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "authority_status_changed" })
+
+        // Preferred citation + notes edits persist.
+        controller.updatePreferredCitation(authorityID: id, "1 U.S. 1")
+        controller.updateUserNotes(authorityID: id, "key holding")
+        XCTAssertEqual(controller.authorities[0].preferredCitation, "1 U.S. 1")
+        XCTAssertEqual(controller.authorities[0].userNotes, "key holding")
+    }
+
     // MARK: - ModelLibrary
 
     func testAddAndActivateLoadsModel() async throws {

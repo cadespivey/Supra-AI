@@ -124,11 +124,15 @@ struct MatterWorkspaceView: View {
                 )
             }
         case .authorities:
-            placeholder(
-                "No Authorities Saved",
-                "Save reviewed CourtListener results to build this matter's authority library.",
-                systemImage: "books.vertical"
-            )
+            if let authorities = controller.authoritiesController {
+                MatterAuthoritiesView(controller: authorities)
+            } else {
+                placeholder(
+                    "Authorities unavailable",
+                    "Select the matter again to load its authority library.",
+                    systemImage: "books.vertical"
+                )
+            }
         case .outputs:
             placeholder(
                 "No Outputs",
