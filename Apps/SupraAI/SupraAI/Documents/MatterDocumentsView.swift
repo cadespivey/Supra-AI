@@ -12,6 +12,7 @@ struct MatterDocumentsView: View {
     @ObservedObject var controller: MatterDocumentsController
     @ObservedObject var queue: DocumentProcessingQueue
     var qaController: DocumentQAController?
+    var chronologyController: DocumentChronologyController?
     var loadedModelID: ModelID?
 
     @State private var showImporter = false
@@ -19,6 +20,7 @@ struct MatterDocumentsView: View {
     @State private var showNewFolder = false
     @State private var showTrash = false
     @State private var showQA = false
+    @State private var showChronology = false
     @State private var dropTargeted = false
     @State private var preview: PreviewItem?
 
@@ -62,6 +64,15 @@ struct MatterDocumentsView: View {
                 ) { showQA = false }
             }
         }
+        .sheet(isPresented: $showChronology) {
+            if let chronologyController {
+                DocumentChronologySheet(
+                    chronology: chronologyController,
+                    scopeFolderID: controller.selectedFolderID,
+                    loadedModelID: loadedModelID
+                ) { showChronology = false }
+            }
+        }
         .sheet(item: $preview) { item in
             DocumentPreviewView(model: item.model) { preview = nil }
         }
@@ -83,6 +94,8 @@ struct MatterDocumentsView: View {
                 .disabled(!controller.setupReady)
             Button { showQA = true } label: { Label("Ask", systemImage: "questionmark.bubble") }
                 .disabled(qaController == nil)
+            Button { showChronology = true } label: { Label("Chronology", systemImage: "calendar") }
+                .disabled(chronologyController == nil)
             Button { showTrash = true } label: { Label("Trash", systemImage: "trash") }
         }
     }
@@ -418,6 +431,83 @@ struct DocumentQASheet: View {
 
     private static func markdown(_ text: String) -> AttributedString {
         (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    }
+}
+
+/// One-shot fact chronology over the matter's documents (WO 42), in a table or
+/// narrative format. Saved to the Outputs tab with its source set.
+struct DocumentChronologySheet: View {
+    @ObservedObject var chronology: DocumentChronologyController
+    let scopeFolderID: String?
+    let loadedModelID: ModelID?
+    let onClose: () -> Void
+
+    @State private var format: DocumentChronologyFormat = .table
+    @State private var scopeThisFolder = false
+
+    private var scope: RetrievalScope {
+        (scopeThisFolder && scopeFolderID != nil) ? RetrievalScope(folderIDs: [scopeFolderID!]) : .wholeMatter
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Fact Chronology").font(.title2.weight(.semibold))
+                Spacer()
+                Button("Done", action: onClose)
+            }
+            .padding()
+            Divider()
+            Form {
+                Picker("Format", selection: $format) {
+                    Text("Table").tag(DocumentChronologyFormat.table)
+                    Text("Narrative").tag(DocumentChronologyFormat.narrative)
+                }
+                .pickerStyle(.segmented)
+                if scopeFolderID != nil {
+                    Toggle("Limit to the selected folder", isOn: $scopeThisFolder)
+                }
+                if let readiness = chronology.scopeReadiness(scope: scope) {
+                    Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) documents indexed")
+                        .font(.caption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
+                }
+                if loadedModelID == nil {
+                    Text("Load a chat model in the Models tab to build a chronology.").font(.caption).foregroundStyle(.orange)
+                }
+                if let message = chronology.message {
+                    Text(message).font(.caption).foregroundStyle(.orange)
+                }
+            }
+            .formStyle(.grouped)
+
+            if let result = chronology.lastResult {
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if result.status == StructuredOutputStatus.needsReview.rawValue {
+                            Label("Needs review — \(result.warnings.joined(separator: " "))", systemImage: "exclamationmark.triangle")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                        Text((try? AttributedString(markdown: result.markdown, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(result.markdown))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding()
+                }
+                .frame(minHeight: 220)
+            }
+
+            Divider()
+            HStack {
+                Spacer()
+                if chronology.isGenerating { ProgressView().controlSize(.small) }
+                Button("Generate") { Task { _ = await chronology.generate(scope: scope, format: format, modelID: loadedModelID) } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(chronology.isGenerating || loadedModelID == nil)
+            }
+            .padding()
+        }
+        .frame(width: 640, height: 620)
     }
 }
 

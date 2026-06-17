@@ -2003,3 +2003,25 @@ Delivered:
 - Tests: auto-source cited answer saved with source set; unsupported question does
   not invent an answer; missing citations → needs review; generation blocked when
   scope not indexed; plus the 8 citation-coverage unit tests.
+
+## WO 42 — Fact Chronology — DONE (2026-06-17)
+
+Status: complete; chronology tests (2) green; app builds.
+
+Delivered:
+- `SupraDocuments/DocumentChronology`: `DateExtraction` (ISO/slashed/month-name/
+  month-year/bare-year detection), `DocumentChronologyFormat` (table/narrative →
+  `factChronologyTable`/`factChronologyNarrative`), `DocumentChronologyPromptBuilder`
+  (exact/partial date labeling, metadata-vs-text distinction, inline citations,
+  source-only facts).
+- `SupraSessions/DocumentChronologyController` (@MainActor): readiness-gated,
+  one-shot. Harvests date-bearing chunks across the scope plus document metadata
+  dates (distinguished), builds the table/narrative prompt, generates, citation-
+  checks, and saves a `factChronology*` output + version + a `.chronology`-mode
+  source set + cited sources. Audited. Reuses the Q&A `QAResult`/`CitationCoverage`/
+  `SourceAppendix` machinery.
+- App: `MattersController` vends `documentChronologyController`; Documents-tab
+  "Chronology" sheet (`DocumentChronologySheet`) with format choice, optional folder
+  scope, readiness, and the rendered chronology.
+- Tests: scope-only facts (notes-folder narrative excludes the contract date;
+  whole-matter table references both docs) + date-form detection.
