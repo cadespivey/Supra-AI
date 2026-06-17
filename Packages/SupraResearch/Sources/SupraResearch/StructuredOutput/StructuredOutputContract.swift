@@ -1,0 +1,131 @@
+import Foundation
+import SupraCore
+
+/// The required Markdown headings for a structured output type (spec §12.2) and
+/// the bundled prompt template that asks the model to produce them.
+public struct StructuredOutputContract: Sendable, Equatable {
+    public let type: StructuredOutputType
+    public let title: String
+    public let templateResource: String
+    /// Full heading lines, including the `#`/`##` prefix, in document order.
+    public let requiredHeadings: [String]
+}
+
+public enum StructuredOutputContracts {
+    public static func contract(for type: StructuredOutputType) -> StructuredOutputContract {
+        switch type {
+        case .legalIssueSpotting:
+            StructuredOutputContract(
+                type: type, title: "Legal Issue Spotting",
+                templateResource: "legal-issue-spotting-v1",
+                requiredHeadings: [
+                    "# Legal Issue Spotting", "## Issues Identified", "## Factual Questions",
+                    "## Legal Questions", "## Missing Evidence", "## Potentially Adverse Facts",
+                    "## Research Needed", "## Drafting Paths"
+                ]
+            )
+        case .researchPlan:
+            StructuredOutputContract(
+                type: type, title: "Research Plan",
+                templateResource: "research-plan-v1",
+                requiredHeadings: [
+                    "# Research Plan", "## Issue", "## Search Strategy", "## Proposed Queries",
+                    "## Court Filters", "## Date Filters", "## Likely Controlling Authority",
+                    "## Likely Persuasive Authority", "## Risks / Adverse Authority to Watch", "## Notes"
+                ]
+            )
+        case .caseResultSummary:
+            StructuredOutputContract(
+                type: type, title: "Case Result Summary",
+                templateResource: "case-result-summary-v1",
+                requiredHeadings: [
+                    "# Case Result Summary", "## Citation", "## Court / Date", "## Procedural Posture",
+                    "## Issue", "## Holding", "## Reasoning", "## Useful Rule Language",
+                    "## Limitations / Negative Treatment", "## Drafting Use", "## Verification Needed"
+                ]
+            )
+        case .ruleSynthesis:
+            StructuredOutputContract(
+                type: type, title: "Rule Synthesis",
+                templateResource: "rule-synthesis-v1",
+                requiredHeadings: [
+                    "# Rule Synthesis", "## Rule Statement", "## Controlling Authorities",
+                    "## Persuasive Authorities", "## Distinctions", "## Counterarguments",
+                    "## Missing Authority", "## Drafting Notes"
+                ]
+            )
+        case .argumentOutline:
+            StructuredOutputContract(
+                type: type, title: "Argument Outline",
+                templateResource: "argument-outline-v1",
+                requiredHeadings: [
+                    "# Argument Outline", "## Proposed Argument", "## Elements / Legal Standard",
+                    "## Supporting Authorities", "## Supporting Facts", "## Counterarguments",
+                    "## Weaknesses", "## Missing Support", "## Next Drafting Steps"
+                ]
+            )
+        case .draftingSkeleton:
+            StructuredOutputContract(
+                type: type, title: "Drafting Skeleton",
+                templateResource: "drafting-skeleton-v1",
+                requiredHeadings: [
+                    "# Drafting Skeleton", "## Caption / Context", "## Introduction", "## Facts Needed",
+                    "## Legal Standard", "## Argument Sections", "## Authorities Needed",
+                    "## Record Support Needed", "## Open Questions"
+                ]
+            )
+        }
+    }
+}
+
+/// Deterministic missing-section detection (spec §12.3): a required heading is
+/// present only if a line matches it exactly at the same level, allowing only
+/// case differences and surrounding/internal whitespace. Synonyms do not count.
+public enum StructuredOutputSections {
+    public struct Analysis: Sendable, Equatable {
+        public let present: [String]
+        public let missing: [String]
+    }
+
+    public static func analyze(markdown: String, requiredHeadings: [String]) -> Analysis {
+        let lines = Set(markdown.split(separator: "\n", omittingEmptySubsequences: false).map(normalize))
+        var present: [String] = []
+        var missing: [String] = []
+        for heading in requiredHeadings {
+            if lines.contains(normalize(Substring(heading))) {
+                present.append(heading)
+            } else {
+                missing.append(heading)
+            }
+        }
+        return Analysis(present: present, missing: missing)
+    }
+
+    /// Trims, collapses internal whitespace, and lowercases — preserving the
+    /// leading `#` run so heading level is still significant.
+    private static func normalize(_ line: Substring) -> String {
+        line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            .joined(separator: " ")
+            .lowercased()
+    }
+}
+
+public enum StructuredOutputPromptError: Error, Equatable, Sendable {
+    case templateUnavailable(String)
+}
+
+/// Loads a structured-output template and fills its `{{context}}` placeholder.
+public enum StructuredOutputPromptBuilder {
+    public static func buildPrompt(for contract: StructuredOutputContract, context: String) throws -> String {
+        guard
+            let url = Bundle.module.url(forResource: contract.templateResource, withExtension: "md"),
+            let template = try? String(contentsOf: url, encoding: .utf8)
+        else {
+            throw StructuredOutputPromptError.templateUnavailable(contract.templateResource)
+        }
+        return template.replacingOccurrences(
+            of: "{{context}}",
+            with: context.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+}

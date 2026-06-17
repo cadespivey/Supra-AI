@@ -448,6 +448,53 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.authorities[0].userNotes, "key holding")
     }
 
+    // MARK: - Structured outputs (WO 28)
+
+    func testCreateOutputCompleteWhenAllSectionsPresent() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)
+        let markdown = contract.requiredHeadings.joined(separator: "\n\nbody\n\n")
+        let stub = StubRuntimeClient { request in
+            .events([.event(request, 1, .token, token: markdown), .event(request, 2, .generationCompleted)])
+        }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+
+        let ok = await controller.createOutput(type: .ruleSynthesis, context: "issue + authorities", modelID: ModelID())
+        XCTAssertTrue(ok)
+        XCTAssertEqual(controller.outputs.count, 1)
+        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.complete.rawValue)
+        XCTAssertEqual(controller.outputs[0].missingCount, 0)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "structured_output_created" })
+    }
+
+    func testCreateOutputNeedsReviewWhenSectionsMissing() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let stub = StubRuntimeClient { request in
+            .events([.event(request, 1, .token, token: "# Rule Synthesis\n## Rule Statement\nonly one section"), .event(request, 2, .generationCompleted)])
+        }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+
+        _ = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: ModelID())
+        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.needsReview.rawValue)
+        XCTAssertGreaterThan(controller.outputs[0].missingCount, 0)
+        // version 1 stored with the missing sections
+        let output = try XCTUnwrap(try store.structuredOutputs.fetchOutputs(matterID: matter.id).first)
+        XCTAssertEqual(try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).count, 1)
+    }
+
+    func testCreateOutputWithoutModelDoesNothing() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let stub = StubRuntimeClient { _ in .events([]) }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+        let ok = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: nil)
+        XCTAssertFalse(ok)
+        XCTAssertTrue(controller.outputs.isEmpty)
+        XCTAssertNotNil(controller.message)
+    }
+
     // MARK: - ModelLibrary
 
     func testAddAndActivateLoadsModel() async throws {

@@ -93,6 +93,7 @@ public final class MattersController: ObservableObject {
     @Published public private(set) var chatController: GlobalChatController?
     @Published public private(set) var researchController: ResearchSessionController?
     @Published public private(set) var authoritiesController: AuthoritiesController?
+    @Published public private(set) var outputsController: StructuredOutputController?
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
@@ -214,6 +215,7 @@ public final class MattersController: ObservableObject {
             chatController = nil
             researchController = nil
             authoritiesController = nil
+            outputsController = nil
             return
         }
         let controller = GlobalChatController(
@@ -237,6 +239,15 @@ public final class MattersController: ObservableObject {
         let authorities = AuthoritiesController(store: store, matterID: matterID)
         authorities.load()
         authoritiesController = authorities
+
+        let outputs = StructuredOutputController(
+            store: store,
+            runtimeClient: runtimeClient,
+            matterID: matterID,
+            defaultSystemPrompt: defaultSystemPrompt
+        )
+        outputs.loadOutputs()
+        outputsController = outputs
     }
 
     private func reload() {
