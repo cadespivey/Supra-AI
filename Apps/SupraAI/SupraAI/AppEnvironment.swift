@@ -1,6 +1,8 @@
 import Combine
 import Foundation
 import SupraCore
+import SupraNetworking
+import SupraResearch
 import SupraRuntimeClient
 import SupraRuntimeInterface
 import SupraSessions
