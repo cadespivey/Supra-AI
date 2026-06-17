@@ -1,10 +1,32 @@
 import Foundation
 import SupraCore
+import SupraNetworking
+import SupraResearch
 import SupraRuntimeClient
 import SupraRuntimeInterface
 @testable import SupraSessions
 import SupraStore
 import XCTest
+
+private struct StubTokenStore: APIKeyStoreProtocol, @unchecked Sendable {
+    var token: String? = "test-token"
+    func saveCourtListenerToken(_ token: String) throws {}
+    func loadCourtListenerToken() throws -> String? { token }
+    func deleteCourtListenerToken() throws {}
+    func hasCourtListenerToken() throws -> Bool { token != nil }
+}
+
+private struct StubCourtListenerClient: CourtListenerClientProtocol, @unchecked Sendable {
+    var response: CourtListenerSearchResponse = .init(count: 0, next: nil, previous: nil, results: [])
+    var shouldFail = false
+    func searchOpinions(
+        _ request: CourtListenerSearchRequest,
+        relatedResearchSessionID: String?
+    ) async throws -> CourtListenerSearchResponse {
+        if shouldFail { throw CourtListenerError.serverError(statusCode: 500) }
+        return response
+    }
+}
 
 @MainActor
 final class SupraSessionsTests: XCTestCase {
@@ -247,6 +269,97 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(controller.canSavePlan)
         let sessionID = try controller.savePlan(draft: ResearchPlanDraft(title: "P", issueText: "I", jurisdiction: "CA"))
         XCTAssertEqual(try store.research.fetchQueries(sessionID: sessionID).count, 1)
+    }
+
+    // MARK: - Research run (WO 25)
+
+    private func seedApprovedSession(_ store: SupraStore, matterID: String) throws -> String {
+        let session = try store.research.createSession(
+            matterID: matterID, title: "S", issueText: "I", jurisdiction: "CA", status: .approved
+        )
+        _ = try store.research.createQuery(researchSessionID: session.id, queryText: "q1", queryIndex: 0, status: .approved)
+        _ = try store.research.createQuery(researchSessionID: session.id, queryText: "q2", queryIndex: 1, status: .approved)
+        return session.id
+    }
+
+    private func makeRunController(
+        store: SupraStore, matterID: String,
+        client: StubCourtListenerClient, token: String? = "test-token"
+    ) -> ResearchSessionController {
+        ResearchSessionController(
+            store: store,
+            runtimeClient: StubRuntimeClient { _ in .events([]) },
+            matterID: matterID,
+            tokenStore: StubTokenStore(token: token),
+            courtListenerClient: client
+        )
+    }
+
+    func testRunApprovedSearchesStoresResultsAndMarksResultsReady() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let sessionID = try seedApprovedSession(store, matterID: matter.id)
+
+        let dto = CourtListenerSearchResultDTO(
+            caseName: "Roe v. Doe", citation: ["1 U.S. 1"], court: "SCOTUS",
+            dateFiled: "2020-01-15",
+            opinions: [CourtListenerOpinionDTO(id: 9, type: nil, snippet: "snippet", downloadURL: nil, localPath: nil, authorID: nil, perCuriam: nil, sha1: nil)],
+            rawResultJSON: "{\"x\":1}"
+        )
+        let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
+        let controller = makeRunController(store: store, matterID: matter.id, client: client)
+
+        controller.openSession(sessionID)
+        XCTAssertTrue(controller.canRunOpenSession)
+        await controller.runApprovedSearches()
+
+        XCTAssertEqual(
+            try store.research.fetchSessions(matterID: matter.id).first { $0.id == sessionID }?.status,
+            ResearchSessionStatus.resultsReady.rawValue
+        )
+        let q1 = controller.sessionQueries[0]
+        XCTAssertEqual(q1.status, ResearchQueryStatus.completed.rawValue)
+        XCTAssertEqual(controller.resultsByQuery[q1.id]?.first?.caseName, "Roe v. Doe")
+        XCTAssertEqual(controller.resultsByQuery[q1.id]?.first?.citation, "1 U.S. 1")
+        let audit = try store.auditEvents.fetchEvents(matterID: matter.id)
+        XCTAssertTrue(audit.contains { $0.eventType == "courtlistener_search_started" })
+        XCTAssertTrue(audit.contains { $0.eventType == "courtlistener_search_completed" })
+    }
+
+    func testRunMarksSessionFailedWhenEveryQueryFails() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let sessionID = try seedApprovedSession(store, matterID: matter.id)
+        let controller = makeRunController(
+            store: store, matterID: matter.id,
+            client: StubCourtListenerClient(shouldFail: true)
+        )
+
+        controller.openSession(sessionID)
+        await controller.runApprovedSearches()
+
+        XCTAssertEqual(
+            try store.research.fetchSessions(matterID: matter.id).first { $0.id == sessionID }?.status,
+            ResearchSessionStatus.failed.rawValue
+        )
+        XCTAssertTrue(controller.sessionQueries.allSatisfy { $0.status == ResearchQueryStatus.failed.rawValue })
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "courtlistener_search_failed" })
+    }
+
+    func testRunWithoutTokenDoesNotRunAndSurfacesMessage() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let sessionID = try seedApprovedSession(store, matterID: matter.id)
+        let controller = makeRunController(
+            store: store, matterID: matter.id,
+            client: StubCourtListenerClient(), token: nil
+        )
+
+        controller.openSession(sessionID)
+        await controller.runApprovedSearches()
+
+        XCTAssertNotNil(controller.runMessage)
+        XCTAssertEqual(controller.sessionQueries[0].status, ResearchQueryStatus.approved.rawValue, "queries stay approved when no token")
     }
 
     // MARK: - ModelLibrary

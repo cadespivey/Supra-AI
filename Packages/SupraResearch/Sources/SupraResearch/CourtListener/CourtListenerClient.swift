@@ -2,7 +2,17 @@ import Foundation
 import SupraNetworking
 
 public protocol CourtListenerClientProtocol: Sendable {
-    func searchOpinions(_ request: CourtListenerSearchRequest) async throws -> CourtListenerSearchResponse
+    func searchOpinions(
+        _ request: CourtListenerSearchRequest,
+        relatedResearchSessionID: String?
+    ) async throws -> CourtListenerSearchResponse
+}
+
+public extension CourtListenerClientProtocol {
+    /// Convenience for callers that don't link the request to a session.
+    func searchOpinions(_ request: CourtListenerSearchRequest) async throws -> CourtListenerSearchResponse {
+        try await searchOpinions(request, relatedResearchSessionID: nil)
+    }
 }
 
 public final class CourtListenerClient: CourtListenerClientProtocol, @unchecked Sendable {
@@ -13,14 +23,15 @@ public final class CourtListenerClient: CourtListenerClientProtocol, @unchecked 
     }
 
     public func searchOpinions(
-        _ request: CourtListenerSearchRequest
+        _ request: CourtListenerSearchRequest,
+        relatedResearchSessionID: String?
     ) async throws -> CourtListenerSearchResponse {
         let url = try CourtListenerEndpoint.searchURL(for: request)
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "GET"
 
         do {
-            let (data, response) = try await httpClient.send(urlRequest, relatedResearchSessionID: nil)
+            let (data, response) = try await httpClient.send(urlRequest, relatedResearchSessionID: relatedResearchSessionID)
             switch response.statusCode {
             case 200..<300:
                 do {

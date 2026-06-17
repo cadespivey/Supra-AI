@@ -16,7 +16,8 @@ let package = Package(
         .package(path: "../SupraRuntimeInterface"),
         .package(path: "../SupraRuntimeClient"),
         .package(path: "../SupraDiagnostics"),
-        .package(path: "../SupraResearch")
+        .package(path: "../SupraResearch"),
+        .package(path: "../SupraNetworking")
     ],
     targets: [
         .target(
@@ -27,7 +28,8 @@ let package = Package(
                 .product(name: "SupraRuntimeInterface", package: "SupraRuntimeInterface"),
                 .product(name: "SupraRuntimeClient", package: "SupraRuntimeClient"),
                 .product(name: "SupraDiagnostics", package: "SupraDiagnostics"),
-                .product(name: "SupraResearch", package: "SupraResearch")
+                .product(name: "SupraResearch", package: "SupraResearch"),
+                .product(name: "SupraNetworking", package: "SupraNetworking")
             ],
             resources: [
                 .process("Resources")
@@ -42,7 +44,8 @@ let package = Package(
                 .product(name: "SupraRuntimeInterface", package: "SupraRuntimeInterface"),
                 .product(name: "SupraRuntimeClient", package: "SupraRuntimeClient"),
                 .product(name: "SupraDiagnostics", package: "SupraDiagnostics"),
-                .product(name: "SupraResearch", package: "SupraResearch")
+                .product(name: "SupraResearch", package: "SupraResearch"),
+                .product(name: "SupraNetworking", package: "SupraNetworking")
             ]
         )
     ]

@@ -11,17 +11,22 @@ struct MatterResearchView: View {
     @State private var showPlanner = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Research Sessions").font(.headline)
-                Spacer()
-                Button { showPlanner = true } label: {
-                    Label("New Research Session", systemImage: "plus")
+        NavigationStack {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Research Sessions").font(.headline)
+                    Spacer()
+                    Button { showPlanner = true } label: {
+                        Label("New Research Session", systemImage: "plus")
+                    }
                 }
+                .padding()
+                Divider()
+                content
             }
-            .padding()
-            Divider()
-            content
+            .navigationDestination(for: String.self) { sessionID in
+                ResearchSessionDetailView(controller: controller, sessionID: sessionID)
+            }
         }
         .sheet(isPresented: $showPlanner) {
             ResearchPlannerView(controller: controller, matter: matter, loadedModelID: library.loadedModelID)
@@ -42,20 +47,22 @@ struct MatterResearchView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List(controller.sessions) { session in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Text(session.title).font(.body.weight(.medium))
-                        Spacer()
-                        Text(session.status)
-                            .font(.caption2)
+                NavigationLink(value: session.id) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(session.title).font(.body.weight(.medium))
+                            Spacer()
+                            Text(session.status)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(session.issueText)
+                            .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(2)
                     }
-                    Text(session.issueText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                    .padding(.vertical, 2)
                 }
-                .padding(.vertical, 2)
             }
         }
     }
