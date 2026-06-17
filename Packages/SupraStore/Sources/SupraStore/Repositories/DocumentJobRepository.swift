@@ -222,6 +222,27 @@ public final class DocumentJobRepository: @unchecked Sendable {
         }
     }
 
+    /// Re-queues a paused job at the end of the FIFO queue so the single-active
+    /// scheduler promotes it only when idle (avoids two simultaneous active jobs).
+    public func requeueJob(id: String) throws {
+        try writer.write { db in
+            let maxPosition = try Int.fetchOne(
+                db,
+                sql: "SELECT MAX(queue_position) FROM document_processing_jobs WHERE status IN (?, ?)",
+                arguments: [DocumentProcessingJobStatus.queued.rawValue, DocumentProcessingJobStatus.active.rawValue]
+            ) ?? -1
+            let now = Date()
+            try db.execute(
+                sql: """
+                UPDATE document_processing_jobs
+                SET status = ?, queue_position = ?, paused_at = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                arguments: [DocumentProcessingJobStatus.queued.rawValue, maxPosition + 1, now, id]
+            )
+        }
+    }
+
     public func completeJob(id: String) throws {
         try writer.write { db in
             let now = Date()

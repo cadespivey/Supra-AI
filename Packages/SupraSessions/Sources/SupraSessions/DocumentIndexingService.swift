@@ -129,11 +129,13 @@ public final class DocumentIndexingService: @unchecked Sendable {
             || document.extractionStatus == DocumentExtractionStatus.edited.rawValue
         guard extractionDone else { return false }
         switch DocumentIndexStatus(rawValue: document.indexStatus) {
-        case .ready:
+        case .ready, .semanticIndexed:
             return false
-        case .semanticIndexed:
-            return embedderAvailable // upgrade to semantic if an embedder is now available
-        case .notIndexed, .stale, .textIndexed, .failed, .none:
+        case .textIndexed:
+            // Already chunked + FTS-indexed; only re-index to add embeddings when
+            // an embedder is now available (otherwise it is fully indexed).
+            return embedderAvailable
+        case .notIndexed, .stale, .failed, .none:
             return true
         }
     }

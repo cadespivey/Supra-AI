@@ -47,6 +47,31 @@ final class DocumentExportTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(exports.count, DocumentExportFormat.allCases.count)
     }
 
+    func testExportDoesNotDuplicateEmbeddedAppendix() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        // Saved version markdown already embeds a "## Sources" appendix, exactly as
+        // the Q&A/chronology controllers persist it.
+        let output = try store.structuredOutputs.createOutput(matterID: matter.id, title: "Q&A", outputType: .documentQA, status: .complete)
+        let version = try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id, versionIndex: 1,
+            contentMarkdown: "Answer body [S1].\n\n## Sources\n- **[S1]** agreement.pdf — p. 3",
+            requiredSections: [], presentSections: [], missingSections: []
+        )
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(sha256: "a", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/a.pdf")).blob
+        let doc = try store.documentLibrary.insertDocument(MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "agreement.pdf"))
+        let sourceSet = try store.documentSources.createSourceSet(matterID: matter.id, mode: .autoSource)
+        try store.documentSources.addOutputSource(DocumentOutputSourceRecord(sourceSetID: sourceSet.id, documentID: doc.id, citationLabel: "S1", locatorJSON: DocumentSourceLocator(sourceKind: .pdfPage, pageIndex: 2).encodedJSON(), excerpt: "x", rank: 0))
+        try store.documentSources.attachSourceSet(id: sourceSet.id, structuredOutputVersionID: version.id)
+
+        let storage = DocumentStorage(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let url = try DocumentExportService(store: store, storage: storage).export(matterID: matter.id, structuredOutputID: output.id, format: .markdown)
+        let md = try String(contentsOf: url, encoding: .utf8)
+        let appendixCount = md.components(separatedBy: "## Sources").count - 1
+        XCTAssertEqual(appendixCount, 1, "exactly one Sources appendix expected, found \(appendixCount)")
+        XCTAssertTrue(md.contains("Answer body [S1]."))
+    }
+
     private func makeStore() throws -> SupraStore {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ExportStore-\(UUID().uuidString)", isDirectory: true)

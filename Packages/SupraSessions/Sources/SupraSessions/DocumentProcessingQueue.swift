@@ -95,9 +95,9 @@ public final class DocumentProcessingQueue: ObservableObject {
     /// Resumes a paused job. Sources from the original session are reused if still
     /// held; otherwise the job reconciles by re-indexing already-imported docs.
     public func resume(jobID: String) {
-        try? store.documentJobs.resumeJob(id: jobID)
-        // resumeJob sets it active; move it back to queued semantics by letting the
-        // run loop pick it up. Mark as queued-for-run via pump.
+        // Re-queue rather than force-active so the single-active scheduler promotes
+        // it only when no other job is running.
+        try? store.documentJobs.requeueJob(id: jobID)
         refresh()
         pump()
     }
