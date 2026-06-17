@@ -120,6 +120,7 @@ final class AppEnvironment: ObservableObject {
         // chat without forcing the user to re-load it (the chat gate keys on
         // ModelLibrary.loadState, which otherwise starts idle each launch).
         modelLibrary.reconcileLoadedModel(runtimeStatusController.loadedModelID)
+        if Self.isUITestMode { seedUITestFixturesIfNeeded() }
         await documentSetupController.refreshAll()
         // Reconcile any document job interrupted by a previous quit (plan §5.4).
         documentQueue.bootstrap()
@@ -135,9 +136,31 @@ final class AppEnvironment: ObservableObject {
         activeModelName = modelLibrary.activeModel?.displayName
     }
 
+    /// True when launched by the XCUITest harness (passes `-uiTestMode`). Drives a
+    /// hermetic throwaway store + a seeded matter so UI tests never touch real data.
+    static var isUITestMode: Bool {
+        ProcessInfo.processInfo.arguments.contains("-uiTestMode")
+    }
+
+    /// Seeds a deterministic matter for UI tests if none exists yet.
+    private func seedUITestFixturesIfNeeded() {
+        mattersController.loadMatters()
+        if mattersController.matters.isEmpty {
+            _ = try? mattersController.createMatter(name: "UITest Matter")
+            mattersController.loadMatters()
+        }
+    }
+
     /// Opens the on-disk store, falling back to a temporary store so the app
     /// still launches if the Application Support database cannot be created.
     private static func makeStore() -> SupraStore {
+        if isUITestMode {
+            // Fresh, throwaway store per launch so UI tests are deterministic and
+            // isolated from the user's real Application Support database.
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("SupraAI-UITest-\(UUID().uuidString).sqlite")
+            if let store = try? SupraStore(url: url) { return store }
+        }
         if let store = try? SupraStore.openAppSupportStore() {
             return store
         }

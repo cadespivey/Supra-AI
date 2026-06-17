@@ -19,6 +19,7 @@ struct MatterResearchView: View {
                     Button { showPlanner = true } label: {
                         Label("New Research Session", systemImage: "plus")
                     }
+                    .accessibilityIdentifier("research.newSession")
                 }
                 .padding()
                 Divider()
@@ -43,8 +44,10 @@ struct MatterResearchView: View {
                 Text("Plan and run CourtListener research for this matter.")
             } actions: {
                 Button("New Research Session") { showPlanner = true }
+                    .accessibilityIdentifier("research.newSession.empty")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityIdentifier("research.empty")
         } else {
             List(controller.sessions) { session in
                 NavigationLink(value: session.id) {
