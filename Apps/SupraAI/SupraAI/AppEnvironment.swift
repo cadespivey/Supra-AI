@@ -29,6 +29,7 @@ final class AppEnvironment: ObservableObject {
     // Milestone 3: document intelligence setup.
     let documentSetupController: DocumentIntelligenceSetupController
     let embeddingDownloadController: EmbeddingModelDownloadController
+    let documentQueue: DocumentProcessingQueue
 
     private let runtimeStatusController: RuntimeStatusController
 
@@ -72,6 +73,17 @@ final class AppEnvironment: ObservableObject {
             store: store,
             fetcher: HuggingFaceClient()
         )
+        self.documentQueue = DocumentProcessingQueue(
+            store: store,
+            importService: DocumentImportService(store: store),
+            makeIndexingService: {
+                // Build a fresh indexing service per job using the currently
+                // selected embedding model (if any).
+                let model = try? store.documentSettings.fetchSelectedEmbeddingModel()
+                let embedder = model.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+                return DocumentIndexingService(store: store, embedder: embedder)
+            }
+        )
     }
 
     var statusBadgeTitle: String {
@@ -99,6 +111,8 @@ final class AppEnvironment: ObservableObject {
         chatController.loadChats()
         await refreshRuntimeStatus()
         await documentSetupController.refreshAll()
+        // Reconcile any document job interrupted by a previous quit (plan §5.4).
+        documentQueue.bootstrap()
     }
 
     func refreshRuntimeStatus() async {
