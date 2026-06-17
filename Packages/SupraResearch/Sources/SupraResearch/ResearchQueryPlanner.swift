@@ -54,7 +54,13 @@ public struct ResearchQueryPlanner: Sendable {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if isQueryHeading(trimmed) {
                 if let current { buckets.append(current) }
-                current = []
+                // Capture query text written inline on the heading
+                // ("## Query 1: breach of contract"), else open an empty bucket.
+                if let inline = inlineQueryText(fromHeading: trimmed) {
+                    current = [inline]
+                } else {
+                    current = []
+                }
             } else if isHeading(trimmed) {
                 // A non-query heading (e.g. "# Research Queries") closes the block.
                 if let current { buckets.append(current) }
@@ -84,12 +90,27 @@ public struct ResearchQueryPlanner: Sendable {
         line.hasPrefix("#")
     }
 
+    private func headingBody(_ line: String) -> String {
+        String(line.drop(while: { $0 == "#" })).trimmingCharacters(in: .whitespaces)
+    }
+
     private func isQueryHeading(_ line: String) -> Bool {
         guard isHeading(line) else { return false }
-        let body = line.drop(while: { $0 == "#" })
-            .trimmingCharacters(in: .whitespaces)
-            .lowercased()
-        return body.hasPrefix("query")
+        return headingBody(line).lowercased().hasPrefix("query")
+    }
+
+    /// Query text written on the heading line itself, e.g.
+    /// "## Query 1: breach of contract" → "breach of contract". Returns nil when
+    /// the heading is just a label ("## Query 1").
+    private func inlineQueryText(fromHeading line: String) -> String? {
+        let body = headingBody(line)
+        guard body.lowercased().hasPrefix("query") else { return nil }
+        var rest = Substring(body.dropFirst("query".count))
+        rest = rest.drop(while: { $0 == " " || $0 == "\t" })
+        rest = rest.drop(while: { $0.isNumber })
+        rest = rest.drop(while: { " :：.-—–)\t".contains($0) })
+        let result = rest.trimmingCharacters(in: .whitespaces)
+        return result.isEmpty ? nil : result
     }
 
     private func isPlaceholder(_ text: String) -> Bool {

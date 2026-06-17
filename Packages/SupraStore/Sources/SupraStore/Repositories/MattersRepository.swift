@@ -17,13 +17,15 @@ public final class MattersRepository: @unchecked Sendable {
         judge: String? = nil,
         docketNumber: String? = nil,
         practiceArea: String? = nil,
-        notes: String? = nil
+        notes: String? = nil,
+        defaultChatTitle: String? = nil
     ) throws -> MatterRecord {
         let normalized = try Self.validateMatterFields(
             name: name,
             jurisdiction: jurisdiction,
             partyPerspective: partyPerspective
         )
+        let chatTitle = defaultChatTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
         return try writer.write { db in
             let now = Date()
             let record = MatterRecord(
@@ -39,6 +41,11 @@ public final class MattersRepository: @unchecked Sendable {
                 updatedAt: now
             )
             try record.insert(db)
+            // Create the default matter chat in the same transaction so a matter
+            // never exists without it (spec §8.3); both roll back together.
+            if let chatTitle, !chatTitle.isEmpty {
+                try ChatRecord(title: chatTitle, scope: "matter", matterID: record.id).insert(db)
+            }
             return record
         }
     }
