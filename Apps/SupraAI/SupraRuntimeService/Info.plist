@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Marks this bundle as a launchd-registerable XPC service. Without the
+	  XPCService dictionary, launchd silently refuses to register the embedded
+	  .xpc, so NSXPCConnection(serviceName:) lookups fail with
+	  "No such process" (BOOTSTRAP_UNKNOWN_SERVICE) and the app reports
+	  "Runtime Failed". GENERATE_INFOPLIST_FILE merges the remaining keys
+	  (CFBundleIdentifier, CFBundlePackageType=XPC!, versions) on top of this.
+	-->
+	<key>XPCService</key>
+	<dict>
+		<key>ServiceType</key>
+		<string>Application</string>
+	</dict>
+</dict>
+</plist>
