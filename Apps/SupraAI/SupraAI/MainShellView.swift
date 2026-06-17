@@ -7,7 +7,14 @@ struct MainShellView: View {
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(selection: $selectedRoute)
+            SidebarView(
+                selection: $selectedRoute,
+                matters: environment.mattersController,
+                onNewMatter: {
+                    selectedRoute = .matters
+                    environment.newMatterRequests += 1
+                }
+            )
         } detail: {
             detailView(for: selectedRoute ?? .globalChats)
                 .frame(minWidth: 640, minHeight: 420)

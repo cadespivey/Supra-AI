@@ -19,10 +19,12 @@ private struct StubTokenStore: APIKeyStoreProtocol, @unchecked Sendable {
 private struct StubCourtListenerClient: CourtListenerClientProtocol, @unchecked Sendable {
     var response: CourtListenerSearchResponse = .init(count: 0, next: nil, previous: nil, results: [])
     var shouldFail = false
+    var failure: CourtListenerError?
     func searchOpinions(
         _ request: CourtListenerSearchRequest,
         relatedResearchSessionID: String?
     ) async throws -> CourtListenerSearchResponse {
+        if let failure { throw failure }
         if shouldFail { throw CourtListenerError.serverError(statusCode: 500) }
         return response
     }
@@ -360,6 +362,42 @@ final class SupraSessionsTests: XCTestCase {
 
         XCTAssertNotNil(controller.runMessage)
         XCTAssertEqual(controller.sessionQueries[0].status, ResearchQueryStatus.approved.rawValue, "queries stay approved when no token")
+    }
+
+    func testRunPopulatesTokenlessQueryMetadata() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let sessionID = try seedApprovedSession(store, matterID: matter.id)
+        let dto = CourtListenerSearchResultDTO(caseName: "Roe", rawResultJSON: "{}")
+        let controller = makeRunController(
+            store: store, matterID: matter.id,
+            client: StubCourtListenerClient(response: .init(count: 3, next: "https://www.courtlistener.com/x", previous: nil, results: [dto]))
+        )
+        controller.openSession(sessionID)
+        await controller.runApprovedSearches()
+
+        let query = try XCTUnwrap(store.research.fetchQueries(sessionID: sessionID).first)
+        let requestMeta = try XCTUnwrap(query.requestMetadataJSON)
+        XCTAssertTrue(requestMeta.contains("\"type\":\"o\""))
+        XCTAssertFalse(requestMeta.lowercased().contains("authorization"), "metadata must be tokenless")
+        XCTAssertFalse(requestMeta.lowercased().contains("token"))
+        XCTAssertTrue(try XCTUnwrap(query.responseMetadataJSON).contains("\"count\":\"3\""))
+    }
+
+    func testRunSurfacesSpecificErrorAndRecordsNetworkDiagnostic() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let sessionID = try seedApprovedSession(store, matterID: matter.id)
+        let controller = makeRunController(
+            store: store, matterID: matter.id,
+            client: StubCourtListenerClient(failure: .localRateLimitExceeded)
+        )
+        controller.openSession(sessionID)
+        await controller.runApprovedSearches()
+
+        XCTAssertEqual(controller.runMessage, CourtListenerError.localRateLimitExceeded.localizedDescription)
+        let diagnostics = try store.diagnostics.fetchRecentDiagnostics()
+        XCTAssertTrue(diagnostics.contains { $0.category == "network" && $0.severity == "warning" })
     }
 
     // MARK: - Result review (WO 26)
