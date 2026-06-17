@@ -118,6 +118,6 @@ public final class ModelDownloadController: ObservableObject {
             modelLibrary.refresh()
             return
         }
-        try? modelLibrary.addModel(displayName: displayName, path: path, bookmarkData: nil)
+        _ = try? modelLibrary.addModel(displayName: displayName, path: path, bookmarkData: nil)
     }
 }
