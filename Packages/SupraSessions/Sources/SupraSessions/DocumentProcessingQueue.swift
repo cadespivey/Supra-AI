@@ -3,6 +3,17 @@ import Foundation
 import SupraCore
 import SupraStore
 
+/// Summary of an import that finished with per-file failures, for in-app display.
+public struct DocumentImportFailureSummary: Sendable, Equatable, Identifiable {
+    public let matterID: String
+    public let importedCount: Int
+    public let discoveredCount: Int
+    public let failedCount: Int
+    /// Stable per-outcome id so a dismissed banner stays dismissed but a new
+    /// failing import re-shows one.
+    public var id: String { "\(matterID)-\(discoveredCount)-\(importedCount)-\(failedCount)" }
+}
+
 /// App-wide document processing queue (plan §5.2–§5.6). Exactly one job runs at a
 /// time; others queue FIFO. Jobs run import → indexing, report phase progress,
 /// fire completion/failure notifications, and reconcile safely after an
@@ -14,6 +25,10 @@ public final class DocumentProcessingQueue: ObservableObject {
     /// Jobs paused by an interrupted quit, awaiting the user's resume decision.
     @Published public private(set) var resumableJobs: [DocumentProcessingJobRecord] = []
     @Published public private(set) var lastError: String?
+    /// The most recent import that completed with per-file failures, for in-app
+    /// surfacing (the Documents tab shows a banner). Cleared on a later clean
+    /// import of the same matter or via `clearImportFailure()`.
+    @Published public private(set) var lastImportFailure: DocumentImportFailureSummary?
 
     private let store: SupraStore
     private let importService: DocumentImportService
@@ -178,13 +193,23 @@ public final class DocumentProcessingQueue: ObservableObject {
         }
     }
 
+    /// Clears the in-app import-failure banner (called when the user dismisses it).
+    public func clearImportFailure() { lastImportFailure = nil }
+
     private func notifyCompletion(job: DocumentProcessingJobRecord, report: DocumentImportReport?) async {
         if let report, report.failedCount > 0 {
+            lastImportFailure = DocumentImportFailureSummary(
+                matterID: job.matterID,
+                importedCount: report.importedCount,
+                discoveredCount: report.discoveredCount,
+                failedCount: report.failedCount
+            )
             await notifier.notify(
                 title: "Import complete with issues",
                 body: "Imported \(report.importedCount) of \(report.discoveredCount); \(report.failedCount) need attention."
             )
         } else if let report {
+            if lastImportFailure?.matterID == job.matterID { lastImportFailure = nil }
             await notifier.notify(
                 title: "Import complete",
                 body: "Imported and indexed \(report.importedCount) document(s)."
