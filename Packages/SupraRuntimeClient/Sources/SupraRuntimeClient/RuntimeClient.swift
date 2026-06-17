@@ -172,6 +172,26 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
         }
     }
 
+    public func loadEmbeddingModel(_ request: LoadEmbeddingModelRequest) async throws -> LoadEmbeddingModelResponse {
+        let requestData = try encode(request)
+        return try await sendRequest(LoadEmbeddingModelResponse.self) { service, reply in
+            service.loadEmbeddingModel(requestData, withReply: reply)
+        }
+    }
+
+    public func embedTexts(_ request: EmbedTextRequest) async throws -> EmbedTextResponse {
+        let requestData = try encode(request)
+        return try await sendRequest(EmbedTextResponse.self) { service, reply in
+            service.embedTexts(requestData, withReply: reply)
+        }
+    }
+
+    public func embeddingStatus() async throws -> EmbeddingModelStatus {
+        try await sendRequest(EmbeddingModelStatus.self) { service, reply in
+            service.embeddingStatus(withReply: reply)
+        }
+    }
+
     public func restartRuntimeService() async throws {
         invalidateConnection()?.invalidate()
         try await connect()

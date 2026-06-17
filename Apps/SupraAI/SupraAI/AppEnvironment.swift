@@ -26,6 +26,9 @@ final class AppEnvironment: ObservableObject {
     let modelDownloadController: ModelDownloadController
     let settingsController: SettingsController
     let mattersController: MattersController
+    // Milestone 3: document intelligence setup.
+    let documentSetupController: DocumentIntelligenceSetupController
+    let embeddingDownloadController: EmbeddingModelDownloadController
 
     private let runtimeStatusController: RuntimeStatusController
 
@@ -61,6 +64,14 @@ final class AppEnvironment: ObservableObject {
             runtimeClient: runtimeClient,
             defaultSystemPrompt: systemPrompt
         )
+        self.documentSetupController = DocumentIntelligenceSetupController(
+            store: store,
+            runtimeClient: runtimeClient
+        )
+        self.embeddingDownloadController = EmbeddingModelDownloadController(
+            store: store,
+            fetcher: HuggingFaceClient()
+        )
     }
 
     var statusBadgeTitle: String {
@@ -87,6 +98,7 @@ final class AppEnvironment: ObservableObject {
         modelLibrary.refresh()
         chatController.loadChats()
         await refreshRuntimeStatus()
+        await documentSetupController.refreshAll()
     }
 
     func refreshRuntimeStatus() async {
