@@ -149,6 +149,7 @@ struct MatterWorkspaceView: View {
                     controller: documents,
                     queue: queue,
                     qaController: controller.documentQAController,
+                    chronologyController: controller.documentChronologyController,
                     loadedModelID: library.loadedModelID
                 )
             } else {

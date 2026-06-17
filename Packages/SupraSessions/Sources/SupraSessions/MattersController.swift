@@ -96,6 +96,7 @@ public final class MattersController: ObservableObject {
     @Published public private(set) var outputsController: StructuredOutputController?
     @Published public private(set) var documentsController: MatterDocumentsController?
     @Published public private(set) var documentQAController: DocumentQAController?
+    @Published public private(set) var documentChronologyController: DocumentChronologyController?
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
@@ -226,6 +227,7 @@ public final class MattersController: ObservableObject {
             outputsController = nil
             documentsController = nil
             documentQAController = nil
+            documentChronologyController = nil
             return
         }
         let controller = GlobalChatController(
@@ -277,6 +279,12 @@ public final class MattersController: ObservableObject {
             store: store,
             runtimeClient: runtimeClient,
             embedder: embedder,
+            defaultSystemPrompt: defaultSystemPrompt
+        )
+        documentChronologyController = DocumentChronologyController(
+            matterID: matterID,
+            store: store,
+            runtimeClient: runtimeClient,
             defaultSystemPrompt: defaultSystemPrompt
         )
     }
