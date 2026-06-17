@@ -1,5 +1,9 @@
+import CoreGraphics
+import CoreText
 import Foundation
+import ImageIO
 import SupraDocuments
+import UniformTypeIdentifiers
 
 /// Authors the synthetic Milestone 3 "Validation Matter" on disk (plan §15.2),
 /// reused by the Diagnostics app-run validation. Born-digital PDF/DOCX/XLSX are
@@ -54,10 +58,52 @@ public enum Milestone3ValidationFixtures {
         --B--
         """
         try eml.write(to: try mk("Emails/notice-thread.eml"), atomically: true, encoding: .utf8)
-        try Data("png-bytes".utf8).write(to: try mk("Images/scanned-notice.png"))
+        try writeScannedImagePNG(
+            "TERMINATION NOTICE\n\nThis scanned notice is dated March 3, 2024.\nIndemnification applies and survives termination of the Service Agreement.",
+            to: try mk("Images/scanned-notice.png")
+        )
         try "binary-junk".write(to: try mk("Finance/legacy-ledger.xls"), atomically: true, encoding: .utf8)
         try "ole-junk".write(to: try mk("Emails/board-approval.msg"), atomically: true, encoding: .utf8)
         try "not a zip".write(to: try mk("Unsupported-Or-Bad/corrupt-file.docx"), atomically: true, encoding: .utf8)
         return root
+    }
+
+    enum FixtureError: Error { case imageRenderFailed }
+
+    /// Renders `text` into a real rasterized PNG (no text layer) so the import
+    /// pipeline must OCR it — this is the fixture's only image-OCR exercise.
+    /// Writing literal bytes here (as a placeholder) makes Vision fail to decode
+    /// the image, which leaves the OCR validation scenario permanently failing.
+    private static func writeScannedImagePNG(_ text: String, to url: URL) throws {
+        let pageSize = CGSize(width: 1000, height: 600)
+        let scale = 2
+        let pixelWidth = Int(pageSize.width) * scale
+        let pixelHeight = Int(pageSize.height) * scale
+        guard let context = CGContext(
+            data: nil, width: pixelWidth, height: pixelHeight,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { throw FixtureError.imageRenderFailed }
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight))
+        context.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
+
+        let font = CTFontCreateWithName("Helvetica" as CFString, 34, nil)
+        let attributed = NSAttributedString(string: text, attributes: [
+            .font: font,
+            .foregroundColor: CGColor(red: 0, green: 0, blue: 0, alpha: 1)
+        ])
+        let framesetter = CTFramesetterCreateWithAttributedString(attributed)
+        let textRect = CGRect(origin: .zero, size: pageSize).insetBy(dx: 48, dy: 48)
+        let frame = CTFramesetterCreateFrame(framesetter, CFRangeMake(0, 0), CGPath(rect: textRect, transform: nil), nil)
+        CTFrameDraw(frame, context)
+
+        guard let image = context.makeImage(),
+              let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+            throw FixtureError.imageRenderFailed
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        CGImageDestinationFinalize(destination)
     }
 }
