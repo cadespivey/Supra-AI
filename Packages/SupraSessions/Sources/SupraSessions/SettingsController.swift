@@ -9,7 +9,18 @@ import SupraStore
 public final class SettingsController: ObservableObject {
     static let generationDefaultsKey = "generation.default"
 
-    @Published public var preset: GenerationPreset { didSet { persist() } }
+    /// Choosing a preset snaps temperature/topP to that preset's character so
+    /// the picker actually changes generation (the runtime reads temperature/
+    /// topP, not the preset label). Manual temperature tweaks afterwards are
+    /// preserved; the preset only re-applies when it is explicitly changed.
+    @Published public var preset: GenerationPreset {
+        didSet {
+            guard preset != oldValue else { return }
+            let params = preset.samplingParameters
+            topP = params.topP
+            temperature = params.temperature // persists via temperature's didSet
+        }
+    }
     @Published public var temperature: Double { didSet { persist() } }
     @Published public var maxOutputTokens: Int { didSet { persist() } }
 
