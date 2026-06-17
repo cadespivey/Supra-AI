@@ -51,15 +51,18 @@ public final class DocumentImportService: @unchecked Sendable {
     private let store: SupraStore
     private let storage: DocumentStorage
     private let extraction: ExtractionService
+    private let ocr: (any DocumentOCRService)?
 
     public init(
         store: SupraStore,
         storage: DocumentStorage = .makeDefault(),
-        extraction: ExtractionService = ExtractionService()
+        extraction: ExtractionService = ExtractionService(),
+        ocr: (any DocumentOCRService)? = VisionOCRService()
     ) {
         self.store = store
         self.storage = storage
         self.extraction = extraction
+        self.ocr = ocr
     }
 
     public struct ImportOutcome: Sendable {
@@ -258,13 +261,18 @@ public final class DocumentImportService: @unchecked Sendable {
 
         try store.documentLibrary.insertDocument(document)
 
-        // Extract.
+        // Extract, then OCR if needed.
         do {
-            let result = try await extraction.extract(fileURL: url)
+            var result = try await extraction.extract(fileURL: url)
+            if result.needsOCR, ocr != nil, let format {
+                let blobURL = storage.url(forManagedRelativePath: blob.managedRelativePath)
+                result = try await applyOCR(to: result, blobURL: blobURL, family: format.family)
+            }
             try persistExtraction(result, documentID: document.id)
+            let disposition: DocumentImportDisposition = result.needsOCR ? .ocrNeeded : .imported
             report.items.append(DocumentImportReportItem(
                 displayName: displayName, sourceDisplayPath: sourceDisplayPath,
-                disposition: result.needsOCR ? DocumentImportDisposition.ocrNeeded.rawValue : DocumentImportDisposition.imported.rawValue,
+                disposition: disposition.rawValue,
                 documentID: document.id, parentDocumentID: parentDocumentID
             ))
             // Expand email attachments as child documents.
@@ -328,6 +336,55 @@ public final class DocumentImportService: @unchecked Sendable {
         )
     }
 
+    // MARK: - Editable extracted text
+
+    /// Applies a user edit to one extracted part's text and marks the document
+    /// edited + index-stale so a later indexing pass re-chunks/re-embeds it
+    /// (plan §6.2). The OCR/extraction text is the editable source of truth.
+    public func updateExtractedText(documentID: String, partID: String, text: String) throws {
+        try store.documentIndex.updatePartText(partID: partID, text: TextNormalization.normalize(text))
+        try store.documentLibrary.markTextEdited(documentID: documentID)
+    }
+
+    // MARK: - OCR
+
+    /// Runs OCR over a document that lacks embedded text and merges the results
+    /// into the extraction (plan §6.2). Confidence flows to the page parts.
+    private func applyOCR(
+        to result: ExtractionResult,
+        blobURL: URL,
+        family: SupportedDocumentTypes.ExtractionFamily
+    ) async throws -> ExtractionResult {
+        guard let ocr else { return result }
+        var merged = result
+        switch family {
+        case .image:
+            let ocrResult = try await ocr.recognizeImage(at: blobURL)
+            merged.parts = [ExtractedPart(
+                sourceKind: .image, text: ocrResult.text, pageIndex: 0, pageLabel: "1",
+                ocrConfidence: ocrResult.confidence, boundingBoxesJSON: ocrResult.boundingBoxesJSON
+            )]
+            merged.method = "vision-ocr-image"
+            merged.needsOCR = false
+        case .pdf:
+            let pageResults = try await ocr.recognizePDFPages(at: blobURL, pageIndices: nil)
+            merged.parts = result.parts.enumerated().map { index, part in
+                var updated = part
+                if let ocrResult = pageResults[part.pageIndex ?? index], ocrResult.text.count > part.text.count {
+                    updated.text = ocrResult.text
+                    updated.ocrConfidence = ocrResult.confidence
+                    updated.boundingBoxesJSON = ocrResult.boundingBoxesJSON
+                }
+                return updated
+            }
+            merged.method = result.method + "+ocr"
+            merged.needsOCR = false
+        default:
+            break
+        }
+        return merged
+    }
+
     // MARK: - Persistence
 
     private func persistExtraction(_ result: ExtractionResult, documentID: String) throws {
@@ -343,15 +400,38 @@ public final class DocumentImportService: @unchecked Sendable {
                 emailPartPath: part.emailPartPath,
                 normalizedText: part.text,
                 charCount: part.text.count,
-                ocrConfidence: part.ocrConfidence
+                ocrConfidence: part.ocrConfidence,
+                boundingBoxesJSON: part.boundingBoxesJSON
             )
         }
         try store.documentIndex.replaceParts(documentID: documentID, parts: parts)
 
         let checksum = DocumentStorage.sha256Hex(of: Data(result.combinedText.utf8))
-        let warningsJSON = result.warnings.isEmpty ? nil : (try? JSONEncoder.encodeToString(result.warnings))
-        let extractionStatus: DocumentExtractionStatus = result.needsOCR ? .needsOCR : .extracted
-        let status: MatterDocumentStatus = result.needsOCR ? .needsOCR : .indexing
+
+        // OCR confidence summary + low-confidence review gating (plan §6.2).
+        let ocrConfidences = result.parts.compactMap(\.ocrConfidence)
+        let meanOCR = ocrConfidences.isEmpty ? nil : ocrConfidences.reduce(0, +) / Double(ocrConfidences.count)
+        let lowConfidence = (meanOCR.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false)
+        let ocrSummary = meanOCR.map { String(format: "OCR mean confidence %.2f%@", $0, lowConfidence ? " (low)" : "") }
+
+        var warnings = result.warnings
+        if lowConfidence {
+            warnings.append("OCR confidence is low; verify the extracted text before relying on it.")
+        }
+        let warningsJSON = warnings.isEmpty ? nil : (try? JSONEncoder.encodeToString(warnings))
+
+        let extractionStatus: DocumentExtractionStatus
+        let status: MatterDocumentStatus
+        if result.needsOCR {
+            extractionStatus = .needsOCR
+            status = .needsOCR
+        } else if !ocrConfidences.isEmpty {
+            extractionStatus = .ocrComplete
+            status = lowConfidence ? .needsReview : .indexing
+        } else {
+            extractionStatus = .extracted
+            status = .indexing
+        }
 
         try store.documentLibrary.updateExtraction(
             documentID: documentID,
@@ -360,6 +440,7 @@ public final class DocumentImportService: @unchecked Sendable {
             method: result.method,
             checksum: checksum,
             pagePartCount: parts.count,
+            ocrConfidenceSummary: ocrSummary,
             warningsJSON: warningsJSON,
             metadataCreatedAt: result.metadataCreatedAt,
             metadataModifiedAt: result.metadataModifiedAt

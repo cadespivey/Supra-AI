@@ -13,6 +13,8 @@ public struct ExtractedPart: Sendable, Equatable {
     public var text: String
     /// OCR confidence in 0...1 when this part came from OCR (set in WO 36).
     public var ocrConfidence: Double?
+    /// Normalized OCR bounding boxes JSON, when available (for highlights).
+    public var boundingBoxesJSON: String?
 
     public init(
         sourceKind: DocumentSourceKind,
@@ -22,7 +24,8 @@ public struct ExtractedPart: Sendable, Equatable {
         sheetName: String? = nil,
         cellRange: String? = nil,
         emailPartPath: String? = nil,
-        ocrConfidence: Double? = nil
+        ocrConfidence: Double? = nil,
+        boundingBoxesJSON: String? = nil
     ) {
         self.sourceKind = sourceKind
         self.text = text
@@ -32,6 +35,7 @@ public struct ExtractedPart: Sendable, Equatable {
         self.cellRange = cellRange
         self.emailPartPath = emailPartPath
         self.ocrConfidence = ocrConfidence
+        self.boundingBoxesJSON = boundingBoxesJSON
     }
 }
 
