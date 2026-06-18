@@ -42,6 +42,14 @@ public final class ModelLibrary: ObservableObject {
         return UUID(uuidString: modelID).map(ModelID.init)
     }
 
+    /// The model the runtime currently holds (per `loadState`). May differ from
+    /// `activeModel` after reconciling a still-warm runtime, so status UI should
+    /// prefer this over `activeModel` to name what is actually loaded.
+    public var loadedModel: ModelSummary? {
+        guard case let .loaded(modelID) = loadState else { return nil }
+        return models.first { $0.id == modelID }
+    }
+
     /// Reloads the registered models from the store.
     public func refresh() {
         models = (try? store.models.fetchModels())?.map(ModelSummary.init) ?? []
