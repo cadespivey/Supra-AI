@@ -12,17 +12,12 @@ struct MatterResearchView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Research Sessions").font(.headline)
-                    Spacer()
-                    Button { showPlanner = true } label: {
-                        Label("New Research Session", systemImage: "plus")
-                    }
-                    .accessibilityIdentifier("research.newSession")
+            MatterTabScaffold("Research Sessions") {
+                Button { showPlanner = true } label: {
+                    Label("New Research Session", systemImage: "plus")
                 }
-                .padding()
-                Divider()
+                .accessibilityIdentifier("research.newSession")
+            } content: {
                 content
             }
             .navigationDestination(for: String.self) { sessionID in
