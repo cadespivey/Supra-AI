@@ -35,12 +35,15 @@ struct SplashView: View {
                 Text("§")
                     .font(.system(size: 104, weight: .semibold, design: .serif))
                     .foregroundStyle(BrandColors.gold)
-                VStack(spacing: 4) {
+                VStack(spacing: 6) {
                     Text("Supra AI")
                         .font(.system(size: 30, weight: .semibold, design: .serif))
                         .foregroundStyle(.white)
-                    Text("See Supra")
-                        .font(.system(size: 16, design: .serif).italic())
+                    Text("Secure legal AI without compromise.")
+                        .font(.system(size: 15, design: .serif))
+                        .foregroundStyle(.white.opacity(0.85))
+                    Text("See Supra.")
+                        .font(.system(size: 15, design: .serif).italic())
                         .foregroundStyle(BrandColors.gold.opacity(0.92))
                 }
             }
