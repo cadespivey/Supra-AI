@@ -54,7 +54,9 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         do {
             _ = try await rateLimitTracker.reserveSlot()
         } catch {
-            try await logger.recordBlockedRequest(
+            // Best-effort logging: a logging failure must not mask the rate-limit
+            // error the caller needs to see (matches the policy-block path above).
+            _ = try? await logger.recordBlockedRequest(
                 url: url,
                 method: method,
                 blockedReason: String(describing: error),
@@ -90,7 +92,9 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
                 )
                 throw AuthorizedHTTPClientError.invalidResponse
             }
-            try await logger.finishRequest(id: logID, statusCode: httpResponse.statusCode)
+            // Best-effort: a logging failure must not discard a successful response
+            // (the catch below would otherwise re-log this success as a failure).
+            try? await logger.finishRequest(id: logID, statusCode: httpResponse.statusCode)
             return (data, httpResponse)
         } catch {
             try? await logger.finishRequest(id: logID, statusCode: nil, errorMessage: error.localizedDescription)
