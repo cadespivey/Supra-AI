@@ -65,11 +65,10 @@ struct MainShellView: View {
         case .models:
             ModelsView(
                 library: environment.modelLibrary,
-                validation: environment.validationController,
                 downloader: environment.modelDownloadController
             )
         case .diagnostics:
-            DiagnosticsView(history: environment.validationHistory, validation: environment.validationController)
+            DiagnosticsView()
         case .settings:
             SettingsView(
                 settings: environment.settingsController,
