@@ -8,6 +8,7 @@ struct MatterWorkspaceView: View {
     @ObservedObject var controller: MattersController
     @ObservedObject var library: ModelLibrary
     @ObservedObject var queue: DocumentProcessingQueue
+    @ObservedObject var settings: SettingsController
     let matter: MatterSummary
 
     @State private var tab: MatterTab = .chat
@@ -107,7 +108,7 @@ struct MatterWorkspaceView: View {
         switch tab {
         case .chat:
             if let chatController = controller.chatController {
-                GlobalChatsView(controller: chatController, library: library, listStyle: .inline)
+                GlobalChatsView(controller: chatController, library: library, settings: settings, listStyle: .inline)
             } else {
                 placeholder("Chat unavailable", "Select the matter again to load its chats.", systemImage: "bubble.left.and.bubble.right")
             }

@@ -12,8 +12,10 @@ struct GlobalChatsView: View {
 
     @ObservedObject var controller: GlobalChatController
     @ObservedObject var library: ModelLibrary
+    @ObservedObject var settings: SettingsController
     var listStyle: ChatListStyle = .picker
     @State private var draft = ""
+    @State private var showGenerationSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +27,8 @@ struct GlobalChatsView: View {
             }
             Divider()
             composer
+            Divider()
+            chatStatusBar
         }
     }
 
@@ -191,6 +195,86 @@ struct GlobalChatsView: View {
         guard canSend, let modelID = library.loadedModelID else { return }
         controller.send(prompt: draft, modelID: modelID)
         draft = ""
+    }
+
+    // MARK: - Status bar
+
+    /// Below the composer: which model is loaded, whether it's generating, and a
+    /// quick generation-settings switcher (the same defaults as Settings).
+    private var chatStatusBar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 5) {
+                Circle().fill(modelStatusColor).frame(width: 7, height: 7)
+                Text(modelStatusText).foregroundStyle(.secondary).lineLimit(1)
+            }
+            if controller.isGenerating {
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.mini)
+                    Text("Generating…")
+                }
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button { showGenerationSettings.toggle() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "slider.horizontal.3")
+                    Text(settings.preset.rawValue.capitalized)
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Generation settings")
+            .popover(isPresented: $showGenerationSettings, arrowEdge: .bottom) {
+                generationSettings
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private var modelStatusText: String {
+        switch library.loadState {
+        case .loaded: library.activeModel?.displayName ?? "Model loaded"
+        case .loading: "Loading model…"
+        case .failed: "Model failed to load"
+        case .idle: "No model loaded"
+        }
+    }
+
+    private var modelStatusColor: Color {
+        switch library.loadState {
+        case .loaded: .green
+        case .loading: .gray
+        case .failed: .orange
+        case .idle: .gray
+        }
+    }
+
+    private var generationSettings: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Generation").font(.headline)
+            Picker("Preset", selection: $settings.preset) {
+                ForEach(GenerationPreset.allCases, id: \.self) { preset in
+                    Text(preset.rawValue.capitalized).tag(preset)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Temperature")
+                    Spacer()
+                    Text(String(format: "%.2f", settings.temperature))
+                        .foregroundStyle(.secondary).monospacedDigit()
+                }
+                Slider(value: $settings.temperature, in: 0...1, step: 0.05)
+            }
+            Stepper("Max output tokens: \(settings.maxOutputTokens)", value: $settings.maxOutputTokens, in: 128...8192, step: 128)
+            Text("Applies to all chats — same as Settings → Generation Defaults.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .padding()
+        .frame(width: 340)
     }
 }
 

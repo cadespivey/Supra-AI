@@ -52,6 +52,7 @@ struct MainShellView: View {
                 controller: environment.mattersController,
                 library: environment.modelLibrary,
                 queue: environment.documentQueue,
+                settings: environment.settingsController,
                 matterID: id
             )
         }
@@ -61,7 +62,7 @@ struct MainShellView: View {
     private func routeView(_ route: AppRoute) -> some View {
         switch route {
         case .globalChats:
-            GlobalChatsView(controller: environment.chatController, library: environment.modelLibrary)
+            GlobalChatsView(controller: environment.chatController, library: environment.modelLibrary, settings: environment.settingsController)
         case .models:
             ModelsView(
                 library: environment.modelLibrary,
@@ -106,11 +107,12 @@ private struct MatterDetailView: View {
     @ObservedObject var controller: MattersController
     @ObservedObject var library: ModelLibrary
     let queue: DocumentProcessingQueue
+    @ObservedObject var settings: SettingsController
     let matterID: String
 
     var body: some View {
         if let matter = controller.matters.first(where: { $0.id == matterID }) {
-            MatterWorkspaceView(controller: controller, library: library, queue: queue, matter: matter)
+            MatterWorkspaceView(controller: controller, library: library, queue: queue, settings: settings, matter: matter)
         } else {
             ContentUnavailableView(
                 "Select a Matter",
