@@ -290,6 +290,22 @@ final class SupraStoreTests: XCTestCase {
         XCTAssertNotNil(strandedRow.completedAt)
     }
 
+    func testSoftDeleteMatterCascadesToChildFolders() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        _ = try store.documentLibrary.createFolder(matterID: matter.id, name: "Contracts")
+        _ = try store.documentLibrary.createFolder(matterID: matter.id, name: "Notes")
+        XCTAssertEqual(try store.documentLibrary.fetchFolders(matterID: matter.id).count, 2)
+
+        try store.matters.softDeleteMatter(id: matter.id)
+
+        XCTAssertEqual(try store.matters.fetchMatters().count, 0, "matter is soft-deleted")
+        XCTAssertEqual(
+            try store.documentLibrary.fetchFolders(matterID: matter.id).count, 0,
+            "child folders are cascade-soft-deleted with the matter"
+        )
+    }
+
     private func makeStore() throws -> SupraStore {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SupraStoreTests-\(UUID().uuidString)", isDirectory: true)

@@ -227,8 +227,6 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         switch DocumentIndexStatus(rawValue: document.indexStatus) {
         case .ready:
             return true
-        case .semanticIndexed:
-            return true
         case .textIndexed:
             return !requiresSemantic
         default:

@@ -3,8 +3,7 @@ import SupraResearch
 import XCTest
 
 final class SupraResearchTests: XCTestCase {
-    func testModuleCanAccessCoreIDsAndNetworkingBoundary() {
-        XCTAssertNotNil(SupraResearchModule.makeResearchSessionID().rawValue.uuidString)
+    func testModuleExposesCourtListenerTokenService() {
         XCTAssertEqual(SupraResearchModule.courtListenerTokenService, "com.supraai.courtlistener")
     }
 

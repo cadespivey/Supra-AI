@@ -11,7 +11,7 @@ public enum TextNormalization {
         var lines = unified.split(separator: "\n", omittingEmptySubsequences: false)
             .map { $0.replacingOccurrences(of: "\u{00A0}", with: " ") }
             .map { String($0).trimmingTrailingWhitespace() }
-        // Collapse 3+ consecutive blank lines to one.
+        // Collapse any run of consecutive blank lines to one.
         var collapsed: [String] = []
         var blankRun = 0
         for line in lines {

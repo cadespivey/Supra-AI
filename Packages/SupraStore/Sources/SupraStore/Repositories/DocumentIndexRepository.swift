@@ -169,22 +169,4 @@ public final class DocumentIndexRepository: @unchecked Sendable {
         }
     }
 
-    /// Deletes all embeddings produced by a model (e.g. when the model changes).
-    public func deleteEmbeddings(embeddingModelID: String) throws {
-        try writer.write { db in
-            try db.execute(
-                sql: "DELETE FROM document_chunk_embeddings WHERE embedding_model_id = ?",
-                arguments: [embeddingModelID]
-            )
-        }
-    }
-
-    public func deleteEmbeddings(documentID: String) throws {
-        try writer.write { db in
-            try db.execute(
-                sql: "DELETE FROM document_chunk_embeddings WHERE document_id = ?",
-                arguments: [documentID]
-            )
-        }
-    }
 }

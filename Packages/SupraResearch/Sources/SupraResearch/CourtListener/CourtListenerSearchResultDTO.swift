@@ -23,7 +23,6 @@ public struct CourtListenerSearchResultDTO: Codable, Equatable, Sendable {
     public let status: String?
     public let suitNature: String?
     public let syllabus: String?
-    public let meta: JSONValue?
     public let rawResultJSON: String
 
     public init(
@@ -49,7 +48,6 @@ public struct CourtListenerSearchResultDTO: Codable, Equatable, Sendable {
         status: String? = nil,
         suitNature: String? = nil,
         syllabus: String? = nil,
-        meta: JSONValue? = nil,
         rawResultJSON: String = "{}"
     ) {
         self.absoluteURL = absoluteURL
@@ -74,7 +72,6 @@ public struct CourtListenerSearchResultDTO: Codable, Equatable, Sendable {
         self.status = status
         self.suitNature = suitNature
         self.syllabus = syllabus
-        self.meta = meta
         self.rawResultJSON = rawResultJSON
     }
 
@@ -102,7 +99,6 @@ public struct CourtListenerSearchResultDTO: Codable, Equatable, Sendable {
             status: result.status,
             suitNature: result.suitNature,
             syllabus: result.syllabus,
-            meta: result.meta,
             rawResultJSON: rawResultJSON
         )
     }
@@ -131,8 +127,7 @@ public struct CourtListenerSearchResultDTO: Codable, Equatable, Sendable {
             source: try container.decodeIfPresent(String.self, forKey: .source),
             status: try container.decodeIfPresent(String.self, forKey: .status),
             suitNature: try container.decodeIfPresent(String.self, forKey: .suitNature),
-            syllabus: try container.decodeIfPresent(String.self, forKey: .syllabus),
-            meta: try container.decodeIfPresent(JSONValue.self, forKey: .meta)
+            syllabus: try container.decodeIfPresent(String.self, forKey: .syllabus)
         )
     }
 
@@ -159,7 +154,6 @@ public struct CourtListenerSearchResultDTO: Codable, Equatable, Sendable {
         case status
         case suitNature
         case syllabus
-        case meta
         case rawResultJSON = "raw_result_json"
     }
 }

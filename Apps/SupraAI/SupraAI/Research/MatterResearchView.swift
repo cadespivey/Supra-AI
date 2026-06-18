@@ -2,7 +2,7 @@ import SupraSessions
 import SwiftUI
 
 /// The matter's Research tab: lists research sessions and opens the planner.
-/// Running searches and reviewing results arrive in WO 25–26.
+/// Running searches and reviewing results happen in the session detail view.
 struct MatterResearchView: View {
     @ObservedObject var controller: ResearchSessionController
     @ObservedObject var library: ModelLibrary

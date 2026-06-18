@@ -2,6 +2,8 @@ import SupraCore
 import SupraRuntimeInterface
 
 public protocol RuntimeClientProtocol: Sendable {
+    /// Eagerly establishes the XPC connection. Reserved for explicit lifecycle
+    /// management; the connection is otherwise established lazily on first use.
     func connect() async throws
     func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse
     func generate(_ request: GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error>
@@ -10,6 +12,8 @@ public protocol RuntimeClientProtocol: Sendable {
     func unloadModel() async throws -> UnloadModelResponse
     func reloadCurrentModel() async throws -> LoadModelResponse
     func runtimeStatus() async throws -> RuntimeStatus
+    /// Tears down and re-establishes the XPC connection. Reserved for runtime
+    /// recovery; not currently invoked from a UI path.
     func restartRuntimeService() async throws
 
     // MARK: - Milestone 3: embeddings
