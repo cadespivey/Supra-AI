@@ -120,12 +120,25 @@ final class AppEnvironment: ObservableObject {
         // chat without forcing the user to re-load it (the chat gate keys on
         // ModelLibrary.loadState, which otherwise starts idle each launch).
         modelLibrary.reconcileLoadedModel(runtimeStatusController.loadedModelID)
+        autoLoadActiveModelIfNeeded()
         if Self.isUITestMode { seedUITestFixturesIfNeeded() }
         await documentSetupController.refreshAll()
         // Reconcile any document job interrupted by a previous quit (plan §5.4).
         documentQueue.bootstrap()
         // Auto-purge documents soft-deleted past the retention window (plan §12.2).
         DocumentMaintenance(store: store).purgeExpired()
+    }
+
+    /// Auto-loads the user's selected (active) model into the runtime on launch so
+    /// chat is ready without a manual Load. Skipped when a model is already loaded
+    /// (reconciled from a still-warm runtime) or in UI tests. Runs in the
+    /// background — the load (and its `.loading`/`.loaded`/`.failed` status) never
+    /// blocks app startup, and overlapping loads are ignored by ModelLibrary.
+    private func autoLoadActiveModelIfNeeded() {
+        guard !Self.isUITestMode,
+              case .idle = modelLibrary.loadState,
+              let active = modelLibrary.activeModel else { return }
+        Task { await modelLibrary.activateAndLoad(modelID: active.id) }
     }
 
     func refreshRuntimeStatus() async {
