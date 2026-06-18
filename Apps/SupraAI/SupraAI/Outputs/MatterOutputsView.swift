@@ -13,20 +13,9 @@ struct MatterOutputsView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Structured Outputs").font(.headline)
-                        Text("Reusable legal work product the local model drafts from this matter — issue spotting, rule synthesis, and drafting skeletons. Document Q&A and chronologies are created from the Documents tab.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                    Button { showNew = true } label: { Label("New Output", systemImage: "plus") }
-                }
-                .padding()
-                Divider()
+            MatterTabScaffold("Structured Outputs") {
+                Button { showNew = true } label: { Label("New Output", systemImage: "plus") }
+            } content: {
                 content
             }
             .navigationDestination(for: String.self) { id in
