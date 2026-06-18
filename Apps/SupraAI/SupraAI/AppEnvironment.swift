@@ -138,7 +138,14 @@ final class AppEnvironment: ObservableObject {
         guard !Self.isUITestMode,
               case .idle = modelLibrary.loadState,
               let active = modelLibrary.activeModel else { return }
-        Task { await modelLibrary.activateAndLoad(modelID: active.id) }
+        Task {
+            await modelLibrary.activateAndLoad(modelID: active.id)
+            // bootstrap()'s refreshAll() likely ran while the model was still
+            // loading and cached chatModelLoaded = false. Re-query once the
+            // background load settles so the Settings checklist reflects the
+            // now-loaded model without a manual Re-check.
+            await documentSetupController.refreshChatModelStatus()
+        }
     }
 
     func refreshRuntimeStatus() async {
