@@ -45,8 +45,14 @@ struct SettingsView: View {
             }
 
             Section {
+                HStack(spacing: 8) {
+                    Image(systemName: settings.hasCourtListenerToken ? "checkmark.seal.fill" : "key.slash")
+                        .foregroundStyle(settings.hasCourtListenerToken ? .green : .orange)
+                    Text(settings.hasCourtListenerToken ? "API token saved" : "No API token saved")
+                        .font(.callout.weight(.medium))
+                    Spacer()
+                }
                 if settings.hasCourtListenerToken {
-                    LabeledContent("API token", value: "•••••• saved")
                     Button("Clear Token", role: .destructive) {
                         settings.clearCourtListenerToken()
                     }
@@ -61,7 +67,9 @@ struct SettingsView: View {
             } header: {
                 Text("CourtListener")
             } footer: {
-                Text("Stored only in your Keychain. Required to run CourtListener research.")
+                Text(settings.hasCourtListenerToken
+                     ? "Stored in your Keychain. Clear it to enter a different token."
+                     : "Add your token to run CourtListener research. Stored only in your Keychain.")
             }
 
             Section("Model Storage") {
