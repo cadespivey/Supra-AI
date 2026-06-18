@@ -129,7 +129,7 @@ public final class DocumentIndexingService: @unchecked Sendable {
             || document.extractionStatus == DocumentExtractionStatus.edited.rawValue
         guard extractionDone else { return false }
         switch DocumentIndexStatus(rawValue: document.indexStatus) {
-        case .ready, .semanticIndexed:
+        case .ready:
             return false
         case .textIndexed:
             // Already chunked + FTS-indexed; only re-index to add embeddings when

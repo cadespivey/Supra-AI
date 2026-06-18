@@ -303,7 +303,6 @@
 			children = (
 				BDDEEEEA83AAE455AE64D9F5 /* ResearchAuthoritiesUITests.swift */,
 			);
-			name = SupraAIUITests;
 			path = SupraAIUITests;
 			sourceTree = "<group>";
 		};
@@ -430,15 +429,15 @@
 			);
 			mainGroup = 5A0000000000000000000901;
 			packageReferences = (
-				5A0000000000000000000302 /* XCLocalSwiftPackageReference "SupraCore" */,
-				5A0000000000000000000303 /* XCLocalSwiftPackageReference "SupraStore" */,
-				5A0000000000000000000304 /* XCLocalSwiftPackageReference "SupraRuntimeInterface" */,
-				5A0000000000000000000305 /* XCLocalSwiftPackageReference "SupraRuntimeClient" */,
-				5A0000000000000000000306 /* XCLocalSwiftPackageReference "SupraDiagnostics" */,
-				5A0000000000000000000307 /* XCLocalSwiftPackageReference "SupraDesignSystem" */,
-				5A000000000000000000030D /* XCLocalSwiftPackageReference "SupraSessions" */,
-				5A000000000000000000030E /* XCLocalSwiftPackageReference "SupraNetworking" */,
-				5A000000000000000000030F /* XCLocalSwiftPackageReference "SupraResearch" */,
+				5A0000000000000000000302 /* XCLocalSwiftPackageReference "../../Packages/SupraCore" */,
+				5A0000000000000000000303 /* XCLocalSwiftPackageReference "../../Packages/SupraStore" */,
+				5A0000000000000000000304 /* XCLocalSwiftPackageReference "../../Packages/SupraRuntimeInterface" */,
+				5A0000000000000000000305 /* XCLocalSwiftPackageReference "../../Packages/SupraRuntimeClient" */,
+				5A0000000000000000000306 /* XCLocalSwiftPackageReference "../../Packages/SupraDiagnostics" */,
+				5A0000000000000000000307 /* XCLocalSwiftPackageReference "../../Packages/SupraDesignSystem" */,
+				5A000000000000000000030D /* XCLocalSwiftPackageReference "../../Packages/SupraSessions" */,
+				5A000000000000000000030E /* XCLocalSwiftPackageReference "../../Packages/SupraNetworking" */,
+				5A000000000000000000030F /* XCLocalSwiftPackageReference "../../Packages/SupraResearch" */,
 				5A0000000000000000000308 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 				5A0000000000000000000309 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				5A000000000000000000030A /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
@@ -823,39 +822,39 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		5A0000000000000000000302 /* XCLocalSwiftPackageReference "SupraCore" */ = {
+		5A0000000000000000000302 /* XCLocalSwiftPackageReference "../../Packages/SupraCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../Packages/SupraCore;
 		};
-		5A0000000000000000000303 /* XCLocalSwiftPackageReference "SupraStore" */ = {
+		5A0000000000000000000303 /* XCLocalSwiftPackageReference "../../Packages/SupraStore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../Packages/SupraStore;
 		};
-		5A0000000000000000000304 /* XCLocalSwiftPackageReference "SupraRuntimeInterface" */ = {
+		5A0000000000000000000304 /* XCLocalSwiftPackageReference "../../Packages/SupraRuntimeInterface" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../Packages/SupraRuntimeInterface;
 		};
-		5A0000000000000000000305 /* XCLocalSwiftPackageReference "SupraRuntimeClient" */ = {
+		5A0000000000000000000305 /* XCLocalSwiftPackageReference "../../Packages/SupraRuntimeClient" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../Packages/SupraRuntimeClient;
 		};
-		5A0000000000000000000306 /* XCLocalSwiftPackageReference "SupraDiagnostics" */ = {
+		5A0000000000000000000306 /* XCLocalSwiftPackageReference "../../Packages/SupraDiagnostics" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../Packages/SupraDiagnostics;
 		};
-		5A0000000000000000000307 /* XCLocalSwiftPackageReference "SupraDesignSystem" */ = {
+		5A0000000000000000000307 /* XCLocalSwiftPackageReference "../../Packages/SupraDesignSystem" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../Packages/SupraDesignSystem;
 		};
-		5A000000000000000000030D /* XCLocalSwiftPackageReference "SupraSessions" */ = {
+		5A000000000000000000030D /* XCLocalSwiftPackageReference "../../Packages/SupraSessions" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../Packages/SupraSessions;
 		};
-		5A000000000000000000030E /* XCLocalSwiftPackageReference "SupraNetworking" */ = {
+		5A000000000000000000030E /* XCLocalSwiftPackageReference "../../Packages/SupraNetworking" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../Packages/SupraNetworking;
 		};
-		5A000000000000000000030F /* XCLocalSwiftPackageReference "SupraResearch" */ = {
+		5A000000000000000000030F /* XCLocalSwiftPackageReference "../../Packages/SupraResearch" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../Packages/SupraResearch;
 		};
@@ -907,47 +906,47 @@
 /* Begin XCSwiftPackageProductDependency section */
 		5A0000000000000000000401 /* SupraCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A0000000000000000000302 /* XCLocalSwiftPackageReference "SupraCore" */;
+			package = 5A0000000000000000000302 /* XCLocalSwiftPackageReference "../../Packages/SupraCore" */;
 			productName = SupraCore;
 		};
 		5A0000000000000000000402 /* SupraStore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A0000000000000000000303 /* XCLocalSwiftPackageReference "SupraStore" */;
+			package = 5A0000000000000000000303 /* XCLocalSwiftPackageReference "../../Packages/SupraStore" */;
 			productName = SupraStore;
 		};
 		5A0000000000000000000403 /* SupraRuntimeInterface */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A0000000000000000000304 /* XCLocalSwiftPackageReference "SupraRuntimeInterface" */;
+			package = 5A0000000000000000000304 /* XCLocalSwiftPackageReference "../../Packages/SupraRuntimeInterface" */;
 			productName = SupraRuntimeInterface;
 		};
 		5A0000000000000000000404 /* SupraRuntimeClient */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A0000000000000000000305 /* XCLocalSwiftPackageReference "SupraRuntimeClient" */;
+			package = 5A0000000000000000000305 /* XCLocalSwiftPackageReference "../../Packages/SupraRuntimeClient" */;
 			productName = SupraRuntimeClient;
 		};
 		5A0000000000000000000405 /* SupraDiagnostics */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A0000000000000000000306 /* XCLocalSwiftPackageReference "SupraDiagnostics" */;
+			package = 5A0000000000000000000306 /* XCLocalSwiftPackageReference "../../Packages/SupraDiagnostics" */;
 			productName = SupraDiagnostics;
 		};
 		5A0000000000000000000406 /* SupraDesignSystem */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A0000000000000000000307 /* XCLocalSwiftPackageReference "SupraDesignSystem" */;
+			package = 5A0000000000000000000307 /* XCLocalSwiftPackageReference "../../Packages/SupraDesignSystem" */;
 			productName = SupraDesignSystem;
 		};
 		5A0000000000000000000407 /* SupraCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A0000000000000000000302 /* XCLocalSwiftPackageReference "SupraCore" */;
+			package = 5A0000000000000000000302 /* XCLocalSwiftPackageReference "../../Packages/SupraCore" */;
 			productName = SupraCore;
 		};
 		5A0000000000000000000408 /* SupraRuntimeInterface */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A0000000000000000000304 /* XCLocalSwiftPackageReference "SupraRuntimeInterface" */;
+			package = 5A0000000000000000000304 /* XCLocalSwiftPackageReference "../../Packages/SupraRuntimeInterface" */;
 			productName = SupraRuntimeInterface;
 		};
 		5A0000000000000000000409 /* SupraDiagnostics */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A0000000000000000000306 /* XCLocalSwiftPackageReference "SupraDiagnostics" */;
+			package = 5A0000000000000000000306 /* XCLocalSwiftPackageReference "../../Packages/SupraDiagnostics" */;
 			productName = SupraDiagnostics;
 		};
 		5A000000000000000000040A /* GRDB */ = {
@@ -977,17 +976,17 @@
 		};
 		5A000000000000000000040F /* SupraSessions */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A000000000000000000030D /* XCLocalSwiftPackageReference "SupraSessions" */;
+			package = 5A000000000000000000030D /* XCLocalSwiftPackageReference "../../Packages/SupraSessions" */;
 			productName = SupraSessions;
 		};
 		5A0000000000000000000410 /* SupraNetworking */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A000000000000000000030E /* XCLocalSwiftPackageReference "SupraNetworking" */;
+			package = 5A000000000000000000030E /* XCLocalSwiftPackageReference "../../Packages/SupraNetworking" */;
 			productName = SupraNetworking;
 		};
 		5A0000000000000000000411 /* SupraResearch */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5A000000000000000000030F /* XCLocalSwiftPackageReference "SupraResearch" */;
+			package = 5A000000000000000000030F /* XCLocalSwiftPackageReference "../../Packages/SupraResearch" */;
 			productName = SupraResearch;
 		};
 		5A0000000000000000000421 /* MLXEmbedders */ = {

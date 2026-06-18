@@ -164,36 +164,6 @@ public final class ChatRepository: @unchecked Sendable {
         try updateVariantStatus(variantID, status: .failed, interruptionReason: reason)
     }
 
-    public func softDeleteVariant(_ variantID: String) throws {
-        try writer.write { db in
-            let now = Date()
-            try db.execute(
-                sql: """
-                UPDATE message_variants
-                SET status = ?, deleted_at = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                arguments: [MessageStatus.deleted.rawValue, now, now, variantID]
-            )
-        }
-    }
-
-    public func setActiveVariant(messageID: String, variantID: String) throws {
-        try writer.write { db in
-            let now = Date()
-            guard let variant = try MessageVariantRecord.fetchOne(db, key: variantID), variant.messageID == messageID else {
-                return
-            }
-            try db.execute(
-                sql: """
-                UPDATE messages
-                SET active_variant_id = ?, content = ?, status = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                arguments: [variantID, variant.content, variant.status, now, messageID]
-            )
-        }
-    }
 
     private func updateVariantStatus(
         _ variantID: String,
