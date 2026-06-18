@@ -127,9 +127,7 @@ public final class GlobalChatController: ObservableObject {
     /// The user's composed "soul document" (system prompt), if set, so profile
     /// edits in Settings shape every chat without a relaunch.
     private func storedSystemPrompt() -> String? {
-        let prompt = (try? store.appSettings.getSetting(AssistantProfile.systemPromptKey, as: String.self))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (prompt?.isEmpty ?? true) ? nil : prompt
+        store.composedAssistantPrompt()
     }
 
     /// Requests cancellation of the active generation. The runtime emits a
