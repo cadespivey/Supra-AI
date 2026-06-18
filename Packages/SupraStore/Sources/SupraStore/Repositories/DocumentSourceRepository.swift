@@ -60,15 +60,6 @@ public final class DocumentSourceRepository: @unchecked Sendable {
         }
     }
 
-    public func discardSourceSet(id: String) throws {
-        try writer.write { db in
-            try db.execute(
-                sql: "UPDATE document_source_sets SET status = ? WHERE id = ?",
-                arguments: [DocumentSourceSetStatus.discarded.rawValue, id]
-            )
-        }
-    }
-
     public func fetchSourceSet(id: String) throws -> DocumentSourceSetRecord? {
         try writer.read { db in try DocumentSourceSetRecord.fetchOne(db, key: id) }
     }

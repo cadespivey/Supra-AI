@@ -2,10 +2,10 @@ import SupraCore
 import XCTest
 
 final class Milestone2CoreTypesTests: XCTestCase {
-    func testMilestone2IDsRoundTripThroughCodable() throws {
-        let id = ResearchResultID()
+    func testTypedIDsRoundTripThroughCodable() throws {
+        let id = GenerationID()
         let data = try JSONEncoder().encode(id)
-        let decoded = try JSONDecoder().decode(ResearchResultID.self, from: data)
+        let decoded = try JSONDecoder().decode(GenerationID.self, from: data)
 
         XCTAssertEqual(decoded, id)
     }
