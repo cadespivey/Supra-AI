@@ -78,6 +78,7 @@ struct SettingsView: View {
             }
 
             Section("About") {
+                AboutBanner()
                 LabeledContent(
                     "Version",
                     value: "\(settings.appVersion.marketingVersion) (\(settings.appVersion.buildNumber))"
@@ -91,6 +92,30 @@ struct SettingsView: View {
     private func revealInFinder(_ path: String) {
         try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+}
+
+/// Branded About banner: the § mark, the name, and the "See Supra" tagline.
+private struct AboutBanner: View {
+    var body: some View {
+        HStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 14)
+                .fill(BrandColors.navy)
+                .frame(width: 60, height: 60)
+                .overlay(
+                    Text("§")
+                        .font(.system(size: 38, weight: .semibold, design: .serif))
+                        .foregroundStyle(BrandColors.gold)
+                )
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Supra AI").font(.title3.weight(.semibold))
+                Text("See Supra")
+                    .font(.callout.italic())
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 4)
     }
 }
 
