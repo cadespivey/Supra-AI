@@ -23,17 +23,6 @@ public enum DateExtraction {
         return regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
     }
 
-    public static func mentions(in text: String) -> [String] {
-        guard let regex else { return [] }
-        var result: [String] = []
-        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-            if let range = Range(match.range, in: text) {
-                let value = String(text[range])
-                if !result.contains(value) { result.append(value) }
-            }
-        }
-        return result
-    }
 }
 
 public enum DocumentChronologyFormat: String, Sendable, Codable {

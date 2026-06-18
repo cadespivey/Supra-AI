@@ -23,5 +23,6 @@ public struct CancelGenerationResponse: Codable, Sendable {
 public enum CancelGenerationStatus: String, Codable, Sendable {
     case cancelled
     case notFound
+    /// Reserved wire status for a cancel that errored; not currently produced by the service.
     case failed
 }

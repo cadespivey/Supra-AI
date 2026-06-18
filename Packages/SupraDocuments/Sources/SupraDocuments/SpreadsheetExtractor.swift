@@ -31,7 +31,7 @@ public struct SpreadsheetExtractor: DocumentExtractor {
             let header = "\(workbookName) > \(sheet.name)\(range.map { "!\($0)" } ?? "")"
             parts.append(ExtractedPart(
                 sourceKind: .spreadsheetCellRange,
-                text: "\(header)\n\(grid.text)",
+                text: "\(header)\n\(grid)",
                 sheetName: sheet.name,
                 cellRange: range
             ))
@@ -138,7 +138,7 @@ public struct SpreadsheetExtractor: DocumentExtractor {
         return collector.cells
     }
 
-    private static func renderGrid(_ cells: [Cell]) -> (text: String, rows: Int) {
+    private static func renderGrid(_ cells: [Cell]) -> String {
         let byRow = Dictionary(grouping: cells, by: \.row)
         var lines: [String] = []
         for row in byRow.keys.sorted() {
@@ -146,7 +146,7 @@ public struct SpreadsheetExtractor: DocumentExtractor {
             let line = rowCells.map { "\($0.ref): \($0.value)" }.joined(separator: "\t")
             if !line.isEmpty { lines.append(line) }
         }
-        return (lines.joined(separator: "\n"), byRow.count)
+        return lines.joined(separator: "\n")
     }
 
     private static func usedRange(_ cells: [Cell]) -> String? {

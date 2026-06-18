@@ -17,7 +17,6 @@ protocol ChatModelController: Sendable {
 
     func cancel() async
     func unload() async throws
-    func status() async -> RuntimeStatus
 }
 
 enum MLXModelControllerError: LocalizedError {
@@ -151,16 +150,6 @@ actor MLXModelController: ChatModelController {
         loadedPath = nil
     }
 
-    func status() async -> RuntimeStatus {
-        RuntimeStatus(
-            state: container == nil ? .modelUnloaded : .modelLoaded,
-            loadedModelID: nil,
-            activeGenerationID: nil,
-            message: loadedPath.map { "MLX model loaded from \($0)" } ?? "No MLX model loaded.",
-            metrics: nil
-        )
-    }
-
     /// Detects whether the model's chat template references `enable_thinking`,
     /// which Qwen3-style reasoning templates use to gate the `<think>` block.
     /// The template lives in `chat_template.jinja` or, failing that, the
@@ -203,7 +192,8 @@ private func generationStream(
         input: input,
         parameters: GenerateParameters(
             maxTokens: options.maxOutputTokens,
-            maxKVSize: options.contextLength,
+            // No user-facing context-length control; use the model's default window.
+            maxKVSize: nil,
             temperature: Float(options.temperature),
             topP: Float(options.topP)
         )
