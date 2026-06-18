@@ -272,7 +272,10 @@ public final class DocumentQAController: ObservableObject {
     private func collect(prompt: String, modelID: ModelID) async throws -> String {
         let request = GenerateRequest(
             generationID: GenerationID(), modelID: modelID, prompt: prompt,
-            systemPrompt: store.composedAssistantPrompt() ?? defaultSystemPrompt, options: GenerationOptions()
+            // Base prompt only: the answer is machine-checked for citation coverage
+            // against the grounding sources, so the user's free-form profile must
+            // not degrade the required citation structure.
+            systemPrompt: defaultSystemPrompt, options: GenerationOptions()
         )
         var output = ""
         for try await event in try runtimeClient.generate(request) {

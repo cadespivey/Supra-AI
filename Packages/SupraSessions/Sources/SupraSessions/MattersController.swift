@@ -230,10 +230,11 @@ public final class MattersController: ObservableObject {
             documentChronologyController = nil
             return
         }
-        // The base prompt is the fallback; the chat and workflow controllers read
-        // the user's composed soul document fresh at generation time (see
-        // `SupraStore.composedAssistantPrompt()`), so profile edits apply without
-        // reselecting the matter.
+        // Matter chat reads the user's composed soul document fresh at send time
+        // (see `SupraStore.composedAssistantPrompt()`), so profile edits apply
+        // without reselecting the matter. The document/research workflows keep the
+        // base prompt — their output is machine-parsed/checked, so a free-form
+        // profile must not override the required structure.
         let controller = GlobalChatController(
             store: store,
             runtimeClient: runtimeClient,
