@@ -620,6 +620,9 @@ public final class ResearchSessionController: ObservableObject {
             generationID: GenerationID(),
             modelID: modelID,
             prompt: prompt,
+            // Base prompt only: the output is machine-parsed into `## Query N`
+            // blocks, so a free-form profile ("write only prose", "no headings")
+            // must not override the required structure.
             systemPrompt: defaultSystemPrompt,
             options: GenerationOptions()
         )

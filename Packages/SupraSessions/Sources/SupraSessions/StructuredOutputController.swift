@@ -334,6 +334,9 @@ public final class StructuredOutputController: ObservableObject {
     private func collect(prompt: String, modelID: ModelID) async throws -> String {
         let request = GenerateRequest(
             generationID: GenerationID(), modelID: modelID, prompt: prompt,
+            // Base prompt only: output is parsed into required sections (with
+            // missing-section repair), so the user's free-form profile must not
+            // override the contract's structure.
             systemPrompt: defaultSystemPrompt, options: GenerationOptions()
         )
         var output = ""
