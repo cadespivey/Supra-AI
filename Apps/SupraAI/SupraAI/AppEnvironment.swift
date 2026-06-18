@@ -21,8 +21,6 @@ final class AppEnvironment: ObservableObject {
     let store: SupraStore
     let modelLibrary: ModelLibrary
     let chatController: GlobalChatController
-    let validationController: ValidationRunController
-    let validationHistory: ValidationHistoryController
     let modelDownloadController: ModelDownloadController
     let settingsController: SettingsController
     let mattersController: MattersController
@@ -30,7 +28,6 @@ final class AppEnvironment: ObservableObject {
     let documentSetupController: DocumentIntelligenceSetupController
     let embeddingDownloadController: EmbeddingModelDownloadController
     let documentQueue: DocumentProcessingQueue
-    let documentValidationController: DocumentValidationRunController
 
     private let runtimeStatusController: RuntimeStatusController
 
@@ -48,13 +45,6 @@ final class AppEnvironment: ObservableObject {
             runtimeClient: runtimeClient,
             defaultSystemPrompt: systemPrompt
         )
-        self.validationController = ValidationRunController(
-            store: store,
-            runtimeClient: runtimeClient,
-            appVersion: appVersion,
-            systemPrompt: systemPrompt
-        )
-        self.validationHistory = ValidationHistoryController(store: store)
         self.modelDownloadController = ModelDownloadController(
             store: store,
             modelLibrary: modelLibrary,
@@ -89,7 +79,6 @@ final class AppEnvironment: ObservableObject {
             documentQueue: queue,
             isImportReady: { documentSetup.isReadyForImport }
         )
-        self.documentValidationController = DocumentValidationRunController(store: store, runtimeClient: runtimeClient)
     }
 
     var statusBadgeTitle: String {
