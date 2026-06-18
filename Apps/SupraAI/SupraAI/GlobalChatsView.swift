@@ -384,7 +384,17 @@ struct GlobalChatsView: View {
 
 private struct MessageRow: View {
     let message: ChatMessage
-    @State private var reasoningExpanded = true
+    /// nil until the user toggles. Until then the reasoning section auto-expands
+    /// only while the response is still generating, and stays collapsed for
+    /// completed/reloaded messages so chat history isn't a wall of reasoning.
+    @State private var reasoningExpandedOverride: Bool?
+
+    private var reasoningExpanded: Binding<Bool> {
+        Binding(
+            get: { reasoningExpandedOverride ?? message.isStreaming },
+            set: { reasoningExpandedOverride = $0 }
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -398,7 +408,7 @@ private struct MessageRow: View {
                 statusBadge
             }
             if let reasoning {
-                DisclosureGroup(isExpanded: $reasoningExpanded) {
+                DisclosureGroup(isExpanded: reasoningExpanded) {
                     Text(reasoning)
                         .font(.callout)
                         .foregroundStyle(.secondary)
