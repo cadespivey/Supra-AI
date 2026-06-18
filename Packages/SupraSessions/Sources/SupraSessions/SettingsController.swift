@@ -35,7 +35,6 @@ public final class SettingsController: ObservableObject {
 
     private let store: SupraStore
     private var topP: Double
-    private var contextLength: Int?
 
     public init(
         store: SupraStore,
@@ -53,7 +52,6 @@ public final class SettingsController: ObservableObject {
         self.temperature = stored.temperature
         self.maxOutputTokens = stored.maxOutputTokens
         self.topP = stored.topP
-        self.contextLength = stored.contextLength
         self.hasCourtListenerToken = (try? self.tokenStore.hasCourtListenerToken()) ?? false
     }
 
@@ -76,8 +74,7 @@ public final class SettingsController: ObservableObject {
             preset: preset,
             temperature: temperature,
             topP: topP,
-            maxOutputTokens: maxOutputTokens,
-            contextLength: contextLength
+            maxOutputTokens: maxOutputTokens
         )
     }
 

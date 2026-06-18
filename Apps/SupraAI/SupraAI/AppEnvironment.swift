@@ -12,6 +12,10 @@ import SupraStore
 final class AppEnvironment: ObservableObject {
     @Published var runtimeServiceState: RuntimeServiceState = .disconnected
     @Published var runtimeStatusMessage = "Checking runtime"
+    /// True when the on-disk store could not be opened and the app fell back to a
+    /// throwaway temporary database — surfaced as a warning so the user knows their
+    /// data is not being persisted.
+    @Published private(set) var usingFallbackStore = false
 
     let store: SupraStore
     let modelLibrary: ModelLibrary
@@ -29,11 +33,13 @@ final class AppEnvironment: ObservableObject {
 
     init() {
         let runtimeClient = RuntimeClient()
-        let store = AppEnvironment.makeStore()
+        let storeResult = AppEnvironment.makeStore()
+        let store = storeResult.store
         let systemPrompt = DefaultSystemPrompt.milestone1()
         let appVersion = AppEnvironment.currentAppVersion()
         let modelLibrary = ModelLibrary(store: store, runtimeClient: runtimeClient)
         self.store = store
+        self.usingFallbackStore = storeResult.isFallback
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
         self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
@@ -139,23 +145,24 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    /// Opens the on-disk store, falling back to a temporary store so the app
-    /// still launches if the Application Support database cannot be created.
-    private static func makeStore() -> SupraStore {
+    /// Opens the on-disk store, falling back to a temporary store so the app still
+    /// launches if the Application Support database cannot be created. `isFallback`
+    /// is true for that degraded last-resort store (not for the UI-test store).
+    private static func makeStore() -> (store: SupraStore, isFallback: Bool) {
         if isUITestMode {
             // Fresh, throwaway store per launch so UI tests are deterministic and
             // isolated from the user's real Application Support database.
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("SupraAI-UITest-\(UUID().uuidString).sqlite")
-            if let store = try? SupraStore(url: url) { return store }
+            if let store = try? SupraStore(url: url) { return (store, false) }
         }
         if let store = try? SupraStore.openAppSupportStore() {
-            return store
+            return (store, false)
         }
         let fallbackURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SupraAI-fallback.sqlite")
         // The temporary store is a last resort; if it also fails the app cannot persist anything.
-        return (try? SupraStore(url: fallbackURL)) ?? unavailableStore()
+        return ((try? SupraStore(url: fallbackURL)) ?? unavailableStore(), true)
     }
 
     private static func unavailableStore() -> SupraStore {

@@ -1,3 +1,4 @@
+import SupraDesignSystem
 import SupraSessions
 import SwiftUI
 
@@ -14,9 +15,19 @@ struct MainShellView: View {
                 onNewMatter: { showNewMatter = true }
             )
         } detail: {
-            detailView
-                .frame(minWidth: 640, minHeight: 420)
-                .toolbar { toolbar }
+            VStack(spacing: 0) {
+                if environment.usingFallbackStore {
+                    SupraWarningBanner(
+                        .warning,
+                        title: "Working in temporary storage",
+                        message: "Supra AI couldn't open its database, so matters, chats, and documents created now won't be saved when you quit. Restart the app; if this keeps happening, check the disk space and permissions for your Application Support folder."
+                    )
+                    .padding([.horizontal, .top], 12)
+                }
+                detailView
+                    .frame(minWidth: 640, minHeight: 420)
+                    .toolbar { toolbar }
+            }
         }
         .sheet(isPresented: $showNewMatter) {
             MatterEditorSheet(mode: .create, draft: MatterDraft()) { draft in

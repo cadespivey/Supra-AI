@@ -143,6 +143,26 @@ public final class MattersRepository: @unchecked Sendable {
                 """,
                 arguments: [deletedAt, deletedAt, id]
             )
+            // Cascade the soft-delete to the matter's child rows that support it, so
+            // deleting a matter doesn't leave its folders, documents, and outputs
+            // visible and orphaned. (Other children are reached only via the now-hidden
+            // matter.) Kept as soft-deletes for potential recovery.
+            for table in ["document_folders", "matter_documents", "structured_outputs"] {
+                try db.execute(
+                    sql: "UPDATE \(table) SET deleted_at = ?, updated_at = ? WHERE matter_id = ? AND deleted_at IS NULL",
+                    arguments: [deletedAt, deletedAt, id]
+                )
+            }
+            // Processing jobs have no deleted_at; cancel any in-flight ones so a deleted
+            // matter's imports stop consuming the queue.
+            try db.execute(
+                sql: """
+                UPDATE document_processing_jobs
+                SET status = ?, updated_at = ?
+                WHERE matter_id = ? AND status IN ('queued', 'active', 'paused')
+                """,
+                arguments: [DocumentProcessingJobStatus.cancelled.rawValue, deletedAt, id]
+            )
         }
     }
 

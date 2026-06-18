@@ -7,7 +7,6 @@ final class SupraNetworkingTests: XCTestCase {
     func testModuleExposesCourtListenerKeychainConstants() {
         XCTAssertEqual(SupraNetworkingModule.courtListenerService, "com.supraai.courtlistener")
         XCTAssertEqual(SupraNetworkingModule.courtListenerTokenAccount, "api-token")
-        XCTAssertNotNil(SupraNetworkingModule.makeNetworkRequestID().rawValue.uuidString)
     }
 
     func testNetworkPolicyAllowsOnlyHTTPSCourtListenerWithoutCredentials() throws {

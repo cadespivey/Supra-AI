@@ -117,14 +117,6 @@ public final class DocumentProcessingQueue: ObservableObject {
         pump()
     }
 
-    /// Pauses the active job at the current safe boundary (call on app quit).
-    public func pauseActiveForQuit() {
-        guard let active = try? store.documentJobs.fetchActiveJob() else { return }
-        try? store.documentJobs.pauseJob(id: active.id)
-        runTask?.cancel()
-        refresh()
-    }
-
     /// Awaits the current run loop until the queue is idle. Useful for tests and
     /// for a deterministic shutdown.
     public func waitUntilIdle() async {

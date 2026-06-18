@@ -35,7 +35,6 @@ public enum DocumentExtractionStatus: String, Codable, CaseIterable, Hashable, S
 public enum DocumentIndexStatus: String, Codable, CaseIterable, Hashable, Sendable {
     case notIndexed = "not_indexed"
     case textIndexed = "text_indexed"
-    case semanticIndexed = "semantic_indexed"
     case ready
     case stale
     case failed

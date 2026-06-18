@@ -15,7 +15,6 @@ protocol EmbeddingModelController: Sendable {
     func loadModel(bookmark: Data?, path: String) async throws -> Int
     func embed(texts: [String], normalize: Bool) async throws -> [[Float]]
     func unload() async
-    func loadedDimension() async -> Int?
 }
 
 enum EmbeddingModelControllerError: LocalizedError {
@@ -91,10 +90,6 @@ actor MLXEmbeddingModelController: EmbeddingModelController {
     func unload() async {
         container = nil
         dimension = nil
-    }
-
-    func loadedDimension() async -> Int? {
-        dimension
     }
 
     /// Tokenizes, runs the encoder, and pools to one vector per text. Vectors are
