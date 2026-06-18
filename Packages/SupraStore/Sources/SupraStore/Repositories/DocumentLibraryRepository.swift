@@ -137,10 +137,24 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
         }
     }
 
-    /// Restores a folder, its descendant folders, and contained instances.
+    /// Restores a folder, its descendant folders, and the document instances that
+    /// were soft-deleted *by this folder delete*.
+    ///
+    /// `softDeleteFolder` stamps every cascade-deleted document with the folder's
+    /// deletion timestamp but skips documents already soft-deleted on their own
+    /// (`deleted_at IS NULL` guard). Restoring therefore matches that same
+    /// timestamp so documents the user deleted independently beforehand stay
+    /// deleted instead of being silently un-deleted.
     public func restoreFolder(id: String) throws {
         try writer.write { db in
             let now = Date()
+            // Capture the folder's deletion timestamp (raw stored text, for an exact
+            // match) before we clear it.
+            let folderDeletedAt = try String.fetchOne(
+                db,
+                sql: "SELECT deleted_at FROM document_folders WHERE id = ?",
+                arguments: [id]
+            )
             let folderIDs = try Self.folderSubtreeIDs(db, rootID: id)
             for folderID in folderIDs {
                 try db.execute(
@@ -148,14 +162,15 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                     arguments: [now, folderID]
                 )
             }
+            guard let folderDeletedAt else { return }
             for folderID in folderIDs {
                 try db.execute(
                     sql: """
                     UPDATE matter_documents
                     SET deleted_at = NULL, status = ?, updated_at = ?
-                    WHERE folder_id = ? AND deleted_at IS NOT NULL
+                    WHERE folder_id = ? AND deleted_at = ?
                     """,
-                    arguments: [MatterDocumentStatus.ready.rawValue, now, folderID]
+                    arguments: [MatterDocumentStatus.ready.rawValue, now, folderID, folderDeletedAt]
                 )
             }
         }

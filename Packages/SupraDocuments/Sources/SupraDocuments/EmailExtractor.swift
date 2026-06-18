@@ -156,8 +156,12 @@ struct MIMEMessage {
         switch encoding {
         case "base64":
             let cleaned = body.replacingOccurrences(of: "\n", with: "")
-            if let data = Data(base64Encoded: cleaned), let string = String(data: data, encoding: .utf8) {
-                return string
+            if let data = Data(base64Encoded: cleaned) {
+                // Fall back to Latin-1 (which can't fail) for non-UTF-8 payloads so a
+                // decodable body is never shown as raw base64 text.
+                return String(data: data, encoding: .utf8)
+                    ?? String(data: data, encoding: .isoLatin1)
+                    ?? body
             }
             return body
         case "quoted-printable":

@@ -492,7 +492,7 @@ public final class DocumentImportService: @unchecked Sendable {
         let result = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(
                 sha256: sha,
-                byteSize: byteSize ?? 0,
+                byteSize: byteSize,
                 originalExtension: ext,
                 managedRelativePath: relativePath
             )

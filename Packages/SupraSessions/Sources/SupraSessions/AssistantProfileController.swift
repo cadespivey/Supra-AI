@@ -35,10 +35,19 @@ public final class AssistantProfileController: ObservableObject {
     }
 
     /// Persists the profile and recomposes the system prompt the model receives.
-    public func save() {
-        try? store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)
-        persistComposedPrompt()
-        message = "Profile saved."
+    /// Returns whether the write succeeded, and reports failure to the user rather
+    /// than claiming success.
+    @discardableResult
+    public func save() -> Bool {
+        do {
+            try store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)
+            try store.appSettings.setSetting(AssistantProfile.systemPromptKey, value: composedSystemPrompt)
+            message = "Profile saved."
+            return true
+        } catch {
+            message = "Couldn't save your profile. \(error.localizedDescription)"
+            return false
+        }
     }
 
     /// Clears any transient status message.
@@ -65,8 +74,9 @@ public final class AssistantProfileController: ObservableObject {
             }
             let excerpt = String(text.prefix(Self.sampleExcerptLimit))
             profile.writingSamples.append(AssistantProfile.WritingSample(name: url.lastPathComponent, excerpt: excerpt))
-            save()
-            message = "Added “\(url.lastPathComponent)”."
+            if save() {
+                message = "Added “\(url.lastPathComponent)”."
+            }
         } catch {
             message = (error as? ExtractionError)?.errorDescription ?? error.localizedDescription
         }

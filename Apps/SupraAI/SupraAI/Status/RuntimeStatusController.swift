@@ -5,7 +5,6 @@ import SupraRuntimeInterface
 
 @MainActor
 final class RuntimeStatusController: ObservableObject {
-    @Published private(set) var readinessState: RuntimeReadinessState = .limited
     @Published private(set) var serviceState: RuntimeServiceState = .disconnected
     @Published private(set) var loadedModelID: ModelID?
     @Published private(set) var statusMessage = "Checking runtime"
@@ -21,7 +20,6 @@ final class RuntimeStatusController: ObservableObject {
             let status = try await runtimeClient.runtimeStatus()
             apply(status)
         } catch {
-            readinessState = .unavailable
             serviceState = .disconnected
             loadedModelID = nil
             statusMessage = error.localizedDescription
@@ -32,17 +30,5 @@ final class RuntimeStatusController: ObservableObject {
         serviceState = status.state
         loadedModelID = status.loadedModelID
         statusMessage = status.message ?? status.state.rawValue
-        readinessState = readinessState(for: status.state)
-    }
-
-    private func readinessState(for serviceState: RuntimeServiceState) -> RuntimeReadinessState {
-        switch serviceState {
-        case .disconnected, .failed:
-            .unavailable
-        case .modelLoaded, .generating, .cancelling:
-            .chatReady
-        case .starting, .connected, .modelUnloaded, .modelLoading, .restarting:
-            .limited
-        }
     }
 }

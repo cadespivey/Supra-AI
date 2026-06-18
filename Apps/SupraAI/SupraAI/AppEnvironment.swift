@@ -10,13 +10,8 @@ import SupraStore
 
 @MainActor
 final class AppEnvironment: ObservableObject {
-    @Published var runtimeReadinessState: RuntimeReadinessState = .limited
     @Published var runtimeServiceState: RuntimeServiceState = .disconnected
-    /// Bumped to ask the Matters screen to open its New Matter editor (e.g. from
-    /// the sidebar's New Matter button).
-    @Published var newMatterRequests = 0
     @Published var runtimeStatusMessage = "Checking runtime"
-    @Published var activeModelName: String?
 
     let store: SupraStore
     let modelLibrary: ModelLibrary
@@ -83,22 +78,6 @@ final class AppEnvironment: ObservableObject {
         )
     }
 
-    var statusBadgeTitle: String {
-        // Exact Milestone 2 §14.2 labels. "Generating" takes precedence over the
-        // readiness-derived label while a generation is in flight.
-        if runtimeServiceState == .generating { return "Generating" }
-        return switch runtimeReadinessState {
-        case .unavailable:
-            "Runtime Failed"
-        case .limited:
-            "Limited Mode"
-        case .chatReady, .embeddingsReady, .fullyReady:
-            "Runtime Ready"
-        case .degraded:
-            "Local"
-        }
-    }
-
     /// Loads persisted state and refreshes runtime status on launch.
     func bootstrap() async {
         // Reconcile any validation run abandoned by a previous quit/crash so it
@@ -141,10 +120,8 @@ final class AppEnvironment: ObservableObject {
 
     func refreshRuntimeStatus() async {
         await runtimeStatusController.refresh()
-        runtimeReadinessState = runtimeStatusController.readinessState
         runtimeServiceState = runtimeStatusController.serviceState
         runtimeStatusMessage = runtimeStatusController.statusMessage
-        activeModelName = modelLibrary.activeModel?.displayName
     }
 
     /// True when launched by the XCUITest harness (passes `-uiTestMode`). Drives a

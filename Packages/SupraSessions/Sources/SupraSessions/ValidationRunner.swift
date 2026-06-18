@@ -241,7 +241,14 @@ public struct ValidationRunner: Sendable {
                     input.generationCancelled = true
                     input.completedWithoutCrash = true
 
-                case .generationFailed, .queued, .modelLoading, .modelLoaded:
+                case .generationFailed:
+                    // The runtime finishes the stream normally after a failure event,
+                    // so capture the reason here (the catch below only fires on a
+                    // thrown/rejected stream). completedWithoutCrash stays false, so
+                    // the mechanical checks still fail the test — now with a reason.
+                    streamErrorMessage = event.error?.message ?? "Generation failed."
+
+                case .queued, .modelLoading, .modelLoaded:
                     break
                 }
             }

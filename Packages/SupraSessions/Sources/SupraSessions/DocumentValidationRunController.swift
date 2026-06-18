@@ -115,7 +115,14 @@ public final class DocumentValidationRunController: ObservableObject {
                 results.append(check("export", "Exports created in all formats", pass: exported == DocumentExportFormat.allCases.count, excerpt: "\(exported)/\(DocumentExportFormat.allCases.count) formats"))
             }
 
-            results.append(check("queue_resume", "No stuck active job", pass: (try? store.documentJobs.fetchActiveJob()) == nil ? true : false, excerpt: "active job reconciled"))
+            let noStuckActiveJob: Bool
+            do {
+                noStuckActiveJob = try store.documentJobs.fetchActiveJob() == nil
+            } catch {
+                // A DB error means the invariant could not be verified — not a pass.
+                noStuckActiveJob = false
+            }
+            results.append(check("queue_resume", "No stuck active job", pass: noStuckActiveJob, excerpt: noStuckActiveJob ? "active job reconciled" : "could not verify active-job state"))
 
             for result in results {
                 _ = try? store.validation.appendValidationTest(
@@ -124,7 +131,16 @@ public final class DocumentValidationRunController: ObservableObject {
                 )
             }
             let passed = results.filter { $0.status == .passed }.count
-            let runStatus: ValidationRunStatus = results.contains { $0.status == .failed } ? .failed : .passed
+            // Match ValidationRunner: any failure → failed, otherwise any warning →
+            // partial, else passed (previously warnings were silently reported as passed).
+            let runStatus: ValidationRunStatus
+            if results.contains(where: { $0.status == .failed }) {
+                runStatus = .failed
+            } else if results.contains(where: { $0.status == .warning }) {
+                runStatus = .partial
+            } else {
+                runStatus = .passed
+            }
             try? store.validation.completeValidationRun(runID: run.id, status: runStatus, summary: "M3 document validation: \(passed)/\(results.count) passed")
             _ = try? store.auditEvents.recordEvent(matterID: matter.id, eventType: "m3_validation_completed", actor: "user", summary: "Ran M3 document validation", relatedTable: "model_validation_runs", relatedID: run.id)
             state = .finished(runID: run.id, passed: passed, total: results.count)

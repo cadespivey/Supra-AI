@@ -127,13 +127,17 @@ public struct DocumentChunker: Sendable {
 
     /// Last paragraph break, else sentence break, else space within the window.
     private func preferredBreak(in characters: [Character], from lower: Int, to upper: Int) -> Int? {
+        var lastParagraph: Int?
         var lastSpace: Int?
         var lastSentence: Int?
         var i = lower
         while i < upper {
             let ch = characters[i]
             if ch == "\n" {
-                if i + 1 < upper && characters[i + 1] == "\n" { return i + 2 } // paragraph
+                // Track the *last* paragraph break in the window (not the first) so the
+                // chunk is as large as possible while still ending on a paragraph,
+                // consistent with the sentence/space handling below.
+                if i + 1 < upper && characters[i + 1] == "\n" { lastParagraph = i + 2 }
                 lastSentence = i + 1
             } else if ch == "." || ch == "!" || ch == "?" {
                 if i + 1 < upper && characters[i + 1] == " " { lastSentence = i + 1 }
@@ -142,7 +146,7 @@ public struct DocumentChunker: Sendable {
             }
             i += 1
         }
-        return lastSentence ?? lastSpace
+        return lastParagraph ?? lastSentence ?? lastSpace
     }
 
     public static func excerpt(_ text: String, limit: Int = 220) -> String {
