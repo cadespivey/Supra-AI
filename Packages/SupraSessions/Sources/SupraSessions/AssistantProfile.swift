@@ -72,6 +72,7 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
         !fullName.isEmpty || !role.isEmpty || !organization.isEmpty || !jurisdictions.isEmpty
             || !practiceAreas.isEmpty || !voiceNotes.isEmpty || !citationStyle.isEmpty
             || !citationNotes.isEmpty || !additionalInstructions.isEmpty || !writingSamples.isEmpty
+            || formality != .balanced || length != .balanced
     }
 
     // Resilient decoding so adding fields later never drops a saved profile.
@@ -106,9 +107,16 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
         if !practiceAreas.isEmpty { identity.append("Practice area(s): \(practiceAreas).") }
         if !identity.isEmpty { profile.append("## About the user\n" + identity.joined(separator: " ")) }
 
-        var style = ["- Formality: \(formality.label).", "- Default length: \(length.label)."]
+        // Only describe style when the user actually deviated from the defaults or
+        // added notes — otherwise an untouched profile would inject a redundant
+        // "Balanced / Balanced" block on every request.
+        var style: [String] = []
+        if formality != .balanced { style.append("- Formality: \(formality.label).") }
+        if length != .balanced { style.append("- Default length: \(length.label).") }
         if !voiceNotes.isEmpty { style.append("- Voice and style: \(voiceNotes)") }
-        profile.append("## How to write for this user\n" + style.joined(separator: "\n"))
+        if !style.isEmpty {
+            profile.append("## How to write for this user\n" + style.joined(separator: "\n"))
+        }
 
         var cites: [String] = []
         if !citationStyle.isEmpty { cites.append("- Citation style: \(citationStyle).") }

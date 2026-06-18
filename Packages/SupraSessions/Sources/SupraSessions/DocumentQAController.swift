@@ -272,7 +272,7 @@ public final class DocumentQAController: ObservableObject {
     private func collect(prompt: String, modelID: ModelID) async throws -> String {
         let request = GenerateRequest(
             generationID: GenerationID(), modelID: modelID, prompt: prompt,
-            systemPrompt: defaultSystemPrompt, options: GenerationOptions()
+            systemPrompt: store.composedAssistantPrompt() ?? defaultSystemPrompt, options: GenerationOptions()
         )
         var output = ""
         for try await event in try runtimeClient.generate(request) {

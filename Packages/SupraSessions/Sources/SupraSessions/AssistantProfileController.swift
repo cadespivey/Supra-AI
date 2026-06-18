@@ -77,3 +77,15 @@ public final class AssistantProfileController: ObservableObject {
         save()
     }
 }
+
+extension SupraStore {
+    /// The user's composed soul document (`AssistantProfile.systemPromptKey`), read
+    /// fresh so profile edits take effect at the next generation without reselecting
+    /// a matter or relaunching. Returns nil when unset or blank, so callers fall back
+    /// to their base system prompt.
+    func composedAssistantPrompt() -> String? {
+        let stored = (try? appSettings.getSetting(AssistantProfile.systemPromptKey, as: String.self))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (stored?.isEmpty ?? true) ? nil : stored
+    }
+}

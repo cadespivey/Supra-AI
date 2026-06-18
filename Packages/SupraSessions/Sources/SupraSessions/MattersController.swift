@@ -230,13 +230,14 @@ public final class MattersController: ObservableObject {
             documentChronologyController = nil
             return
         }
-        // Use the user's composed soul document if set, so a matter's Q&A, outputs,
-        // chronology, and research reflect the profile configured in Settings.
-        let composedPrompt = (try? store.appSettings.getSetting(AssistantProfile.systemPromptKey, as: String.self)) ?? defaultSystemPrompt
+        // The base prompt is the fallback; the chat and workflow controllers read
+        // the user's composed soul document fresh at generation time (see
+        // `SupraStore.composedAssistantPrompt()`), so profile edits apply without
+        // reselecting the matter.
         let controller = GlobalChatController(
             store: store,
             runtimeClient: runtimeClient,
-            defaultSystemPrompt: composedPrompt,
+            defaultSystemPrompt: defaultSystemPrompt,
             scope: .matter(id: matterID)
         )
         controller.loadChats()
@@ -246,7 +247,7 @@ public final class MattersController: ObservableObject {
             store: store,
             runtimeClient: runtimeClient,
             matterID: matterID,
-            defaultSystemPrompt: composedPrompt
+            defaultSystemPrompt: defaultSystemPrompt
         )
         research.loadSessions()
         researchController = research
@@ -262,7 +263,7 @@ public final class MattersController: ObservableObject {
             runtimeClient: runtimeClient,
             matterID: matterID,
             embedder: embedder,
-            defaultSystemPrompt: composedPrompt
+            defaultSystemPrompt: defaultSystemPrompt
         )
         outputs.loadOutputs()
         outputsController = outputs
@@ -283,13 +284,13 @@ public final class MattersController: ObservableObject {
             store: store,
             runtimeClient: runtimeClient,
             embedder: embedder,
-            defaultSystemPrompt: composedPrompt
+            defaultSystemPrompt: defaultSystemPrompt
         )
         documentChronologyController = DocumentChronologyController(
             matterID: matterID,
             store: store,
             runtimeClient: runtimeClient,
-            defaultSystemPrompt: composedPrompt
+            defaultSystemPrompt: defaultSystemPrompt
         )
     }
 

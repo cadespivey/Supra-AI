@@ -620,7 +620,7 @@ public final class ResearchSessionController: ObservableObject {
             generationID: GenerationID(),
             modelID: modelID,
             prompt: prompt,
-            systemPrompt: defaultSystemPrompt,
+            systemPrompt: store.composedAssistantPrompt() ?? defaultSystemPrompt,
             options: GenerationOptions()
         )
         var output = ""
