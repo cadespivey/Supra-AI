@@ -109,7 +109,10 @@ private struct AboutBanner: View {
                 )
             VStack(alignment: .leading, spacing: 2) {
                 Text("Supra AI").font(.title3.weight(.semibold))
-                Text("See Supra")
+                Text("Secure legal AI without compromise.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("See Supra.")
                     .font(.callout.italic())
                     .foregroundStyle(.secondary)
             }
