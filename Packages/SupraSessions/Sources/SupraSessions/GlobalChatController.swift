@@ -107,7 +107,7 @@ public final class GlobalChatController: ObservableObject {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isGenerating else { return }
 
-        let effectiveSystemPrompt = systemPrompt ?? defaultSystemPrompt
+        let effectiveSystemPrompt = systemPrompt ?? storedSystemPrompt() ?? defaultSystemPrompt
         let effectiveOptions = options ?? storedDefaultOptions()
         Task {
             await self.performSend(
@@ -122,6 +122,14 @@ public final class GlobalChatController: ObservableObject {
 
     private func storedDefaultOptions() -> GenerationOptions {
         (try? store.appSettings.getSetting(SettingsController.generationDefaultsKey, as: GenerationOptions.self)) ?? GenerationOptions()
+    }
+
+    /// The user's composed "soul document" (system prompt), if set, so profile
+    /// edits in Settings shape every chat without a relaunch.
+    private func storedSystemPrompt() -> String? {
+        let prompt = (try? store.appSettings.getSetting(AssistantProfile.systemPromptKey, as: String.self))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (prompt?.isEmpty ?? true) ? nil : prompt
     }
 
     /// Requests cancellation of the active generation. The runtime emits a

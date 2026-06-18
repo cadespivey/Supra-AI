@@ -23,6 +23,7 @@ final class AppEnvironment: ObservableObject {
     let chatController: GlobalChatController
     let modelDownloadController: ModelDownloadController
     let settingsController: SettingsController
+    let assistantProfileController: AssistantProfileController
     let mattersController: MattersController
     // Milestone 3: document intelligence setup.
     let documentSetupController: DocumentIntelligenceSetupController
@@ -51,6 +52,7 @@ final class AppEnvironment: ObservableObject {
             fetcher: HuggingFaceClient()
         )
         self.settingsController = SettingsController(store: store, appVersion: appVersion)
+        self.assistantProfileController = AssistantProfileController(store: store, basePrompt: systemPrompt)
 
         // Document intelligence controllers must exist before MattersController so
         // it can vend a per-matter Documents controller wired to the queue + gate.
