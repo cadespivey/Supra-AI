@@ -22,5 +22,6 @@ public enum GenerateStartStatus: String, Codable, Sendable {
     case busy
     case modelNotLoaded
     case invalidRequest
+    /// Reserved wire status for a start that errored; not currently produced by the service.
     case failed
 }

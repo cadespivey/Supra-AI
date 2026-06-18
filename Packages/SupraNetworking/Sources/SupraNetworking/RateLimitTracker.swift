@@ -53,11 +53,6 @@ public actor RateLimitTracker {
         return snapshot(now: now)
     }
 
-    public func currentSnapshot(now: Date = Date()) -> Snapshot {
-        prune(now: now)
-        return snapshot(now: now)
-    }
-
     private func snapshot(now: Date) -> Snapshot {
         Snapshot(
             requestsLastMinute: countRequests(since: now.addingTimeInterval(-60)),

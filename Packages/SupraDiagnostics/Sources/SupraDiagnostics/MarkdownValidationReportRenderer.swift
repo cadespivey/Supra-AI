@@ -30,9 +30,6 @@ public struct MarkdownValidationReportRenderer: Sendable {
             "- ID: \(report.suiteID)",
             "- Version: \(report.suiteVersion)",
             "",
-            "## Overall Status",
-            report.overallStatus.rawValue,
-            "",
             "## Runtime Metrics",
             runtimeMetricsMarkdown(report.metrics),
             "",
@@ -64,7 +61,6 @@ public struct MarkdownValidationReportRenderer: Sendable {
             "- First-token latency: \(formatted(metrics.firstTokenLatencyMs, suffix: " ms"))",
             "- Tokens/sec: \(metrics.tokensPerSecond.map { String(format: "%.2f", $0) } ?? "n/a")",
             "- Cancellation latency: \(formatted(metrics.cancellationLatencyMs, suffix: " ms"))",
-            "- Peak memory: \(formatted(metrics.peakMemoryMb, suffix: " MB"))",
             "- Generated tokens: \(formatted(metrics.generatedTokenCount, suffix: ""))"
         ].joined(separator: "\n")
     }

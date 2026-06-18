@@ -62,6 +62,8 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
             await modelController.cancel()
         }
 
+        // Cancellation is acknowledged immediately — the cancelled event is delivered
+        // here, before the model task unwinds — so request→ack latency is ~0.
         let metrics = RuntimeMetrics(cancellationLatencyMs: 0)
         deliver(
             type: .generationCancelled,
@@ -153,6 +155,8 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         self.activeGeneration = nil
         lock.unlock()
 
+        // Cancellation is acknowledged immediately — the cancelled event is delivered
+        // here, before the model task unwinds — so request→ack latency is ~0.
         let metrics = RuntimeMetrics(cancellationLatencyMs: 0)
         deliver(
             type: .generationCancelled,
