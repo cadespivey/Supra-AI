@@ -626,13 +626,7 @@ public final class ResearchSessionController: ObservableObject {
             systemPrompt: defaultSystemPrompt,
             options: GenerationOptions()
         )
-        var output = ""
-        for try await event in try runtimeClient.generate(request) {
-            if event.type == .token, let token = event.tokenText {
-                output += token
-            }
-        }
-        return output
+        return try await runtimeClient.collectGeneratedText(request)
     }
 
     private func formatDateRange(start: Date?, end: Date?) -> String {

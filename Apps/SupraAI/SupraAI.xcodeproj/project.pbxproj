@@ -35,7 +35,6 @@
 		5A0000000000000000000018 /* RuntimeGenerationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000010D /* RuntimeGenerationCoordinator.swift */; };
 		5A0000000000000000000019 /* GenerationEventBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000010E /* GenerationEventBuffer.swift */; };
 		5A000000000000000000001A /* MLXModelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000010F /* MLXModelController.swift */; };
-		5A000000000000000000001B /* RuntimeMetricsCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000110 /* RuntimeMetricsCollector.swift */; };
 		5A000000000000000000001C /* RuntimeErrorMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000111 /* RuntimeErrorMapper.swift */; };
 		5A000000000000000000001D /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 5A000000000000000000040D /* MLXLMCommon */; };
 		5A000000000000000000001E /* MLXLMTokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 5A000000000000000000040E /* MLXLMTokenizers */; };
@@ -109,7 +108,6 @@
 		5A000000000000000000010D /* RuntimeGenerationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeGenerationCoordinator.swift; sourceTree = "<group>"; };
 		5A000000000000000000010E /* GenerationEventBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationEventBuffer.swift; sourceTree = "<group>"; };
 		5A000000000000000000010F /* MLXModelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXModelController.swift; sourceTree = "<group>"; };
-		5A0000000000000000000110 /* RuntimeMetricsCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeMetricsCollector.swift; sourceTree = "<group>"; };
 		5A0000000000000000000111 /* RuntimeErrorMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeErrorMapper.swift; sourceTree = "<group>"; };
 		5A0000000000000000000112 /* GlobalChatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalChatsView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000113 /* ModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsView.swift; sourceTree = "<group>"; };
@@ -239,7 +237,6 @@
 				5A000000000000000000010E /* GenerationEventBuffer.swift */,
 				5A000000000000000000010F /* MLXModelController.swift */,
 				5A0000000000000000000130 /* MLXEmbeddingModelController.swift */,
-				5A0000000000000000000110 /* RuntimeMetricsCollector.swift */,
 				5A0000000000000000000111 /* RuntimeErrorMapper.swift */,
 				5A000000000000000000010C /* SupraRuntimeService.entitlements */,
 			);
@@ -524,7 +521,6 @@
 				5A0000000000000000000019 /* GenerationEventBuffer.swift in Sources */,
 				5A000000000000000000001A /* MLXModelController.swift in Sources */,
 				5A00000000000000000000E2 /* MLXEmbeddingModelController.swift in Sources */,
-				5A000000000000000000001B /* RuntimeMetricsCollector.swift in Sources */,
 				5A000000000000000000001C /* RuntimeErrorMapper.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

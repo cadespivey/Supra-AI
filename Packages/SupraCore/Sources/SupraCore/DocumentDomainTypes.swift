@@ -74,15 +74,6 @@ public enum DocumentSourceKind: String, Codable, CaseIterable, Hashable, Sendabl
     case convertedDocument = "converted_document"
 }
 
-/// Kind of generated document output (Q&A or chronology), parallel to the
-/// `StructuredOutputType` cases used by the Outputs tab.
-public enum DocumentGeneratedOutputKind: String, Codable, CaseIterable, Hashable, Sendable {
-    case documentQA = "document_qa"
-    case documentQAMemo = "document_qa_memo"
-    case factChronologyTable = "fact_chronology_table"
-    case factChronologyNarrative = "fact_chronology_narrative"
-}
-
 /// Status of a document processing job in the app-wide FIFO queue.
 public enum DocumentProcessingJobStatus: String, Codable, CaseIterable, Hashable, Sendable {
     case queued
