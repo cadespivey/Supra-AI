@@ -63,7 +63,7 @@ struct ModelsView: View {
     private var modelList: some View {
         List {
             ForEach(library.models) { model in
-                ModelRow(model: model, isLoading: isLoading(model), loadDisabled: isAnyLoading) {
+                ModelRow(model: model, isLoading: isLoading(model), isLoaded: isLoaded(model), loadDisabled: isAnyLoading) {
                     Task { await library.activateAndLoad(modelID: model.id) }
                 }
             }
@@ -152,6 +152,13 @@ struct ModelsView: View {
         return false
     }
 
+    /// Whether this model is the one actually loaded into the runtime right now —
+    /// distinct from `model.isActive`, which is the persisted default that survives
+    /// relaunches even though the runtime starts empty.
+    private func isLoaded(_ model: ModelSummary) -> Bool {
+        library.loadedModelID?.rawValue.uuidString == model.id
+    }
+
     private var isAnyLoading: Bool {
         if case .loading = library.loadState { return true }
         return false
@@ -188,6 +195,7 @@ struct ModelsView: View {
 private struct ModelRow: View {
     let model: ModelSummary
     let isLoading: Bool
+    let isLoaded: Bool
     let loadDisabled: Bool
     let onLoad: () -> Void
 
@@ -196,8 +204,19 @@ private struct ModelRow: View {
             Image(systemName: model.isActive ? "cpu.fill" : "cpu")
                 .foregroundStyle(model.isActive ? Color.accentColor : .secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.displayName)
-                    .font(.body)
+                HStack(spacing: 6) {
+                    Text(model.displayName)
+                        .font(.body)
+                    // The persisted default model; "Default" is independent of whether
+                    // it's currently loaded into the runtime.
+                    if model.isActive {
+                        Text("Default")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                    }
+                }
                 Text(model.path)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -207,11 +226,15 @@ private struct ModelRow: View {
             Spacer()
             if isLoading {
                 ProgressView().controlSize(.small)
-            } else if model.isActive {
-                Text("Active")
+            } else if isLoaded {
+                Label("Loaded", systemImage: "checkmark.circle.fill")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.green)
+                    .labelStyle(.titleAndIcon)
             } else {
+                // A "Load" action is always offered when the model isn't in the
+                // runtime — including the default model after a relaunch (which used
+                // to show a static "Active" label with no way to load it).
                 Button("Load", action: onLoad)
                     .disabled(loadDisabled)
             }
