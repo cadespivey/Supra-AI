@@ -384,7 +384,7 @@ struct GlobalChatsView: View {
 
 private struct MessageRow: View {
     let message: ChatMessage
-    @State private var reasoningExpanded = false
+    @State private var reasoningExpanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -412,12 +412,25 @@ private struct MessageRow: View {
                 }
                 .tint(.secondary)
             }
-            Text(displayContent)
+            Text(attributedContent)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(12)
         .background(roleColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// The answer rendered as Markdown (bold/italic/code/links/lists), with line
+    /// breaks preserved. Falls back to plain text if it can't be parsed (e.g. a
+    /// partially-streamed message), so streaming never shows a parse error.
+    private var attributedContent: AttributedString {
+        (try? AttributedString(
+            markdown: displayContent,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        )) ?? AttributedString(displayContent)
     }
 
     /// The model's chain-of-thought, available once its `</think>` boundary has
