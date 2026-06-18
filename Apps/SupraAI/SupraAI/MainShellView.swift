@@ -73,6 +73,7 @@ struct MainShellView: View {
         case .settings:
             SettingsView(
                 settings: environment.settingsController,
+                profile: environment.assistantProfileController,
                 documentSetup: environment.documentSetupController,
                 embeddingDownloader: environment.embeddingDownloadController
             )

@@ -230,10 +230,13 @@ public final class MattersController: ObservableObject {
             documentChronologyController = nil
             return
         }
+        // Use the user's composed soul document if set, so a matter's Q&A, outputs,
+        // chronology, and research reflect the profile configured in Settings.
+        let composedPrompt = (try? store.appSettings.getSetting(AssistantProfile.systemPromptKey, as: String.self)) ?? defaultSystemPrompt
         let controller = GlobalChatController(
             store: store,
             runtimeClient: runtimeClient,
-            defaultSystemPrompt: defaultSystemPrompt,
+            defaultSystemPrompt: composedPrompt,
             scope: .matter(id: matterID)
         )
         controller.loadChats()
@@ -243,7 +246,7 @@ public final class MattersController: ObservableObject {
             store: store,
             runtimeClient: runtimeClient,
             matterID: matterID,
-            defaultSystemPrompt: defaultSystemPrompt
+            defaultSystemPrompt: composedPrompt
         )
         research.loadSessions()
         researchController = research
@@ -259,7 +262,7 @@ public final class MattersController: ObservableObject {
             runtimeClient: runtimeClient,
             matterID: matterID,
             embedder: embedder,
-            defaultSystemPrompt: defaultSystemPrompt
+            defaultSystemPrompt: composedPrompt
         )
         outputs.loadOutputs()
         outputsController = outputs
@@ -280,13 +283,13 @@ public final class MattersController: ObservableObject {
             store: store,
             runtimeClient: runtimeClient,
             embedder: embedder,
-            defaultSystemPrompt: defaultSystemPrompt
+            defaultSystemPrompt: composedPrompt
         )
         documentChronologyController = DocumentChronologyController(
             matterID: matterID,
             store: store,
             runtimeClient: runtimeClient,
-            defaultSystemPrompt: defaultSystemPrompt
+            defaultSystemPrompt: composedPrompt
         )
     }
 
