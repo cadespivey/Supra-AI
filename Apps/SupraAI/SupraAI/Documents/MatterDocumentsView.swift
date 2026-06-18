@@ -376,19 +376,32 @@ struct MatterDocumentsView: View {
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         guard controller.setupReady else { return false }
         let group = DispatchGroup()
-        var urls: [URL] = []
+        // NSItemProvider completion handlers run concurrently, so collect through a
+        // lock instead of mutating a captured array (a data race — and a Swift 6
+        // sendable-capture error).
+        let collector = DroppedURLCollector()
         for provider in providers {
             group.enter()
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                if let url { urls.append(url) }
+                if let url { collector.append(url) }
                 group.leave()
             }
         }
         group.notify(queue: .main) {
+            let urls = collector.drain()
             if !urls.isEmpty { controller.importItems(urls) }
         }
         return true
     }
+}
+
+/// Thread-safe URL collector for the concurrent drag-and-drop `NSItemProvider`
+/// completion handlers in `handleDrop`.
+private final class DroppedURLCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var urls: [URL] = []
+    func append(_ url: URL) { lock.withLock { urls.append(url) } }
+    func drain() -> [URL] { lock.withLock { urls } }
 }
 
 /// Sheet-presentable wrapper for a preview model.

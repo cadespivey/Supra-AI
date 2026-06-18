@@ -211,17 +211,6 @@ public final class DocumentJobRepository: @unchecked Sendable {
         }
     }
 
-    public func resumeJob(id: String) throws {
-        try writer.write { db in
-            guard var record = try DocumentProcessingJobRecord.fetchOne(db, key: id) else { return }
-            let now = Date()
-            record.status = DocumentProcessingJobStatus.active.rawValue
-            record.pausedAt = nil
-            record.updatedAt = now
-            try record.update(db)
-        }
-    }
-
     /// Re-queues a paused job at the end of the FIFO queue so the single-active
     /// scheduler promotes it only when idle (avoids two simultaneous active jobs).
     public func requeueJob(id: String) throws {

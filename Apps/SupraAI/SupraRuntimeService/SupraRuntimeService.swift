@@ -242,7 +242,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             } catch {
                 reply(EmbedTextResponse(
                     state: .failed,
-                    error: RuntimeErrorMapper.modelLoadFailed(error)
+                    error: RuntimeErrorMapper.embeddingFailed(error)
                 ))
             }
         }

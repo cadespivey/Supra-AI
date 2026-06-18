@@ -26,6 +26,14 @@ enum RuntimeErrorMapper {
         )
     }
 
+    static func embeddingFailed(_ error: Error) -> RuntimeError {
+        RuntimeError(
+            category: "embeddingFailed",
+            message: "The MLX model could not generate embeddings.",
+            technicalDetails: error.localizedDescription
+        )
+    }
+
     static func generationFailed(_ error: Error) -> RuntimeError {
         RuntimeError(
             category: "generationFailed",

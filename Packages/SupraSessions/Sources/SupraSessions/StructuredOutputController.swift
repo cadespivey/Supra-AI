@@ -339,10 +339,6 @@ public final class StructuredOutputController: ObservableObject {
             // override the contract's structure.
             systemPrompt: defaultSystemPrompt, options: GenerationOptions()
         )
-        var output = ""
-        for try await event in try runtimeClient.generate(request) {
-            if event.type == .token, let token = event.tokenText { output += token }
-        }
-        return output
+        return try await runtimeClient.collectGeneratedText(request)
     }
 }

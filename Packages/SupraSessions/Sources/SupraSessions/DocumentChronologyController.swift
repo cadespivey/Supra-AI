@@ -229,10 +229,7 @@ public final class DocumentChronologyController: ObservableObject {
             // required structure.
             systemPrompt: defaultSystemPrompt, options: GenerationOptions()
         )
-        var output = ""
-        for try await event in try runtimeClient.generate(request) {
-            if event.type == .token, let token = event.tokenText { output += token }
-        }
+        let output = try await runtimeClient.collectGeneratedText(request)
         return ReasoningContent.answer(from: output)
     }
 }

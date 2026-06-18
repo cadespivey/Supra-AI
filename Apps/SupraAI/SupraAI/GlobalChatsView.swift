@@ -338,7 +338,7 @@ struct GlobalChatsView: View {
 
     private var modelStatusText: String {
         switch library.loadState {
-        case .loaded: library.activeModel?.displayName ?? "Model loaded"
+        case .loaded: library.loadedModel?.displayName ?? "Model loaded"
         case .loading: "Loading model…"
         case .failed: "Model failed to load"
         case .idle: "No model loaded"
