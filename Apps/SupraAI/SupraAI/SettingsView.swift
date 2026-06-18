@@ -2,16 +2,20 @@ import AppKit
 import SupraCore
 import SupraSessions
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Generation defaults, model storage location, and app info.
 struct SettingsView: View {
     @ObservedObject var settings: SettingsController
+    @ObservedObject var profile: AssistantProfileController
     @ObservedObject var documentSetup: DocumentIntelligenceSetupController
     @ObservedObject var embeddingDownloader: EmbeddingModelDownloadController
     @State private var courtListenerToken = ""
 
     var body: some View {
         Form {
+            AssistantProfileSection(profile: profile)
+
             DocumentIntelligenceSection(
                 setup: documentSetup,
                 downloader: embeddingDownloader
@@ -127,6 +131,174 @@ private struct AboutBanner: View {
             Spacer()
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// The "Assistant Profile": plain-language inputs about who you are, how you write,
+/// and how you cite, plus samples of your own writing. These are combined into the
+/// system prompt the assistant follows on every response. Written for a legal
+/// audience — no machine-learning jargon.
+private struct AssistantProfileSection: View {
+    @ObservedObject var profile: AssistantProfileController
+    @State private var isImportingSample = false
+    @State private var showPreview = false
+
+    /// File types accepted for writing samples (handled by the extraction service).
+    private static let sampleTypes: [UTType] = {
+        var types: [UTType] = [.pdf, .rtf, .plainText, .text]
+        if let docx = UTType("org.openxmlformats.wordprocessingml.document") { types.append(docx) }
+        if let doc = UTType("com.microsoft.word.doc") { types.append(doc) }
+        return types
+    }()
+
+    var body: some View {
+        Section {
+            Text("These details shape how the assistant writes for you. Everything is optional — fill in what's useful and update it anytime.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("Full name", text: $profile.profile.fullName)
+            TextField("Role or title", text: $profile.profile.role, prompt: Text("e.g. Partner, Associate, Paralegal"))
+            TextField("Firm or organization", text: $profile.profile.organization)
+            TextField("Jurisdictions", text: $profile.profile.jurisdictions, prompt: Text("e.g. California state and the Ninth Circuit"))
+            TextField("Practice areas", text: $profile.profile.practiceAreas, prompt: Text("e.g. Commercial litigation, employment"))
+        } header: {
+            Text("Assistant Profile")
+        } footer: {
+            Text("Tells the assistant who it's helping and the law you work in, so its answers fit your practice.")
+        }
+
+        Section {
+            Picker("Tone", selection: $profile.profile.formality) {
+                ForEach(AssistantProfile.Formality.allCases) { Text($0.label).tag($0) }
+            }
+            Picker("Default length", selection: $profile.profile.length) {
+                ForEach(AssistantProfile.Length.allCases) { Text($0.label).tag($0) }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Style notes").font(.caption).foregroundStyle(.secondary)
+                TextField(
+                    "Style notes",
+                    text: $profile.profile.voiceNotes,
+                    prompt: Text("e.g. Lead with the bottom line, avoid legalese, use IRAC for analysis"),
+                    axis: .vertical
+                )
+                .lineLimit(2...5)
+                .labelsHidden()
+            }
+        } header: {
+            Text("Writing Style")
+        } footer: {
+            Text("Shapes how the assistant writes for you — how formal, how long, and any habits you prefer.")
+        }
+
+        Section {
+            TextField(
+                "Citation style",
+                text: $profile.profile.citationStyle,
+                prompt: Text("e.g. Bluebook, ALWD, or your court's local rules")
+            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Citation notes").font(.caption).foregroundStyle(.secondary)
+                TextField(
+                    "Citation notes",
+                    text: $profile.profile.citationNotes,
+                    prompt: Text("e.g. Always pin-cite; include parallel cites; short form after first reference"),
+                    axis: .vertical
+                )
+                .lineLimit(2...5)
+                .labelsHidden()
+            }
+        } header: {
+            Text("Citations")
+        } footer: {
+            Text("How you want authorities cited. The assistant follows this when it references cases, statutes, or rules.")
+        }
+
+        Section {
+            TextField(
+                "Anything else",
+                text: $profile.profile.additionalInstructions,
+                prompt: Text("e.g. Flag missing facts; caveat firm conclusions; prefer primary sources"),
+                axis: .vertical
+            )
+            .lineLimit(2...6)
+            .labelsHidden()
+        } header: {
+            Text("Other Instructions")
+        } footer: {
+            Text("Standing instructions you'd give a new associate. These apply to every response.")
+        }
+
+        Section {
+            if profile.profile.writingSamples.isEmpty {
+                Text("No samples added yet.").font(.callout).foregroundStyle(.secondary)
+            } else {
+                ForEach(profile.profile.writingSamples) { sample in
+                    HStack {
+                        Image(systemName: "doc.text").foregroundStyle(.secondary)
+                        Text(sample.name).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button {
+                            profile.removeWritingSample(id: sample.id)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove this sample")
+                    }
+                }
+            }
+            HStack {
+                Button {
+                    isImportingSample = true
+                } label: {
+                    Label("Add writing sample…", systemImage: "plus")
+                }
+                .disabled(profile.isAddingSample)
+                if profile.isAddingSample { ProgressView().controlSize(.small) }
+                Spacer()
+            }
+        } header: {
+            Text("Writing Samples")
+        } footer: {
+            Text("Add a brief, motion, or letter you've written. The assistant studies its voice and formatting to match your style — it won't reuse the content. Accepts PDF, Word, RTF, or text.")
+        }
+        .fileImporter(
+            isPresented: $isImportingSample,
+            allowedContentTypes: Self.sampleTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            if case let .success(urls) = result {
+                for url in urls {
+                    Task { await profile.addWritingSample(url: url) }
+                }
+            }
+        }
+
+        Section {
+            HStack {
+                Button("Save Profile") { profile.save() }
+                    .buttonStyle(.borderedProminent)
+                Spacer()
+                if let message = profile.message {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            DisclosureGroup("Preview what the assistant receives", isExpanded: $showPreview) {
+                ScrollView {
+                    Text(profile.composedSystemPrompt.isEmpty ? "Nothing configured yet." : profile.composedSystemPrompt)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 4)
+                }
+                .frame(maxHeight: 220)
+            }
+        } header: {
+            Text("Review & Save")
+        } footer: {
+            Text("Everything above is combined into the instructions the assistant follows. Changes take effect once you save.")
+        }
     }
 }
 

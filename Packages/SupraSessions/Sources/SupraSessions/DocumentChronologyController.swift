@@ -224,6 +224,9 @@ public final class DocumentChronologyController: ObservableObject {
     private func collect(prompt: String, modelID: ModelID) async throws -> String {
         let request = GenerateRequest(
             generationID: GenerationID(), modelID: modelID, prompt: prompt,
+            // Base prompt only: output is parsed into dated-fact rows and source
+            // citations, so the user's free-form profile must not override the
+            // required structure.
             systemPrompt: defaultSystemPrompt, options: GenerationOptions()
         )
         var output = ""
