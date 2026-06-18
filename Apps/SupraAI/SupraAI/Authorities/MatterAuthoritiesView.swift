@@ -9,7 +9,12 @@ struct MatterAuthoritiesView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
+            MatterTabScaffold("Authorities") {
+                Button { onNewResearch() } label: {
+                    Label("New Research Session", systemImage: "plus")
+                }
+                .accessibilityIdentifier("authorities.newResearch.header")
+            } content: {
                 if controller.authorities.isEmpty {
                     ContentUnavailableView {
                         Label("No Authorities Saved", systemImage: "books.vertical")

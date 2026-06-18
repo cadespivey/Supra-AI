@@ -164,20 +164,22 @@ struct MatterWorkspaceView: View {
 
     @ViewBuilder
     private var auditTab: some View {
-        let entries = controller.auditEntries(forMatter: matter.id)
-        if entries.isEmpty {
-            placeholder("No Activity Yet", "Matter, research, authority, and output actions are logged here.", systemImage: "list.bullet.rectangle")
-        } else {
-            List(entries) { entry in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(entry.eventType).font(.callout.weight(.medium))
-                        Spacer()
-                        Text(entry.timestamp, format: .dateTime.month().day().hour().minute())
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+        MatterTabScaffold("Activity Log") {
+            let entries = controller.auditEntries(forMatter: matter.id)
+            if entries.isEmpty {
+                placeholder("No Activity Yet", "Matter, research, authority, and output actions are logged here.", systemImage: "list.bullet.rectangle")
+            } else {
+                List(entries) { entry in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(entry.eventType).font(.callout.weight(.medium))
+                            Spacer()
+                            Text(entry.timestamp, format: .dateTime.month().day().hour().minute())
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(entry.summary).font(.caption).foregroundStyle(.secondary)
                     }
-                    Text(entry.summary).font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
@@ -186,5 +188,40 @@ struct MatterWorkspaceView: View {
     private func placeholder(_ title: String, _ message: String, systemImage: String) -> some View {
         ContentUnavailableView(title, systemImage: systemImage, description: Text(message))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Uniform chrome for a matter's list-style tabs (Research, Authorities, Outputs,
+/// Audit): a title row with optional trailing actions, a divider, and a content
+/// area that fills the remaining height — so empty states stay centered instead of
+/// floating in the middle of the pane.
+struct MatterTabScaffold<Actions: View, Content: View>: View {
+    private let title: String
+    private let actions: Actions
+    private let content: Content
+
+    init(
+        _ title: String,
+        @ViewBuilder actions: () -> Actions = { EmptyView() },
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.actions = actions()
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                actions
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+            Divider()
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
