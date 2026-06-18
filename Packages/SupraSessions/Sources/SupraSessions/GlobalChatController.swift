@@ -100,6 +100,7 @@ public final class GlobalChatController: ObservableObject {
     public func send(
         prompt: String,
         modelID: ModelID,
+        attachments: [ChatAttachmentContext] = [],
         systemPrompt: String? = nil,
         options: GenerationOptions? = nil
     ) {
@@ -111,6 +112,7 @@ public final class GlobalChatController: ObservableObject {
         Task {
             await self.performSend(
                 prompt: trimmed,
+                attachments: attachments,
                 modelID: modelID,
                 systemPrompt: effectiveSystemPrompt,
                 options: effectiveOptions
@@ -133,6 +135,7 @@ public final class GlobalChatController: ObservableObject {
     /// The full persist-and-stream flow. Internal so tests can await it directly.
     func performSend(
         prompt: String,
+        attachments: [ChatAttachmentContext] = [],
         modelID: ModelID,
         systemPrompt: String?,
         options: GenerationOptions
@@ -147,17 +150,24 @@ public final class GlobalChatController: ObservableObject {
         var variantID: String?
         var sessionID: String?
 
+        // Keep the chat bubble clean (the question + a list of attached files);
+        // give the model the attachment contents as grounding.
+        let modelPrompt = attachments.isEmpty ? prompt : Self.attachmentsBlock(attachments) + "\n\n" + prompt
+        let displayContent = attachments.isEmpty
+            ? prompt
+            : prompt + "\n\nAttached: " + attachments.map(\.name).joined(separator: ", ")
+
         do {
             let chatID = try ensureSelectedChat().id
 
-            _ = try store.chats.appendUserMessage(chatID: chatID, content: prompt)
+            _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
             let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
             let generationID = GenerationID()
             let session = try store.generation.createGenerationSession(
                 chatID: chatID,
                 messageID: assistant.id,
                 modelID: modelID.rawValue.uuidString,
-                prompt: prompt,
+                prompt: modelPrompt,
                 systemPrompt: systemPrompt,
                 options: options
             )
@@ -172,7 +182,7 @@ public final class GlobalChatController: ObservableObject {
             let request = GenerateRequest(
                 generationID: generationID,
                 modelID: modelID,
-                prompt: prompt,
+                prompt: modelPrompt,
                 systemPrompt: systemPrompt,
                 options: options
             )
@@ -262,6 +272,17 @@ public final class GlobalChatController: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// Formats attachments as a grounding block prepended to the model prompt.
+    private static func attachmentsBlock(_ attachments: [ChatAttachmentContext]) -> String {
+        var lines = ["The user attached the following file(s). Use their contents as context for the question."]
+        for attachment in attachments {
+            lines.append("")
+            lines.append("===== \(attachment.name) =====")
+            lines.append(attachment.text)
+        }
+        return lines.joined(separator: "\n")
+    }
 
     private func ensureSelectedChat() throws -> ChatSummary {
         if let selectedChatID, let existing = chats.first(where: { $0.id == selectedChatID }) {
