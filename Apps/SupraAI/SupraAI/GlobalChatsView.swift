@@ -1,6 +1,7 @@
 import SupraCore
 import SupraSessions
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The first persisted global chat flow: pick or create a chat, send a prompt
 /// to the loaded model, and watch the answer stream in.
@@ -16,6 +17,13 @@ struct GlobalChatsView: View {
     var listStyle: ChatListStyle = .picker
     @State private var draft = ""
     @State private var showGenerationSettings = false
+    @State private var attachments: [ChatAttachmentContext] = []
+    @State private var attachmentError: String?
+    @State private var showAttachmentImporter = false
+    @State private var isLoadingAttachment = false
+
+    private let attachmentLoader = ChatAttachmentLoader()
+    private static let maxAttachments = 10
 
     var body: some View {
         VStack(spacing: 0) {
@@ -163,7 +171,13 @@ struct GlobalChatsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if listStyle == .picker {
+                attachmentArea
+            }
             HStack(alignment: .bottom, spacing: 8) {
+                if listStyle == .picker {
+                    attachButton
+                }
                 TextField("Message", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...6)
@@ -184,6 +198,94 @@ struct GlobalChatsView: View {
             }
         }
         .padding(12)
+        .fileImporter(
+            isPresented: $showAttachmentImporter,
+            allowedContentTypes: [.image, .plainText, .text, .sourceCode, .pdf, .data],
+            allowsMultipleSelection: true
+        ) { result in
+            if case let .success(urls) = result { addAttachments(urls) }
+        }
+    }
+
+    // MARK: - Attachments (global chat only)
+
+    /// Attach files/images/screenshots into the model's context. Heavy documents
+    /// (PDF, Word, Excel) are declined with a nudge to open a matter.
+    private var attachButton: some View {
+        Button {
+            attachmentError = nil
+            showAttachmentImporter = true
+        } label: {
+            if isLoadingAttachment {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "plus")
+            }
+        }
+        .help("Attach files or images (up to \(Self.maxAttachments)). Open a matter for PDFs and Word/Excel documents.")
+        .disabled(controller.isGenerating || isLoadingAttachment || attachments.count >= Self.maxAttachments)
+    }
+
+    @ViewBuilder
+    private var attachmentArea: some View {
+        if !attachments.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(attachments) { attachment in
+                        HStack(spacing: 4) {
+                            Image(systemName: "doc.text")
+                            Text(attachment.name).lineLimit(1)
+                            Button {
+                                attachments.removeAll { $0.id == attachment.id }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                        }
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                    }
+                }
+            }
+        }
+        if let attachmentError {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text(attachmentError).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button { self.attachmentError = nil } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func addAttachments(_ urls: [URL]) {
+        attachmentError = nil
+        let remaining = Self.maxAttachments - attachments.count
+        guard remaining > 0 else {
+            attachmentError = "You can attach up to \(Self.maxAttachments) items."
+            return
+        }
+        let toLoad = Array(urls.prefix(remaining))
+        if urls.count > remaining {
+            attachmentError = "You can attach up to \(Self.maxAttachments) items; some were skipped."
+        }
+        Task { @MainActor in
+            isLoadingAttachment = true
+            defer { isLoadingAttachment = false }
+            for url in toLoad {
+                do {
+                    let context = try await attachmentLoader.load(url: url)
+                    attachments.append(context)
+                } catch {
+                    attachmentError = (error as? ChatAttachmentLoader.LoadFailure)?.errorDescription
+                        ?? error.localizedDescription
+                }
+            }
+        }
     }
 
     private var canSend: Bool {
@@ -193,8 +295,10 @@ struct GlobalChatsView: View {
 
     private func send() {
         guard canSend, let modelID = library.loadedModelID else { return }
-        controller.send(prompt: draft, modelID: modelID)
+        controller.send(prompt: draft, modelID: modelID, attachments: attachments)
         draft = ""
+        attachments = []
+        attachmentError = nil
     }
 
     // MARK: - Status bar
