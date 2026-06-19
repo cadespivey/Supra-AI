@@ -35,6 +35,8 @@ ARCHIVE="${BUILD}/SupraAI.xcarchive"
 EXPORT_DIR="${BUILD}/export"
 APP="${EXPORT_DIR}/SupraAI.app"
 ZIP="${BUILD}/SupraAI-${VERSION}.zip"
+DMG="${BUILD}/SupraAI-${VERSION}.dmg"
+SIGN_ID="${SIGN_IDENTITY:-Developer ID Application}"
 
 rm -rf "${BUILD}"
 mkdir -p "${BUILD}"
@@ -54,19 +56,32 @@ xcodebuild -exportArchive \
   -exportPath "${EXPORT_DIR}" \
   -exportOptionsPlist "${ROOT}/Scripts/ExportOptions.plist"
 
-echo "▶︎ Notarizing (this can take a few minutes)…"
+echo "▶︎ Notarizing app (this can take a few minutes)…"
 ditto -c -k --keepParent "${APP}" "${BUILD}/notarize.zip"
 xcrun notarytool submit "${BUILD}/notarize.zip" --keychain-profile "${PROFILE}" --wait
 xcrun stapler staple "${APP}"
-xcrun stapler validate "${APP}"
 
-echo "▶︎ Packaging ${ZIP}…"
+echo "▶︎ Building DMG (drag-to-Applications)…"
+STAGE="${BUILD}/dmg"
+rm -rf "${STAGE}"
+mkdir -p "${STAGE}"
+cp -R "${APP}" "${STAGE}/"
+ln -s /Applications "${STAGE}/Applications"
+hdiutil create -volname "Supra AI ${VERSION}" -srcfolder "${STAGE}" -ov -format UDZO "${DMG}"
+codesign --force --timestamp --sign "${SIGN_ID}" "${DMG}"
+
+echo "▶︎ Notarizing DMG…"
+xcrun notarytool submit "${DMG}" --keychain-profile "${PROFILE}" --wait
+xcrun stapler staple "${DMG}"
+xcrun stapler validate "${DMG}"
+
+echo "▶︎ Packaging app zip…"
 ditto -c -k --keepParent "${APP}" "${ZIP}"
 
 echo "▶︎ Publishing release ${TAG}…"
 if ! gh release view "${TAG}" >/dev/null 2>&1; then
   gh release create "${TAG}" --title "Supra AI ${VERSION}" --generate-notes
 fi
-gh release upload "${TAG}" "${ZIP}" --clobber
+gh release upload "${TAG}" "${DMG}" "${ZIP}" --clobber
 
-echo "✓ Released ${TAG} — notarized, stapled, uploaded: ${ZIP}"
+echo "✓ Released ${TAG} — DMG + zip, notarized + stapled: ${DMG}"
