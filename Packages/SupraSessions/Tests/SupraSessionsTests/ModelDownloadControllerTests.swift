@@ -199,6 +199,35 @@ final class ModelDownloadControllerTests: XCTestCase {
         XCTAssertNil(library.resolvedModel(for: .legalReasoningHighQuality))
     }
 
+    @MainActor
+    func testRecommendedModelPicksBestRegisteredModelPerRole() throws {
+        let store = try makeStore()
+        let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
+        // Neither is a plan default, so recommendation falls to the trait heuristic.
+        _ = try library.addModel(displayName: "Llama 3.1 8B Instruct (4-bit)", path: "/m/llama-instruct", bookmarkData: nil)
+        _ = try library.addModel(displayName: "DeepSeek-R1 Distill Qwen 7B (4-bit)", path: "/m/deepseek-r1", bookmarkData: nil)
+        library.refresh()
+
+        // Reasoning/critique routes prefer the reasoning model; drafting prefers instruct.
+        XCTAssertEqual(library.recommendedModel(for: .legalReasoning)?.path, "/m/deepseek-r1")
+        XCTAssertEqual(library.recommendedModel(for: .legalReasoningHighQuality)?.path, "/m/deepseek-r1")
+        XCTAssertEqual(library.recommendedModel(for: .critique)?.path, "/m/deepseek-r1")
+        XCTAssertEqual(library.recommendedModel(for: .drafting)?.path, "/m/llama-instruct")
+
+        // The exact plan model wins over the heuristic when it is registered.
+        _ = try library.addModel(
+            displayName: "Qwen3 30B A3B Thinking 2507 (4-bit)",
+            path: "/m/\(ManagedModelStorage.folderName(forRepoID: "mlx-community/Qwen3-30B-A3B-Thinking-2507-4bit"))",
+            bookmarkData: nil
+        )
+        library.refresh()
+        XCTAssertTrue(library.recommendedModel(for: .legalReasoning)?.path.contains("Thinking-2507-4bit") ?? false)
+
+        // No models → no recommendation.
+        let empty = ModelLibrary(store: try makeStore(), runtimeClient: StubRuntimeClient())
+        XCTAssertNil(empty.recommendedModel(for: .legalReasoning))
+    }
+
     // MARK: - Helpers
 
     private func tempDir() -> URL {
