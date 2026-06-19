@@ -125,6 +125,36 @@ public final class ModelLibrary: ObservableObject {
         resolvedModelWithIssue(for: role, configuration: configuration).model
     }
 
+    /// A suggested model for a role given what is currently registered: the plan's
+    /// configured model for the role if it is registered, otherwise the best-fitting
+    /// registered model by its name traits (thinking/reasoning models for the legal
+    /// reasoning and critique routes; instruct models for drafting). Returns nil only
+    /// when no models are registered.
+    public func recommendedModel(
+        for role: ModelRole,
+        configuration: LegalModelConfiguration = .fromEnvironment()
+    ) -> ModelSummary? {
+        if let configured = matchingModel(forIdentifier: configuration.modelIdentifier(for: role)) {
+            return configured
+        }
+        return models
+            .map { (model: $0, score: Self.suitabilityScore(of: $0, for: role)) }
+            .max { $0.score < $1.score }?
+            .model
+    }
+
+    private static func suitabilityScore(of model: ModelSummary, for role: ModelRole) -> Int {
+        let text = (model.displayName + " " + model.path).lowercased()
+        let isReasoning = ["thinking", "reasoning", "deepseek-r1", "-r1-", "distill"].contains { text.contains($0) }
+        let isInstruct = ["instruct", "-it-", "chat"].contains { text.contains($0) }
+        switch role {
+        case .legalReasoning, .legalReasoningHighQuality, .critique:
+            return isReasoning ? 3 : 1
+        case .drafting:
+            return isInstruct ? 3 : 1
+        }
+    }
+
     public func assignModel(_ modelID: String?, to role: ModelRole) {
         var updated = roleAssignments
         updated.setModelID(modelID, for: role)

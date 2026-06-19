@@ -44,7 +44,8 @@ struct ModelsView: View {
                         role: role,
                         models: library.models,
                         assignedModelID: assignmentBinding(for: role),
-                        resolvedModel: library.resolvedModel(for: role)
+                        resolvedModel: library.resolvedModel(for: role),
+                        recommendedModel: library.recommendedModel(for: role)
                     )
                 }
             } header: {
@@ -225,6 +226,7 @@ private struct ModelRoleAssignmentRow: View {
     let models: [ModelSummary]
     @Binding var assignedModelID: String
     let resolvedModel: ModelSummary?
+    let recommendedModel: ModelSummary?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -239,6 +241,21 @@ private struct ModelRoleAssignmentRow: View {
                     .foregroundStyle(resolvedModel == nil ? .orange : .secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                // Suggest the best-fitting downloaded model for this route when it
+                // isn't already the one in use; one tap assigns it.
+                if let recommendedModel, recommendedModel.id != resolvedModel?.id {
+                    HStack(spacing: 6) {
+                        Image(systemName: "wand.and.stars")
+                        Text("Recommended: \(recommendedModel.displayName)")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Button("Use") { assignedModelID = recommendedModel.id }
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+                }
             }
             Spacer()
             Picker(role.displayName, selection: $assignedModelID) {
