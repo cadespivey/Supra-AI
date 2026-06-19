@@ -16,15 +16,36 @@ public struct CatalogModel: Identifiable, Sendable, Equatable {
     }
 }
 
-/// The curated list of MLX 4-bit instruct models offered in the guided download.
-/// Sizes are approximate on-disk footprints; all are `mlx-community` 4-bit builds.
+/// The curated list of MLX models offered in the guided download. Sizes are
+/// approximate on-disk footprints; all are `mlx-community` builds. The first three
+/// are the role models from the local-legal-model-setup plan; once downloaded their
+/// repo name auto-resolves to the matching chat route (legal reasoning / drafting /
+/// critique). The remainder are smaller general-purpose options.
 public enum ModelCatalog {
     public static let curated: [CatalogModel] = [
+        CatalogModel(
+            repoID: "mlx-community/Qwen3-30B-A3B-Thinking-2507-4bit",
+            displayName: "Qwen3 30B A3B Thinking 2507 (4-bit)",
+            approxSizeGB: 17,
+            notes: "Legal reasoning route (default for /legal and /research). MoE, ~3B active. Needs ~32 GB+ free RAM."
+        ),
+        CatalogModel(
+            repoID: "mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit",
+            displayName: "Qwen3 30B A3B Instruct 2507 (4-bit)",
+            approxSizeGB: 17,
+            notes: "Drafting route (/draft and ordinary drafting). MoE, ~3B active."
+        ),
+        CatalogModel(
+            repoID: "mlx-community/DeepSeek-R1-Distill-Qwen-32B-4bit",
+            displayName: "DeepSeek-R1 Distill Qwen 32B (4-bit)",
+            approxSizeGB: 18,
+            notes: "Critique route (/critique second-pass review). Needs ~24 GB+ free RAM."
+        ),
         CatalogModel(
             repoID: "mlx-community/Qwen2.5-32B-Instruct-4bit",
             displayName: "Qwen2.5 32B Instruct (4-bit)",
             approxSizeGB: 18,
-            notes: "Milestone 1 target. Needs ~24 GB+ free RAM."
+            notes: "General-purpose 32B. Needs ~24 GB+ free RAM."
         ),
         CatalogModel(
             repoID: "mlx-community/Qwen2.5-14B-Instruct-4bit",
