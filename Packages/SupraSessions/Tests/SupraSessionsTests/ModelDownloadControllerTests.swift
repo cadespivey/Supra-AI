@@ -1,4 +1,5 @@
 import Foundation
+import SupraCore
 import SupraRuntimeClient
 @testable import SupraSessions
 import SupraStore
@@ -158,6 +159,44 @@ final class ModelDownloadControllerTests: XCTestCase {
         XCTAssertEqual(ManagedModelStorage.folderName(forRepoID: "mlx-community/Qwen2.5-32B-Instruct-4bit"), "mlx-community__Qwen2.5-32B-Instruct-4bit")
         XCTAssertTrue(ManagedModelStorage.isManaged(path: dir.appendingPathComponent("foo").path))
         XCTAssertFalse(ManagedModelStorage.isManaged(path: "/tmp/somewhere-else"))
+    }
+
+    @MainActor
+    func testPlanRoleModelsAreInCatalogAndAutoResolveToTheirRoles() throws {
+        // The three downloadable role models from the local-legal-model-setup plan.
+        let planRepos: [ModelRole: String] = [
+            .legalReasoning: "mlx-community/Qwen3-30B-A3B-Thinking-2507-4bit",
+            .drafting: "mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit",
+            .critique: "mlx-community/DeepSeek-R1-Distill-Qwen-32B-4bit"
+        ]
+
+        // (1) Downloadable: each is offered in the guided-download catalog.
+        let catalogRepos = Set(ModelCatalog.curated.map(\.repoID))
+        for repo in planRepos.values {
+            XCTAssertTrue(catalogRepos.contains(repo), "ModelCatalog is missing \(repo)")
+        }
+
+        // (2) Assignable: once registered, each repo resolves to its intended chat
+        // route via the configured (plan-default) identifier — no manual assignment.
+        let store = try makeStore()
+        let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
+        for repo in planRepos.values {
+            let folder = ManagedModelStorage.folderName(forRepoID: repo)
+            _ = try library.addModel(displayName: repo, path: "/models/\(folder)", bookmarkData: nil)
+        }
+        library.refresh()
+
+        for (role, repo) in planRepos {
+            XCTAssertEqual(
+                library.resolvedModel(for: role)?.path,
+                "/models/\(ManagedModelStorage.folderName(forRepoID: repo))",
+                "role \(role.rawValue) did not resolve to \(repo)"
+            )
+        }
+
+        // The plan's 6-bit high-quality model isn't published by mlx-community, so the
+        // HQ route has no auto-resolved model until one is assigned manually.
+        XCTAssertNil(library.resolvedModel(for: .legalReasoningHighQuality))
     }
 
     // MARK: - Helpers
