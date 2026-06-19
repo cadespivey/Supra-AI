@@ -12,7 +12,9 @@ final class UpdateCheckerTests: XCTestCase {
       "prerelease": false,
       "assets": [
         { "name": "SupraAI-1.2.0.zip",
-          "browser_download_url": "https://github.com/cadespivey/Supra-AI/releases/download/v1.2.0/SupraAI-1.2.0.zip" }
+          "browser_download_url": "https://github.com/cadespivey/Supra-AI/releases/download/v1.2.0/SupraAI-1.2.0.zip" },
+        { "name": "SupraAI-1.2.0.dmg",
+          "browser_download_url": "https://github.com/cadespivey/Supra-AI/releases/download/v1.2.0/SupraAI-1.2.0.dmg" }
       ]
     }
     """
@@ -25,11 +27,11 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertFalse(ReleaseUpdateChecker.isNewer("1.0.9", than: "1.1.0"))
     }
 
-    func testEvaluatePicksZipAssetForNewerRelease() throws {
+    func testEvaluatePrefersDmgAssetForNewerRelease() throws {
         let release = try JSONDecoder().decode(GitHubRelease.self, from: Data(Self.releaseJSON.utf8))
         let update = try XCTUnwrap(ReleaseUpdateChecker.evaluate(release: release, currentVersion: "1.1.0"))
         XCTAssertEqual(update.version, "1.2.0")
-        XCTAssertEqual(update.downloadURL?.lastPathComponent, "SupraAI-1.2.0.zip")
+        XCTAssertEqual(update.downloadURL?.lastPathComponent, "SupraAI-1.2.0.dmg")
         XCTAssertEqual(update.releaseURL.absoluteString, "https://github.com/cadespivey/Supra-AI/releases/tag/v1.2.0")
     }
 
