@@ -21,6 +21,7 @@ public struct ResearchQueryPlanner: Sendable {
     public func buildPrompt(
         issueText: String,
         jurisdiction: String,
+        jurisdictionContext: String = "",
         partyPerspective: String,
         preferredCourts: [String],
         excludedCourts: [String],
@@ -29,6 +30,7 @@ public struct ResearchQueryPlanner: Sendable {
         var template = try Self.loadTemplate()
         let replacements: [(String, String)] = [
             ("{{jurisdiction}}", blankToNeutral(jurisdiction, fallback: "Unspecified")),
+            ("{{jurisdiction_context}}", blankToNeutral(jurisdictionContext, fallback: "No structured jurisdiction context supplied.")),
             ("{{party_perspective}}", blankToNeutral(partyPerspective, fallback: "neutral")),
             ("{{preferred_courts}}", preferredCourts.isEmpty ? "Any" : preferredCourts.joined(separator: ", ")),
             ("{{excluded_courts}}", excludedCourts.isEmpty ? "None" : excludedCourts.joined(separator: ", ")),

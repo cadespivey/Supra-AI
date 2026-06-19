@@ -87,12 +87,15 @@ actor MLXModelController: ChatModelController {
     func generate(
         prompt: String,
         systemPrompt: String?,
-        options: GenerationOptions,
+        options rawOptions: GenerationOptions,
         onToken: @escaping @Sendable (String) async -> Void
     ) async throws -> RuntimeMetrics {
         guard let container else {
             throw MLXModelControllerError.modelNotLoaded
         }
+        // Defense-in-depth: clamp parameters that crossed the XPC boundary so a
+        // malformed/hostile request can't pass NaN/negative/absurd values to MLX.
+        let options = rawOptions.clampedForRuntime()
 
         cancellationRequested = false
 
@@ -101,7 +104,7 @@ actor MLXModelController: ChatModelController {
             prompt: prompt,
             systemPrompt: systemPrompt,
             options: options,
-            disableThinking: templateSupportsThinkingToggle
+            templateSupportsThinkingToggle: templateSupportsThinkingToggle
         )
 
         var generatedTokenCount = 0
@@ -133,10 +136,19 @@ actor MLXModelController: ChatModelController {
             }
         }
 
+        // Treat hitting the output-token cap as truncation: the generation stopped
+        // before the model's natural end, so any unterminated reasoning is partial.
+        let truncated = generatedTokenCount >= options.maxOutputTokens
+        // Reasoning was actually active only when the model's template honors the
+        // thinking toggle AND the preset enabled it; otherwise a missing `</think>`
+        // is normal (a plain model never emits one).
+        let reasoningActive = templateSupportsThinkingToggle && options.thinkingBudget.enablesModelThinking
         return RuntimeMetrics(
             firstTokenLatencyMs: firstTokenLatencyMs,
             tokensPerSecond: tokensPerSecond,
-            generatedTokenCount: generatedTokenCount
+            generatedTokenCount: generatedTokenCount,
+            truncated: truncated,
+            reasoningActive: reasoningActive
         )
     }
 
@@ -175,13 +187,13 @@ private func generationStream(
     prompt: String,
     systemPrompt: String?,
     options: GenerationOptions,
-    disableThinking: Bool
+    templateSupportsThinkingToggle: Bool
 ) async throws -> AsyncStream<Generation> {
-    // `enable_thinking: false` is read by Qwen3-style chat templates, which then
-    // emit an empty `<think></think>` block so the model produces only its
-    // answer. It flows through UserInput.additionalContext ->
-    // applyChatTemplate; templates that don't define the variable ignore it.
-    let additionalContext: [String: any Sendable]? = disableThinking ? ["enable_thinking": false] : nil
+    // `enable_thinking` is read by Qwen3-style chat templates. Drafting and
+    // ordinary chat keep it off; legal reasoning/research presets can opt in.
+    let additionalContext: [String: any Sendable]? = templateSupportsThinkingToggle
+        ? ["enable_thinking": options.thinkingBudget.enablesModelThinking]
+        : nil
     let userInput = UserInput(
         chat: chatMessages(prompt: prompt, systemPrompt: systemPrompt),
         additionalContext: additionalContext
@@ -192,10 +204,10 @@ private func generationStream(
         input: input,
         parameters: GenerateParameters(
             maxTokens: options.maxOutputTokens,
-            // No user-facing context-length control; use the model's default window.
-            maxKVSize: nil,
+            maxKVSize: options.maxContextTokens,
             temperature: Float(options.temperature),
-            topP: Float(options.topP)
+            topP: Float(options.topP),
+            topK: options.topK ?? 0
         )
     )
 }

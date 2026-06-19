@@ -122,12 +122,12 @@ final class Milestone3SchemaTests: XCTestCase {
 
         // Deleting one instance keeps the blob (still referenced by the copy).
         let firstDelete = try store.documentLibrary.permanentlyDeleteDocument(id: doc.id)
-        XCTAssertNil(firstDelete.removedBlobPath)
+        XCTAssertTrue(firstDelete.removedBlobPaths.isEmpty)
         XCTAssertNotNil(try store.documentLibrary.fetchBlob(id: blob.id))
 
         // Deleting the last instance removes the now-unreferenced blob.
         let secondDelete = try store.documentLibrary.permanentlyDeleteDocument(id: copy.id)
-        XCTAssertEqual(secondDelete.removedBlobPath, "blobs/s2.pdf")
+        XCTAssertEqual(secondDelete.removedBlobPaths, ["blobs/s2.pdf"])
         XCTAssertNil(try store.documentLibrary.fetchBlob(id: blob.id))
     }
 
@@ -218,6 +218,58 @@ final class Milestone3SchemaTests: XCTestCase {
         XCTAssertEqual(try ftsRows(), 1)
         _ = try store.documentLibrary.permanentlyDeleteDocument(id: doc.id)
         XCTAssertEqual(try ftsRows(), 0, "FTS rows must be removed on permanent delete")
+    }
+
+    func testPermanentDeleteOfParentPurgesAttachmentSubtreeWithoutLeaks() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        // Parent email + child attachment, each with its own distinct blob.
+        let parentBlob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "email", byteSize: 1, originalExtension: "eml", managedRelativePath: "blobs/email.eml")
+        ).blob
+        let childBlob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "attach", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/attach.pdf")
+        ).blob
+        let parent = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: parentBlob.id, displayName: "message.eml")
+        )
+        let child = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: childBlob.id, parentDocumentID: parent.id, displayName: "attachment.pdf")
+        )
+        try store.documentIndex.replaceChunks(documentID: child.id, chunks: [
+            DocumentChunkRecord(documentID: child.id, chunkIndex: 0, sourceKind: DocumentSourceKind.pdfPage.rawValue, normalizedText: "attachment body text")
+        ])
+
+        func count(_ sql: String, _ args: StatementArguments) throws -> Int {
+            try store.database.writer.read { db in try Int.fetchOne(db, sql: sql, arguments: args) ?? -1 }
+        }
+        XCTAssertEqual(try count("SELECT COUNT(*) FROM document_chunk_fts WHERE document_id = ?", [child.id]), 1)
+
+        let result = try store.documentLibrary.permanentlyDeleteDocument(id: parent.id)
+
+        XCTAssertEqual(try count("SELECT COUNT(*) FROM matter_documents WHERE id = ?", [child.id]), 0, "child attachment row must be purged")
+        XCTAssertEqual(try count("SELECT COUNT(*) FROM document_chunk_fts WHERE document_id = ?", [child.id]), 0, "child FTS rows must not leak")
+        XCTAssertEqual(try count("SELECT COUNT(*) FROM document_blobs WHERE id = ?", [childBlob.id]), 0, "child blob row must not leak")
+        XCTAssertEqual(try count("SELECT COUNT(*) FROM document_blobs WHERE id = ?", [parentBlob.id]), 0, "parent blob row must not leak")
+        XCTAssertEqual(Set(result.removedBlobPaths), Set(["blobs/email.eml", "blobs/attach.pdf"]), "both freed blob files must be returned for deletion")
+    }
+
+    func testDateFilteredScopeRetainsDocumentsWithNoKnownDate() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(sha256: "undated", byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/undated.txt")
+        ).blob
+        let undated = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "undated.txt", metadataCreatedAt: nil)
+        )
+
+        let resolved = try store.documentLibrary.resolveScopeDocumentIDs(
+            matterID: matter.id,
+            dateStart: Date(timeIntervalSince1970: 1_600_000_000),
+            dateEnd: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        XCTAssertTrue(resolved.contains(undated.id), "a document with no extracted date must not be silently dropped by a date filter")
     }
 
     func testSearchExcludesSoftDeletedDocuments() throws {

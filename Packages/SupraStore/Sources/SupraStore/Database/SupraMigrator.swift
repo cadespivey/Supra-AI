@@ -747,6 +747,14 @@ public enum SupraMigrator {
             try db.create(index: "idx_document_exports_matter", on: "document_exports", columns: ["matter_id", "created_at"], ifNotExists: true)
         }
 
+        migrator.registerMigration("v038_add_matter_information_fields") { db in
+            try db.alter(table: "matters") { table in
+                table.add(column: "client_names", .text)
+                table.add(column: "matter_description", .text)
+                table.add(column: "internal_matter_id", .text)
+            }
+        }
+
         return migrator
     }
 

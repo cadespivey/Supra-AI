@@ -16,6 +16,8 @@ public struct ResearchPlanDraft: Sendable, Equatable {
     public var partyPerspective: String
     public var preferredCourts: [String]
     public var excludedCourts: [String]
+    public var jurisdictionContext: String
+    public var courtFilterIDs: [String]
     public var dateRangeStart: Date?
     public var dateRangeEnd: Date?
 
@@ -26,6 +28,8 @@ public struct ResearchPlanDraft: Sendable, Equatable {
         partyPerspective: String = "neutral",
         preferredCourts: [String] = [],
         excludedCourts: [String] = [],
+        jurisdictionContext: String = "",
+        courtFilterIDs: [String] = [],
         dateRangeStart: Date? = nil,
         dateRangeEnd: Date? = nil
     ) {
@@ -35,6 +39,8 @@ public struct ResearchPlanDraft: Sendable, Equatable {
         self.partyPerspective = partyPerspective
         self.preferredCourts = preferredCourts
         self.excludedCourts = excludedCourts
+        self.jurisdictionContext = jurisdictionContext
+        self.courtFilterIDs = courtFilterIDs
         self.dateRangeStart = dateRangeStart
         self.dateRangeEnd = dateRangeEnd
     }
@@ -91,6 +97,9 @@ public final class ResearchSessionController: ObservableObject {
         public let id: String
         public let text: String
         public let index: Int
+        public var courtFilter: String?
+        public var dateFiledAfter: Date?
+        public var dateFiledBefore: Date?
         public var status: String
         public var resultCount: Int?
         public var nextURL: String?
@@ -129,6 +138,7 @@ public final class ResearchSessionController: ObservableObject {
     private let planner = ResearchQueryPlanner()
     private let tokenStore: any APIKeyStoreProtocol
     private let courtListenerClient: any CourtListenerClientProtocol
+    private let logPrivilegedQueryTerms: Bool
     public let matterID: String
 
     public init(
@@ -136,6 +146,7 @@ public final class ResearchSessionController: ObservableObject {
         runtimeClient: any RuntimeClientProtocol,
         matterID: String,
         defaultSystemPrompt: String? = nil,
+        legalConfiguration: LegalModelConfiguration = .fromEnvironment(),
         tokenStore: (any APIKeyStoreProtocol)? = nil,
         courtListenerClient: (any CourtListenerClientProtocol)? = nil
     ) {
@@ -143,15 +154,18 @@ public final class ResearchSessionController: ObservableObject {
         self.runtimeClient = runtimeClient
         self.matterID = matterID
         self.defaultSystemPrompt = defaultSystemPrompt
-        let resolvedTokenStore = tokenStore ?? KeychainTokenStore()
+        self.logPrivilegedQueryTerms = legalConfiguration.logPrivilegedQueryTerms
+        let resolvedTokenStore = tokenStore ?? EnvironmentBackedTokenStore(primary: KeychainTokenStore())
         self.tokenStore = resolvedTokenStore
         // Build the default CourtListener stack from the store; every request is
         // allowlisted, rate-limited, and logged to network_requests by the client.
+        // Privileged query terms are redacted from the log unless explicitly enabled.
         self.courtListenerClient = courtListenerClient ?? CourtListenerClient(
             httpClient: AuthorizedHTTPClient(
                 keyStore: resolvedTokenStore,
                 policy: NetworkPolicyService(),
-                logger: NetworkRequestLogger(repository: store.networkRequests)
+                logger: NetworkRequestLogger(repository: store.networkRequests),
+                redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
             )
         )
     }
@@ -194,13 +208,17 @@ public final class ResearchSessionController: ObservableObject {
         plannedQueries[index].text = text
     }
 
-    /// Generates proposed queries through the local model. Falls back to
-    /// `incomplete` (manual entry) when no model is loaded or the model returns
-    /// fewer than five — never throws to the UI (spec §9.4 parser rule).
-    public func generatePlan(draft: ResearchPlanDraft, modelID: ModelID?) async {
+    /// Generates proposed queries through the legal-research route. Falls back
+    /// to `incomplete` (manual entry) when no routed model is loaded or the
+    /// model returns fewer than five — never throws to the UI (spec §9.4 parser
+    /// rule).
+    public func generatePlan(draft: ResearchPlanDraft, modelID: ModelID?, route: ModelRoute? = nil) async {
+        let effectiveRoute = route ?? ModelRouter().route(for: .legalResearch)
         guard let modelID else {
             plannedQueries = []
-            planState = .incomplete("Load a model in the Models tab to generate queries, or add them manually.")
+            planState = .incomplete(
+                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to generate queries, or add them manually."
+            )
             return
         }
         planState = .generating
@@ -208,12 +226,13 @@ public final class ResearchSessionController: ObservableObject {
             let prompt = try planner.buildPrompt(
                 issueText: draft.issueText,
                 jurisdiction: draft.jurisdiction,
+                jurisdictionContext: effectiveJurisdictionContext(for: draft),
                 partyPerspective: draft.partyPerspective,
-                preferredCourts: draft.preferredCourts,
+                preferredCourts: effectivePreferredCourts(for: draft),
                 excludedCourts: draft.excludedCourts,
                 dateRange: formatDateRange(start: draft.dateRangeStart, end: draft.dateRangeEnd)
             )
-            let output = try await collect(prompt: prompt, modelID: modelID)
+            let output = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
             let parsed = planner.parseQueries(from: output)
             plannedQueries = parsed.map { PlannedQuery(id: UUID(), text: $0, approved: true) }
             if parsed.isEmpty {
@@ -243,17 +262,21 @@ public final class ResearchSessionController: ObservableObject {
             title: draft.title,
             issueText: draft.issueText,
             jurisdiction: draft.jurisdiction,
-            preferredCourts: draft.preferredCourts,
+            preferredCourts: effectivePreferredCourts(for: draft),
             excludedCourts: draft.excludedCourts,
             dateRangeStart: draft.dateRangeStart,
             dateRangeEnd: draft.dateRangeEnd,
             status: .approved
         )
+        let courtFilter = JurisdictionCatalog.courtFilterString(draft.courtFilterIDs)
         for (index, query) in approved.enumerated() {
             _ = try store.research.createQuery(
                 researchSessionID: session.id,
                 queryText: query.text.trimmingCharacters(in: .whitespacesAndNewlines),
                 queryIndex: index,
+                courtFilter: courtFilter,
+                dateFiledAfter: draft.dateRangeStart,
+                dateFiledBefore: draft.dateRangeEnd,
                 status: .approved
             )
         }
@@ -320,15 +343,34 @@ public final class ResearchSessionController: ObservableObject {
         var anySuccess = false
         var lastFailureMessage: String?
         for query in approved {
-            let requestMeta = Self.jsonString(["q": query.text, "type": "o", "highlight": "true"])
+            let request = CourtListenerSearchRequest(
+                query: query.text,
+                highlight: true,
+                courtIDs: JurisdictionCatalog.courtFilterIDs(from: query.courtFilter),
+                dateFiledAfter: Self.courtListenerDateString(query.dateFiledAfter),
+                dateFiledBefore: Self.courtListenerDateString(query.dateFiledBefore)
+            )
+            let requestMeta = requestMeta(request)
             try? store.research.updateQueryExecution(queryID: query.id, status: .running, executedAt: nil)
             do {
                 let response = try await courtListenerClient.searchOpinions(
-                    CourtListenerSearchRequest(query: query.text, highlight: true),
+                    request,
                     relatedResearchSessionID: sessionID
                 )
                 for dto in response.results {
                     _ = try? store.research.insertResult(makeResultRecord(dto, queryID: query.id))
+                }
+                if response.droppedResultCount > 0 {
+                    // Best-effort decoding silently skipped malformed results — make
+                    // the partial-page loss visible rather than hidden.
+                    try? store.diagnostics.recordDiagnosticEvent(
+                        DiagnosticEventRecord(
+                            severity: "warning",
+                            category: "research",
+                            message: "\(response.droppedResultCount) CourtListener result(s) were skipped because their format could not be decoded.",
+                            technicalDetails: "Query fingerprint: \(Self.fingerprint(query.text))"
+                        )
+                    )
                 }
                 try? store.research.updateQueryExecution(
                     queryID: query.id, status: .completed,
@@ -416,18 +458,56 @@ public final class ResearchSessionController: ObservableObject {
         default:
             return
         }
+        // Redact the privileged query text from the global diagnostics log unless
+        // query-term logging is explicitly enabled; store a stable fingerprint so
+        // events can still be correlated without revealing the user's terms.
+        let queryDetail = logPrivilegedQueryTerms
+            ? "Query: \(queryText)"
+            : "Query fingerprint: \(Self.fingerprint(queryText))"
         try? store.diagnostics.recordDiagnosticEvent(
             DiagnosticEventRecord(
                 severity: "warning",
                 category: category,
                 message: courtListenerError.localizedDescription,
-                technicalDetails: "Query: \(queryText)"
+                technicalDetails: queryDetail
             )
         )
     }
 
+    private static func fingerprint(_ value: String) -> String {
+        var hash: UInt64 = 1469598103934665603
+        for byte in value.utf8 {
+            hash = (hash ^ UInt64(byte)) &* 1099511628211
+        }
+        return String(hash, radix: 16)
+    }
+
     private static func responseMeta(_ response: CourtListenerSearchResponse) -> String? {
         jsonString(["count": String(response.count), "has_next": String(response.next != nil)])
+    }
+
+    private func requestMeta(_ request: CourtListenerSearchRequest) -> String? {
+        // Redact the privileged search term and citation to fingerprints unless
+        // query-term logging is enabled, matching the network-log redaction. The
+        // non-privileged filters (type/court/dates) are kept for auditability.
+        var dict: [String: String] = [
+            "q": logPrivilegedQueryTerms ? request.query : "#\(Self.fingerprint(request.query))",
+            "type": "o",
+            "highlight": String(request.highlight)
+        ]
+        if !request.courtIDs.isEmpty {
+            dict["court"] = request.courtIDs.joined(separator: ",")
+        }
+        if let after = request.dateFiledAfter {
+            dict["filed_after"] = after
+        }
+        if let before = request.dateFiledBefore {
+            dict["filed_before"] = before
+        }
+        if let citation = request.citation {
+            dict["citation"] = logPrivilegedQueryTerms ? citation : "#\(Self.fingerprint(citation))"
+        }
+        return Self.jsonString(dict)
     }
 
     /// Encodes a tokenless string map to JSON for research_queries metadata
@@ -565,7 +645,11 @@ public final class ResearchSessionController: ObservableObject {
             .sorted { $0.queryIndex < $1.queryIndex }
         sessionQueries = queries.map {
             SessionQuery(
-                id: $0.id, text: $0.queryText, index: $0.queryIndex, status: $0.status,
+                id: $0.id, text: $0.queryText, index: $0.queryIndex,
+                courtFilter: $0.courtFilter,
+                dateFiledAfter: $0.dateFiledAfter,
+                dateFiledBefore: $0.dateFiledBefore,
+                status: $0.status,
                 resultCount: $0.resultCount, nextURL: $0.nextURL, errorMessage: $0.errorMessage
             )
         }
@@ -613,18 +697,57 @@ public final class ResearchSessionController: ObservableObject {
         return formatter.date(from: String(string.prefix(10)))
     }
 
+    private static func courtListenerDateString(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        return courtListenerDateFormatter.string(from: date)
+    }
+
+    private static let courtListenerDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
     // MARK: - Helpers
 
-    private func collect(prompt: String, modelID: ModelID) async throws -> String {
+    private func effectiveJurisdictionContext(for draft: ResearchPlanDraft) -> String {
+        let trimmed = draft.jurisdictionContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return JurisdictionCatalog.shared.authorityScope(jurisdiction: draft.jurisdiction)?.modelContext ?? ""
+    }
+
+    private func effectivePreferredCourts(for draft: ResearchPlanDraft) -> [String] {
+        var courts = draft.preferredCourts
+        if courts.isEmpty,
+           let scope = JurisdictionCatalog.shared.authorityScope(jurisdiction: draft.jurisdiction) {
+            courts = scope.preferredCourtNames
+        }
+        return Self.uniquePreservingOrder(courts)
+    }
+
+    private static func uniquePreservingOrder(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+            seen.insert(trimmed)
+            result.append(trimmed)
+        }
+        return result
+    }
+
+    private func collect(prompt: String, modelID: ModelID, route: ModelRoute?) async throws -> String {
         let request = GenerateRequest(
             generationID: GenerationID(),
             modelID: modelID,
             prompt: prompt,
-            // Base prompt only: the output is machine-parsed into `## Query N`
-            // blocks, so a free-form profile ("write only prose", "no headings")
+            // Keep the planner prompt contract isolated: the output is
+            // machine-parsed into `## Query N` blocks, so a broader route prompt
             // must not override the required structure.
             systemPrompt: defaultSystemPrompt,
-            options: GenerationOptions()
+            options: route?.options ?? GenerationOptions()
         )
         return try await runtimeClient.collectGeneratedText(request)
     }

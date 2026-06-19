@@ -6,6 +6,11 @@ import ZIPFoundation
 /// Reads named entries from a ZIP container (.docx/.xlsx) via the pinned
 /// ZIPFoundation library.
 enum ZipArchiveReader {
+    /// Caps a single decompressed entry so a malicious "zip bomb" (a tiny entry
+    /// that inflates to gigabytes) cannot exhaust memory. 256 MB is far beyond any
+    /// legitimate Office part while still bounding worst-case extraction.
+    static let maxUncompressedEntryBytes = 256 * 1024 * 1024
+
     static func entryData(in url: URL, path: String) throws -> Data? {
         let archive: Archive
         do {
@@ -14,8 +19,24 @@ enum ZipArchiveReader {
             throw ExtractionError.malformed("Not a readable archive: \(error.localizedDescription)")
         }
         guard let entry = archive[path] else { return nil }
+        // Reject based on the declared size first (cheap), then enforce a running
+        // cap while extracting in case the header understates the real size.
+        if entry.uncompressedSize > UInt64(maxUncompressedEntryBytes) {
+            throw ExtractionError.malformed("Archive entry '\(path)' is too large to extract safely.")
+        }
         var data = Data()
-        _ = try archive.extract(entry) { data.append($0) }
+        do {
+            _ = try archive.extract(entry) { chunk in
+                if data.count + chunk.count > maxUncompressedEntryBytes {
+                    throw ExtractionError.malformed("Archive entry '\(path)' exceeded the safe extraction limit.")
+                }
+                data.append(chunk)
+            }
+        } catch let error as ExtractionError {
+            throw error
+        } catch {
+            throw ExtractionError.malformed("Could not extract '\(path)': \(error.localizedDescription)")
+        }
         return data
     }
 

@@ -96,7 +96,7 @@ final class AppEnvironment: ObservableObject {
         // chat without forcing the user to re-load it (the chat gate keys on
         // ModelLibrary.loadState, which otherwise starts idle each launch).
         modelLibrary.reconcileLoadedModel(runtimeStatusController.loadedModelID)
-        autoLoadActiveModelIfNeeded()
+        autoLoadStartupModelIfNeeded()
         if Self.isUITestMode { seedUITestFixturesIfNeeded() }
         await documentSetupController.refreshAll()
         // Reconcile any document job interrupted by a previous quit (plan §5.4).
@@ -105,12 +105,10 @@ final class AppEnvironment: ObservableObject {
         DocumentMaintenance(store: store).purgeExpired()
     }
 
-    /// Auto-loads the user's selected (active) model into the runtime on launch so
-    /// chat is ready without a manual Load. Skipped when a model is already loaded
-    /// (reconciled from a still-warm runtime) or in UI tests. Runs in the
-    /// background — the load (and its `.loading`/`.loaded`/`.failed` status) never
-    /// blocks app startup, and overlapping loads are ignored by ModelLibrary.
-    private func autoLoadActiveModelIfNeeded() {
+    /// Auto-loads the user's startup model into the runtime on launch for manual
+    /// runtime workflows. Routed chat tasks still load their assigned role model
+    /// before generation. Skipped when a model is already loaded or in UI tests.
+    private func autoLoadStartupModelIfNeeded() {
         guard !Self.isUITestMode,
               case .idle = modelLibrary.loadState,
               let active = modelLibrary.activeModel else { return }
@@ -159,10 +157,31 @@ final class AppEnvironment: ObservableObject {
         if let store = try? SupraStore.openAppSupportStore() {
             return (store, false)
         }
+        // Unique-named on-disk fallback so a corrupt/locked leftover fallback file
+        // from a previous crash can't doom every subsequent launch. Prune stale
+        // fallback files first since nothing persists across launches in this path.
+        cleanupStaleFallbackStores()
         let fallbackURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SupraAI-fallback.sqlite")
-        // The temporary store is a last resort; if it also fails the app cannot persist anything.
-        return ((try? SupraStore(url: fallbackURL)) ?? unavailableStore(), true)
+            .appendingPathComponent("SupraAI-fallback-\(UUID().uuidString).sqlite")
+        if let store = try? SupraStore(url: fallbackURL) {
+            return (store, true)
+        }
+        // Absolute last resort: an in-memory store so the app still launches
+        // (degraded — nothing persists) instead of crashing on a broken disk.
+        if let store = try? SupraStore.inMemory() {
+            return (store, true)
+        }
+        return (unavailableStore(), true)
+    }
+
+    /// Removes leftover fallback databases (and their -wal/-shm sidecars) from the
+    /// temp directory so failed launches don't accumulate stale files.
+    private static func cleanupStaleFallbackStores() {
+        let tempDir = FileManager.default.temporaryDirectory
+        let entries = (try? FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil)) ?? []
+        for url in entries where url.lastPathComponent.hasPrefix("SupraAI-fallback-") {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     private static func unavailableStore() -> SupraStore {

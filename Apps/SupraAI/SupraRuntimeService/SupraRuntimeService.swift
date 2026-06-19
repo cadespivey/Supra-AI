@@ -14,6 +14,9 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
 
     private var loadedModelID: ModelID?
     private var currentModelRequest: LoadModelRequest?
+    /// The XPC connection that started the in-flight generation, so a dropped
+    /// client can have its orphaned generation cancelled (guarded by stateLock).
+    private weak var activeGenerationConnection: NSXPCConnection?
     // Milestone 3 embedding state, guarded by stateLock.
     private var loadedEmbeddingModelID: DocumentEmbeddingModelID?
     private var embeddingDimension: Int?
@@ -72,6 +75,24 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         }
 
         generationCoordinator.startGeneration(request, eventSink: eventSink, reply: reply)
+    }
+
+    /// Cancels the active generation if it was started by a connection that has
+    /// just dropped, freeing the single generation slot for future clients.
+    func handleConnectionTermination(_ connection: NSXPCConnection?) {
+        guard let activeID = generationCoordinator.activeGenerationID() else { return }
+        stateLock.lock()
+        let owner = activeGenerationConnection
+        stateLock.unlock()
+        // Only cancel on a POSITIVE ownership match. A generation that cannot be
+        // positively attributed to the dropped connection is left alone — cancelling
+        // on a "can't tell" (nil owner/connection) could kill a newer, live
+        // generation owned by a different client when a stale handler runs late.
+        guard let owner, let connection, owner === connection else { return }
+        _ = generationCoordinator.cancelGeneration(activeID)
+        stateLock.lock()
+        activeGenerationConnection = nil
+        stateLock.unlock()
     }
 
     func cancelGeneration(
@@ -232,7 +253,11 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         let reply = RuntimeReply(reply)
         Task { [embeddingController, reply] in
             do {
-                let vectors = try await embeddingController.embed(texts: request.texts, normalize: request.normalize)
+                let rawVectors = try await embeddingController.embed(texts: request.texts, normalize: request.normalize)
+                // JSONEncoder throws on non-finite Floats; map NaN/±Inf to 0 so a
+                // degenerate vector becomes a usable (if zeroed) response instead of
+                // an encode failure that the client sees as a generic decode error.
+                let vectors = rawVectors.map { $0.map { $0.isFinite ? $0 : 0 } }
                 reply(EmbedTextResponse(
                     state: .loaded,
                     vectors: vectors,
@@ -338,6 +363,12 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
     ) {
         do {
             let request = try RuntimeXPCCodec.decode(GenerateRequest.self, from: requestData)
+            // Record the owning connection so a dropped client can have its
+            // orphaned generation cancelled (see handleConnectionTermination).
+            let connection = NSXPCConnection.current()
+            stateLock.lock()
+            activeGenerationConnection = connection
+            stateLock.unlock()
             generate(request, eventSink: XPCGenerationEventSinkAdapter(eventSink: eventSink)) { response in
                 reply(Self.encoded(response))
             }
@@ -467,6 +498,11 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
         })
     }
 
+    // Response DTOs are plain Codable and the only non-finite-Float source
+    // (embedding vectors) is sanitized before encode, so this never throws in
+    // practice. A generic fallback can't produce a value the typed caller would
+    // decode, so on the (unreachable) failure we return empty Data — the same
+    // best-effort behavior, without a misleading undecodable envelope.
     private static func encoded<T: Encodable>(_ value: T) -> Data {
         (try? RuntimeXPCCodec.encode(value)) ?? Data()
     }

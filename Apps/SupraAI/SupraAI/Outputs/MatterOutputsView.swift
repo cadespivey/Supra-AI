@@ -6,8 +6,8 @@ import SwiftUI
 /// (spec §13).
 struct MatterOutputsView: View {
     @ObservedObject var controller: StructuredOutputController
+    @ObservedObject var library: ModelLibrary
     let matter: MatterSummary
-    let loadedModelID: ModelID?
 
     @State private var showNew = false
 
@@ -19,11 +19,11 @@ struct MatterOutputsView: View {
                 content
             }
             .navigationDestination(for: String.self) { id in
-                OutputDetailView(controller: controller, outputID: id, loadedModelID: loadedModelID)
+                OutputDetailView(controller: controller, library: library, outputID: id)
             }
         }
         .sheet(isPresented: $showNew) {
-            NewOutputSheet(controller: controller, matter: matter, loadedModelID: loadedModelID)
+            NewOutputSheet(controller: controller, library: library, matter: matter)
         }
         .onAppear { controller.loadOutputs() }
     }
@@ -71,8 +71,8 @@ enum StructuredOutputLabels {
 
 private struct NewOutputSheet: View {
     @ObservedObject var controller: StructuredOutputController
+    @ObservedObject var library: ModelLibrary
     let matter: MatterSummary
-    let loadedModelID: ModelID?
 
     @Environment(\.dismiss) private var dismiss
     @State private var type: StructuredOutputType = .legalIssueSpotting
@@ -80,6 +80,14 @@ private struct NewOutputSheet: View {
     @State private var groundInDocuments = false
     @State private var selectedDocIDs: Set<String> = []
     @State private var documents: [StructuredOutputController.DocumentChoice] = []
+    @State private var routingMessage: String?
+
+    private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
+    private var route: ModelRoute? { router.route(forStructuredOutput: type) }
+    private var routeModel: ModelSummary? {
+        guard let route else { return nil }
+        return library.resolvedModel(for: route.role, configuration: router.configuration)
+    }
 
     private var scope: RetrievalScope? {
         guard groundInDocuments, !selectedDocIDs.isEmpty else { return nil }
@@ -146,8 +154,9 @@ private struct NewOutputSheet: View {
                          ? "The model is given the most relevant passages from the selected documents and cites them as [S1], [S2], … Generation is blocked until the selection is fully indexed."
                          : "Optional — ground this output in specific documents instead of only the notes above.")
                 }
-                if loadedModelID == nil {
-                    Text("Load a model in the Models tab to generate.").font(.caption).foregroundStyle(.secondary)
+                routeStatus
+                if let routingMessage {
+                    Text(routingMessage).font(.caption).foregroundStyle(.orange)
                 }
                 if let message = controller.message {
                     Text(message).font(.caption).foregroundStyle(.orange)
@@ -161,22 +170,80 @@ private struct NewOutputSheet: View {
                 if controller.isGenerating { ProgressView().controlSize(.small) }
                 Button("Generate") { Task { await generate() } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(loadedModelID == nil || controller.isGenerating)
+                    .disabled(routeModel == nil || controller.isGenerating)
             }
             .padding()
         }
         .frame(width: 520, height: 600)
-        .onAppear { documents = controller.documentChoices() }
+        .onAppear {
+            library.refresh()
+            documents = controller.documentChoices()
+        }
+    }
+
+    @ViewBuilder
+    private var routeStatus: some View {
+        if let route {
+            if let routeModel {
+                Text("Uses \(route.role.displayName): \(routeModel.displayName)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Assign a \(route.role.displayName) model in Models to generate this output.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
     }
 
     private func generate() async {
-        let prefix = """
-        Matter: \(matter.name)
-        Jurisdiction: \(matter.jurisdiction)
-        Party perspective: \(matter.partyPerspective.rawValue)
+        routingMessage = nil
+        guard let route else { return }
+        let modelID: ModelID
+        switch await library.ensureLoadedRoutedModelID(for: route.role, configuration: router.configuration) {
+        case let .success(loaded):
+            modelID = loaded
+        case let .failure(issue):
+            routingMessage = issue.message
+            return
+        }
 
-        """
-        let ok = await controller.createOutput(type: type, context: prefix + context, scope: scope, modelID: loadedModelID)
+        let prefix = matterContextPrefix
+        let ok = await controller.createOutput(
+            type: type,
+            context: prefix + context,
+            scope: scope,
+            modelID: modelID,
+            route: route
+        )
         if ok { dismiss() }
+    }
+
+    private var matterContextPrefix: String {
+        var lines = [
+            "Matter: \(matter.name)",
+            "Jurisdiction: \(matter.jurisdiction)",
+            "Party perspective: \(matter.partyPerspective.rawValue)"
+        ]
+        if let court = nonEmpty(matter.court) {
+            lines.append("Court: \(court)")
+        }
+        if let clientNames = nonEmpty(matter.clientNames) {
+            lines.append("Client name(s): \(clientNames)")
+        }
+        if let internalMatterID = nonEmpty(matter.internalMatterID) {
+            lines.append("Internal matter ID: \(internalMatterID)")
+        }
+        if let matterDescription = nonEmpty(matter.matterDescription) {
+            lines.append("Matter description: \(matterDescription)")
+        }
+        return lines.joined(separator: "\n") + "\n\n"
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 }

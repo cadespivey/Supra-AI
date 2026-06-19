@@ -17,6 +17,9 @@ public final class MattersRepository: @unchecked Sendable {
         judge: String? = nil,
         docketNumber: String? = nil,
         practiceArea: String? = nil,
+        clientNames: String? = nil,
+        matterDescription: String? = nil,
+        internalMatterID: String? = nil,
         notes: String? = nil,
         defaultChatTitle: String? = nil
     ) throws -> MatterRecord {
@@ -36,6 +39,9 @@ public final class MattersRepository: @unchecked Sendable {
                 judge: Self.trimOptional(judge),
                 docketNumber: Self.trimOptional(docketNumber),
                 practiceArea: Self.trimOptional(practiceArea),
+                clientNames: Self.trimOptional(clientNames),
+                matterDescription: Self.trimOptional(matterDescription),
+                internalMatterID: Self.trimOptional(internalMatterID),
                 notes: Self.trimOptional(notes),
                 createdAt: now,
                 updatedAt: now
@@ -95,6 +101,9 @@ public final class MattersRepository: @unchecked Sendable {
         judge: String? = nil,
         docketNumber: String? = nil,
         practiceArea: String? = nil,
+        clientNames: String? = nil,
+        matterDescription: String? = nil,
+        internalMatterID: String? = nil,
         notes: String? = nil
     ) throws {
         let normalized = try Self.validateMatterFields(
@@ -113,6 +122,9 @@ public final class MattersRepository: @unchecked Sendable {
                     judge = ?,
                     docket_number = ?,
                     practice_area = ?,
+                    client_names = ?,
+                    matter_description = ?,
+                    internal_matter_id = ?,
                     notes = ?,
                     updated_at = ?
                 WHERE id = ? AND deleted_at IS NULL
@@ -125,6 +137,9 @@ public final class MattersRepository: @unchecked Sendable {
                     Self.trimOptional(judge),
                     Self.trimOptional(docketNumber),
                     Self.trimOptional(practiceArea),
+                    Self.trimOptional(clientNames),
+                    Self.trimOptional(matterDescription),
+                    Self.trimOptional(internalMatterID),
                     Self.trimOptional(notes),
                     Date(),
                     id

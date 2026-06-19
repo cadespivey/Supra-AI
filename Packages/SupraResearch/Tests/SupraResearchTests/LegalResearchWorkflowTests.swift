@@ -1,0 +1,323 @@
+import SupraResearch
+import XCTest
+
+final class LegalResearchWorkflowTests: XCTestCase {
+    func testNormalizesAndRanksCourtListenerAuthority() {
+        let dto = CourtListenerSearchResultDTO(
+            absoluteURL: "/opinion/1/foo-v-bar/",
+            caseName: "Foo v. Bar",
+            citation: ["123 Cal. App. 5th 456"],
+            clusterID: 1,
+            court: "California Court of Appeal",
+            courtID: "calctapp",
+            dateFiled: "2024-02-03",
+            opinions: [CourtListenerOpinionDTO(id: 99, snippet: "A non-compete clause was void under California law.")],
+            status: "Published"
+        )
+
+        let authority = LegalAuthorityNormalizer.normalize(dto)
+        XCTAssertEqual(authority.id, "courtlistener:opinion:99")
+        XCTAssertEqual(authority.source, .courtlistener)
+        XCTAssertEqual(authority.caseName, "Foo v. Bar")
+        XCTAssertEqual(authority.citation, "123 Cal. App. 5th 456")
+        XCTAssertEqual(authority.url, "https://www.courtlistener.com/opinion/1/foo-v-bar/")
+
+        let classification = LegalQueryClassification(
+            jurisdiction: "California",
+            legalIssue: "California non-compete clause",
+            bindingAuthorityRequired: true
+        )
+        let ranked = LegalAuthorityRanker.rank([authority], for: classification)
+        XCTAssertEqual(ranked.first?.authority.id, authority.id)
+        XCTAssertTrue(ranked.first?.reasons.contains("term_relevance") ?? false)
+    }
+
+    func testVerifierRejectsInventedCitation() {
+        let authority = LegalAuthority(
+            id: "courtlistener:opinion:1",
+            authorityType: .case,
+            caseName: "Real v. Case",
+            citation: "123 Cal. App. 5th 456",
+            citations: ["123 Cal. App. 5th 456"],
+            court: "California Court of Appeal",
+            jurisdiction: "California",
+            text: "The court held that the contract term was unenforceable."
+        )
+        let answer = "California law requires this result. Fake v. Madeup, 999 F.3d 1234."
+
+        let report = LegalCitationVerifier.verify(
+            answer: answer,
+            authorities: [authority],
+            expectedJurisdiction: "California"
+        )
+
+        XCTAssertFalse(report.passed)
+        XCTAssertTrue(report.issues.contains { $0.kind == .unsupportedCitation })
+        XCTAssertTrue(report.issues.contains { $0.excerpt?.contains("999 F.3d 1234") ?? false })
+    }
+
+    func testVerifierRejectsWrongReporterAttachedToKnownCaseName() {
+        let authority = LegalAuthority(
+            id: "courtlistener:opinion:1",
+            authorityType: .case,
+            caseName: "Real v. Case",
+            citation: "123 Cal. App. 5th 456",
+            citations: ["123 Cal. App. 5th 456"],
+            court: "California Court of Appeal",
+            jurisdiction: "California",
+            text: "The court held that the contract term was unenforceable."
+        )
+        let answer = "Real v. Case, 999 F.3d 1234 held that the contract term was unenforceable."
+
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [authority])
+
+        XCTAssertFalse(report.passed)
+        XCTAssertTrue(report.issues.contains { $0.kind == .unsupportedCitation })
+        XCTAssertTrue(report.issues.contains { $0.excerpt?.contains("999 F.3d 1234") ?? false })
+    }
+
+    func testVerifierRejectsUnsupportedQuote() {
+        let authority = LegalAuthority(
+            id: "courtlistener:opinion:1",
+            authorityType: .case,
+            caseName: "Real v. Case",
+            citation: "123 Cal. App. 5th 456",
+            citations: ["123 Cal. App. 5th 456"],
+            court: "California Court of Appeal",
+            jurisdiction: "California",
+            text: "The court held that the contract term was unenforceable."
+        )
+        let answer = #"Real v. Case says "this exact invented quote never happened." 123 Cal. App. 5th 456."#
+
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [authority])
+
+        XCTAssertFalse(report.passed)
+        XCTAssertTrue(report.issues.contains { $0.kind == .unsupportedQuote })
+    }
+
+    func testClassifierFindsJurisdictionAdverseRequestAndCitation() {
+        let classification = LegalQueryClassifier.classify(
+            "Find adverse California authority discussing 410 U.S. 113 after summary judgment."
+        )
+        XCTAssertEqual(classification.jurisdiction, "California")
+        XCTAssertTrue(classification.adverseAuthorityRequested)
+        XCTAssertEqual(classification.citationLookup, "410 U.S. 113")
+        XCTAssertEqual(classification.proceduralPosture, "summary judgment")
+    }
+
+    func testClassifierFindsCourtIDsAndDateFilters() {
+        let classification = LegalQueryClassifier.classify(
+            "Find binding 9th Cir. and N.D. Cal. authority after 2020 on employee non-compete agreements."
+        )
+
+        XCTAssertEqual(classification.jurisdiction, "Ninth Circuit")
+        XCTAssertTrue(classification.courtIDs.contains("ca9"))
+        XCTAssertTrue(classification.courtIDs.contains("cand"))
+        XCTAssertEqual(classification.dateFiledAfter, "2020-01-01")
+        XCTAssertFalse(classification.legalIssue.localizedCaseInsensitiveContains("after 2020"))
+    }
+
+    func testClassifierFindsStateReporterStatuteAndCaseNameCitations() {
+        XCTAssertEqual(
+            LegalQueryClassifier.firstCitation(in: "Verify 123 Cal. App. 5th 456 for California contracts."),
+            "123 Cal. App. 5th 456"
+        )
+        XCTAssertEqual(
+            LegalQueryClassifier.firstCitation(in: "Research Cal. Civ. Code § 16600 and non-competes."),
+            "Cal. Civ. Code § 16600"
+        )
+        XCTAssertEqual(
+            LegalQueryClassifier.firstCitation(in: "Find Roe v. Wade for privacy analysis."),
+            "Roe v. Wade"
+        )
+        XCTAssertEqual(
+            LegalQueryClassifier.firstCitation(in: "Find Smith and Wesson v. Jones for product liability."),
+            "Smith and Wesson v. Jones"
+        )
+    }
+
+    func testVerifierChecksCurlyQuotesAndStatutoryCitations() {
+        let authority = LegalAuthority(
+            id: "courtlistener:opinion:1",
+            authorityType: .case,
+            caseName: "Real v. Case",
+            citation: "123 Cal. App. 5th 456",
+            citations: ["123 Cal. App. 5th 456"],
+            court: "California Court of Appeal",
+            jurisdiction: "California",
+            text: "The court held that the contract term was unenforceable."
+        )
+        let answer = "Real v. Case says “invented quoted text.” 123 Cal. App. 5th 456. Cal. Civ. Code § 16600 applies."
+
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [authority])
+
+        XCTAssertFalse(report.passed)
+        XCTAssertTrue(report.issues.contains { $0.kind == .unsupportedQuote })
+        XCTAssertTrue(report.citedStrings.contains { $0.contains("§ 16600") })
+    }
+
+    // MARK: - Strict case-name matching (audit [6])
+
+    func testBareCaseNameCiteNotSupportedByUnrelatedAuthorityViaSubstring() {
+        // Authority parties do not contain the cited parties — must be unsupported,
+        // not "verified" through loose substring matching.
+        let authority = LegalAuthority(
+            id: "courtlistener:opinion:1",
+            authorityType: .case,
+            caseName: "Smithfield Foods v. Jonestown Holdings",
+            citations: [],
+            court: "California Court of Appeal",
+            jurisdiction: "California",
+            text: "Some unrelated holding."
+        )
+        let answer = "The rule applies. See Acme v. Globex."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [authority])
+        XCTAssertFalse(report.passed)
+        XCTAssertTrue(report.issues.contains { $0.kind == .unsupportedCitation && ($0.excerpt?.contains("Acme") ?? false) })
+    }
+
+    func testReverseContainmentNoLongerVerifiesFabricatedLongerName() {
+        // Authority "Doe v. Roe"; the answer cites a fabricated, longer name whose
+        // parties are a superset. Old bidirectional containment marked this
+        // supported; it must now be flagged.
+        let authority = LegalAuthority(
+            id: "courtlistener:opinion:2",
+            authorityType: .case,
+            caseName: "Doe v. Roe",
+            citations: [],
+            court: "Ninth Circuit",
+            jurisdiction: "ca9"
+        )
+        let answer = "As established in Doe Industries International v. Roe Holdings Worldwide."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [authority])
+        XCTAssertTrue(report.issues.contains { $0.kind == .unsupportedCitation })
+    }
+
+    func testAbbreviatedCaseNameWithMatchingReporterIsStillSupported() {
+        // A correct reporter plus an abbreviated (subset) case name should pass.
+        let authority = LegalAuthority(
+            id: "courtlistener:opinion:3",
+            authorityType: .case,
+            caseName: "Brown v. Board of Education of Topeka",
+            citation: "347 U.S. 483",
+            citations: ["347 U.S. 483"],
+            court: "Supreme Court of the United States",
+            jurisdiction: "scotus"
+        )
+        let answer = "Segregation is unconstitutional. Brown v. Board, 347 U.S. 483."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [authority])
+        XCTAssertFalse(report.issues.contains { $0.kind == .unsupportedCitation })
+    }
+
+    // MARK: - Federal statutory/regulatory citation recognition (Round 2 [1])
+
+    func testExtractorRecognizesFederalStatuteAndRegulationCites() {
+        let cites = LegalCitationVerifier.extractCitationLikeStrings(
+            from: "Liability arises under 42 U.S.C. § 1983 and the procedure in 20 C.F.R. § 404.1520 applies."
+        )
+        XCTAssertTrue(cites.contains { $0.contains("§ 1983") }, "U.S.C. cite must be extracted")
+        XCTAssertTrue(cites.contains { $0.contains("404.1520") }, "C.F.R. cite must be extracted")
+    }
+
+    func testExtractorRecognizesOtherHighTrafficAuthorityForms() {
+        let text = "See Fed. R. Civ. P. 12(b)(6); Fed. R. Evid. 403; Pub. L. No. 117-99; 86 Fed. Reg. 12345; U.C.C. § 2-207; Restatement (Second) of Torts § 402A."
+        let cites = LegalCitationVerifier.extractCitationLikeStrings(from: text)
+        XCTAssertTrue(cites.contains { $0.contains("12(b)(6)") }, "federal civil rule")
+        XCTAssertTrue(cites.contains { $0.contains("403") }, "federal evidence rule")
+        XCTAssertTrue(cites.contains { $0.localizedCaseInsensitiveContains("Pub. L") }, "public law")
+        XCTAssertTrue(cites.contains { $0.localizedCaseInsensitiveContains("Fed. Reg") }, "federal register")
+        XCTAssertTrue(cites.contains { $0.contains("2-207") }, "U.C.C.")
+        XCTAssertTrue(cites.contains { $0.contains("402A") }, "Restatement")
+    }
+
+    func testFabricatedFederalRuleIsFlaggedUnsupported() {
+        let authority = LegalAuthority(
+            id: "courtlistener:opinion:1", authorityType: .case, caseName: "Real v. Case",
+            citation: "123 Cal. App. 5th 456", citations: ["123 Cal. App. 5th 456"],
+            court: "California Court of Appeal", jurisdiction: "California"
+        )
+        let answer = "Per Real v. Case, 123 Cal. App. 5th 456, dismissal is proper under Fed. R. Civ. P. 12(b)(6)."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [authority])
+        XCTAssertFalse(report.passed)
+        XCTAssertTrue(report.issues.contains { $0.kind == .unsupportedCitation && ($0.excerpt?.localizedCaseInsensitiveContains("Fed. R") ?? false) })
+    }
+
+    func testFabricatedFederalStatuteIsFlaggedUnsupported() {
+        let authority = LegalAuthority(
+            id: "courtlistener:opinion:1",
+            authorityType: .case,
+            caseName: "Real v. Case",
+            citation: "123 Cal. App. 5th 456",
+            citations: ["123 Cal. App. 5th 456"],
+            court: "California Court of Appeal",
+            jurisdiction: "California"
+        )
+        // A real, supported case cite PLUS a fabricated federal statute — the
+        // statute must not slip through as part of a verification-passed answer.
+        let answer = "Per Real v. Case, 123 Cal. App. 5th 456, and 42 U.S.C. § 9999, the claim holds."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [authority])
+        XCTAssertFalse(report.passed)
+        XCTAssertTrue(report.issues.contains { $0.kind == .unsupportedCitation && ($0.excerpt?.contains("§ 9999") ?? false) })
+    }
+
+    // MARK: - Per-citation jurisdiction (audit [17])
+
+    func testJurisdictionMismatchFlaggedPerCitedAuthority() {
+        // Two authorities retrieved: one in CA, one in NY. The answer cites the NY
+        // case while CA was requested — the cited authority must be flagged, even
+        // though *some* retrieved authority matches the jurisdiction.
+        let ca = LegalAuthority(
+            id: "courtlistener:opinion:ca",
+            authorityType: .case,
+            caseName: "Alpha v. Beta",
+            citation: "1 Cal. 5th 1",
+            citations: ["1 Cal. 5th 1"],
+            court: "Supreme Court of California",
+            jurisdiction: "California"
+        )
+        let ny = LegalAuthority(
+            id: "courtlistener:opinion:ny",
+            authorityType: .case,
+            caseName: "Gamma v. Delta",
+            citation: "2 N.Y.3d 2",
+            citations: ["2 N.Y.3d 2"],
+            court: "New York Court of Appeals",
+            jurisdiction: "New York"
+        )
+        let answer = "Under the controlling rule, Gamma v. Delta, 2 N.Y.3d 2, governs."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [ca, ny], expectedJurisdiction: "California")
+        XCTAssertTrue(report.issues.contains { $0.kind == .jurisdictionMismatch && ($0.excerpt?.contains("N.Y.3d") ?? false) })
+    }
+
+    // MARK: - Precedential ranking (audit [31])
+
+    func testUnpublishedAuthorityRanksBelowPublished() {
+        let published = LegalAuthority(
+            id: "courtlistener:opinion:pub",
+            authorityType: .case,
+            caseName: "Pub v. Lished",
+            citation: "10 Cal. 5th 10",
+            citations: ["10 Cal. 5th 10"],
+            court: "Supreme Court of California",
+            jurisdiction: "California",
+            dateFiled: "2021-01-01",
+            precedentialStatus: "Published"
+        )
+        let unpublished = LegalAuthority(
+            id: "courtlistener:opinion:unpub",
+            authorityType: .case,
+            caseName: "Un v. Published",
+            citation: "11 Cal. 5th 11",
+            citations: ["11 Cal. 5th 11"],
+            court: "Supreme Court of California",
+            jurisdiction: "California",
+            dateFiled: "2021-01-01",
+            precedentialStatus: "Unpublished"
+        )
+        let classification = LegalQueryClassification(jurisdiction: "California", legalIssue: "general")
+        let ranked = LegalAuthorityRanker.rank([unpublished, published], for: classification)
+        XCTAssertEqual(ranked.first?.authority.id, published.id)
+        XCTAssertTrue(ranked.first?.reasons.contains("precedential") ?? false)
+        XCTAssertTrue(ranked.last?.reasons.contains("non_precedential") ?? false)
+    }
+}

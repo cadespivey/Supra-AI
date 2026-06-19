@@ -70,10 +70,16 @@ public struct CitationCheckResult: Sendable, Equatable {
 
     /// The answer needs review when it is a substantive answer that lacks inline
     /// citations or cites labels that do not resolve, or when generated from an
-    /// incomplete scope. An explicit "sources do not support" answer is valid.
+    /// incomplete scope. An explicit "sources do not support" answer is valid only
+    /// when it cites nothing resolvable — a substantive answer that merely contains
+    /// a refusal-like phrase must not skip the citation checks.
     public var requiresReview: Bool {
-        if appearsUnsupported { return citedFromIncompleteScope }
-        return !hasInlineCitations || !unresolvedLabels.isEmpty || citedFromIncompleteScope
+        // Hallucinated/unresolved citation labels always force review, even if the
+        // text also contains a refusal-like phrase.
+        if !unresolvedLabels.isEmpty { return true }
+        // A genuine refusal cites nothing resolvable.
+        if appearsUnsupported && usedLabels.isEmpty { return citedFromIncompleteScope }
+        return !hasInlineCitations || citedFromIncompleteScope
     }
 
     public var warnings: [String] {

@@ -17,6 +17,15 @@ final class ExtractionTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
+    func testSafeAttachmentNameStripsTraversal() {
+        // Attacker-controlled MIME filenames must be reduced to a bare component.
+        XCTAssertEqual(EmailExtractor.safeAttachmentName("../../etc/passwd", index: 0), "passwd")
+        XCTAssertEqual(EmailExtractor.safeAttachmentName("/Users/victim/secret.key", index: 1), "secret.key")
+        XCTAssertEqual(EmailExtractor.safeAttachmentName("..", index: 2), "attachment-3")
+        XCTAssertEqual(EmailExtractor.safeAttachmentName(nil, index: 4), "attachment-5")
+        XCTAssertEqual(EmailExtractor.safeAttachmentName("invoice.pdf", index: 0), "invoice.pdf")
+    }
+
     func testPlainTextAndMarkdown() async throws {
         let txt = try write("notes.txt", "Wire transfer on 2024-03-03 for $5,000.")
         let result = try await service.extract(fileURL: txt)

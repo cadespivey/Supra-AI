@@ -3,3 +3,7 @@
 DerivedData/
 xcuserdata/
 *.xcuserstate
+
+# Local environment config — may hold the CourtListener API token. Never commit.
+.env
+.env.local

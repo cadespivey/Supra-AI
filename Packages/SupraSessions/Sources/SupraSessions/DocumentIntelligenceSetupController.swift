@@ -78,7 +78,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     /// Human-readable list of steps still outstanding, for the Settings UI.
     public var outstandingSteps: [String] {
         var steps: [String] = []
-        if !chatModelLoaded { steps.append("Load a chat model in the Models tab.") }
+        if !chatModelLoaded { steps.append("Load a runtime text model in the Models tab.") }
         if selectedEmbeddingModel == nil { steps.append("Download and select an embedding model.") }
         else if !embeddingTestPassed { steps.append("Test-load the selected embedding model.") }
         if !(toolchain?.meetsMinimumForSetup ?? false) { steps.append("Confirm the local extraction/OCR toolchain.") }

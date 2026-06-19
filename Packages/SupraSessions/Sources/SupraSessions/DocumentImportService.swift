@@ -314,6 +314,17 @@ public final class DocumentImportService: @unchecked Sendable {
         return document.id
     }
 
+    /// Reduces an attachment filename to a safe bare component (no separators or
+    /// traversal), falling back to a unique name. Mirrors the extractor-boundary
+    /// sanitization so any attachment source is safe at the write sink.
+    private static func safeAttachmentFileName(_ raw: String) -> String {
+        let last = (raw as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if last.isEmpty || last == "." || last == ".." || last.contains("/") || last.contains("\\") {
+            return "attachment-\(UUID().uuidString)"
+        }
+        return last
+    }
+
     private func importAttachment(
         _ attachment: ExtractedAttachment,
         parentDocument: MatterDocumentRecord,
@@ -326,7 +337,20 @@ public final class DocumentImportService: @unchecked Sendable {
         // original filename, so the path-based import pipeline (copy/dedup/extract)
         // handles it and the child document keeps the attachment's display name.
         let tempDir = storage.tempDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let tempURL = tempDir.appendingPathComponent(attachment.fileName)
+        // Defense-in-depth against path traversal: the attachment name is reduced
+        // to a bare component, and we verify the resolved write path stays inside
+        // tempDir before writing.
+        let safeName = Self.safeAttachmentFileName(attachment.fileName)
+        let tempURL = tempDir.appendingPathComponent(safeName)
+        let containedDir = tempDir.resolvingSymlinksInPath().path
+        guard tempURL.resolvingSymlinksInPath().path.hasPrefix(containedDir + "/") else {
+            report.items.append(DocumentImportReportItem(
+                displayName: attachment.fileName, sourceDisplayPath: "\(parentDocument.sourceDisplayPath ?? parentDocument.displayName) ▸ \(attachment.fileName)",
+                disposition: DocumentImportDisposition.extractionFailed.rawValue,
+                reason: "Rejected an attachment with an unsafe filename.", parentDocumentID: parentDocument.id
+            ))
+            return
+        }
         do {
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             try attachment.data.write(to: tempURL)

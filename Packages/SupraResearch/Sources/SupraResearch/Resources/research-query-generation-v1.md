@@ -12,6 +12,8 @@ Do not include commentary outside the required Markdown.
 
 Matter:
 - Jurisdiction: {{jurisdiction}}
+- Structured jurisdiction scope:
+{{jurisdiction_context}}
 - Party perspective: {{party_perspective}}
 - Preferred courts: {{preferred_courts}}
 - Excluded courts: {{excluded_courts}}

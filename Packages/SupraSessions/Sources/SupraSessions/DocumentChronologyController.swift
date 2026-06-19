@@ -48,15 +48,16 @@ public final class DocumentChronologyController: ObservableObject {
     public func generate(
         scope: RetrievalScope = .wholeMatter,
         format: DocumentChronologyFormat = .table,
-        modelID: ModelID?
+        modelID: ModelID?,
+        route: ModelRoute? = nil
     ) async -> DocumentQAController.QAResult? {
-        await produce(scope: scope, format: format, modelID: modelID, existingOutputID: nil)
+        await produce(scope: scope, format: format, modelID: modelID, route: route, existingOutputID: nil)
     }
 
     /// Regenerates a saved chronology using its stored scope + format, creating a
     /// new version with a fresh source set (plan §9.1, §10.1).
     @discardableResult
-    public func regenerate(outputID: String, modelID: ModelID?) async -> DocumentQAController.QAResult? {
+    public func regenerate(outputID: String, modelID: ModelID?, route: ModelRoute? = nil) async -> DocumentQAController.QAResult? {
         guard let output = try? store.structuredOutputs.fetchOutputs(matterID: matterID).first(where: { $0.id == outputID }),
               let activeVersionID = output.activeVersionID,
               let sourceSet = try? store.documentSources.fetchSourceSet(structuredOutputVersionID: activeVersionID) else {
@@ -65,7 +66,7 @@ public final class DocumentChronologyController: ObservableObject {
         }
         let scope = (try? JSONDecoder().decode(RetrievalScope.self, from: Data(sourceSet.scopeJSON.utf8))) ?? .wholeMatter
         let format: DocumentChronologyFormat = output.outputType == StructuredOutputType.factChronologyNarrative.rawValue ? .narrative : .table
-        return await produce(scope: scope, format: format, modelID: modelID, existingOutputID: outputID)
+        return await produce(scope: scope, format: format, modelID: modelID, route: route, existingOutputID: outputID)
     }
 
     @discardableResult
@@ -73,27 +74,50 @@ public final class DocumentChronologyController: ObservableObject {
         scope: RetrievalScope,
         format: DocumentChronologyFormat,
         modelID: ModelID?,
+        route: ModelRoute?,
         existingOutputID: String?
     ) async -> DocumentQAController.QAResult? {
-        guard let modelID else { message = "Load a chat model in the Models tab to build a chronology."; return nil }
+        let effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: format.outputType)
+        guard let modelID else {
+            message = if let effectiveRoute {
+                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to build a chronology."
+            } else {
+                "Assign a task model in the Models tab to build a chronology."
+            }
+            return nil
+        }
         let readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope)) ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
         guard readiness.isFullyReady else {
             message = "The selected documents are still indexing (\(readiness.readyDocuments)/\(readiness.totalDocuments) ready)."
             return nil
         }
 
+        guard !isGenerating else {
+            message = "A chronology is already generating. Wait for it to finish."
+            return nil
+        }
         isGenerating = true
         message = nil
         defer { isGenerating = false }
 
         do {
-            let prepared = try harvestSources(scope: scope)
+            // Bound the assembled prompt so a large scope can't overflow the model
+            // context and silently lose mid-prompt source material (the KV cache
+            // evicts the middle when over budget). Reserve roughly half the context
+            // for source text (≈4 chars/token), the rest for instructions + answer.
+            let contextTokens = effectiveRoute?.options.maxContextTokens ?? 32_768
+            let characterBudget = max(8_000, contextTokens * 2)
+            let harvest = try harvestSources(scope: scope, characterBudget: characterBudget)
+            let prepared = harvest.sources
             guard !prepared.isEmpty else {
                 message = "No dated facts were found in the selected documents."
                 return nil
             }
+            if harvest.droppedCount > 0 {
+                message = "Chronology covers \(prepared.count) of \(prepared.count + harvest.droppedCount) dated sources; the rest were omitted to fit the model's context budget. Narrow the scope or date range for full coverage."
+            }
             let prompt = DocumentChronologyPromptBuilder.build(sources: prepared.map(\.source), format: format)
-            let answer = try await collect(prompt: prompt, modelID: modelID)
+            let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
             let check = CitationCoverage.check(
                 answer: answer, availableLabels: prepared.map(\.source.label),
                 lowConfidenceLabels: Set(prepared.filter { $0.source.lowConfidence }.map(\.source.label)),
@@ -106,22 +130,20 @@ public final class DocumentChronologyController: ObservableObject {
             let status: StructuredOutputStatus = check.requiresReview ? .needsReview : .complete
 
             let outputID: String
-            let versionIndex: Int
             let parentVersionID: String?
             if let existingOutputID {
                 outputID = existingOutputID
                 let versions = (try? store.structuredOutputs.fetchVersions(structuredOutputID: existingOutputID)) ?? []
-                versionIndex = (versions.map(\.versionIndex).max() ?? 0) + 1
-                parentVersionID = versions.first(where: { $0.versionIndex == versionIndex - 1 })?.id
+                parentVersionID = versions.max(by: { $0.versionIndex < $1.versionIndex })?.id
                 try? store.structuredOutputs.updateStatus(outputID: existingOutputID, status: status)
             } else {
                 let output = try store.structuredOutputs.createOutput(matterID: matterID, title: "Chronology (\(format.rawValue))", outputType: format.outputType, status: status)
                 outputID = output.id
-                versionIndex = 1
                 parentVersionID = nil
             }
+            // versionIndex is computed atomically inside createVersion.
             let version = try store.structuredOutputs.createVersion(
-                structuredOutputID: outputID, versionIndex: versionIndex, contentMarkdown: markdown,
+                structuredOutputID: outputID, contentMarkdown: markdown,
                 requiredSections: [], presentSections: [], missingSections: [], parentVersionID: parentVersionID
             )
             try attachSources(prepared: prepared, scope: scope, versionID: version.id)
@@ -153,7 +175,7 @@ public final class DocumentChronologyController: ObservableObject {
         var warnings: [String]
     }
 
-    private func harvestSources(scope: RetrievalScope) throws -> [PreparedSource] {
+    private func harvestSources(scope: RetrievalScope, characterBudget: Int) throws -> (sources: [PreparedSource], droppedCount: Int) {
         let scopeIDs = try store.documentLibrary.resolveScopeDocumentIDs(
             matterID: matterID, folderIDs: scope.folderIDs, documentIDs: scope.documentIDs,
             tagIDs: scope.tagIDs, dateStart: scope.dateStart, dateEnd: scope.dateEnd
@@ -161,6 +183,8 @@ public final class DocumentChronologyController: ObservableObject {
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID).filter { scopeIDs.contains($0.id) }
         var prepared: [PreparedSource] = []
         var rank = 0
+        var usedCharacters = 0
+        var droppedCount = 0
 
         for document in documents {
             // Metadata date (file/email), distinguished from text dates.
@@ -182,7 +206,10 @@ public final class DocumentChronologyController: ObservableObject {
             // Date-bearing chunks (text dates).
             let chunks = (try? store.documentIndex.fetchChunks(documentID: document.id)) ?? []
             for chunk in chunks where DateExtraction.containsDate(chunk.normalizedText) {
-                if prepared.count >= maxSources { break }
+                if prepared.count >= maxSources || usedCharacters >= characterBudget {
+                    droppedCount += 1
+                    continue
+                }
                 let label = "S\(rank + 1)"
                 let locator = DocumentSourceLocator(
                     sourceKind: DocumentSourceKind(rawValue: chunk.sourceKind) ?? .text,
@@ -199,11 +226,11 @@ public final class DocumentChronologyController: ObservableObject {
                     documentID: document.id, chunkID: chunk.id, locatorJSON: locator.encodedJSON(),
                     rank: rank, warnings: low ? ["low OCR confidence"] : []
                 ))
+                usedCharacters += chunk.normalizedText.count
                 rank += 1
             }
-            if prepared.count >= maxSources { break }
         }
-        return prepared
+        return (prepared, droppedCount)
     }
 
     private func attachSources(prepared: [PreparedSource], scope: RetrievalScope, versionID: String) throws {
@@ -221,15 +248,22 @@ public final class DocumentChronologyController: ObservableObject {
         try store.documentSources.attachSourceSet(id: sourceSet.id, structuredOutputVersionID: versionID)
     }
 
-    private func collect(prompt: String, modelID: ModelID) async throws -> String {
+    private func collect(prompt: String, modelID: ModelID, route: ModelRoute?) async throws -> String {
         let request = GenerateRequest(
             generationID: GenerationID(), modelID: modelID, prompt: prompt,
-            // Base prompt only: output is parsed into dated-fact rows and source
-            // citations, so the user's free-form profile must not override the
-            // required structure.
-            systemPrompt: defaultSystemPrompt, options: GenerationOptions()
+            // Keep chronology structure isolated from the user's free-form profile
+            // while still applying task-specific routing instructions.
+            systemPrompt: routedSystemPrompt(route),
+            options: route?.options ?? GenerationOptions()
         )
         let output = try await runtimeClient.collectGeneratedText(request)
         return ReasoningContent.answer(from: output)
+    }
+
+    private func routedSystemPrompt(_ route: ModelRoute?) -> String? {
+        let parts = [defaultSystemPrompt, route?.systemPrompt]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 }

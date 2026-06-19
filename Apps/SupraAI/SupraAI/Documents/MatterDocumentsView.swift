@@ -12,9 +12,9 @@ import UniformTypeIdentifiers
 struct MatterDocumentsView: View {
     @ObservedObject var controller: MatterDocumentsController
     @ObservedObject var queue: DocumentProcessingQueue
+    @ObservedObject var library: ModelLibrary
     var qaController: DocumentQAController?
     var chronologyController: DocumentChronologyController?
-    var loadedModelID: ModelID?
 
     @State private var showImporter = false
     @State private var newFolderName = ""
@@ -31,6 +31,8 @@ struct MatterDocumentsView: View {
             if !controller.setupReady {
                 setupBanner
             }
+            documentActionBar
+            Divider()
             jobProgress
             importFailureBanner
             HSplitView {
@@ -38,9 +40,8 @@ struct MatterDocumentsView: View {
                     .frame(minWidth: 200, maxWidth: 280)
                 mainContent
                     .frame(minWidth: 360)
-            }
+                }
         }
-        .toolbar { toolbarContent }
         .fileImporter(
             isPresented: $showImporter,
             allowedContentTypes: controller.allowedContentTypes,
@@ -63,7 +64,7 @@ struct MatterDocumentsView: View {
                 DocumentQASheet(
                     qa: qaController,
                     scopeFolderID: controller.selectedFolderID,
-                    loadedModelID: loadedModelID
+                    library: library
                 ) { showQA = false }
             }
         }
@@ -72,7 +73,7 @@ struct MatterDocumentsView: View {
                 DocumentChronologySheet(
                     chronology: chronologyController,
                     scopeFolderID: controller.selectedFolderID,
-                    loadedModelID: loadedModelID
+                    library: library
                 ) { showChronology = false }
             }
         }
@@ -82,25 +83,49 @@ struct MatterDocumentsView: View {
         .onAppear { controller.reload() }
     }
 
-    // MARK: - Toolbar
+    // MARK: - Action Bar
 
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItemGroup {
+    private var documentActionBar: some View {
+        HStack(spacing: 8) {
             TextField("Search documents", text: $controller.searchText)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 220)
+                .frame(minWidth: 140, idealWidth: 220, maxWidth: 260)
                 .onSubmit { controller.runSearch() }
-            Button { controller.runSearch() } label: { Image(systemName: "magnifyingglass") }
-            Button { showNewFolder = true } label: { Label("New Folder", systemImage: "folder.badge.plus") }
-            Button { showImporter = true } label: { Label("Import", systemImage: "square.and.arrow.down") }
-                .disabled(!controller.setupReady)
-            Button { showQA = true } label: { Label("Ask", systemImage: "questionmark.bubble") }
-                .disabled(qaController == nil)
-            Button { showChronology = true } label: { Label("Chronology", systemImage: "calendar") }
-                .disabled(chronologyController == nil)
-            Button { showTrash = true } label: { Label("Trash", systemImage: "trash") }
+            SupraToolbarIconButton("Search Documents", systemImage: "magnifyingglass") {
+                controller.runSearch()
+            }
+
+            Divider().frame(height: 20)
+
+            SupraToolbarIconButton("New Folder", systemImage: "folder.badge.plus") {
+                showNewFolder = true
+            }
+
+            SupraToolbarIconButton("Import Documents", systemImage: "tray.and.arrow.down") {
+                showImporter = true
+            }
+            .disabled(!controller.setupReady)
+
+            Divider().frame(height: 20)
+
+            SupraToolbarIconButton("Ask Documents", systemImage: "bubble.left.and.text.bubble.right") {
+                showQA = true
+            }
+            .disabled(qaController == nil)
+
+            SupraToolbarIconButton("Fact Chronology", systemImage: "calendar.badge.clock") {
+                showChronology = true
+            }
+            .disabled(chronologyController == nil)
+
+            Spacer()
+
+            SupraToolbarIconButton("Trash", systemImage: "trash", role: .destructive) {
+                showTrash = true
+            }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Sidebar
@@ -415,12 +440,20 @@ struct PreviewItem: Identifiable {
 struct DocumentQASheet: View {
     @ObservedObject var qa: DocumentQAController
     let scopeFolderID: String?
-    let loadedModelID: ModelID?
+    @ObservedObject var library: ModelLibrary
     let onClose: () -> Void
 
     @State private var question = ""
     @State private var mode: DocumentAnswerMode = .short
     @State private var scopeThisFolder = false
+    @State private var routingMessage: String?
+
+    private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
+    private var route: ModelRoute? { router.route(forStructuredOutput: mode.outputType) }
+    private var routeModel: ModelSummary? {
+        guard let route else { return nil }
+        return library.resolvedModel(for: route.role, configuration: router.configuration)
+    }
 
     private var scope: RetrievalScope {
         (scopeThisFolder && scopeFolderID != nil) ? RetrievalScope(folderIDs: [scopeFolderID!]) : .wholeMatter
@@ -450,8 +483,9 @@ struct DocumentQASheet: View {
                     Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) documents indexed")
                         .font(.caption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
                 }
-                if loadedModelID == nil {
-                    Text("Load a chat model in the Models tab to ask questions.").font(.caption).foregroundStyle(.orange)
+                routeStatus
+                if let routingMessage {
+                    Text(routingMessage).font(.caption).foregroundStyle(.orange)
                 }
                 if let message = qa.message {
                     Text(message).font(.caption).foregroundStyle(.orange)
@@ -479,18 +513,65 @@ struct DocumentQASheet: View {
             Divider()
             HStack {
                 if let result = qa.lastResult {
-                    Button("Regenerate") { Task { _ = await qa.regenerate(outputID: result.outputID, modelID: loadedModelID) } }
-                        .disabled(qa.isGenerating || loadedModelID == nil)
+                    Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
+                        .disabled(qa.isGenerating || routeModel == nil)
                 }
                 Spacer()
                 if qa.isGenerating { ProgressView().controlSize(.small) }
-                Button("Ask") { Task { _ = await qa.generate(question: question, scope: scope, mode: mode, modelID: loadedModelID) } }
+                Button("Ask") { Task { await ask() } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(qa.isGenerating || loadedModelID == nil || question.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(qa.isGenerating || routeModel == nil || question.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding()
         }
         .frame(width: 620, height: 600)
+        .onAppear { library.refresh() }
+    }
+
+    @ViewBuilder
+    private var routeStatus: some View {
+        if let route {
+            if let routeModel {
+                Text("Uses \(route.role.displayName): \(routeModel.displayName)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Assign a \(route.role.displayName) model in Models to ask documents.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func ask() async {
+        guard let resolved = await resolveRouteModel() else { return }
+        _ = await qa.generate(
+            question: question,
+            scope: scope,
+            mode: mode,
+            modelID: resolved.modelID,
+            route: resolved.route
+        )
+    }
+
+    private func regenerate(outputID: String) async {
+        guard let resolved = await resolveRouteModel() else { return }
+        _ = await qa.regenerate(outputID: outputID, modelID: resolved.modelID, route: resolved.route)
+    }
+
+    private func resolveRouteModel() async -> (modelID: ModelID, route: ModelRoute)? {
+        routingMessage = nil
+        guard let route else {
+            routingMessage = "No route is available for this document output."
+            return nil
+        }
+        switch await library.ensureLoadedRoutedModelID(for: route.role, configuration: router.configuration) {
+        case let .success(modelID):
+            return (modelID, route)
+        case let .failure(issue):
+            routingMessage = issue.message
+            return nil
+        }
     }
 
     private static func markdown(_ text: String) -> AttributedString {
@@ -503,11 +584,19 @@ struct DocumentQASheet: View {
 struct DocumentChronologySheet: View {
     @ObservedObject var chronology: DocumentChronologyController
     let scopeFolderID: String?
-    let loadedModelID: ModelID?
+    @ObservedObject var library: ModelLibrary
     let onClose: () -> Void
 
     @State private var format: DocumentChronologyFormat = .table
     @State private var scopeThisFolder = false
+    @State private var routingMessage: String?
+
+    private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
+    private var route: ModelRoute? { router.route(forStructuredOutput: format.outputType) }
+    private var routeModel: ModelSummary? {
+        guard let route else { return nil }
+        return library.resolvedModel(for: route.role, configuration: router.configuration)
+    }
 
     private var scope: RetrievalScope {
         (scopeThisFolder && scopeFolderID != nil) ? RetrievalScope(folderIDs: [scopeFolderID!]) : .wholeMatter
@@ -535,8 +624,9 @@ struct DocumentChronologySheet: View {
                     Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) documents indexed")
                         .font(.caption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
                 }
-                if loadedModelID == nil {
-                    Text("Load a chat model in the Models tab to build a chronology.").font(.caption).foregroundStyle(.orange)
+                routeStatus
+                if let routingMessage {
+                    Text(routingMessage).font(.caption).foregroundStyle(.orange)
                 }
                 if let message = chronology.message {
                     Text(message).font(.caption).foregroundStyle(.orange)
@@ -564,18 +654,64 @@ struct DocumentChronologySheet: View {
             Divider()
             HStack {
                 if let result = chronology.lastResult {
-                    Button("Regenerate") { Task { _ = await chronology.regenerate(outputID: result.outputID, modelID: loadedModelID) } }
-                        .disabled(chronology.isGenerating || loadedModelID == nil)
+                    Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
+                        .disabled(chronology.isGenerating || routeModel == nil)
                 }
                 Spacer()
                 if chronology.isGenerating { ProgressView().controlSize(.small) }
-                Button("Generate") { Task { _ = await chronology.generate(scope: scope, format: format, modelID: loadedModelID) } }
+                Button("Generate") { Task { await generate() } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(chronology.isGenerating || loadedModelID == nil)
+                    .disabled(chronology.isGenerating || routeModel == nil)
             }
             .padding()
         }
         .frame(width: 640, height: 620)
+        .onAppear { library.refresh() }
+    }
+
+    @ViewBuilder
+    private var routeStatus: some View {
+        if let route {
+            if let routeModel {
+                Text("Uses \(route.role.displayName): \(routeModel.displayName)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Assign a \(route.role.displayName) model in Models to build a chronology.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func generate() async {
+        guard let resolved = await resolveRouteModel() else { return }
+        _ = await chronology.generate(
+            scope: scope,
+            format: format,
+            modelID: resolved.modelID,
+            route: resolved.route
+        )
+    }
+
+    private func regenerate(outputID: String) async {
+        guard let resolved = await resolveRouteModel() else { return }
+        _ = await chronology.regenerate(outputID: outputID, modelID: resolved.modelID, route: resolved.route)
+    }
+
+    private func resolveRouteModel() async -> (modelID: ModelID, route: ModelRoute)? {
+        routingMessage = nil
+        guard let route else {
+            routingMessage = "No route is available for this chronology."
+            return nil
+        }
+        switch await library.ensureLoadedRoutedModelID(for: route.role, configuration: router.configuration) {
+        case let .success(modelID):
+            return (modelID, route)
+        case let .failure(issue):
+            routingMessage = issue.message
+            return nil
+        }
     }
 }
 

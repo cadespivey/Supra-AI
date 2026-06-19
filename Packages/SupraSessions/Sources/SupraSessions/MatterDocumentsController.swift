@@ -130,8 +130,14 @@ public final class MatterDocumentsController: ObservableObject {
         }
         guard !urls.isEmpty else { return }
         let display = urls.first?.deletingLastPathComponent().lastPathComponent
-        _ = queue.enqueueImport(matterID: matterID, sources: urls, sourceRootDisplay: display)
-        message = nil
+        if queue.enqueueImport(matterID: matterID, sources: urls, sourceRootDisplay: display) == nil {
+            // Enqueue failed (e.g. the batch/job could not be written) — surface it
+            // instead of silently dropping the user's import.
+            message = queue.lastError.map { "Couldn't start the import: \($0)" }
+                ?? "Couldn't start the document import. Please try again."
+        } else {
+            message = nil
+        }
     }
 
     // MARK: - Folders
@@ -218,9 +224,10 @@ public final class MatterDocumentsController: ObservableObject {
     }
 
     public func permanentlyDelete(documentID: String) {
-        if let result = try? store.documentLibrary.permanentlyDeleteDocument(id: documentID),
-           let path = result.removedBlobPath {
-            try? FileManager.default.removeItem(at: storage.url(forManagedRelativePath: path))
+        if let result = try? store.documentLibrary.permanentlyDeleteDocument(id: documentID) {
+            for path in result.removedBlobPaths {
+                try? FileManager.default.removeItem(at: storage.url(forManagedRelativePath: path))
+            }
         }
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "document_permanently_deleted", actor: "user",

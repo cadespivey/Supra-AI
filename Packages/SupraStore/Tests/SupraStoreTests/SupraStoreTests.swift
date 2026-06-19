@@ -67,7 +67,10 @@ final class SupraStoreTests: XCTestCase {
             jurisdiction: "  Delaware  ",
             partyPerspective: .plaintiff,
             court: "Chancery",
-            docketNumber: "2026-001"
+            docketNumber: "2026-001",
+            clientNames: #"ACME Holdings, LLC; O'Neil & Sons / María-José"#,
+            matterDescription: #"Post-closing indemnity dispute re: § 2.4(a), escrow #A-17 & "side letter""#,
+            internalMatterID: #"LIT-2026/ACME#001-A&B"#
         )
 
         XCTAssertEqual(matter.name, "Acme v. Roe")
@@ -75,6 +78,9 @@ final class SupraStoreTests: XCTestCase {
         XCTAssertEqual(matter.partyPerspective, PartyPerspective.plaintiff.rawValue)
         XCTAssertEqual(matter.court, "Chancery")
         XCTAssertEqual(matter.docketNumber, "2026-001")
+        XCTAssertEqual(matter.clientNames, #"ACME Holdings, LLC; O'Neil & Sons / María-José"#)
+        XCTAssertEqual(matter.matterDescription, #"Post-closing indemnity dispute re: § 2.4(a), escrow #A-17 & "side letter""#)
+        XCTAssertEqual(matter.internalMatterID, #"LIT-2026/ACME#001-A&B"#)
     }
 
     func testMilestone2ResearchAuthorityOutputAuditAndNetworkRoundTrip() throws {
@@ -265,6 +271,24 @@ final class SupraStoreTests: XCTestCase {
             ExportedReportRecord(validationRunID: run.id, format: "markdown", fileURL: "/tmp/report.md")
         )
         XCTAssertEqual(try store.exportedReports.fetchExportedReports(validationRunID: run.id).single?.format, "markdown")
+    }
+
+    func testFetchGenerationSessionsCanReturnBeyondRecoveryWindow() throws {
+        let store = try makeStore()
+        let chat = try store.chats.createGlobalChat(title: "Global")
+
+        for index in 0..<125 {
+            let assistant = try store.chats.createAssistantMessageShell(chatID: chat.id)
+            _ = try store.generation.createGenerationSession(
+                chatID: chat.id,
+                messageID: assistant.id,
+                prompt: "Prompt \(index)",
+                options: GenerationOptions()
+            )
+        }
+
+        XCTAssertEqual(try store.generation.fetchGenerationSessions(chatID: chat.id, limit: 100).count, 100)
+        XCTAssertEqual(try store.generation.fetchGenerationSessions(chatID: chat.id).count, 125)
     }
 
     func testMarkUnfinishedRunsCancelledReconcilesOnlyStrandedRuns() throws {

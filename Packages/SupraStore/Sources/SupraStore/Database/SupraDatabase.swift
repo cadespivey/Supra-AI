@@ -18,6 +18,17 @@ public final class SupraDatabase: @unchecked Sendable {
         try self.init(writer: queue)
     }
 
+    /// An in-memory database (migrations applied). Used as the app's absolute
+    /// last-resort store so a launch can degrade gracefully instead of crashing
+    /// when no on-disk database can be opened.
+    public static func inMemory() throws -> SupraDatabase {
+        var configuration = Configuration()
+        configuration.prepareDatabase { db in
+            try db.execute(sql: "PRAGMA foreign_keys = ON")
+        }
+        return try SupraDatabase(writer: DatabaseQueue(configuration: configuration))
+    }
+
     public static func openAppSupportDatabase(
         fileManager: FileManager = .default,
         bundleIdentifier: String = "ai.supra.SupraAI"

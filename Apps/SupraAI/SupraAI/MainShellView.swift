@@ -93,22 +93,18 @@ struct MainShellView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        // A quiet model-status indicator (only when a model isn't loaded), then the
-        // consistent action buttons. Replaces the old always-on "Limited Mode" pill.
+        ToolbarItem(placement: .navigation) {
+            SupraToolbarIconButton("New Matter", systemImage: "case") {
+                showNewMatter = true
+            }
+        }
+
+        // A compact runtime indicator plus the consistent runtime action.
         ToolbarItemGroup(placement: .primaryAction) {
             ModelStatusToolbarItem(library: environment.modelLibrary)
-            Button {
+            SupraToolbarIconButton("Refresh Runtime Status", systemImage: "arrow.clockwise") {
                 Task { await environment.refreshRuntimeStatus() }
-            } label: {
-                Label("Refresh runtime status", systemImage: "arrow.clockwise")
             }
-            .help("Refresh runtime status")
-            Button {
-                showNewMatter = true
-            } label: {
-                Label("New Matter", systemImage: "folder.badge.plus")
-            }
-            .help("New Matter")
         }
     }
 }
@@ -136,18 +132,16 @@ private struct MatterDetailView: View {
     }
 }
 
-/// A subtle toolbar status shown only when chat isn't ready. Driven by the same
-/// source of truth as the chat composer (ModelLibrary.loadState), so the badge and
-/// the chat gate can never disagree.
+/// A subtle toolbar status for the runtime's currently loaded model.
 private struct ModelStatusToolbarItem: View {
     @ObservedObject var library: ModelLibrary
 
     var body: some View {
         switch library.loadState {
         case .loaded:
-            EmptyView()
+            label("Runtime model loaded", systemImage: "checkmark.circle.fill", color: .green)
         case .idle:
-            label("No model loaded", systemImage: "cpu", color: .secondary)
+            label("Runtime idle", systemImage: "cpu", color: .secondary)
         case .loading:
             label("Loading model…", systemImage: "hourglass", color: .secondary)
         case .failed:
@@ -156,10 +150,62 @@ private struct ModelStatusToolbarItem: View {
     }
 
     private func label(_ title: String, systemImage: String, color: Color) -> some View {
-        Label(title, systemImage: systemImage)
-            .labelStyle(.titleAndIcon)
-            .font(.caption)
+        Image(systemName: systemImage)
+            .font(.system(size: 14.5, weight: .medium))
             .foregroundStyle(color)
+            .frame(width: 28, height: 28)
+            .accessibilityLabel(title)
             .help(title)
+    }
+}
+
+struct SupraToolbarIconButton: View {
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+
+    let title: String
+    let systemImage: String
+    let role: ButtonRole?
+    let action: () -> Void
+
+    init(
+        _ title: String,
+        systemImage: String,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        self.role = role
+        self.action = action
+    }
+
+    var body: some View {
+        Button(role: role, action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14.5, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(foregroundStyle)
+                .frame(width: 28, height: 28)
+                .background(backgroundFill, in: Circle())
+                .overlay {
+                    Circle()
+                        .strokeBorder(Color.secondary.opacity(isHovered && isEnabled ? 0.18 : 0.10), lineWidth: 0.5)
+                }
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(isEnabled ? 1 : 0.45)
+        .onHover { isHovered = $0 }
+        .accessibilityLabel(Text(title))
+        .help(title)
+    }
+
+    private var backgroundFill: Color {
+        Color.secondary.opacity(isHovered && isEnabled ? 0.18 : 0.10)
+    }
+
+    private var foregroundStyle: Color {
+        role == .destructive ? .red : .primary
     }
 }

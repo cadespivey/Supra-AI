@@ -21,7 +21,7 @@ public enum ManagedModelStorage {
     }
 
     /// The app-managed directory for downloaded embedding models (Milestone 3),
-    /// kept separate from chat models so the two are never confused.
+    /// kept separate from runtime text models so the two are never confused.
     public static func embeddingModelsDirectory(
         fileManager: FileManager = .default,
         bundleIdentifier: String = "ai.supra.SupraAI"

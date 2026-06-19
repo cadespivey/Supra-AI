@@ -30,6 +30,52 @@ private struct StubCourtListenerClient: CourtListenerClientProtocol, @unchecked 
     }
 }
 
+private final class CapturingCourtListenerClient: CourtListenerClientProtocol, @unchecked Sendable {
+    private let response: CourtListenerSearchResponse
+    private let lock = NSLock()
+    private var _requests: [CourtListenerSearchRequest] = []
+    private var _relatedSessionIDs: [String?] = []
+
+    var requests: [CourtListenerSearchRequest] { lock.withLock { _requests } }
+    var relatedSessionIDs: [String?] { lock.withLock { _relatedSessionIDs } }
+
+    init(response: CourtListenerSearchResponse) {
+        self.response = response
+    }
+
+    func searchOpinions(
+        _ request: CourtListenerSearchRequest,
+        relatedResearchSessionID: String?
+    ) async throws -> CourtListenerSearchResponse {
+        lock.withLock {
+            _requests.append(request)
+            _relatedSessionIDs.append(relatedResearchSessionID)
+        }
+        return response
+    }
+}
+
+private final class SequencedCourtListenerClient: CourtListenerClientProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var responses: [CourtListenerSearchResponse]
+
+    init(responses: [CourtListenerSearchResponse]) {
+        self.responses = responses
+    }
+
+    func searchOpinions(
+        _ request: CourtListenerSearchRequest,
+        relatedResearchSessionID: String?
+    ) async throws -> CourtListenerSearchResponse {
+        lock.withLock {
+            if responses.isEmpty {
+                return CourtListenerSearchResponse(count: 0, results: [])
+            }
+            return responses.removeFirst()
+        }
+    }
+}
+
 @MainActor
 final class SupraSessionsTests: XCTestCase {
 
@@ -155,6 +201,643 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertNotNil(controller.selectedChatID)
     }
 
+    func testDraftRouteUsesDraftingPresetAndPromptWithoutResearch() async throws {
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration(draftingModel: "Draft")).route(for: .drafting)
+        let stub = StubRuntimeClient { request in
+            XCTAssertEqual(request.options.preset, .drafting)
+            XCTAssertEqual(request.options.thinkingBudget, .lowOrOff)
+            XCTAssertTrue(request.systemPrompt?.contains("legal drafting assistant") ?? false)
+            return .events([
+                .event(request, 1, .token, token: "Drafted letter."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let court = StubCourtListenerClient(shouldFail: true)
+        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Write a demand letter",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        XCTAssertEqual(controller.messages.last?.content, "Drafted letter.")
+        XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
+    func testLegalResearchWithoutJurisdictionAsksClarifyingQuestion() async throws {
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let stub = StubRuntimeClient { _ in
+            XCTFail("Runtime should not run until jurisdiction is supplied.")
+            return .events([])
+        }
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What are the elements of promissory estoppel?",
+            modelID: nil,
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        XCTAssertTrue(controller.messages.last?.content.contains("I need the jurisdiction") ?? false)
+        XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
+    func testMatterLegalResearchPersistsSourcePacketAndVerifyUsesItWithoutModel() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let researchRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let verifyRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalVerify)
+        let court = StubCourtListenerClient(
+            response: CourtListenerSearchResponse(
+                count: 1,
+                results: [
+                    CourtListenerSearchResultDTO(
+                        absoluteURL: "/opinion/1/foo-v-bar/",
+                        caseName: "Foo v. Bar",
+                        citation: ["123 Cal. App. 5th 456"],
+                        clusterID: 1,
+                        court: "California Court of Appeal",
+                        courtID: "calctapp",
+                        dateFiled: "2024-02-03",
+                        opinions: [CourtListenerOpinionDTO(id: 99, snippet: "A contract term was unenforceable.")],
+                        status: "Published"
+                    )
+                ]
+            )
+        )
+        let stub = StubRuntimeClient { request in
+            XCTAssertTrue(request.prompt.contains("SOURCE PACKET"))
+            return .events([
+                .event(request, 1, .token, token: "Foo v. Bar, 123 Cal. App. 5th 456 held the term unenforceable."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(
+            store: store,
+            runtimeClient: stub,
+            scope: .matter(id: matter.id),
+            courtListenerClient: court
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Research California contract unenforceability.",
+            modelID: ModelID(),
+            systemPrompt: researchRoute.systemPrompt,
+            options: researchRoute.options,
+            route: researchRoute
+        )
+        await controller.performSend(
+            prompt: "Foo v. Bar, 123 Cal. App. 5th 456 held the term unenforceable.",
+            modelID: nil,
+            systemPrompt: verifyRoute.systemPrompt,
+            options: verifyRoute.options,
+            route: verifyRoute
+        )
+
+        let sessions = try store.research.fetchSessions(matterID: matter.id)
+        XCTAssertEqual(sessions.count, 1)
+        let queries = try store.research.fetchQueries(sessionID: sessions[0].id)
+        XCTAssertEqual(try store.research.fetchResults(queryID: queries[0].id).count, 1)
+        XCTAssertTrue(controller.messages.last?.content.contains("Verified against the latest source packet") ?? false)
+        XCTAssertFalse(controller.messages.last?.content.contains("no_retrieved_authorities") ?? true)
+
+        let audits = try store.auditEvents.fetchEvents(matterID: matter.id).filter { $0.eventType == "legal_model_route" }
+        XCTAssertFalse(audits.isEmpty)
+        let metadata = try XCTUnwrap(audits.last?.metadataJSON)
+        XCTAssertTrue(metadata.contains("courtListenerQueryFingerprints"))
+        XCTAssertFalse(metadata.contains("Research California contract unenforceability"))
+    }
+
+    func testMatterVerifyAfterReopenUsesChatBoundPacketNotNewestMatterResearchSession() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let router = ModelRouter(configuration: LegalModelConfiguration())
+        let researchRoute = router.route(for: .legalResearch)
+        let verifyRoute = router.route(for: .legalVerify)
+        let court = StubCourtListenerClient(
+            response: CourtListenerSearchResponse(
+                count: 1,
+                results: [
+                    CourtListenerSearchResultDTO(
+                        caseName: "Foo v. Bar",
+                        citation: ["123 Cal. App. 5th 456"],
+                        clusterID: 1,
+                        courtID: "calctapp",
+                        opinions: [CourtListenerOpinionDTO(id: 99, snippet: "A contract term was unenforceable.")]
+                    )
+                ]
+            )
+        )
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Foo v. Bar, 123 Cal. App. 5th 456."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(
+            store: store,
+            runtimeClient: stub,
+            scope: .matter(id: matter.id),
+            courtListenerClient: court
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Research California contract unenforceability.",
+            modelID: ModelID(),
+            systemPrompt: researchRoute.systemPrompt,
+            options: researchRoute.options,
+            route: researchRoute
+        )
+        let chatID = try XCTUnwrap(controller.selectedChatID)
+
+        let unrelated = try store.research.createSession(
+            matterID: matter.id,
+            title: "Unrelated newer packet",
+            issueText: "Different issue",
+            jurisdiction: "California",
+            status: .resultsReady
+        )
+        let unrelatedQuery = try store.research.createQuery(
+            researchSessionID: unrelated.id,
+            queryText: "different issue",
+            queryIndex: 0,
+            status: .completed
+        )
+        _ = try store.research.insertResult(
+            ResearchResultRecord(
+                researchQueryID: unrelatedQuery.id,
+                clusterID: "999",
+                opinionID: "1000",
+                caseName: "Different v. Packet",
+                citationJSON: #"["999 F.4th 1000"]"#,
+                preferredCitation: "999 F.4th 1000",
+                courtID: "ca9",
+                snippet: "Different packet text."
+            )
+        )
+
+        let reopened = GlobalChatController(
+            store: store,
+            runtimeClient: StubRuntimeClient { _ in
+                XCTFail("Verify should not call the runtime.")
+                return .events([])
+            },
+            scope: .matter(id: matter.id),
+            courtListenerClient: StubCourtListenerClient()
+        )
+        reopened.loadChats()
+        reopened.select(chatID: chatID)
+
+        await reopened.performSend(
+            prompt: "Foo v. Bar, 123 Cal. App. 5th 456 held the term unenforceable.",
+            modelID: nil,
+            systemPrompt: verifyRoute.systemPrompt,
+            options: verifyRoute.options,
+            route: verifyRoute
+        )
+
+        let output = try XCTUnwrap(reopened.messages.last?.content)
+        XCTAssertTrue(output.contains("Verified against the latest source packet"))
+        XCTAssertFalse(output.contains("unsupported_citation"), output)
+        XCTAssertFalse(output.contains("No source packet is available"))
+    }
+
+    func testNoResultResearchBlocksFallbackToOlderSourcePacketAfterReopen() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let router = ModelRouter(configuration: LegalModelConfiguration())
+        let researchRoute = router.route(for: .legalResearch)
+        let verifyRoute = router.route(for: .legalVerify)
+        let court = SequencedCourtListenerClient(
+            responses: [
+                CourtListenerSearchResponse(
+                    count: 1,
+                    results: [
+                        CourtListenerSearchResultDTO(
+                            caseName: "Foo v. Bar",
+                            citation: ["123 Cal. App. 5th 456"],
+                            clusterID: 1,
+                            courtID: "calctapp",
+                            opinions: [CourtListenerOpinionDTO(id: 99, snippet: "A contract term was unenforceable.")]
+                        )
+                    ]
+                ),
+                CourtListenerSearchResponse(count: 0, results: [])
+            ]
+        )
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Foo v. Bar, 123 Cal. App. 5th 456."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(
+            store: store,
+            runtimeClient: stub,
+            scope: .matter(id: matter.id),
+            courtListenerClient: court
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Research California contract unenforceability.",
+            modelID: ModelID(),
+            systemPrompt: researchRoute.systemPrompt,
+            options: researchRoute.options,
+            route: researchRoute
+        )
+        await controller.performSend(
+            prompt: "Research California issue with no available authority.",
+            modelID: ModelID(),
+            systemPrompt: researchRoute.systemPrompt,
+            options: researchRoute.options,
+            route: researchRoute
+        )
+        let chatID = try XCTUnwrap(controller.selectedChatID)
+
+        let reopened = GlobalChatController(
+            store: store,
+            runtimeClient: StubRuntimeClient { _ in
+                XCTFail("Verify should not call the runtime.")
+                return .events([])
+            },
+            scope: .matter(id: matter.id),
+            courtListenerClient: StubCourtListenerClient()
+        )
+        reopened.loadChats()
+        reopened.select(chatID: chatID)
+
+        await reopened.performSend(
+            prompt: "Foo v. Bar, 123 Cal. App. 5th 456 held the term unenforceable.",
+            modelID: nil,
+            systemPrompt: verifyRoute.systemPrompt,
+            options: verifyRoute.options,
+            route: verifyRoute
+        )
+
+        let output = try XCTUnwrap(reopened.messages.last?.content)
+        XCTAssertTrue(output.contains("No source packet is available"), output)
+        XCTAssertTrue(output.contains("no_retrieved_authorities"), output)
+        XCTAssertFalse(output.contains("Verification passed"), output)
+    }
+
+    func testGlobalLegalResearchAuditRehydratesSourcePacketAfterReopen() async throws {
+        let store = try makeStore()
+        let router = ModelRouter(configuration: LegalModelConfiguration())
+        let researchRoute = router.route(for: .legalResearch)
+        let verifyRoute = router.route(for: .legalVerify)
+        let court = StubCourtListenerClient(
+            response: CourtListenerSearchResponse(
+                count: 1,
+                results: [
+                    CourtListenerSearchResultDTO(
+                        caseName: "Foo v. Bar",
+                        citation: ["123 Cal. App. 5th 456"],
+                        clusterID: 1,
+                        courtID: "calctapp",
+                        opinions: [CourtListenerOpinionDTO(id: 99, snippet: "A contract term was unenforceable.")]
+                    )
+                ]
+            )
+        )
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Foo v. Bar, 123 Cal. App. 5th 456."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Research California contract unenforceability.",
+            modelID: ModelID(),
+            systemPrompt: researchRoute.systemPrompt,
+            options: researchRoute.options,
+            route: researchRoute
+        )
+        let chatID = try XCTUnwrap(controller.selectedChatID)
+
+        let reopened = GlobalChatController(
+            store: store,
+            runtimeClient: StubRuntimeClient { _ in
+                XCTFail("Verify should not call the runtime.")
+                return .events([])
+            },
+            courtListenerClient: StubCourtListenerClient()
+        )
+        reopened.loadChats()
+        reopened.select(chatID: chatID)
+
+        await reopened.performSend(
+            prompt: "Foo v. Bar, 123 Cal. App. 5th 456 held the term unenforceable.",
+            modelID: nil,
+            systemPrompt: verifyRoute.systemPrompt,
+            options: verifyRoute.options,
+            route: verifyRoute
+        )
+
+        let output = try XCTUnwrap(reopened.messages.last?.content)
+        XCTAssertTrue(output.contains("Verified against the latest source packet"))
+        XCTAssertFalse(output.contains("No source packet is available"))
+        XCTAssertFalse(output.contains("no_retrieved_authorities"))
+
+        let generations = try store.generation.fetchGenerationSessions(chatID: chatID)
+        let researchGeneration = try XCTUnwrap(generations.last)
+        let audits = try store.auditEvents.fetchEvents(
+            relatedTable: "generation_sessions",
+            relatedID: researchGeneration.id,
+            eventType: "legal_model_route"
+        )
+        let metadata = try XCTUnwrap(audits.first?.metadataJSON)
+        XCTAssertTrue(metadata.contains("Foo v. Bar"))
+        XCTAssertFalse(metadata.contains("A contract term was unenforceable."))
+    }
+
+    func testStoredSourcePacketRehydratesRawCourtListenerTextAfterReopen() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let router = ModelRouter(configuration: LegalModelConfiguration())
+        let researchRoute = router.route(for: .legalResearch)
+        let verifyRoute = router.route(for: .legalVerify)
+        let sourceQuote = "the buyer may revoke acceptance after latent defects are discovered"
+        let rawResultJSON = """
+        {"absolute_url":"/opinion/12/full-text-v-case/","caseName":"Full Text v. Case","citation":["321 Cal. App. 5th 654"],"cluster_id":12,"court":"California Court of Appeal","court_id":"calctapp","dateFiled":"2023-01-02","opinions":[{"id":44,"snippet":"short snippet"}],"syllabus":"The court explained that \(sourceQuote)."}
+        """
+        let court = StubCourtListenerClient(
+            response: CourtListenerSearchResponse(
+                count: 1,
+                results: [
+                    CourtListenerSearchResultDTO(
+                        absoluteURL: "/opinion/12/full-text-v-case/",
+                        caseName: "Full Text v. Case",
+                        citation: ["321 Cal. App. 5th 654"],
+                        clusterID: 12,
+                        courtID: "calctapp",
+                        opinions: [CourtListenerOpinionDTO(id: 44, snippet: "short snippet")],
+                        rawResultJSON: rawResultJSON
+                    )
+                ]
+            )
+        )
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Full Text v. Case, 321 Cal. App. 5th 654."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(
+            store: store,
+            runtimeClient: stub,
+            scope: .matter(id: matter.id),
+            courtListenerClient: court
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Research California buyer revocation authority.",
+            modelID: ModelID(),
+            systemPrompt: researchRoute.systemPrompt,
+            options: researchRoute.options,
+            route: researchRoute
+        )
+        let chatID = try XCTUnwrap(controller.selectedChatID)
+
+        let reopened = GlobalChatController(
+            store: store,
+            runtimeClient: StubRuntimeClient { _ in
+                XCTFail("Verify should not call the runtime.")
+                return .events([])
+            },
+            scope: .matter(id: matter.id),
+            courtListenerClient: StubCourtListenerClient()
+        )
+        reopened.loadChats()
+        reopened.select(chatID: chatID)
+
+        await reopened.performSend(
+            prompt: #"Full Text v. Case says "\#(sourceQuote)." 321 Cal. App. 5th 654."#,
+            modelID: nil,
+            systemPrompt: verifyRoute.systemPrompt,
+            options: verifyRoute.options,
+            route: verifyRoute
+        )
+
+        let output = try XCTUnwrap(reopened.messages.last?.content)
+        XCTAssertTrue(output.contains("Verification passed"), output)
+        XCTAssertFalse(output.contains("unsupported_quote"), output)
+    }
+
+    func testAutomaticAdverseResultsRemainUnreviewed() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let court = StubCourtListenerClient(
+            response: CourtListenerSearchResponse(
+                count: 1,
+                results: [
+                    CourtListenerSearchResultDTO(
+                        caseName: "Roe v. Doe",
+                        citation: ["1 Cal. App. 5th 2"],
+                        courtID: "calctapp",
+                        opinions: [CourtListenerOpinionDTO(id: 7, snippet: "Adverse authority snippet.")]
+                    )
+                ]
+            )
+        )
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Roe v. Doe, 1 Cal. App. 5th 2."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(
+            store: store,
+            runtimeClient: stub,
+            scope: .matter(id: matter.id),
+            courtListenerClient: court
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Find adverse California authority on contract defenses.",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        let session = try XCTUnwrap(try store.research.fetchSessions(matterID: matter.id).first)
+        let queries = try store.research.fetchQueries(sessionID: session.id)
+        XCTAssertEqual(queries.count, 2)
+        let reviewStates = try queries.flatMap { query in
+            try store.research.fetchResults(queryID: query.id).map(\.reviewState)
+        }
+        XCTAssertEqual(reviewStates, [
+            ResearchResultReviewState.unreviewed.rawValue,
+            ResearchResultReviewState.unreviewed.rawValue
+        ])
+    }
+
+    func testLegalResearchUsesCourtAndDateFilters() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let court = CapturingCourtListenerClient(
+            response: CourtListenerSearchResponse(
+                count: 1,
+                results: [
+                    CourtListenerSearchResultDTO(
+                        caseName: "Roe v. Doe",
+                        citation: ["1 F.4th 1"],
+                        courtID: "ca9",
+                        opinions: [CourtListenerOpinionDTO(id: 7, snippet: "snippet")]
+                    )
+                ]
+            )
+        )
+        let stub = StubRuntimeClient { request in
+            .events([.event(request, 1, .token, token: "Roe v. Doe, 1 F.4th 1."), .event(request, 2, .generationCompleted)])
+        }
+        let controller = GlobalChatController(
+            store: store,
+            runtimeClient: stub,
+            scope: .matter(id: matter.id),
+            courtListenerClient: court
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Find binding 9th Cir. and N.D. Cal. authority after 2020 on employee non-compete agreements.",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        let request = try XCTUnwrap(court.requests.first)
+        XCTAssertTrue(request.courtIDs.contains("ca9"))
+        XCTAssertTrue(request.courtIDs.contains("cand"))
+        XCTAssertEqual(request.dateFiledAfter, "2020-01-01")
+        XCTAssertFalse(request.query.localizedCaseInsensitiveContains("after 2020"))
+        XCTAssertNotNil(court.relatedSessionIDs.first ?? nil)
+    }
+
+    func testCritiqueUsesPriorAssistantDraftAndLatestSourcePacket() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let router = ModelRouter(configuration: LegalModelConfiguration())
+        let researchRoute = router.route(for: .legalResearch)
+        let critiqueRoute = router.route(for: .legalCritique)
+        let court = StubCourtListenerClient(
+            response: CourtListenerSearchResponse(
+                count: 1,
+                results: [
+                    CourtListenerSearchResultDTO(
+                        caseName: "Foo v. Bar",
+                        citation: ["123 Cal. App. 5th 456"],
+                        courtID: "calctapp",
+                        opinions: [CourtListenerOpinionDTO(id: 99, snippet: "A contract term was unenforceable.")]
+                    )
+                ]
+            )
+        )
+        let stub = StubRuntimeClient { request in
+            if request.prompt.contains("DRAFT TO CRITIQUE") {
+                XCTAssertTrue(request.prompt.contains("Foo v. Bar"))
+                XCTAssertTrue(request.prompt.contains("123 Cal. App. 5th 456"))
+                return .events([.event(request, 1, .token, token: "Critique complete."), .event(request, 2, .generationCompleted)])
+            }
+            return .events([
+                .event(request, 1, .token, token: "Foo v. Bar, 123 Cal. App. 5th 456 supports the draft."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(
+            store: store,
+            runtimeClient: stub,
+            scope: .matter(id: matter.id),
+            courtListenerClient: court
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Research California contract unenforceability.",
+            modelID: ModelID(),
+            systemPrompt: researchRoute.systemPrompt,
+            options: researchRoute.options,
+            route: researchRoute
+        )
+        await controller.performSend(
+            prompt: "",
+            modelID: ModelID(),
+            systemPrompt: critiqueRoute.systemPrompt,
+            options: critiqueRoute.options,
+            route: critiqueRoute,
+            displayPrompt: "/critique"
+        )
+
+        XCTAssertEqual(controller.messages.last?.content, "Critique complete.")
+    }
+
+    func testLegalResearchAppendsVerificationWarningsForInventedCitation() async throws {
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let court = StubCourtListenerClient(
+            response: CourtListenerSearchResponse(
+                count: 1,
+                results: [
+                    CourtListenerSearchResultDTO(
+                        absoluteURL: "/opinion/1/foo-v-bar/",
+                        caseName: "Foo v. Bar",
+                        citation: ["123 Cal. App. 5th 456"],
+                        clusterID: 1,
+                        court: "California Court of Appeal",
+                        courtID: "calctapp",
+                        dateFiled: "2024-02-03",
+                        opinions: [CourtListenerOpinionDTO(id: 99, snippet: "A contract term was unenforceable.")],
+                        status: "Published"
+                    )
+                ]
+            )
+        )
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "California law requires this result. Fake v. Madeup, 999 F.3d 1234."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(
+            store: store,
+            runtimeClient: stub,
+            courtListenerClient: court
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Research California contract unenforceability.",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        XCTAssertTrue(controller.messages.last?.content.contains("Verification warnings") ?? false)
+        XCTAssertTrue(controller.messages.last?.content.contains("unsupported_citation") ?? false)
+        XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
     // MARK: - MattersController
 
     func testMattersControllerCreatesMatterWithScopedChats() async throws {
@@ -198,9 +881,15 @@ final class SupraSessionsTests: XCTestCase {
         var draft = try XCTUnwrap(controller.draft(forMatter: matter.id))
         draft.partyPerspective = .defendant
         draft.court = "N.D. Cal."
+        draft.clientNames = #"Doe & Sons, LLC / María-José"#
+        draft.matterDescription = #"Contract dispute involving § 2.4(a), "special" escrow terms, and ACME#42."#
+        draft.internalMatterID = #"INT-2026/CA#001&A"#
         try controller.updateMatter(id: matter.id, draft: draft)
         XCTAssertEqual(controller.selectedMatter?.partyPerspective, .defendant)
         XCTAssertEqual(controller.draft(forMatter: matter.id)?.court, "N.D. Cal.")
+        XCTAssertEqual(controller.selectedMatter?.clientNames, #"Doe & Sons, LLC / María-José"#)
+        XCTAssertEqual(controller.draft(forMatter: matter.id)?.matterDescription, #"Contract dispute involving § 2.4(a), "special" escrow terms, and ACME#42."#)
+        XCTAssertEqual(controller.draft(forMatter: matter.id)?.internalMatterID, #"INT-2026/CA#001&A"#)
 
         controller.deleteMatter(id: matter.id)
         XCTAssertTrue(controller.matters.isEmpty)
@@ -249,6 +938,92 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(controller.plannedQueries.isEmpty, "plan resets after save")
         let audit = try store.auditEvents.fetchEvents(matterID: matter.id)
         XCTAssertTrue(audit.contains { $0.eventType == "research_queries_approved" })
+    }
+
+    func testResearchPlannerUsesLegalResearchRouteOptions() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California", partyPerspective: .plaintiff)
+        let markdown = """
+        # Research Queries
+        ## Query 1
+        first
+        ## Query 2
+        second
+        ## Query 3
+        third
+        ## Query 4
+        fourth
+        ## Query 5
+        fifth
+        """
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let stub = StubRuntimeClient { request in
+            XCTAssertEqual(request.options.preset, .legalResearch)
+            XCTAssertEqual(request.options.thinkingBudget, .high)
+            XCTAssertEqual(request.options.maxContextTokens, route.options.maxContextTokens)
+            XCTAssertNil(request.systemPrompt)
+            return .events([
+                .event(request, 1, .token, token: markdown),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = ResearchSessionController(store: store, runtimeClient: stub, matterID: matter.id)
+
+        let draft = ResearchPlanDraft(title: "Plan A", issueText: "Issue", jurisdiction: "California", partyPerspective: "plaintiff")
+        await controller.generatePlan(draft: draft, modelID: ModelID(), route: route)
+
+        XCTAssertEqual(controller.plannedQueries.count, 5)
+        XCTAssertEqual(controller.planState, .ready)
+    }
+
+    func testResearchPlannerPromptIncludesStructuredJurisdictionContext() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "Florida", partyPerspective: .plaintiff)
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let scope = try XCTUnwrap(
+            JurisdictionCatalog.shared.authorityScope(
+                jurisdiction: "Florida",
+                court: "Circuit Court of the Fourth Judicial Circuit in and for Duval County"
+            )
+        )
+        let stub = StubRuntimeClient { request in
+            XCTAssertTrue(request.prompt.contains("Structured jurisdiction scope"))
+            XCTAssertTrue(request.prompt.contains("Fifth District Court of Appeal of Florida"))
+            XCTAssertTrue(request.prompt.contains("Supreme Court of Florida"))
+            return .events([
+                .event(request, 1, .token, token: """
+                ## Query 1
+                premises liability notice
+                ## Query 2
+                negligent security duty
+                ## Query 3
+                open and obvious condition
+                ## Query 4
+                comparative fault
+                ## Query 5
+                summary judgment premises liability
+                """),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = ResearchSessionController(store: store, runtimeClient: stub, matterID: matter.id)
+        let draft = ResearchPlanDraft(
+            title: "Plan A",
+            issueText: "Issue",
+            jurisdiction: "Florida",
+            partyPerspective: "plaintiff",
+            preferredCourts: scope.preferredCourtNames,
+            jurisdictionContext: scope.modelContext,
+            courtFilterIDs: scope.courtListenerIDs
+        )
+
+        await controller.generatePlan(draft: draft, modelID: ModelID(), route: route)
+
+        XCTAssertEqual(controller.plannedQueries.count, 5)
+        controller.setApproved(true, for: controller.plannedQueries[0].id)
+        let sessionID = try controller.savePlan(draft: draft)
+        let query = try XCTUnwrap(try store.research.fetchQueries(sessionID: sessionID).first)
+        XCTAssertEqual(query.courtFilter, "fla,fladistctapp,scotus")
     }
 
     func testResearchPlannerWithoutModelAllowsManualEntry() async throws {
@@ -384,6 +1159,52 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(query.responseMetadataJSON).contains("\"count\":\"3\""))
     }
 
+    func testRunApprovedSearchesAppliesSavedCourtAndDateFilters() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "Florida")
+        let session = try store.research.createSession(
+            matterID: matter.id,
+            title: "S",
+            issueText: "I",
+            jurisdiction: "Florida",
+            preferredCourts: ["Supreme Court of Florida"],
+            status: .approved
+        )
+        let after = try XCTUnwrap(Calendar(identifier: .gregorian).date(from: DateComponents(year: 2020, month: 1, day: 1)))
+        let before = try XCTUnwrap(Calendar(identifier: .gregorian).date(from: DateComponents(year: 2024, month: 12, day: 31)))
+        _ = try store.research.createQuery(
+            researchSessionID: session.id,
+            queryText: "premises liability notice",
+            queryIndex: 0,
+            courtFilter: "fla,fladistctapp,scotus",
+            dateFiledAfter: after,
+            dateFiledBefore: before,
+            status: .approved
+        )
+        let client = CapturingCourtListenerClient(
+            response: CourtListenerSearchResponse(count: 0, next: nil, previous: nil, results: [])
+        )
+        let controller = ResearchSessionController(
+            store: store,
+            runtimeClient: StubRuntimeClient { _ in .events([]) },
+            matterID: matter.id,
+            tokenStore: StubTokenStore(),
+            courtListenerClient: client
+        )
+
+        controller.openSession(session.id)
+        await controller.runApprovedSearches()
+
+        let request = try XCTUnwrap(client.requests.first)
+        XCTAssertEqual(request.courtIDs, ["fla", "fladistctapp", "scotus"])
+        XCTAssertEqual(request.dateFiledAfter, "2020-01-01")
+        XCTAssertEqual(request.dateFiledBefore, "2024-12-31")
+        let storedQuery = try XCTUnwrap(try store.research.fetchQueries(sessionID: session.id).first)
+        let metadata = try XCTUnwrap(storedQuery.requestMetadataJSON)
+        XCTAssertTrue(metadata.contains("\"court\":\"fla,fladistctapp,scotus\""))
+        XCTAssertTrue(metadata.contains("\"filed_after\":\"2020-01-01\""))
+    }
+
     func testRunSurfacesSpecificErrorAndRecordsNetworkDiagnostic() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
@@ -515,19 +1336,77 @@ final class SupraSessionsTests: XCTestCase {
     func testCreateOutputCompleteWhenAllSectionsPresent() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
-        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
+        // draftingSkeleton is structurally validated but does not assert legal
+        // authority, so a section-complete, citation-free output reaches `.complete`.
+        let contract = StructuredOutputContracts.contract(for: .draftingSkeleton)!
         let markdown = contract.requiredHeadings.joined(separator: "\n\nbody\n\n")
         let stub = StubRuntimeClient { request in
             .events([.event(request, 1, .token, token: markdown), .event(request, 2, .generationCompleted)])
         }
         let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
 
-        let ok = await controller.createOutput(type: .ruleSynthesis, context: "issue + authorities", modelID: ModelID())
+        let ok = await controller.createOutput(type: .draftingSkeleton, context: "issue + authorities", modelID: ModelID())
         XCTAssertTrue(ok)
         XCTAssertEqual(controller.outputs.count, 1)
         XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.complete.rawValue)
         XCTAssertEqual(controller.outputs[0].missingCount, 0)
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "structured_output_created" })
+    }
+
+    func testCreateOutputWithUngroundedCitationIsForcedToNeedsReviewWithBanner() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
+        // All required sections present (would otherwise be `.complete`), but the
+        // body contains a legal citation this path never retrieved or verified.
+        let markdown = contract.requiredHeadings.joined(separator: "\n\nThe rule derives from Brown v. Board, 347 U.S. 483.\n\n")
+        let stub = StubRuntimeClient { request in
+            .events([.event(request, 1, .token, token: markdown), .event(request, 2, .generationCompleted)])
+        }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+
+        let ok = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: ModelID())
+        XCTAssertTrue(ok)
+        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.needsReview.rawValue, "an ungrounded legal citation must force review, never complete")
+        let output = try XCTUnwrap(try store.structuredOutputs.fetchOutputs(matterID: matter.id).first)
+        let version = try XCTUnwrap(try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).first)
+        XCTAssertTrue(version.contentMarkdown.contains("UNVERIFIED CITATIONS"), "must carry the unverified-citations banner")
+    }
+
+    func testAuthorityAssertingOutputAlwaysFlaggedEvenWithNoRecognizedCitation() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        // ruleSynthesis asserts authority. All sections present, but the body uses
+        // prose authority references with NO recognized citation format — it must
+        // still be flagged so an unrecognized/fabricated authority can't read as
+        // a finished, verified output.
+        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
+        let markdown = contract.requiredHeadings.joined(separator: "\n\nThe controlling authority establishes the rule.\n\n")
+        let stub = StubRuntimeClient { request in
+            .events([.event(request, 1, .token, token: markdown), .event(request, 2, .generationCompleted)])
+        }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+        let ok = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: ModelID())
+        XCTAssertTrue(ok)
+        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.needsReview.rawValue)
+        let output = try XCTUnwrap(try store.structuredOutputs.fetchOutputs(matterID: matter.id).first)
+        let version = try XCTUnwrap(try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).first)
+        XCTAssertTrue(version.contentMarkdown.contains("UNVERIFIED CITATIONS"))
+    }
+
+    func testNonAuthorityScaffoldWithoutCitationStaysComplete() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        // draftingSkeleton does not assert authority; with all sections and no
+        // citation it should remain complete (no spurious banner).
+        let contract = StructuredOutputContracts.contract(for: .draftingSkeleton)!
+        let markdown = contract.requiredHeadings.joined(separator: "\n\nplaceholder body text\n\n")
+        let stub = StubRuntimeClient { request in
+            .events([.event(request, 1, .token, token: markdown), .event(request, 2, .generationCompleted)])
+        }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+        _ = await controller.createOutput(type: .draftingSkeleton, context: "x", modelID: ModelID())
+        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.complete.rawValue)
     }
 
     func testCreateOutputNeedsReviewWhenSectionsMissing() async throws {
@@ -546,6 +1425,23 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).count, 1)
     }
 
+    func testStructuredOutputUsesTaskRouteOptionsAndSystemPrompt() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let contract = StructuredOutputContracts.contract(for: .draftingSkeleton)!
+        let markdown = contract.requiredHeadings.joined(separator: "\n\nbody\n\n")
+        let stub = StubRuntimeClient { request in
+            XCTAssertEqual(request.options.preset, .drafting)
+            XCTAssertTrue(request.systemPrompt?.contains("legal drafting assistant") ?? false)
+            return .events([.event(request, 1, .token, token: markdown), .event(request, 2, .generationCompleted)])
+        }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+
+        let ok = await controller.createOutput(type: .draftingSkeleton, context: "draft facts", modelID: ModelID())
+
+        XCTAssertTrue(ok)
+    }
+
     func testCreateOutputWithoutModelDoesNothing() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
@@ -554,7 +1450,7 @@ final class SupraSessionsTests: XCTestCase {
         let ok = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: nil)
         XCTAssertFalse(ok)
         XCTAssertTrue(controller.outputs.isEmpty)
-        XCTAssertNotNil(controller.message)
+        XCTAssertEqual(controller.message, "Assign a High-quality legal reasoning model in the Models tab to generate Rule Synthesis.")
     }
 
     // MARK: - Structure repair (WO 29)
@@ -562,9 +1458,11 @@ final class SupraSessionsTests: XCTestCase {
     func testRepairCreatesNewVersionPreservingOriginalAndCompletes() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
-        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
+        // draftingSkeleton (non-authority-asserting) so a section-complete repair
+        // can reach `.complete`, isolating this test to the repair/version flow.
+        let contract = StructuredOutputContracts.contract(for: .draftingSkeleton)!
         let fullMarkdown = contract.requiredHeadings.joined(separator: "\n\nbody\n\n")
-        let partialMarkdown = "# Rule Synthesis\n## Rule Statement\npartial"
+        let partialMarkdown = "\(contract.requiredHeadings[0])\n\(contract.requiredHeadings[1])\npartial"
         // Create returns an incomplete doc; repair (detected by prompt text) returns the full one.
         let stub = StubRuntimeClient { request in
             let token = request.prompt.contains("repairing the structure") ? fullMarkdown : partialMarkdown
@@ -572,7 +1470,7 @@ final class SupraSessionsTests: XCTestCase {
         }
         let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
 
-        _ = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: ModelID())
+        _ = await controller.createOutput(type: .draftingSkeleton, context: "x", modelID: ModelID())
         let outputID = controller.outputs[0].id
         XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.needsReview.rawValue)
 
@@ -589,6 +1487,29 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(versions[1].parentVersionID, versions[0].id)
         XCTAssertEqual(versions[1].repairReason, "missing_required_sections")
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "structured_output_repaired" })
+    }
+
+    func testStructureRepairUsesCritiqueRouteOptionsAndSystemPrompt() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
+        let fullMarkdown = contract.requiredHeadings.joined(separator: "\n\nbody\n\n")
+        let partialMarkdown = "# Rule Synthesis\n## Rule Statement\npartial"
+        let stub = StubRuntimeClient { request in
+            if request.prompt.contains("repairing the structure") {
+                XCTAssertEqual(request.options.preset, .legalCritique)
+                XCTAssertTrue(request.systemPrompt?.contains("reviewing legal work product") ?? false)
+                return .events([.event(request, 1, .token, token: fullMarkdown), .event(request, 2, .generationCompleted)])
+            }
+            return .events([.event(request, 1, .token, token: partialMarkdown), .event(request, 2, .generationCompleted)])
+        }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+        _ = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: ModelID())
+        let outputID = controller.outputs[0].id
+
+        let repaired = await controller.repairOutput(outputID, modelID: ModelID())
+
+        XCTAssertTrue(repaired)
     }
 
     // MARK: - ModelLibrary
@@ -620,6 +1541,59 @@ final class SupraSessionsTests: XCTestCase {
         await library.activateAndLoad(modelID: summary.id)
 
         XCTAssertEqual(library.loadState, .failed(message: "missing weights"))
+    }
+
+    func testRouteAssignmentLoadsAssignedModelInsteadOfActiveFallback() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient()
+        let library = ModelLibrary(store: store, runtimeClient: stub)
+        let startup = try library.addModel(displayName: "Generic Startup", path: "/tmp/startup", bookmarkData: nil)
+        let drafter = try library.addModel(displayName: "Drafting Route", path: "/tmp/drafter", bookmarkData: nil)
+        try store.models.setActiveModel(id: startup.id)
+        library.refresh()
+        library.assignModel(drafter.id, to: .drafting)
+
+        let result = await library.ensureLoadedRoutedModelID(for: .drafting)
+
+        guard case let .success(modelID) = result else {
+            return XCTFail("Expected the assigned drafting model to load.")
+        }
+        XCTAssertEqual(modelID.rawValue.uuidString, drafter.id)
+        XCTAssertEqual(stub.loadRequests.map { $0.modelID.rawValue.uuidString }, [drafter.id])
+        XCTAssertEqual(library.activeModel?.id, drafter.id)
+    }
+
+    func testRoutedLoadFailsWhenRoleIsUnassignedInsteadOfUsingActiveModel() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient()
+        let library = ModelLibrary(store: store, runtimeClient: stub)
+        let startup = try library.addModel(displayName: "Generic Startup", path: "/tmp/startup", bookmarkData: nil)
+        try store.models.setActiveModel(id: startup.id)
+        library.refresh()
+
+        let result = await library.ensureLoadedRoutedModelID(
+            for: .legalReasoning,
+            configuration: LegalModelConfiguration(legalReasoningModel: "MissingPreferred")
+        )
+
+        XCTAssertEqual(
+            result,
+            .failure(.roleUnassigned(role: .legalReasoning, configuredIdentifier: "MissingPreferred"))
+        )
+        XCTAssertTrue(stub.loadRequests.isEmpty)
+        XCTAssertNil(library.loadedModelID)
+    }
+
+    func testRoleAssignmentsPersistByModelID() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient()
+        let library = ModelLibrary(store: store, runtimeClient: stub)
+        let critic = try library.addModel(displayName: "Critic", path: "/tmp/critic", bookmarkData: nil)
+
+        library.assignModel(critic.id, to: .critique)
+
+        let reopened = ModelLibrary(store: store, runtimeClient: stub)
+        XCTAssertEqual(reopened.roleAssignments.modelID(for: .critique), critic.id)
     }
 
     func testActivateFailsWhenBookmarkCannotBeAccessed() async throws {
@@ -662,9 +1636,14 @@ final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     private let outcome: @Sendable (GenerateRequest) -> GenerationOutcome
     private let lock = NSLock()
     private var _cancelledGenerationIDs: [GenerationID] = []
+    private var _loadRequests: [LoadModelRequest] = []
 
     var cancelledGenerationIDs: [GenerationID] {
         lock.withLock { _cancelledGenerationIDs }
+    }
+
+    var loadRequests: [LoadModelRequest] {
+        lock.withLock { _loadRequests }
     }
 
     init(
@@ -678,7 +1657,8 @@ final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     func connect() async throws {}
 
     func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
-        loadResult
+        lock.withLock { _loadRequests.append(request) }
+        return loadResult
     }
 
     func generate(_ request: GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error> {

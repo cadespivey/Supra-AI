@@ -34,6 +34,29 @@ final class CitationCoverageTests: XCTestCase {
         XCTAssertFalse(check.requiresReview)
     }
 
+    func testRefusalPhraseInSubstantiveCitedAnswerStillRequiresReviewForUnresolvedLabel() {
+        // A substantive answer that merely contains a refusal-like phrase AND cites
+        // an unresolved label must not skip review (audit [10]).
+        let check = CitationCoverage.check(
+            answer: "The sources do not contain X, but the deadline was March 3 [S9].",
+            availableLabels: ["S1", "S2"]
+        )
+        XCTAssertTrue(check.appearsUnsupported)
+        XCTAssertEqual(check.unresolvedLabels, ["S9"])
+        XCTAssertTrue(check.requiresReview)
+    }
+
+    func testRefusalPhraseWithResolvedCitationStillReviewedNotTreatedAsRefusal() {
+        // Contains a refusal phrase but actually answers and cites a real source —
+        // because it cites something, it is not a genuine refusal fast-path.
+        let check = CitationCoverage.check(
+            answer: "I cannot answer fully, but [S1] shows the payment was due March 3.",
+            availableLabels: ["S1"],
+            scopeFullyIndexed: false
+        )
+        XCTAssertTrue(check.requiresReview)
+    }
+
     func testIncompleteScopeRequiresReview() {
         let check = CitationCoverage.check(answer: "Due March 3 [S1].", availableLabels: ["S1"], scopeFullyIndexed: false)
         XCTAssertTrue(check.requiresReview)

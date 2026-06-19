@@ -332,6 +332,7 @@
 				5A0000000000000000000B01 /* Sources */,
 				5A0000000000000000000801 /* Frameworks */,
 				5A0000000000000000000C01 /* Resources */,
+				5A0000000000000000000F01 /* Generate full app icon ICNS */,
 				5A0000000000000000000701 /* Embed XPC Services */,
 			);
 			buildRules = (
@@ -479,6 +480,37 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		5A0000000000000000000F01 /* Generate full app icon ICNS */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Scripts/GenerateFullAppIconICNS.sh",
+				"$(SRCROOT)/SupraAI/Assets.xcassets/AppIcon.appiconset/icon_16.png",
+				"$(SRCROOT)/SupraAI/Assets.xcassets/AppIcon.appiconset/icon_32.png",
+				"$(SRCROOT)/SupraAI/Assets.xcassets/AppIcon.appiconset/icon_64.png",
+				"$(SRCROOT)/SupraAI/Assets.xcassets/AppIcon.appiconset/icon_128.png",
+				"$(SRCROOT)/SupraAI/Assets.xcassets/AppIcon.appiconset/icon_256.png",
+				"$(SRCROOT)/SupraAI/Assets.xcassets/AppIcon.appiconset/icon_512.png",
+				"$(SRCROOT)/SupraAI/Assets.xcassets/AppIcon.appiconset/icon_1024.png",
+			);
+			name = "Generate full app icon ICNS";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AppIcon.icns",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/Scripts/GenerateFullAppIconICNS.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		5A0000000000000000000B01 /* Sources */ = {
@@ -687,6 +719,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 1.0.0;
 				CODE_SIGN_ENTITLEMENTS = SupraAI/SupraAI.entitlements;
 				CODE_SIGN_IDENTITY = "-";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
@@ -712,6 +746,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MARKETING_VERSION = 1.0.0;
 				CODE_SIGN_ENTITLEMENTS = SupraAI/SupraAI.entitlements;
 				CODE_SIGN_IDENTITY = "-";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
@@ -745,6 +782,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = SupraRuntimeService/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = SupraRuntimeService;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 1.0.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -770,6 +809,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = SupraRuntimeService/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = SupraRuntimeService;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MARKETING_VERSION = 1.0.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

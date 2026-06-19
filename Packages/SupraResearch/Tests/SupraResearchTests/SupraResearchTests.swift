@@ -7,6 +7,41 @@ final class SupraResearchTests: XCTestCase {
         XCTAssertEqual(SupraResearchModule.courtListenerTokenService, "com.supraai.courtlistener")
     }
 
+    func testJurisdictionCatalogResolvesDuvalCountyFloridaScope() throws {
+        let option = try XCTUnwrap(
+            JurisdictionCatalog.shared.bestMatch(
+                jurisdiction: "Florida",
+                court: "Circuit Court of the Fourth Judicial Circuit in and for Duval County"
+            )
+        )
+
+        XCTAssertEqual(option.state, "Florida")
+        XCTAssertEqual(option.county, "Duval County")
+        let scope = JurisdictionCatalog.shared.authorityScope(for: option)
+        XCTAssertTrue(scope.mandatoryAuthorities.contains("Fifth District Court of Appeal of Florida"))
+        XCTAssertTrue(scope.mandatoryAuthorities.contains("Supreme Court of Florida"))
+        XCTAssertTrue(scope.mandatoryAuthorities.contains("Supreme Court of the United States for federal questions"))
+        XCTAssertTrue(scope.courtListenerIDs.contains("fla"))
+        XCTAssertTrue(scope.courtListenerIDs.contains("fladistctapp"))
+        XCTAssertTrue(scope.courtListenerIDs.contains("scotus"))
+    }
+
+    func testJurisdictionCatalogResolvesFederalDistrictScope() throws {
+        let option = try XCTUnwrap(
+            JurisdictionCatalog.shared.bestMatch(
+                jurisdiction: "Eleventh Circuit",
+                court: "United States District Court for the Middle District of Florida"
+            )
+        )
+
+        let scope = JurisdictionCatalog.shared.authorityScope(for: option)
+        XCTAssertTrue(scope.mandatoryAuthorities.contains("United States Court of Appeals for the Eleventh Circuit"))
+        XCTAssertTrue(scope.mandatoryAuthorities.contains("Supreme Court of the United States"))
+        XCTAssertTrue(scope.courtListenerIDs.contains("flmd"))
+        XCTAssertTrue(scope.courtListenerIDs.contains("ca11"))
+        XCTAssertTrue(scope.courtListenerIDs.contains("scotus"))
+    }
+
     func testCourtListenerSearchBuildsOpinionQueryAndPreservesRawResultJSON() async throws {
         let httpClient = StubHTTPClient(
             statusCode: 200,
@@ -43,6 +78,35 @@ final class SupraResearchTests: XCTestCase {
         )
     }
 
+    func testCourtListenerSearchAddsSupportedResearchFilters() async throws {
+        let httpClient = StubHTTPClient(
+            statusCode: 200,
+            data: Data(Self.searchResponseJSON.utf8)
+        )
+        let client = CourtListenerClient(httpClient: httpClient)
+
+        _ = try await client.searchOpinions(
+            CourtListenerSearchRequest(
+                query: "non-compete",
+                courtIDs: ["ca9"],
+                dateFiledAfter: "2020-01-01",
+                dateFiledBefore: "2024-12-31",
+                citation: "410 U.S. 113"
+            )
+        )
+
+        let lastURL = await httpClient.lastURL()
+        let requestURL = try XCTUnwrap(lastURL)
+        let queryItems = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let query = Dictionary(uniqueKeysWithValues: queryItems.compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
+        XCTAssertEqual(query["court"], "ca9")
+        XCTAssertEqual(query["filed_after"], "2020-01-01")
+        XCTAssertEqual(query["filed_before"], "2024-12-31")
+        XCTAssertEqual(query["citation"], "410 U.S. 113")
+    }
+
     func testCourtListenerClientRejectsInvalidCursorHostBeforeSending() async throws {
         let httpClient = StubHTTPClient(statusCode: 200, data: Data(Self.searchResponseJSON.utf8))
         let client = CourtListenerClient(httpClient: httpClient)
@@ -61,7 +125,7 @@ final class SupraResearchTests: XCTestCase {
         let cases: [(Int, CourtListenerError)] = [
             (401, .authenticationFailed),
             (403, .authenticationFailed),
-            (429, .throttled),
+            (429, .throttled(retryAfter: nil)),
             (503, .serverError(statusCode: 503)),
             (302, .invalidResponse)
         ]

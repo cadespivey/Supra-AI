@@ -8,7 +8,7 @@ import XCTest
 /// Milestone 3 deterministic pipeline validation (plan §15.3, §15.5). Builds the
 /// synthetic Validation Matter, runs import → OCR (mocked) → index (stub embedder)
 /// → search → Q&A → chronology → export, and asserts the §15.5 gates — all without
-/// a chat model.
+/// a runtime text model.
 @MainActor
 final class Milestone3ValidationTests: XCTestCase {
     private var root = URL(fileURLWithPath: "/tmp")

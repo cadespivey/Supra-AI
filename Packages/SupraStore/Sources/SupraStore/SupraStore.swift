@@ -49,6 +49,12 @@ public final class SupraStore: @unchecked Sendable {
         try self.init(database: SupraDatabase(url: url))
     }
 
+    /// An in-memory store (nothing persists). Last-resort fallback so the app can
+    /// still launch when no on-disk database can be opened.
+    public static func inMemory() throws -> SupraStore {
+        try SupraStore(database: .inMemory())
+    }
+
     public static func openAppSupportStore(
         fileManager: FileManager = .default,
         bundleIdentifier: String = "ai.supra.SupraAI"
