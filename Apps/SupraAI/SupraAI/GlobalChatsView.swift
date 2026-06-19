@@ -384,6 +384,17 @@ struct GlobalChatsView: View {
 
 private struct MessageRow: View {
     let message: ChatMessage
+    /// nil until the user toggles. Until then the reasoning section auto-expands
+    /// only while the response is still generating, and stays collapsed for
+    /// completed/reloaded messages so chat history isn't a wall of reasoning.
+    @State private var reasoningExpandedOverride: Bool?
+
+    private var reasoningExpanded: Binding<Bool> {
+        Binding(
+            get: { reasoningExpandedOverride ?? message.isStreaming },
+            set: { reasoningExpandedOverride = $0 }
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -396,12 +407,52 @@ private struct MessageRow: View {
                 }
                 statusBadge
             }
-            Text(displayContent)
+            if let reasoning {
+                DisclosureGroup(isExpanded: reasoningExpanded) {
+                    Text(reasoning)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
+                } label: {
+                    Label("Reasoning", systemImage: "brain")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .tint(.secondary)
+            }
+            Text(attributedContent)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(12)
         .background(roleColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// The answer rendered as Markdown (bold/italic/code/links/lists), with line
+    /// breaks preserved. Falls back to plain text if it can't be parsed (e.g. a
+    /// partially-streamed message), so streaming never shows a parse error.
+    private var attributedContent: AttributedString {
+        // Only the assistant's answer is rendered as Markdown. User/system rows are
+        // shown verbatim so a prompt containing literal **/`code`/[label](…) is
+        // preserved exactly in the transcript.
+        guard message.role == .assistant else { return AttributedString(displayContent) }
+        return (try? AttributedString(
+            markdown: displayContent,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        )) ?? AttributedString(displayContent)
+    }
+
+    /// The model's chain-of-thought, available once its `</think>` boundary has
+    /// streamed in. Nil for non-reasoning output and while still mid-thought.
+    private var reasoning: String? {
+        guard message.role == .assistant else { return nil }
+        let block = ReasoningContent.reasoning(from: message.content)
+        return (block?.isEmpty ?? true) ? nil : block
     }
 
     private var roleLabel: String {
@@ -425,11 +476,13 @@ private struct MessageRow: View {
             return message.isStreaming ? "…" : message.content
         }
         // Show the answer, not the model's chain-of-thought. The full raw text
-        // (reasoning included) stays persisted; we only strip it for display.
-        // While a reasoning model is still inside its <think> block the answer
-        // is empty, so show a thinking placeholder.
+        // (reasoning included) stays persisted; once the reasoning block exists it
+        // is surfaced in the collapsible section above, never duplicated here.
         let answer = ReasoningContent.answer(from: message.content)
         if answer.isEmpty {
+            // Reasoning parsed but the answer hasn't started (just past </think>):
+            // a brief placeholder rather than echoing the raw reasoning text.
+            if reasoning != nil { return message.isStreaming ? "…" : "" }
             return message.isStreaming ? "Thinking…" : message.content
         }
         return answer
