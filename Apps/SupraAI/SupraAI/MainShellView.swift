@@ -86,7 +86,8 @@ struct MainShellView: View {
                 settings: environment.settingsController,
                 profile: environment.assistantProfileController,
                 documentSetup: environment.documentSetupController,
-                embeddingDownloader: environment.embeddingDownloadController
+                embeddingDownloader: environment.embeddingDownloadController,
+                update: environment.updateController
             )
         }
     }

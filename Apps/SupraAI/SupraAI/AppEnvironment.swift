@@ -23,6 +23,7 @@ final class AppEnvironment: ObservableObject {
     let modelDownloadController: ModelDownloadController
     let settingsController: SettingsController
     let assistantProfileController: AssistantProfileController
+    let updateController: UpdateController
     let mattersController: MattersController
     // Milestone 3: document intelligence setup.
     let documentSetupController: DocumentIntelligenceSetupController
@@ -54,6 +55,7 @@ final class AppEnvironment: ObservableObject {
         )
         self.settingsController = SettingsController(store: store, appVersion: appVersion)
         self.assistantProfileController = AssistantProfileController(store: store, basePrompt: systemPrompt)
+        self.updateController = UpdateController(store: store, currentVersion: appVersion.marketingVersion)
 
         // Document intelligence controllers must exist before MattersController so
         // it can vend a per-matter Documents controller wired to the queue + gate.
@@ -103,6 +105,8 @@ final class AppEnvironment: ObservableObject {
         documentQueue.bootstrap()
         // Auto-purge documents soft-deleted past the retention window (plan §12.2).
         DocumentMaintenance(store: store).purgeExpired()
+        // Opt-in only: reaches GitHub solely when the user enabled update checks.
+        updateController.checkOnLaunchIfEnabled()
     }
 
     /// Auto-loads the user's startup model into the runtime on launch for manual

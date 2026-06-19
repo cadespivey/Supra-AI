@@ -10,6 +10,7 @@ struct SettingsView: View {
     @ObservedObject var profile: AssistantProfileController
     @ObservedObject var documentSetup: DocumentIntelligenceSetupController
     @ObservedObject var embeddingDownloader: EmbeddingModelDownloadController
+    @ObservedObject var update: UpdateController
     @State private var courtListenerToken = ""
 
     var body: some View {
@@ -85,6 +86,40 @@ struct SettingsView: View {
                 Button("Reveal in Finder") {
                     revealInFinder(settings.modelsDirectoryPath)
                 }
+            }
+
+            Section {
+                Toggle("Check for updates automatically", isOn: $update.autoCheckEnabled)
+                if let available = update.available {
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.down.circle.fill").foregroundStyle(.green)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Version \(available.version) is available")
+                                .font(.callout.weight(.medium))
+                            Text("You have \(settings.appVersion.marketingVersion).")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Download") {
+                            NSWorkspace.shared.open(available.downloadURL ?? available.releaseURL)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    Button("Release notes…") { NSWorkspace.shared.open(available.releaseURL) }
+                }
+                HStack {
+                    Button("Check Now") { Task { await update.checkNow() } }
+                        .disabled(update.isChecking)
+                    if update.isChecking { ProgressView().controlSize(.small) }
+                    Spacer()
+                    if update.available == nil, let message = update.statusMessage {
+                        Text(message).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Software Update")
+            } footer: {
+                Text("Checks GitHub for newer releases of Supra AI. It only fetches the latest version number — no usage data is sent — and only when you ask or turn on automatic checks.")
             }
 
             Section("About") {
