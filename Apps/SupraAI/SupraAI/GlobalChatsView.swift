@@ -434,7 +434,11 @@ private struct MessageRow: View {
     /// breaks preserved. Falls back to plain text if it can't be parsed (e.g. a
     /// partially-streamed message), so streaming never shows a parse error.
     private var attributedContent: AttributedString {
-        (try? AttributedString(
+        // Only the assistant's answer is rendered as Markdown. User/system rows are
+        // shown verbatim so a prompt containing literal **/`code`/[label](…) is
+        // preserved exactly in the transcript.
+        guard message.role == .assistant else { return AttributedString(displayContent) }
+        return (try? AttributedString(
             markdown: displayContent,
             options: AttributedString.MarkdownParsingOptions(
                 interpretedSyntax: .inlineOnlyPreservingWhitespace,
