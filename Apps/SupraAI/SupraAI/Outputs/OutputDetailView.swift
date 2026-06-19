@@ -8,11 +8,29 @@ import SwiftUI
 /// Structure action when sections are missing.
 struct OutputDetailView: View {
     @ObservedObject var controller: StructuredOutputController
+    @ObservedObject var library: ModelLibrary
     let outputID: String
-    let loadedModelID: ModelID?
 
     @State private var selectedVersionID: String?
     @State private var showRaw = false
+    @State private var routingMessage: String?
+
+    private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
+
+    private var outputType: StructuredOutputType? {
+        controller.outputs
+            .first { $0.id == outputID }
+            .flatMap { StructuredOutputType(rawValue: $0.outputType) }
+    }
+
+    private var repairRoute: ModelRoute? {
+        outputType.flatMap { router.repairRoute(forStructuredOutput: $0) }
+    }
+
+    private var repairModel: ModelSummary? {
+        guard let repairRoute else { return nil }
+        return library.resolvedModel(for: repairRoute.role, configuration: router.configuration)
+    }
 
     var body: some View {
         let versions = controller.versions(forOutput: outputID)
@@ -23,6 +41,14 @@ struct OutputDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             controlBar(versions: versions, selected: selected)
             Divider()
+            if let message = controller.message {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.top, 6)
+            }
             if let selected {
                 ScrollView {
                     Group {
@@ -89,12 +115,51 @@ struct OutputDetailView: View {
             .fixedSize()
             let activeMissing = versions.first { $0.isActive }?.missingSections ?? []
             if !activeMissing.isEmpty {
-                Button("Repair Structure") { Task { await controller.repairOutput(outputID, modelID: loadedModelID) } }
-                    .disabled(loadedModelID == nil || controller.isGenerating)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Button("Repair Structure") { Task { await repairStructure() } }
+                        .disabled(repairModel == nil || controller.isGenerating)
+                    repairRouteStatus
+                }
                 if controller.isGenerating { ProgressView().controlSize(.small) }
             }
         }
         .padding()
+    }
+
+    @ViewBuilder
+    private var repairRouteStatus: some View {
+        if let repairRoute {
+            if let repairModel {
+                Text("\(repairRoute.role.shortDisplayName): \(repairModel.displayName)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else {
+                Text("Assign \(repairRoute.role.displayName) model")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        if let routingMessage {
+            Text(routingMessage)
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .lineLimit(2)
+        }
+    }
+
+    private func repairStructure() async {
+        routingMessage = nil
+        guard let repairRoute else { return }
+        let modelID: ModelID
+        switch await library.ensureLoadedRoutedModelID(for: repairRoute.role, configuration: router.configuration) {
+        case let .success(loaded):
+            modelID = loaded
+        case let .failure(issue):
+            routingMessage = issue.message
+            return
+        }
+        _ = await controller.repairOutput(outputID, modelID: modelID, route: repairRoute)
     }
 
     private func missingBar(_ version: StructuredOutputController.VersionItem) -> some View {
@@ -154,7 +219,17 @@ struct MarkdownPreview: View {
         } else if trimmed.isEmpty {
             Color.clear.frame(height: 2)
         } else {
-            Text(LocalizedStringKey(line)).font(.callout).textSelection(.enabled)
+            // Parse inline Markdown explicitly rather than via LocalizedStringKey,
+            // which would treat model output as a localization key / format string
+            // (so a stray "%@" or key-like line could be mis-rendered).
+            Text(Self.inlineMarkdown(line)).font(.callout).textSelection(.enabled)
         }
+    }
+
+    private static func inlineMarkdown(_ line: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: line,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(line)
     }
 }

@@ -14,8 +14,38 @@ public enum ReasoningContent {
     private static let closeTag = "</think>"
     private static let openTag = "<think>"
 
+    /// The resolved outcome of separating an answer from its reasoning.
+    public enum Resolution: Equatable, Sendable {
+        /// A user-facing answer (reasoning closed normally, or thinking was off).
+        case answer(String)
+        /// Thinking was enabled but the model never emitted `</think>`, i.e. it
+        /// ran out of output budget mid-reasoning. The associated value is the
+        /// partial reasoning, which must NOT be presented as an answer.
+        case truncatedReasoning(String)
+    }
+
+    /// Resolves raw model output into either a real answer or a truncated-reasoning
+    /// signal. When `thinkingEnabled` is true the model is expected to close its
+    /// reasoning with `</think>` before answering; if no `</think>` is present the
+    /// generation was cut off mid-thought, and the raw chain-of-thought must not be
+    /// shown or verified as the answer. When thinking is off, output without a
+    /// `</think>` is a normal answer and is returned unchanged.
+    public static func resolve(rawOutput: String, thinkingEnabled: Bool) -> Resolution {
+        if let closeRange = rawOutput.range(of: closeTag) {
+            return .answer(String(rawOutput[closeRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        let trimmed = rawOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if thinkingEnabled && !trimmed.isEmpty {
+            return .truncatedReasoning(trimmed)
+        }
+        return .answer(trimmed)
+    }
+
     /// The user-facing answer with any leading reasoning block removed.
     /// Returns `rawOutput` unchanged when there is no reasoning block.
+    ///
+    /// Prefer `resolve(rawOutput:thinkingEnabled:)` on paths where the model runs
+    /// with thinking enabled, so truncated reasoning is not mistaken for an answer.
     public static func answer(from rawOutput: String) -> String {
         guard let closeRange = rawOutput.range(of: closeTag) else {
             return rawOutput

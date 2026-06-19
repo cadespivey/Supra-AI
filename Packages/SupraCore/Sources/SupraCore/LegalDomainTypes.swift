@@ -76,6 +76,21 @@ public enum StructuredOutputType: String, Codable, CaseIterable, Hashable, Senda
             false
         }
     }
+
+    /// Output types whose contract asserts specific legal authority (citations,
+    /// holdings, controlling/supporting authorities). Because these are drafted
+    /// from notes/documents without retrieving or verifying legal authority, any
+    /// such output must always be flagged for citation review — independent of
+    /// whether a citation in a recognized format was detected.
+    public var assertsLegalAuthority: Bool {
+        switch self {
+        case .caseResultSummary, .ruleSynthesis, .argumentOutline, .researchPlan:
+            true
+        case .legalIssueSpotting, .draftingSkeleton,
+             .documentQA, .documentQAMemo, .factChronologyTable, .factChronologyNarrative:
+            false
+        }
+    }
 }
 
 public enum StructuredOutputStatus: String, Codable, Hashable, Sendable {

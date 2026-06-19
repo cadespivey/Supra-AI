@@ -35,7 +35,7 @@ public final class DocumentValidationRunController: ObservableObject {
 
     public var isRunning: Bool { if case .running = state { return true }; return false }
 
-    /// Requires a loaded chat model and a selected embedding model.
+    /// Requires a loaded runtime text model and a selected embedding model.
     public func run(chatModelID: ModelID, chatModelName: String) {
         guard !isRunning else { return }
         task = Task { await self.execute(chatModelID: chatModelID, chatModelName: chatModelName) }

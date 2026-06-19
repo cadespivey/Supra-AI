@@ -7,7 +7,9 @@ public enum CourtListenerError: Error, Equatable, Sendable, LocalizedError {
     case invalidCursorHost
     case invalidResponse
     case authenticationFailed
-    case throttled
+    /// HTTP 429. `retryAfter` carries the server's suggested back-off in seconds
+    /// when a `Retry-After` header was present.
+    case throttled(retryAfter: TimeInterval?)
     case serverError(statusCode: Int)
     case decodingFailed
     case transportFailed(String)
@@ -26,8 +28,12 @@ public enum CourtListenerError: Error, Equatable, Sendable, LocalizedError {
             "CourtListener returned an unexpected response."
         case .authenticationFailed:
             "CourtListener rejected the API token (check it in Settings)."
-        case .throttled:
-            "CourtListener throttled the request (HTTP 429). Try again shortly."
+        case let .throttled(retryAfter):
+            if let retryAfter, retryAfter > 0 {
+                "CourtListener throttled the request (HTTP 429). Try again in about \(Int(retryAfter.rounded(.up))) second(s)."
+            } else {
+                "CourtListener throttled the request (HTTP 429). Try again shortly."
+            }
         case let .serverError(statusCode):
             "CourtListener server error (HTTP \(statusCode))."
         case .decodingFailed:

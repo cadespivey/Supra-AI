@@ -36,12 +36,18 @@ public final class DocumentMaintenance: @unchecked Sendable {
         let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
         let expired = (try? store.documentLibrary.fetchDocumentsDeletedBefore(cutoff)) ?? []
         var purged = 0
+        // A parent's permanent delete cascade-purges its attachment subtree, so a
+        // child appearing later in `expired` is already gone — skip it to avoid an
+        // over-count and a spurious second audit event.
+        var alreadyPurged = Set<String>()
         for document in expired {
+            if alreadyPurged.contains(document.id) { continue }
             do {
                 let result = try store.documentLibrary.permanentlyDeleteDocument(id: document.id)
-                if let path = result.removedBlobPath {
+                for path in result.removedBlobPaths {
                     try? FileManager.default.removeItem(at: storage.url(forManagedRelativePath: path))
                 }
+                alreadyPurged.formUnion(result.removedDocumentIDs)
                 _ = try? store.auditEvents.recordEvent(
                     matterID: document.matterID, eventType: "document_permanently_deleted", actor: "system",
                     summary: "Auto-purged a document deleted over \(days) days ago",

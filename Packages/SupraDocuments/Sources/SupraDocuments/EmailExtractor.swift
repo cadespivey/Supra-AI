@@ -25,7 +25,10 @@ public struct EmailExtractor: DocumentExtractor {
 
         for (index, attachment) in message.attachments().enumerated() {
             attachments.append(ExtractedAttachment(
-                fileName: attachment.fileName ?? "attachment-\(index + 1)",
+                // The MIME filename is attacker-controlled; reduce it to a bare
+                // last-path-component so it can never carry path separators or
+                // "../" traversal into the import write path (Zip-Slip).
+                fileName: Self.safeAttachmentName(attachment.fileName, index: index),
                 data: attachment.data,
                 partPath: "attachment[\(index)]"
             ))
@@ -38,6 +41,18 @@ public struct EmailExtractor: DocumentExtractor {
             attachments: attachments,
             metadataCreatedAt: metaDate
         )
+    }
+
+    /// Reduces an attacker-controlled MIME attachment filename to a safe bare name
+    /// (no directory separators / traversal), falling back to `attachment-N`.
+    static func safeAttachmentName(_ raw: String?, index: Int) -> String {
+        let fallback = "attachment-\(index + 1)"
+        guard let raw else { return fallback }
+        let last = (raw as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if last.isEmpty || last == "." || last == ".." || last.contains("/") || last.contains("\\") {
+            return fallback
+        }
+        return last
     }
 
     private static func headerSummary(_ headers: [String: String]) -> String {

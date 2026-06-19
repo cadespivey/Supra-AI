@@ -52,4 +52,40 @@ public final class AuditEventRepository: @unchecked Sendable {
             )
         }
     }
+
+    public func fetchEvents(
+        relatedTable: String,
+        relatedID: String,
+        eventType: String? = nil,
+        limit: Int = 100
+    ) throws -> [AuditEventRecord] {
+        try writer.read { db in
+            if let eventType {
+                return try AuditEventRecord.fetchAll(
+                    db,
+                    sql: """
+                    SELECT * FROM audit_events
+                    WHERE related_table = ?
+                        AND related_id = ?
+                        AND event_type = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    arguments: [relatedTable, relatedID, eventType, max(0, limit)]
+                )
+            }
+
+            return try AuditEventRecord.fetchAll(
+                db,
+                sql: """
+                SELECT * FROM audit_events
+                WHERE related_table = ?
+                    AND related_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                arguments: [relatedTable, relatedID, max(0, limit)]
+            )
+        }
+    }
 }

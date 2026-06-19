@@ -60,9 +60,14 @@ struct MatterWorkspaceView: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(matter.name).font(.title2.weight(.semibold))
-                Text("\(matter.jurisdiction) · \(matter.partyPerspective.rawValue.capitalized)")
+                Text(matterSubtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                if let detail = matterClientDetail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer()
             Button { showEditor = true } label: { Label("Edit", systemImage: "pencil") }
@@ -71,6 +76,26 @@ struct MatterWorkspaceView: View {
             }
         }
         .padding()
+    }
+
+    private var matterSubtitle: String {
+        var parts = [matter.jurisdiction]
+        if let court = matter.court?.trimmingCharacters(in: .whitespacesAndNewlines), !court.isEmpty {
+            parts.append(court)
+        }
+        parts.append(matter.partyPerspective.rawValue.capitalized)
+        return parts.joined(separator: " · ")
+    }
+
+    private var matterClientDetail: String? {
+        var parts: [String] = []
+        if let clientNames = matter.clientNames?.trimmingCharacters(in: .whitespacesAndNewlines), !clientNames.isEmpty {
+            parts.append(clientNames)
+        }
+        if let internalID = matter.internalMatterID?.trimmingCharacters(in: .whitespacesAndNewlines), !internalID.isEmpty {
+            parts.append("ID \(internalID)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private var tabBar: some View {
@@ -91,6 +116,8 @@ struct MatterWorkspaceView: View {
                 }
                 .buttonStyle(.plain)
                 .help(item.rawValue)
+                .accessibilityLabel(Text(item.label))
+                .accessibilityValue(tab == item ? Text("Selected") : Text(""))
                 .accessibilityIdentifier("matterTab.\(item.rawValue)")
             }
             Spacer()
@@ -134,7 +161,7 @@ struct MatterWorkspaceView: View {
             }
         case .outputs:
             if let outputs = controller.outputsController {
-                MatterOutputsView(controller: outputs, matter: matter, loadedModelID: library.loadedModelID)
+                MatterOutputsView(controller: outputs, library: library, matter: matter)
             } else {
                 placeholder(
                     "Outputs unavailable",
@@ -149,9 +176,9 @@ struct MatterWorkspaceView: View {
                 MatterDocumentsView(
                     controller: documents,
                     queue: queue,
+                    library: library,
                     qaController: controller.documentQAController,
-                    chronologyController: controller.documentChronologyController,
-                    loadedModelID: library.loadedModelID
+                    chronologyController: controller.documentChronologyController
                 )
             } else {
                 placeholder(
@@ -173,7 +200,7 @@ struct MatterWorkspaceView: View {
                 List(entries) { entry in
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
-                            Text(entry.eventType).font(.callout.weight(.medium))
+                            Text(auditEventLabel(entry.eventType)).font(.callout.weight(.medium))
                             Spacer()
                             Text(entry.timestamp, format: .dateTime.month().day().hour().minute())
                                 .font(.caption)
@@ -189,6 +216,42 @@ struct MatterWorkspaceView: View {
     private func placeholder(_ title: String, _ message: String, systemImage: String) -> some View {
         ContentUnavailableView(title, systemImage: systemImage, description: Text(message))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func auditEventLabel(_ eventType: String) -> String {
+        switch eventType {
+        case "matter_created": "Matter Created"
+        case "matter_updated": "Matter Updated"
+        case "research_queries_approved": "Research Queries Approved"
+        case "courtlistener_search_started": "CourtListener Search Started"
+        case "authority_status_changed": "Authority Status Changed"
+        case "structured_output_created": "Structured Output Created"
+        case "structured_output_repaired": "Structured Output Repaired"
+        case "qa_generated": "Document Q&A Generated"
+        case "chronology_generated": "Chronology Generated"
+        case "document_import_started": "Document Import Started"
+        case "document_job_failed": "Document Job Failed"
+        case "document_ocr_completed": "Document OCR Completed"
+        case "document_ocr_failed": "Document OCR Failed"
+        case "semantic_indexing_completed": "Semantic Indexing Completed"
+        case "text_indexing_completed": "Text Indexing Completed"
+        case "folder_soft_deleted": "Folder Moved to Trash"
+        case "folder_restored": "Folder Restored"
+        case "document_soft_deleted": "Document Moved to Trash"
+        case "document_restored": "Document Restored"
+        case "document_permanently_deleted": "Document Permanently Deleted"
+        case "document_intelligence_setup_changed": "Document Intelligence Setup Changed"
+        case "document_intelligence_setup_completed": "Document Intelligence Setup Completed"
+        case "document_intelligence_setup_invalidated": "Document Intelligence Setup Invalidated"
+        case "m3_validation_completed": "Milestone 3 Validation Completed"
+        case "export_completed": "Export Completed"
+        case "legal_model_route": "Model Route Used"
+        default:
+            eventType
+                .split(separator: "_")
+                .map { $0.capitalized }
+                .joined(separator: " ")
+        }
     }
 }
 

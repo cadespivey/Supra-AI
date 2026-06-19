@@ -24,8 +24,8 @@ struct SettingsView: View {
 
             Section("Generation Defaults") {
                 Picker("Preset", selection: $settings.preset) {
-                    ForEach(GenerationPreset.allCases, id: \.self) { preset in
-                        Text(preset.rawValue.capitalized).tag(preset)
+                    ForEach(GenerationPreset.userSelectableDefaults, id: \.self) { preset in
+                        Text(preset.displayName).tag(preset)
                     }
                 }
 
@@ -52,15 +52,15 @@ struct SettingsView: View {
                 HStack(spacing: 8) {
                     Image(systemName: settings.hasCourtListenerToken ? "checkmark.seal.fill" : "key.slash")
                         .foregroundStyle(settings.hasCourtListenerToken ? .green : .orange)
-                    Text(settings.hasCourtListenerToken ? "API token saved" : "No API token saved")
+                    Text(courtListenerStatusText)
                         .font(.callout.weight(.medium))
                     Spacer()
                 }
-                if settings.hasCourtListenerToken {
+                if settings.courtListenerTokenSource == .keychain {
                     Button("Clear Token", role: .destructive) {
                         settings.clearCourtListenerToken()
                     }
-                } else {
+                } else if settings.courtListenerTokenSource == .none {
                     SecureField("CourtListener API token", text: $courtListenerToken)
                     Button("Save Token") {
                         settings.saveCourtListenerToken(courtListenerToken)
@@ -71,9 +71,7 @@ struct SettingsView: View {
             } header: {
                 Text("CourtListener")
             } footer: {
-                Text(settings.hasCourtListenerToken
-                     ? "Stored in your Keychain. Clear it to enter a different token."
-                     : "Add your token to run CourtListener research. Stored only in your Keychain.")
+                Text(courtListenerFooterText)
             }
 
             Section("Model Storage") {
@@ -104,6 +102,28 @@ struct SettingsView: View {
     private func revealInFinder(_ path: String) {
         try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    private var courtListenerStatusText: String {
+        switch settings.courtListenerTokenSource {
+        case .environment:
+            "API token from environment"
+        case .keychain:
+            "API token saved in Keychain"
+        case .none:
+            "No API token saved"
+        }
+    }
+
+    private var courtListenerFooterText: String {
+        switch settings.courtListenerTokenSource {
+        case .environment:
+            "Using SUPRA_COURTLISTENER_API_KEY from the environment. Change or unset that variable to use a different token."
+        case .keychain:
+            "Stored in your Keychain. Clear it to enter a different token."
+        case .none:
+            "Add your token to run CourtListener research. Stored only in your Keychain."
+        }
     }
 }
 
@@ -325,7 +345,7 @@ private struct DocumentIntelligenceSection: View {
                 if setup.isBusy { ProgressView().controlSize(.small) }
             }
 
-            stepRow("Chat model loaded", done: setup.chatModelLoaded, detail: "Load a chat model in the Models tab.")
+            stepRow("Runtime text model loaded", done: setup.chatModelLoaded, detail: "Load a registered model in the Models tab.")
             embeddingRow
             stepRow(
                 "Extraction / OCR toolchain",

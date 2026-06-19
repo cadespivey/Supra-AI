@@ -5,8 +5,8 @@ import SupraRuntimeClient
 import SupraRuntimeInterface
 import SupraStore
 
-/// Manages the user's registered local model folders and drives loading the
-/// active model into the runtime service.
+/// Manages registered local model folders, task-route assignments, and runtime
+/// model loading.
 ///
 /// All state is published on the main actor for SwiftUI. The orchestration is
 /// kept here (rather than in the app target) so it can be unit-tested against a
@@ -22,16 +22,28 @@ public final class ModelLibrary: ObservableObject {
 
     @Published public private(set) var models: [ModelSummary] = []
     @Published public private(set) var loadState: LoadState = .idle
+    @Published public private(set) var roleAssignments: ModelRoleAssignments
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
+    private var hasPersistedRoleAssignments: Bool
 
     public init(store: SupraStore, runtimeClient: any RuntimeClientProtocol) {
         self.store = store
         self.runtimeClient = runtimeClient
+        if let stored = try? store.appSettings.getSetting(
+            ModelRoleAssignments.settingsKey,
+            as: ModelRoleAssignments.self
+        ) {
+            self.roleAssignments = stored
+            self.hasPersistedRoleAssignments = true
+        } else {
+            self.roleAssignments = ModelRoleAssignments()
+            self.hasPersistedRoleAssignments = false
+        }
     }
 
-    /// The currently active model, if one is registered as active.
+    /// The startup/manual model, if one is registered as active.
     public var activeModel: ModelSummary? {
         models.first { $0.isActive }
     }
@@ -50,9 +62,81 @@ public final class ModelLibrary: ObservableObject {
         return models.first { $0.id == modelID }
     }
 
+    public func preferredModelID(
+        for role: ModelRole,
+        configuration: LegalModelConfiguration = .fromEnvironment()
+    ) -> ModelID? {
+        return resolvedModel(for: role, configuration: configuration)
+            .flatMap { UUID(uuidString: $0.id).map(ModelID.init) }
+    }
+
+    public func ensureLoadedModelID(
+        for role: ModelRole,
+        configuration: LegalModelConfiguration = .fromEnvironment()
+    ) async -> ModelID? {
+        switch await ensureLoadedRoutedModelID(for: role, configuration: configuration) {
+        case let .success(modelID):
+            modelID
+        case .failure:
+            nil
+        }
+    }
+
+    public func ensureLoadedRoutedModelID(
+        for role: ModelRole,
+        configuration: LegalModelConfiguration = .fromEnvironment()
+    ) async -> Result<ModelID, ModelRouteResolutionIssue> {
+        refresh()
+        let resolution = resolvedModelWithIssue(for: role, configuration: configuration)
+        guard let preferred = resolution.model else {
+            return .failure(resolution.issue ?? .roleUnassigned(
+                role: role,
+                configuredIdentifier: configuration.modelIdentifier(for: role)
+            ))
+        }
+        guard let uuid = UUID(uuidString: preferred.id) else {
+            return .failure(.assignedModelMissing(role: role, modelID: preferred.id))
+        }
+        if loadedModelID?.rawValue == uuid {
+            return .success(ModelID(uuid))
+        }
+
+        await activateAndLoad(modelID: preferred.id)
+        if loadedModelID?.rawValue == uuid {
+            return .success(ModelID(uuid))
+        }
+        let message: String
+        if case let .failed(failureMessage) = loadState {
+            message = failureMessage
+        } else {
+            message = "The runtime did not confirm that the assigned model is loaded."
+        }
+        return .failure(.assignedModelLoadFailed(
+            role: role,
+            displayName: preferred.displayName,
+            message: message
+        ))
+    }
+
+    public func resolvedModel(
+        for role: ModelRole,
+        configuration: LegalModelConfiguration = .fromEnvironment()
+    ) -> ModelSummary? {
+        resolvedModelWithIssue(for: role, configuration: configuration).model
+    }
+
+    public func assignModel(_ modelID: String?, to role: ModelRole) {
+        var updated = roleAssignments
+        updated.setModelID(modelID, for: role)
+        roleAssignments = updated
+        hasPersistedRoleAssignments = true
+        persistRoleAssignments()
+    }
+
     /// Reloads the registered models from the store.
     public func refresh() {
         models = (try? store.models.fetchModels())?.map(ModelSummary.init) ?? []
+        bootstrapRoleAssignmentsIfNeeded(configuration: .fromEnvironment())
     }
 
     /// Reconciles the published load state with a model the runtime already holds
@@ -167,8 +251,108 @@ public final class ModelLibrary: ObservableObject {
     private static func failureMessage(_ error: RuntimeError?) -> String {
         guard let error else { return "The model could not be loaded." }
         if let details = error.technicalDetails, !details.isEmpty {
-            return "\(error.message) — \(details)"
+            return "\(error.message) — \(redactingAbsolutePaths(details))"
         }
         return error.message
+    }
+
+    /// Redacts filesystem paths from user-facing failure text: the home directory
+    /// is replaced with `~` (so even a bare `/Users/<name>` reveals no username),
+    /// and any other absolute path is shortened to its final component. URLs
+    /// (anything containing `://`, e.g. a Hugging Face link) are left intact.
+    private static func redactingAbsolutePaths(_ text: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return text
+            .split(separator: " ", omittingEmptySubsequences: false)
+            .map { token -> String in
+                var value = String(token)
+                // Always collapse the home directory first, so the username never
+                // leaks even inside a file:// URL.
+                if !home.isEmpty, value.contains(home) {
+                    value = value.replacingOccurrences(of: home, with: "~")
+                }
+                // Preserve web links intact; only shorten bare absolute paths.
+                if value.contains("://") { return value }
+                if value.hasPrefix("/"), value.dropFirst().contains("/") {
+                    value = "…/" + (value as NSString).lastPathComponent
+                }
+                return value
+            }
+            .joined(separator: " ")
+    }
+
+    private func matchingModel(forIdentifier identifier: String) -> ModelSummary? {
+        let target = Self.normalizedModelIdentifier(identifier)
+        guard !target.isEmpty else { return nil }
+
+        return models.first { model in
+            let candidates = [
+                model.displayName,
+                model.path,
+                URL(fileURLWithPath: model.path).lastPathComponent,
+                model.path.replacingOccurrences(of: "__", with: "/")
+            ]
+            return candidates.contains {
+                let normalized = Self.normalizedModelIdentifier($0)
+                return normalized == target
+                    || normalized.contains(target)
+                    || target.contains(normalized)
+            }
+        }
+    }
+
+    private static func normalizedModelIdentifier(_ value: String) -> String {
+        value.lowercased()
+            .replacingOccurrences(of: "mlx-community/", with: "")
+            .replacingOccurrences(of: "-mlx", with: "")
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .joined()
+    }
+
+    private func resolvedModelWithIssue(
+        for role: ModelRole,
+        configuration: LegalModelConfiguration
+    ) -> (model: ModelSummary?, issue: ModelRouteResolutionIssue?) {
+        guard !models.isEmpty else {
+            return (nil, .noRegisteredModels(role: role))
+        }
+
+        if let assignedModelID = roleAssignments.modelID(for: role) {
+            if let model = models.first(where: { $0.id == assignedModelID }) {
+                return (model, nil)
+            }
+            return (nil, .assignedModelMissing(role: role, modelID: assignedModelID))
+        }
+
+        let configuredIdentifier = configuration.modelIdentifier(for: role)
+        if let configured = matchingModel(forIdentifier: configuredIdentifier) {
+            return (configured, nil)
+        }
+        return (nil, .roleUnassigned(role: role, configuredIdentifier: configuredIdentifier))
+    }
+
+    private func bootstrapRoleAssignmentsIfNeeded(configuration: LegalModelConfiguration) {
+        guard !hasPersistedRoleAssignments else { return }
+        var updated = roleAssignments
+        // Cross-role uniqueness: fuzzy identifier matching means one generic-named
+        // model could match several role identifiers. Don't let auto-bootstrap fill
+        // multiple distinct roles with the same model — the user can still assign it
+        // to additional roles manually if they intend to share it.
+        var assignedModelIDs = Set(ModelRole.allCases.compactMap { updated.modelID(for: $0) })
+        for role in ModelRole.allCases where updated.modelID(for: role) == nil {
+            if let model = matchingModel(forIdentifier: configuration.modelIdentifier(for: role)),
+               !assignedModelIDs.contains(model.id) {
+                updated.setModelID(model.id, for: role)
+                assignedModelIDs.insert(model.id)
+            }
+        }
+        guard updated != roleAssignments else { return }
+        roleAssignments = updated
+        hasPersistedRoleAssignments = true
+        persistRoleAssignments()
+    }
+
+    private func persistRoleAssignments() {
+        try? store.appSettings.setSetting(ModelRoleAssignments.settingsKey, value: roleAssignments)
     }
 }

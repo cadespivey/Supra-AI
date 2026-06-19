@@ -6,7 +6,7 @@ import SupraRuntimeClient
 import SupraStore
 
 /// Main-actor wrapper around `ValidationRunner` for the UI: runs the bundled
-/// Milestone 1 suite against the active model and publishes progress + result.
+/// Milestone 1 suite against the selected runtime model and publishes progress + result.
 @MainActor
 public final class ValidationRunController: ObservableObject {
     public enum State: Sendable {

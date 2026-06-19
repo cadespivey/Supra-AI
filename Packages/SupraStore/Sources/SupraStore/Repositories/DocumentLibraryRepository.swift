@@ -378,33 +378,58 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
     /// blob row is also removed and its managed relative path is returned so the
     /// caller can delete the file.
     public struct PermanentDeleteResult: Sendable {
-        public let removedBlobPath: String?
+        /// Managed relative paths of every blob file freed by the delete (one per
+        /// document in the deleted subtree whose blob is no longer referenced).
+        public let removedBlobPaths: [String]
+        /// Every document id removed (root + attachment descendants), so callers
+        /// iterating a list of expired documents don't double-process a child that
+        /// was already cascade-purged with its parent.
+        public let removedDocumentIDs: [String]
     }
 
+    /// Permanently removes a document instance, its attachment subtree (emails
+    /// import attachments as child documents), and all derived index rows. Each
+    /// freed blob's managed file path is returned so the caller can delete it; a
+    /// blob is only freed when no surviving document still references it.
     @discardableResult
     public func permanentlyDeleteDocument(id: String) throws -> PermanentDeleteResult {
         try writer.write { db in
-            guard let document = try MatterDocumentRecord.fetchOne(db, key: id) else {
-                return PermanentDeleteResult(removedBlobPath: nil)
+            guard try MatterDocumentRecord.fetchOne(db, key: id) != nil else {
+                return PermanentDeleteResult(removedBlobPaths: [], removedDocumentIDs: [])
             }
-            let blobID = document.blobID
-            // The FTS5 chunk index is a standalone virtual table (no FK cascade),
-            // so its rows must be removed explicitly before the cascade drops the
-            // chunks, otherwise they leak.
-            try db.execute(sql: "DELETE FROM document_chunk_fts WHERE document_id = ?", arguments: [id])
-            try db.execute(sql: "DELETE FROM matter_documents WHERE id = ?", arguments: [id])
+            let subtreeIDs = try Self.documentSubtreeIDs(db, rootID: id)
 
-            let remaining = try Int.fetchOne(
-                db,
-                sql: "SELECT COUNT(*) FROM matter_documents WHERE blob_id = ?",
-                arguments: [blobID]
-            ) ?? 0
-            guard remaining == 0 else {
-                return PermanentDeleteResult(removedBlobPath: nil)
+            // Capture blob ids and clear the standalone FTS5 index (no FK cascade)
+            // for every document in the subtree BEFORE deleting any rows, so a FK
+            // cascade on parent_document_id cannot remove a child row before we
+            // record its blob — otherwise the child's blob/file/FTS rows leak.
+            var blobIDs = Set<String>()
+            for documentID in subtreeIDs {
+                if let row = try MatterDocumentRecord.fetchOne(db, key: documentID) {
+                    blobIDs.insert(row.blobID)
+                }
+                try db.execute(sql: "DELETE FROM document_chunk_fts WHERE document_id = ?", arguments: [documentID])
             }
-            let blob = try DocumentBlobRecord.fetchOne(db, key: blobID)
-            try db.execute(sql: "DELETE FROM document_blobs WHERE id = ?", arguments: [blobID])
-            return PermanentDeleteResult(removedBlobPath: blob?.managedRelativePath)
+            // Delete deepest-first so we never violate the parent FK or depend on
+            // cascade behavior.
+            for documentID in subtreeIDs.reversed() {
+                try db.execute(sql: "DELETE FROM matter_documents WHERE id = ?", arguments: [documentID])
+            }
+
+            var removedPaths: [String] = []
+            for blobID in blobIDs {
+                let remaining = try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM matter_documents WHERE blob_id = ?",
+                    arguments: [blobID]
+                ) ?? 0
+                guard remaining == 0 else { continue }
+                if let path = try DocumentBlobRecord.fetchOne(db, key: blobID)?.managedRelativePath {
+                    removedPaths.append(path)
+                }
+                try db.execute(sql: "DELETE FROM document_blobs WHERE id = ?", arguments: [blobID])
+            }
+            return PermanentDeleteResult(removedBlobPaths: removedPaths, removedDocumentIDs: subtreeIDs)
         }
     }
 
@@ -490,12 +515,16 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                 clauses.append("d.id IN (\(databaseQuestionMarks(count: documentIDs.count)))")
                 arguments.append(contentsOf: documentIDs)
             }
+            // A date filter narrows by *known* dates but never silently drops a
+            // document whose date could not be extracted (metadata_created_at IS
+            // NULL) — excluding undated evidence from a legal scope is the more
+            // dangerous failure, so NULL-dated documents are always retained.
             if let dateStart {
-                clauses.append("d.metadata_created_at >= ?")
+                clauses.append("(d.metadata_created_at IS NULL OR d.metadata_created_at >= ?)")
                 arguments.append(dateStart)
             }
             if let dateEnd {
-                clauses.append("d.metadata_created_at <= ?")
+                clauses.append("(d.metadata_created_at IS NULL OR d.metadata_created_at <= ?)")
                 arguments.append(dateEnd)
             }
             sql += " WHERE " + clauses.joined(separator: " AND ")
@@ -551,13 +580,38 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
     /// Returns a folder id plus all descendant folder ids (depth-first).
     private static func folderSubtreeIDs(_ db: Database, rootID: String) throws -> [String] {
         var result: [String] = []
+        var seen = Set<String>()
         var queue: [String] = [rootID]
         while let current = queue.first {
             queue.removeFirst()
+            // Cycle guard: a corrupted/cyclic parent pointer must not hang the
+            // write transaction in an infinite loop.
+            guard seen.insert(current).inserted else { continue }
             result.append(current)
             let children = try String.fetchAll(
                 db,
                 sql: "SELECT id FROM document_folders WHERE parent_folder_id = ?",
+                arguments: [current]
+            )
+            queue.append(contentsOf: children)
+        }
+        return result
+    }
+
+    /// Breadth-first list of a document id followed by all of its attachment
+    /// descendants (root first), used to purge an entire attachment subtree.
+    private static func documentSubtreeIDs(_ db: Database, rootID: String) throws -> [String] {
+        var result: [String] = []
+        var seen = Set<String>()
+        var queue: [String] = [rootID]
+        while let current = queue.first {
+            queue.removeFirst()
+            // Cycle guard against a corrupted/cyclic parent pointer.
+            guard seen.insert(current).inserted else { continue }
+            result.append(current)
+            let children = try String.fetchAll(
+                db,
+                sql: "SELECT id FROM matter_documents WHERE parent_document_id = ?",
                 arguments: [current]
             )
             queue.append(contentsOf: children)

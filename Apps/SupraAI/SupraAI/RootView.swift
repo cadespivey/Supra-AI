@@ -5,18 +5,24 @@ struct RootView: View {
     @State private var showSplash = true
 
     var body: some View {
-        MainShellView()
-            .task { await environment.bootstrap() }
-            .overlay {
-                if showSplash {
-                    SplashView()
-                        .transition(.opacity)
-                        .task {
-                            try? await Task.sleep(nanoseconds: 1_600_000_000)
-                            withAnimation(.easeOut(duration: 0.45)) { showSplash = false }
-                        }
-                }
+        ZStack {
+            MainShellView()
+                .opacity(showSplash ? 0 : 1)
+                .allowsHitTesting(!showSplash)
+                .accessibilityHidden(showSplash)
+
+            if showSplash {
+                SplashView()
+                    .transition(.opacity)
+                    .zIndex(1)
+                    .task {
+                        try? await Task.sleep(nanoseconds: 1_600_000_000)
+                        withAnimation(.easeOut(duration: 0.45)) { showSplash = false }
+                    }
             }
+        }
+        .background(showSplash ? BrandColors.navy : Color.clear)
+        .task { await environment.bootstrap() }
     }
 }
 

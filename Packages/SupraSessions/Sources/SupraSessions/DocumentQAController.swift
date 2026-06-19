@@ -59,11 +59,20 @@ public final class DocumentQAController: ObservableObject {
         scope: RetrievalScope = .wholeMatter,
         mode: DocumentAnswerMode = .short,
         guidedChunkIDs: [String]? = nil,
-        modelID: ModelID?
+        modelID: ModelID?,
+        route: ModelRoute? = nil
     ) async -> QAResult? {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { message = "Enter a question."; return nil }
-        guard let modelID else { message = "Load a chat model in the Models tab to ask questions."; return nil }
+        let effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: mode.outputType)
+        guard let modelID else {
+            message = if let effectiveRoute {
+                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to ask questions."
+            } else {
+                "Assign a task model in the Models tab to ask questions."
+            }
+            return nil
+        }
 
         // Block until the selected scope is fully indexed (plan §8.1).
         let readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope)) ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
@@ -71,11 +80,16 @@ public final class DocumentQAController: ObservableObject {
             message = "The selected documents are still indexing (\(readiness.readyDocuments)/\(readiness.totalDocuments) ready). Try again once indexing finishes."
             return nil
         }
+        guard !isGenerating else {
+            message = "A question is already being answered. Wait for it to finish."
+            return nil
+        }
 
         isGenerating = true
         message = nil
         defer { isGenerating = false }
 
+        let isGuided = (guidedChunkIDs?.isEmpty == false)
         do {
             let prepared = try await prepareSources(question: trimmed, scope: scope, guidedChunkIDs: guidedChunkIDs)
             guard !prepared.isEmpty else {
@@ -84,7 +98,7 @@ public final class DocumentQAController: ObservableObject {
             }
             let groundingSources = prepared.map(\.source)
             let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: trimmed, sources: groundingSources, mode: mode)
-            let answer = try await collect(prompt: prompt, modelID: modelID)
+            let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
 
             let lowConfidence = Set(prepared.filter { $0.source.lowConfidence }.map(\.source.label))
             let check = CitationCoverage.check(
@@ -99,7 +113,8 @@ public final class DocumentQAController: ObservableObject {
 
             let result = try persist(
                 question: trimmed, scope: scope, mode: mode, markdown: markdown,
-                prepared: prepared, status: status, check: check
+                prepared: prepared, status: status, check: check,
+                sourceMode: isGuided ? .guided : .autoSource
             )
             lastResult = result
             return result
@@ -112,7 +127,7 @@ public final class DocumentQAController: ObservableObject {
     /// Regenerates an output using its saved scope + question, creating a new
     /// version with a fresh source set (plan §10.1).
     @discardableResult
-    public func regenerate(outputID: String, modelID: ModelID?) async -> QAResult? {
+    public func regenerate(outputID: String, modelID: ModelID?, route: ModelRoute? = nil) async -> QAResult? {
         guard let output = try? store.structuredOutputs.fetchOutputs(matterID: matterID).first(where: { $0.id == outputID }),
               let activeVersionID = output.activeVersionID,
               let sourceSet = try? store.documentSources.fetchSourceSet(structuredOutputVersionID: activeVersionID) else {
@@ -122,7 +137,25 @@ public final class DocumentQAController: ObservableObject {
         let scope = (try? JSONDecoder().decode(RetrievalScope.self, from: Data((sourceSet.scopeJSON).utf8))) ?? .wholeMatter
         let question = sourceSet.retrievalQuery ?? output.title
         let mode: DocumentAnswerMode = output.outputType == StructuredOutputType.documentQAMemo.rawValue ? .memo : .short
-        return await regenerateExisting(outputID: outputID, question: question, scope: scope, mode: mode, modelID: modelID)
+        // Preserve a hand-picked (guided) selection on regenerate instead of
+        // silently falling back to auto-retrieval, which would change which
+        // sources the answer is grounded in without the user knowing.
+        var guidedChunkIDs: [String]?
+        if sourceSet.mode == DocumentSourceSetMode.guided.rawValue {
+            let priorChunkIDs = ((try? store.documentSources.fetchSources(structuredOutputVersionID: activeVersionID)) ?? [])
+                .sorted { $0.rank < $1.rank }
+                .compactMap(\.chunkID)
+            guidedChunkIDs = priorChunkIDs.isEmpty ? nil : priorChunkIDs
+        }
+        return await regenerateExisting(
+            outputID: outputID,
+            question: question,
+            scope: scope,
+            mode: mode,
+            guidedChunkIDs: guidedChunkIDs,
+            modelID: modelID,
+            route: route ?? ModelRouter().route(forStructuredOutput: mode.outputType)
+        )
     }
 
     // MARK: - Internals
@@ -158,9 +191,13 @@ public final class DocumentQAController: ObservableObject {
     }
 
     private func prepareGuided(chunkIDs: [String]) -> [PreparedSource] {
-        let chunks = (try? store.documentIndex.fetchChunks(ids: chunkIDs)) ?? []
-        let order = Dictionary(uniqueKeysWithValues: chunkIDs.enumerated().map { ($1, $0) })
         let nameByID = Dictionary((try? store.documentLibrary.fetchDocuments(matterID: matterID))?.map { ($0.id, $0.displayName) } ?? [], uniquingKeysWith: { a, _ in a })
+        // Matter-scope the hand-picked chunks: only chunks belonging to documents
+        // in THIS matter may be used, so a stray/other-matter chunk id can never
+        // leak another matter's content into this answer.
+        let chunks = ((try? store.documentIndex.fetchChunks(ids: chunkIDs)) ?? [])
+            .filter { nameByID[$0.documentID] != nil }
+        let order = Dictionary(uniqueKeysWithValues: chunkIDs.enumerated().map { ($1, $0) })
         return chunks
             .sorted { (order[$0.id] ?? 0) < (order[$1.id] ?? 0) }
             .enumerated().map { index, chunk in
@@ -195,15 +232,16 @@ public final class DocumentQAController: ObservableObject {
 
     private func persist(
         question: String, scope: RetrievalScope, mode: DocumentAnswerMode, markdown: String,
-        prepared: [PreparedSource], status: StructuredOutputStatus, check: CitationCheckResult
+        prepared: [PreparedSource], status: StructuredOutputStatus, check: CitationCheckResult,
+        sourceMode: DocumentSourceSetMode
     ) throws -> QAResult {
         let title = "Q&A: \(question.prefix(60))"
         let output = try store.structuredOutputs.createOutput(matterID: matterID, title: String(title), outputType: mode.outputType, status: status)
         let version = try store.structuredOutputs.createVersion(
-            structuredOutputID: output.id, versionIndex: 1, contentMarkdown: markdown,
+            structuredOutputID: output.id, contentMarkdown: markdown,
             requiredSections: [], presentSections: [], missingSections: []
         )
-        try attachSources(prepared: prepared, scope: scope, question: question, mode: mode, versionID: version.id)
+        try attachSources(prepared: prepared, scope: scope, question: question, mode: sourceMode, versionID: version.id)
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "qa_generated", actor: "runtime",
             summary: "Generated document Q&A", relatedTable: "structured_outputs", relatedID: output.id
@@ -214,31 +252,52 @@ public final class DocumentQAController: ObservableObject {
         )
     }
 
-    private func regenerateExisting(outputID: String, question: String, scope: RetrievalScope, mode: DocumentAnswerMode, modelID: ModelID?) async -> QAResult? {
-        guard let modelID else { message = "Load a chat model to regenerate."; return nil }
+    private func regenerateExisting(
+        outputID: String,
+        question: String,
+        scope: RetrievalScope,
+        mode: DocumentAnswerMode,
+        guidedChunkIDs: [String]?,
+        modelID: ModelID?,
+        route: ModelRoute?
+    ) async -> QAResult? {
+        let effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: mode.outputType)
+        guard let modelID else {
+            message = if let effectiveRoute {
+                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to regenerate."
+            } else {
+                "Assign a task model in the Models tab to regenerate."
+            }
+            return nil
+        }
+        guard !isGenerating else {
+            message = "A question is already being answered. Wait for it to finish."
+            return nil
+        }
         isGenerating = true
         message = nil
         defer { isGenerating = false }
+        let isGuided = (guidedChunkIDs?.isEmpty == false)
         do {
             let readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope)) ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
-            let prepared = try await prepareSources(question: question, scope: scope, guidedChunkIDs: nil)
+            let prepared = try await prepareSources(question: question, scope: scope, guidedChunkIDs: guidedChunkIDs)
             guard !prepared.isEmpty else { message = "No matching sources were found."; return nil }
             let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: question, sources: prepared.map(\.source), mode: mode)
-            let answer = try await collect(prompt: prompt, modelID: modelID)
+            let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
             let lowConfidence = Set(prepared.filter { $0.source.lowConfidence }.map(\.source.label))
             let check = CitationCoverage.check(answer: answer, availableLabels: prepared.map(\.source.label), lowConfidenceLabels: lowConfidence, scopeFullyIndexed: readiness.isFullyReady)
             let markdown = answer + "\n" + makeAppendix(prepared).markdown()
             let status: StructuredOutputStatus = check.requiresReview ? .needsReview : .complete
 
             let existingVersions = (try? store.structuredOutputs.fetchVersions(structuredOutputID: outputID)) ?? []
-            let nextIndex = (existingVersions.map(\.versionIndex).max() ?? 0) + 1
+            let parentVersionID = existingVersions.max(by: { $0.versionIndex < $1.versionIndex })?.id
             let version = try store.structuredOutputs.createVersion(
-                structuredOutputID: outputID, versionIndex: nextIndex, contentMarkdown: markdown,
+                structuredOutputID: outputID, contentMarkdown: markdown,
                 requiredSections: [], presentSections: [], missingSections: [],
-                parentVersionID: existingVersions.first(where: { $0.versionIndex == nextIndex - 1 })?.id
+                parentVersionID: parentVersionID
             )
             try? store.structuredOutputs.updateStatus(outputID: outputID, status: status)
-            try attachSources(prepared: prepared, scope: scope, question: question, mode: mode, versionID: version.id)
+            try attachSources(prepared: prepared, scope: scope, question: question, mode: isGuided ? .guided : .autoSource, versionID: version.id)
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "qa_generated", actor: "runtime",
                 summary: "Regenerated document Q&A", relatedTable: "structured_outputs", relatedID: outputID
@@ -252,10 +311,10 @@ public final class DocumentQAController: ObservableObject {
         }
     }
 
-    private func attachSources(prepared: [PreparedSource], scope: RetrievalScope, question: String, mode: DocumentAnswerMode, versionID: String) throws {
+    private func attachSources(prepared: [PreparedSource], scope: RetrievalScope, question: String, mode: DocumentSourceSetMode, versionID: String) throws {
         let scopeJSON = (try? JSONEncoder().encode(scope)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let sourceSet = try store.documentSources.createSourceSet(
-            matterID: matterID, mode: .autoSource, scopeJSON: scopeJSON, retrievalQuery: question
+            matterID: matterID, mode: mode, scopeJSON: scopeJSON, retrievalQuery: question
         )
         let rows = prepared.map { source in
             DocumentOutputSourceRecord(
@@ -269,15 +328,22 @@ public final class DocumentQAController: ObservableObject {
         try store.documentSources.attachSourceSet(id: sourceSet.id, structuredOutputVersionID: versionID)
     }
 
-    private func collect(prompt: String, modelID: ModelID) async throws -> String {
+    private func collect(prompt: String, modelID: ModelID, route: ModelRoute?) async throws -> String {
         let request = GenerateRequest(
             generationID: GenerationID(), modelID: modelID, prompt: prompt,
-            // Base prompt only: the answer is machine-checked for citation coverage
-            // against the grounding sources, so the user's free-form profile must
-            // not degrade the required citation structure.
-            systemPrompt: defaultSystemPrompt, options: GenerationOptions()
+            // Keep document-output contracts isolated from the user's free-form
+            // profile while still applying task-specific routing instructions.
+            systemPrompt: routedSystemPrompt(route),
+            options: route?.options ?? GenerationOptions()
         )
         let output = try await runtimeClient.collectGeneratedText(request)
         return ReasoningContent.answer(from: output)
+    }
+
+    private func routedSystemPrompt(_ route: ModelRoute?) -> String? {
+        let parts = [defaultSystemPrompt, route?.systemPrompt]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 }

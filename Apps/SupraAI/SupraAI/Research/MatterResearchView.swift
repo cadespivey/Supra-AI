@@ -25,7 +25,7 @@ struct MatterResearchView: View {
             }
         }
         .sheet(isPresented: $showPlanner) {
-            ResearchPlannerView(controller: controller, matter: matter, loadedModelID: library.loadedModelID)
+            ResearchPlannerView(controller: controller, library: library, matter: matter)
         }
         .onAppear { controller.loadSessions() }
     }

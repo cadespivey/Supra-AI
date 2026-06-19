@@ -17,16 +17,18 @@ public extension CourtListenerClientProtocol {
 
 public final class CourtListenerClient: CourtListenerClientProtocol, @unchecked Sendable {
     private let httpClient: any AuthorizedHTTPClientProtocol
+    private let baseURLOverride: String?
 
-    public init(httpClient: any AuthorizedHTTPClientProtocol) {
+    public init(httpClient: any AuthorizedHTTPClientProtocol, baseURLOverride: String? = nil) {
         self.httpClient = httpClient
+        self.baseURLOverride = baseURLOverride
     }
 
     public func searchOpinions(
         _ request: CourtListenerSearchRequest,
         relatedResearchSessionID: String?
     ) async throws -> CourtListenerSearchResponse {
-        let url = try CourtListenerEndpoint.searchURL(for: request)
+        let url = try CourtListenerEndpoint.searchURL(for: request, baseURLOverride: baseURLOverride)
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "GET"
 
@@ -42,7 +44,7 @@ public final class CourtListenerClient: CourtListenerClientProtocol, @unchecked 
             case 401, 403:
                 throw CourtListenerError.authenticationFailed
             case 429:
-                throw CourtListenerError.throttled
+                throw CourtListenerError.throttled(retryAfter: Self.retryAfterSeconds(from: response))
             case 500...599:
                 throw CourtListenerError.serverError(statusCode: response.statusCode)
             default:
@@ -67,5 +69,29 @@ public final class CourtListenerClient: CourtListenerClientProtocol, @unchecked 
         } catch {
             throw CourtListenerError.transportFailed(error.localizedDescription)
         }
+    }
+
+    /// Parses a `Retry-After` header (delta-seconds or HTTP-date) into a
+    /// non-negative back-off in seconds, or `nil` when absent/unparseable.
+    private static func retryAfterSeconds(from response: HTTPURLResponse) -> TimeInterval? {
+        guard let raw = response.value(forHTTPHeaderField: "Retry-After")?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        if let seconds = TimeInterval(raw) {
+            return max(0, seconds)
+        }
+        // Accept all three RFC 7231 HTTP-date forms: IMF-fixdate, RFC 850, asctime.
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        // Collapse whitespace runs so asctime's double-space before single-digit
+        // days parses with a single 'd'.
+        let normalized = raw.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        for format in ["EEE, dd MMM yyyy HH:mm:ss zzz", "EEEE, dd-MMM-yy HH:mm:ss zzz", "EEE MMM d HH:mm:ss yyyy"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: normalized) {
+                return max(0, date.timeIntervalSinceNow)
+            }
+        }
+        return nil
     }
 }

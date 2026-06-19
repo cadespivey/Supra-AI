@@ -65,6 +65,25 @@ final class DocumentChronologyTests: XCTestCase {
         XCTAssertFalse(try store.documentSources.fetchSources(structuredOutputVersionID: regenResult.versionID).isEmpty)
     }
 
+    func testChronologyUsesStructuredOutputRouteOptionsAndPrompt() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        try await indexDoc(store, matter.id, nil, "timeline.txt", "The amendment was signed on July 9, 2024.")
+        let runtime = StubRuntimeClient(outcome: { request in
+            XCTAssertEqual(request.options.preset, .legalResearch)
+            XCTAssertTrue(request.systemPrompt?.contains("legal document analysis assistant") ?? false)
+            return .events([
+                .event(request, 0, .token, token: "| Date | Event | Source |\n| 2024-07-09 | Amendment signed [S1] | [S1] |"),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let generated = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+
+        XCTAssertNotNil(generated)
+    }
+
     func testDateExtractionDetectsCommonForms() {
         XCTAssertTrue(DateExtraction.containsDate("Signed on March 3, 2024."))
         XCTAssertTrue(DateExtraction.containsDate("2024-03-03 filing"))

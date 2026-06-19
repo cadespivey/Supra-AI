@@ -162,20 +162,32 @@ public final class StructuredOutputController: ObservableObject {
         scope: RetrievalScope? = nil,
         chatID: String? = nil,
         researchSessionID: String? = nil,
-        modelID: ModelID?
+        modelID: ModelID?,
+        route: ModelRoute? = nil
     ) async -> Bool {
+        guard let contract = StructuredOutputContracts.contract(for: type) else {
+            message = "Document Q&A and chronologies are generated from the Documents tab."
+            return false
+        }
+        let effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: type)
         guard let modelID else {
-            message = "Load a model in the Models tab to generate structured outputs."
+            message = if let effectiveRoute {
+                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to generate \(contract.title)."
+            } else {
+                "Assign a task model in the Models tab to generate structured outputs."
+            }
+            return false
+        }
+        // Re-entrancy guard: claim the flag synchronously (no await before this)
+        // so a second concurrent call cannot start a parallel generation.
+        guard !isGenerating else {
+            message = "An output is already generating. Wait for it to finish."
             return false
         }
         isGenerating = true
         message = nil
         defer { isGenerating = false }
 
-        guard let contract = StructuredOutputContracts.contract(for: type) else {
-            message = "Document Q&A and chronologies are generated from the Documents tab."
-            return false
-        }
         do {
             // When the output is scoped to documents, retrieve the most relevant
             // passages and prepend them as cited grounding (mirrors Document Q&A).
@@ -199,18 +211,27 @@ public final class StructuredOutputController: ObservableObject {
             }
 
             let prompt = try StructuredOutputPromptBuilder.buildPrompt(for: contract, context: groundedContext)
-            let markdown = ReasoningContent.answer(from: try await collect(prompt: prompt, modelID: modelID))
+            let rawMarkdown = ReasoningContent.answer(from: try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute))
             let analysis = StructuredOutputSections.analyze(
-                markdown: markdown, requiredHeadings: contract.requiredHeadings
+                markdown: rawMarkdown, requiredHeadings: contract.requiredHeadings
             )
-            let status: StructuredOutputStatus = analysis.missing.isEmpty ? .complete : .needsReview
+            // Cardinal-sin guard: this controller never retrieves or verifies legal
+            // authority, so any reporter/case/statute citation the model emits is
+            // ungrounded. Force review and flag it so it can never read as verified
+            // good law. ([S1]-style document labels are not legal citations and are
+            // not affected.)
+            let (markdown, status) = Self.guardUnverifiedCitations(
+                in: rawMarkdown,
+                type: type,
+                status: analysis.missing.isEmpty ? .complete : .needsReview
+            )
 
             let output = try store.structuredOutputs.createOutput(
                 matterID: matterID, title: contract.title, outputType: type,
                 chatID: chatID, researchSessionID: researchSessionID, status: status
             )
             let version = try store.structuredOutputs.createVersion(
-                structuredOutputID: output.id, versionIndex: 1, contentMarkdown: markdown,
+                structuredOutputID: output.id, contentMarkdown: markdown,
                 requiredSections: contract.requiredHeadings,
                 presentSections: analysis.present, missingSections: analysis.missing
             )
@@ -228,6 +249,30 @@ public final class StructuredOutputController: ObservableObject {
             message = "Output generation failed: \(error.localizedDescription)"
             return false
         }
+    }
+
+    /// Detects ungrounded legal citations in a generated structured output and, for
+    /// authority-asserting types, always flags it. These outputs are scaffolds built
+    /// from notes/documents, not from retrieved+verified legal authority, so their
+    /// citations must never present as verified good law. The banner fires when a
+    /// citation in a recognized format is present, OR unconditionally for a type
+    /// whose contract asserts authority (so an unrecognized citation format can't
+    /// slip a fabricated authority through as a "complete" output).
+    static func guardUnverifiedCitations(
+        in markdown: String,
+        type: StructuredOutputType,
+        status: StructuredOutputStatus
+    ) -> (markdown: String, status: StructuredOutputStatus) {
+        let citations = LegalCitationVerifier.extractCitationLikeStrings(from: markdown)
+        guard !citations.isEmpty || type.assertsLegalAuthority else { return (markdown, status) }
+        let detail = citations.isEmpty
+            ? "Independently verify every legal authority cited in this output before use."
+            : "Independently verify every citation before use: \(citations.prefix(8).joined(separator: "; "))."
+        let banner = """
+        > ⚠️ **UNVERIFIED CITATIONS — DO NOT RELY.** This output was drafted from your notes/documents without retrieving or verifying legal authority. \(detail)
+
+        """
+        return (banner + markdown, .needsReview)
     }
 
     private struct PreparedDocSource {
@@ -268,31 +313,44 @@ public final class StructuredOutputController: ObservableObject {
     /// version, links the repaired one to it as parent, makes it active, re-runs
     /// detection, and audits it (spec §12.5).
     @discardableResult
-    public func repairOutput(_ outputID: String, modelID: ModelID?) async -> Bool {
-        guard let modelID else {
-            message = "Load a model in the Models tab to repair outputs."
-            return false
-        }
+    public func repairOutput(_ outputID: String, modelID: ModelID?, route: ModelRoute? = nil) async -> Bool {
         guard let record = outputRecord(outputID),
               let type = StructuredOutputType(rawValue: record.outputType),
               let active = activeVersion(for: record) else { return false }
+        guard let contract = StructuredOutputContracts.contract(for: type) else { return false }
+        let effectiveRoute = route ?? ModelRouter().repairRoute(forStructuredOutput: type)
+        guard let modelID else {
+            message = if let effectiveRoute {
+                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to repair \(record.title)."
+            } else {
+                "Assign a task model in the Models tab to repair outputs."
+            }
+            return false
+        }
 
+        guard !isGenerating else {
+            message = "An output is already generating. Wait for it to finish."
+            return false
+        }
         isGenerating = true
         message = nil
         defer { isGenerating = false }
 
-        guard let contract = StructuredOutputContracts.contract(for: type) else { return false }
         do {
             let prompt = try StructuredOutputPromptBuilder.buildRepairPrompt(
                 originalOutput: active.contentMarkdown, requiredHeadings: contract.requiredHeadings
             )
-            let repaired = ReasoningContent.answer(from: try await collect(prompt: prompt, modelID: modelID))
+            let rawRepaired = ReasoningContent.answer(from: try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute))
             let analysis = StructuredOutputSections.analyze(
-                markdown: repaired, requiredHeadings: contract.requiredHeadings
+                markdown: rawRepaired, requiredHeadings: contract.requiredHeadings
             )
-            let status: StructuredOutputStatus = analysis.missing.isEmpty ? .complete : .needsReview
+            let (repaired, status) = Self.guardUnverifiedCitations(
+                in: rawRepaired,
+                type: type,
+                status: analysis.missing.isEmpty ? .complete : .needsReview
+            )
             _ = try store.structuredOutputs.createVersion(
-                structuredOutputID: outputID, versionIndex: active.versionIndex + 1, contentMarkdown: repaired,
+                structuredOutputID: outputID, contentMarkdown: repaired,
                 requiredSections: contract.requiredHeadings, presentSections: analysis.present,
                 missingSections: analysis.missing, parentVersionID: active.id,
                 repairReason: "missing_required_sections", makeActive: true
@@ -331,14 +389,21 @@ public final class StructuredOutputController: ObservableObject {
         return (try? JSONDecoder().decode([String].self, from: Data(active.missingSectionsJSON.utf8)))?.count ?? 0
     }
 
-    private func collect(prompt: String, modelID: ModelID) async throws -> String {
+    private func collect(prompt: String, modelID: ModelID, route: ModelRoute?) async throws -> String {
         let request = GenerateRequest(
             generationID: GenerationID(), modelID: modelID, prompt: prompt,
-            // Base prompt only: output is parsed into required sections (with
-            // missing-section repair), so the user's free-form profile must not
-            // override the contract's structure.
-            systemPrompt: defaultSystemPrompt, options: GenerationOptions()
+            // Keep structured-output contracts isolated from the user's free-form
+            // profile while still applying task-specific routing instructions.
+            systemPrompt: structuredSystemPrompt(route),
+            options: route?.options ?? GenerationOptions()
         )
         return try await runtimeClient.collectGeneratedText(request)
+    }
+
+    private func structuredSystemPrompt(_ route: ModelRoute?) -> String? {
+        let parts = [defaultSystemPrompt, route?.systemPrompt]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 }

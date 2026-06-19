@@ -54,6 +54,33 @@ public final class GenerationRepository: @unchecked Sendable {
         }
     }
 
+    public func fetchGenerationSessions(chatID: String, limit: Int? = nil) throws -> [GenerationSessionRecord] {
+        try writer.read { db in
+            if let limit {
+                return try GenerationSessionRecord.fetchAll(
+                    db,
+                    sql: """
+                    SELECT * FROM generation_sessions
+                    WHERE chat_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    arguments: [chatID, max(0, limit)]
+                )
+            }
+
+            return try GenerationSessionRecord.fetchAll(
+                db,
+                sql: """
+                SELECT * FROM generation_sessions
+                WHERE chat_id = ?
+                ORDER BY created_at DESC
+                """,
+                arguments: [chatID]
+            )
+        }
+    }
+
     public func markFirstToken(generationID: String, date: Date = Date()) throws {
         try writer.write { db in
             try db.execute(

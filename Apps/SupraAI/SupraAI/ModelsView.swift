@@ -1,4 +1,5 @@
 import AppKit
+import SupraCore
 import SupraSessions
 import SwiftUI
 
@@ -11,26 +12,19 @@ struct ModelsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if library.models.isEmpty {
-                emptyState
-            } else {
-                modelList
-            }
+            modelList
             Divider()
             footer
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
+            ToolbarItemGroup(placement: .primaryAction) {
+                SupraToolbarIconButton("Download Model", systemImage: "arrow.down.circle") {
                     showDownloadSheet = true
-                } label: {
-                    Label("Download Model", systemImage: "arrow.down.circle")
                 }
                 .help("Download an MLX model from Hugging Face")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: addModelFolder) {
-                    Label("Add Local Folder", systemImage: "folder.badge.plus")
+
+                SupraToolbarIconButton("Add Local Folder", systemImage: "folder.badge.plus") {
+                    addModelFolder()
                 }
                 .help("Register an MLX model folder already on disk")
             }
@@ -42,27 +36,53 @@ struct ModelsView: View {
         }
     }
 
-    private var emptyState: some View {
-        ContentUnavailableView {
-            Label("No Models", systemImage: "cpu")
-        } description: {
-            Text("Download an MLX model from Hugging Face, or register a folder already on disk, to load a model into the runtime.")
-        } actions: {
-            Button("Download a Model…") { showDownloadSheet = true }
-                .buttonStyle(.borderedProminent)
-            Button("Add Local Folder…", action: addModelFolder)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
     private var modelList: some View {
         List {
-            ForEach(library.models) { model in
-                ModelRow(model: model, isLoading: isLoading(model), isLoaded: isLoaded(model), loadDisabled: isAnyLoading) {
-                    Task { await library.activateAndLoad(modelID: model.id) }
+            Section {
+                ForEach(ModelRole.allCases, id: \.self) { role in
+                    ModelRoleAssignmentRow(
+                        role: role,
+                        models: library.models,
+                        assignedModelID: assignmentBinding(for: role),
+                        resolvedModel: library.resolvedModel(for: role)
+                    )
                 }
+            } header: {
+                Text("Task Models")
+            } footer: {
+                Text("Each chat route loads its assigned model before generation. The runtime holds one model at a time.")
+            }
+
+            Section {
+                if library.models.isEmpty {
+                    noModelsRow
+                } else {
+                    ForEach(library.models) { model in
+                        ModelRow(model: model, isLoading: isLoading(model), isLoaded: isLoaded(model), loadDisabled: isAnyLoading) {
+                            Task { await library.activateAndLoad(modelID: model.id) }
+                        }
+                    }
+                }
+            } header: {
+                Text("Registered Models")
             }
         }
+    }
+
+    private var noModelsRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("No Models", systemImage: "cpu")
+                .font(.callout.weight(.medium))
+            Text("Download an MLX model from Hugging Face, or register a folder already on disk.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Button("Download a Model…") { showDownloadSheet = true }
+                    .buttonStyle(.borderedProminent)
+                Button("Add Local Folder…", action: addModelFolder)
+            }
+        }
+        .padding(.vertical, 6)
     }
 
     @ViewBuilder
@@ -72,7 +92,7 @@ struct ModelsView: View {
             case .idle:
                 Image(systemName: "circle")
                     .foregroundStyle(.secondary)
-                Text("No model loaded.")
+                Text("No runtime model loaded.")
                     .foregroundStyle(.secondary)
             case .loading:
                 ProgressView()
@@ -81,7 +101,7 @@ struct ModelsView: View {
             case .loaded:
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-                Text("Model loaded and ready.")
+                Text(library.loadedModel.map { "Runtime loaded: \($0.displayName)" } ?? "Runtime model loaded.")
             case let .failed(message):
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
@@ -100,6 +120,13 @@ struct ModelsView: View {
             return modelID == model.id
         }
         return false
+    }
+
+    private func assignmentBinding(for role: ModelRole) -> Binding<String> {
+        Binding(
+            get: { library.roleAssignments.modelID(for: role) ?? "" },
+            set: { newValue in library.assignModel(newValue.isEmpty ? nil : newValue, to: role) }
+        )
     }
 
     /// Whether this model is the one actually loaded into the runtime right now —
@@ -132,13 +159,11 @@ struct ModelsView: View {
             relativeTo: nil
         ) else { return }
 
-        guard let summary = try? library.addModel(
+        _ = try? library.addModel(
             displayName: url.lastPathComponent,
             path: url.path(percentEncoded: false),
             bookmarkData: bookmark
-        ) else { return }
-
-        Task { await library.activateAndLoad(modelID: summary.id) }
+        )
     }
 }
 
@@ -157,10 +182,10 @@ private struct ModelRow: View {
                 HStack(spacing: 6) {
                     Text(model.displayName)
                         .font(.body)
-                    // The persisted default model; "Default" is independent of whether
+                    // The persisted startup model; this is independent of whether
                     // it's currently loaded into the runtime.
                     if model.isActive {
-                        Text("Default")
+                        Text("Startup")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 5).padding(.vertical, 1)
@@ -183,13 +208,76 @@ private struct ModelRow: View {
                     .labelStyle(.titleAndIcon)
             } else {
                 // A "Load" action is always offered when the model isn't in the
-                // runtime — including the default model after a relaunch (which used
+                // runtime — including the startup model after a relaunch (which used
                 // to show a static "Active" label with no way to load it).
-                Button("Load", action: onLoad)
+                Button(action: onLoad) {
+                    Label("Load", systemImage: "play.fill")
+                }
                     .disabled(loadDisabled)
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+private struct ModelRoleAssignmentRow: View {
+    let role: ModelRole
+    let models: [ModelSummary]
+    @Binding var assignedModelID: String
+    let resolvedModel: ModelSummary?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: iconName)
+                .foregroundStyle(resolvedModel == nil ? .orange : .green)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(role.displayName)
+                    .font(.callout.weight(.medium))
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(resolvedModel == nil ? .orange : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Picker(role.displayName, selection: $assignedModelID) {
+                Text("Not assigned").tag("")
+                ForEach(models) { model in
+                    Text(model.displayName).tag(model.id)
+                }
+                if !assignedModelID.isEmpty && !models.contains(where: { $0.id == assignedModelID }) {
+                    Text("Missing model").tag(assignedModelID)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: 280)
+            .disabled(models.isEmpty)
+        }
+        .padding(.vertical, 3)
+    }
+
+    private var statusText: String {
+        if models.isEmpty {
+            return "Add a model to assign this route"
+        }
+        if let resolvedModel {
+            return resolvedModel.displayName
+        }
+        return "No route model"
+    }
+
+    private var iconName: String {
+        switch role {
+        case .legalReasoning:
+            "scalemass"
+        case .legalReasoningHighQuality:
+            "sparkles"
+        case .drafting:
+            "square.and.pencil"
+        case .critique:
+            "checkmark.seal"
+        }
     }
 }
 

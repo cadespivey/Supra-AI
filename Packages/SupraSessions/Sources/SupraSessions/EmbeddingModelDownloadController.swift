@@ -6,7 +6,7 @@ import SupraStore
 /// Drives a guided Hugging Face embedding-model download into app-managed
 /// storage and registers the result as a `DocumentEmbeddingModelRecord` so it can
 /// be selected and test-loaded during Document Intelligence setup (plan §2.2).
-/// Separate from `ModelDownloadController`, which handles chat models.
+/// Separate from `ModelDownloadController`, which handles runtime text models.
 @MainActor
 public final class EmbeddingModelDownloadController: ObservableObject {
     public enum State: Equatable, Sendable {

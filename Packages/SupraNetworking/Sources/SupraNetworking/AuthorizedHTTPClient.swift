@@ -12,12 +12,14 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
     private let logger: NetworkRequestLogger
     private let rateLimitTracker: RateLimitTracker
     private let transport: HTTPTransport
+    private let redactsQueryValues: Bool
 
     public init(
         keyStore: any APIKeyStoreProtocol,
         policy: any NetworkPolicyServiceProtocol,
         logger: NetworkRequestLogger,
         rateLimitTracker: RateLimitTracker = RateLimitTracker(),
+        redactsQueryValues: Bool = true,
         transport: @escaping HTTPTransport = { request in
             try await URLSession.shared.data(for: request)
         }
@@ -26,6 +28,7 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         self.policy = policy
         self.logger = logger
         self.rateLimitTracker = rateLimitTracker
+        self.redactsQueryValues = redactsQueryValues
         self.transport = transport
     }
 
@@ -46,7 +49,7 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
                 method: method,
                 blockedReason: String(describing: error),
                 relatedResearchSessionID: relatedResearchSessionID,
-                requestMetadataJSON: Self.requestMetadataJSON(for: request)
+                requestMetadataJSON: requestMetadataJSON(for: request)
             )
             throw error
         }
@@ -61,7 +64,7 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
                 method: method,
                 blockedReason: String(describing: error),
                 relatedResearchSessionID: relatedResearchSessionID,
-                requestMetadataJSON: Self.requestMetadataJSON(for: request)
+                requestMetadataJSON: requestMetadataJSON(for: request)
             )
             throw error
         }
@@ -79,7 +82,7 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
             url: url,
             method: method,
             relatedResearchSessionID: relatedResearchSessionID,
-            requestMetadataJSON: Self.requestMetadataJSON(for: authorizedRequest)
+            requestMetadataJSON: requestMetadataJSON(for: authorizedRequest)
         )
 
         do {
@@ -102,17 +105,42 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         }
     }
 
-    private static func requestMetadataJSON(for request: URLRequest) -> String? {
+    private func requestMetadataJSON(for request: URLRequest) -> String? {
         guard let url = request.url else { return nil }
         let sanitizedHeaders = (request.allHTTPHeaderFields ?? [:]).filter { key, _ in
             key.lowercased() != "authorization"
         }
+        // The query string carries the user's privileged search terms (e.g. the
+        // CourtListener `q=` parameter). Unless query-term logging is explicitly
+        // enabled, redact parameter *values* to a stable fingerprint while keeping
+        // the parameter names, matching the audit-event privacy guarantee.
+        let query = url.query.map { redactsQueryValues ? Self.redactedQuery($0) : $0 }
         let metadata = NetworkRequestAuditMetadata(
-            query: url.query,
+            query: query,
             headers: sanitizedHeaders.isEmpty ? nil : sanitizedHeaders
         )
         guard let data = try? JSONEncoder().encode(metadata) else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    /// Replaces each query parameter's value with a stable fingerprint, preserving
+    /// the parameter names so the *shape* of the request remains auditable.
+    static func redactedQuery(_ query: String) -> String {
+        query.split(separator: "&", omittingEmptySubsequences: false).map { pair -> String in
+            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { return String(pair) }
+            let value = String(parts[1])
+            let marker = value.isEmpty ? "" : "#\(fingerprint(value))"
+            return "\(parts[0])=\(marker)"
+        }.joined(separator: "&")
+    }
+
+    private static func fingerprint(_ value: String) -> String {
+        var hash: UInt64 = 1469598103934665603
+        for byte in value.utf8 {
+            hash = (hash ^ UInt64(byte)) &* 1099511628211
+        }
+        return String(hash, radix: 16)
     }
 }
 

@@ -43,4 +43,32 @@ final class ReasoningContentTests: XCTestCase {
             "The tag </think> appears in prose here."
         )
     }
+
+    func testResolveFlagsTruncatedReasoningWhenThinkingEnabledAndNoCloseTag() {
+        let raw = "Step 1: the model is still reasoning and ran out of tokens"
+        XCTAssertEqual(
+            ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: true),
+            .truncatedReasoning(raw)
+        )
+    }
+
+    func testResolveTreatsNoCloseTagAsAnswerWhenThinkingDisabled() {
+        let raw = "The agreement does not require arbitration."
+        XCTAssertEqual(
+            ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: false),
+            .answer(raw)
+        )
+    }
+
+    func testResolveReturnsAnswerAfterCloseTagEvenWhenThinkingEnabled() {
+        let raw = "weigh the clause\n</think>\n\nNo — it is not required."
+        XCTAssertEqual(
+            ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: true),
+            .answer("No — it is not required.")
+        )
+    }
+
+    func testResolveEmptyOutputIsAnswerNotTruncation() {
+        XCTAssertEqual(ReasoningContent.resolve(rawOutput: "   ", thinkingEnabled: true), .answer(""))
+    }
 }

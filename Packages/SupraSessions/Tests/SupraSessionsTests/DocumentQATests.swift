@@ -56,6 +56,27 @@ final class DocumentQATests: XCTestCase {
         XCTAssertEqual(result.status, StructuredOutputStatus.complete.rawValue)
     }
 
+    func testDocumentQAUsesStructuredOutputRouteOptionsAndPrompt() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        try await indexDoc(store, matter.id, "agreement.txt", "The agreement required notice by May 1, 2024.")
+
+        let runtime = StubRuntimeClient(outcome: { request in
+            XCTAssertEqual(request.options.preset, .legalResearch)
+            XCTAssertFalse(request.systemPrompt?.contains("legal authorities") ?? true)
+            XCTAssertTrue(request.systemPrompt?.contains("legal document analysis assistant") ?? false)
+            return .events([
+                .event(request, 0, .token, token: "Notice was required by May 1, 2024 [S1]."),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: nil)
+
+        let generated = await qa.generate(question: "When was notice required?", modelID: ModelID())
+
+        XCTAssertNotNil(generated)
+    }
+
     func testMissingCitationsMarkNeedsReview() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")

@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 public final class KeychainTokenStore: APIKeyStoreProtocol, @unchecked Sendable {
@@ -24,6 +25,10 @@ public final class KeychainTokenStore: APIKeyStoreProtocol, @unchecked Sendable 
 
         var attributes = query
         attributes[kSecValueData as String] = data
+        // Bind the token to this device and keep it out of iCloud Keychain sync /
+        // keychain migration; it is readable after first unlock so the background
+        // runtime service can use it without an interactive unlock prompt.
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
 
         let status = SecItemAdd(attributes as CFDictionary, nil)
         guard status == errSecSuccess else {
@@ -58,7 +63,28 @@ public final class KeychainTokenStore: APIKeyStoreProtocol, @unchecked Sendable 
     }
 
     public func hasCourtListenerToken() throws -> Bool {
-        try loadCourtListenerToken() != nil
+        var query = baseQuery()
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        query[kSecUseAuthenticationContext as String] = context
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            return true
+        case errSecItemNotFound:
+            return false
+        case errSecInteractionNotAllowed, errSecAuthFailed:
+            // The item appears to require interactive authorization. Treat it as
+            // present so callers can defer the prompt until they actually load it.
+            return true
+        default:
+            throw KeychainTokenStoreError.unhandledStatus(status)
+        }
     }
 
     private func baseQuery() -> [String: Any] {

@@ -36,10 +36,14 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         }
     }
 
+    /// Appends a version. Pass `versionIndex: nil` (the default) to let the next
+    /// index be computed atomically inside the write transaction — this avoids the
+    /// read-then-write race where two appends compute the same next index from a
+    /// separate read. An explicit index is still honored for callers that need it.
     @discardableResult
     public func createVersion(
         structuredOutputID: String,
-        versionIndex: Int,
+        versionIndex: Int? = nil,
         contentMarkdown: String,
         requiredSections: [String],
         presentSections: [String],
@@ -54,9 +58,14 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         let missingSectionsJSON = try JSONCoding.encode(missingSections)
         return try writer.write { db in
             let now = Date()
+            let resolvedIndex = try versionIndex ?? (Int.fetchOne(
+                db,
+                sql: "SELECT COALESCE(MAX(version_index), 0) + 1 FROM structured_output_versions WHERE structured_output_id = ?",
+                arguments: [structuredOutputID]
+            ) ?? 1)
             let record = StructuredOutputVersionRecord(
                 structuredOutputID: structuredOutputID,
-                versionIndex: versionIndex,
+                versionIndex: resolvedIndex,
                 parentVersionID: parentVersionID,
                 contentMarkdown: contentMarkdown,
                 requiredSectionsJSON: requiredSectionsJSON,

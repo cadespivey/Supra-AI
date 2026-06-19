@@ -7,7 +7,7 @@ enum RuntimeErrorMapper {
     }
 
     static func modelNotLoaded() -> RuntimeError {
-        RuntimeError(category: "modelNotLoaded", message: "No matching chat model is loaded.")
+        RuntimeError(category: "modelNotLoaded", message: "No matching runtime model is loaded.")
     }
 
     static func generationBusy() -> RuntimeError {
@@ -19,10 +19,18 @@ enum RuntimeErrorMapper {
     }
 
     static func modelLoadFailed(_ error: Error) -> RuntimeError {
-        RuntimeError(
+        let details = error.localizedDescription
+        if looksLikeMemoryPressure(details) {
+            return RuntimeError(
+                category: "modelLoadFailed",
+                message: "The MLX model could not be loaded. The Mac may not have enough free unified memory for the selected quantization/context.",
+                technicalDetails: details
+            )
+        }
+        return RuntimeError(
             category: "modelLoadFailed",
             message: "The MLX model could not be loaded.",
-            technicalDetails: error.localizedDescription
+            technicalDetails: details
         )
     }
 
@@ -40,5 +48,14 @@ enum RuntimeErrorMapper {
             message: "The MLX generation failed.",
             technicalDetails: error.localizedDescription
         )
+    }
+
+    private static func looksLikeMemoryPressure(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("memory")
+            || lower.contains("out of resource")
+            || lower.contains("allocation")
+            || lower.contains("metal")
+            || lower.contains("mps")
     }
 }

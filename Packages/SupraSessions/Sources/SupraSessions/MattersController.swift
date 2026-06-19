@@ -10,6 +10,10 @@ public struct MatterSummary: Identifiable, Sendable, Equatable {
     public let id: String
     public var name: String
     public var jurisdiction: String
+    public var court: String?
+    public var clientNames: String?
+    public var matterDescription: String?
+    public var internalMatterID: String?
     public var partyPerspective: PartyPerspective
     public var updatedAt: Date
 
@@ -17,6 +21,10 @@ public struct MatterSummary: Identifiable, Sendable, Equatable {
         self.id = record.id
         self.name = record.name
         self.jurisdiction = record.jurisdiction
+        self.court = record.court
+        self.clientNames = record.clientNames
+        self.matterDescription = record.matterDescription
+        self.internalMatterID = record.internalMatterID
         self.partyPerspective = PartyPerspective(rawValue: record.partyPerspective) ?? .neutral
         self.updatedAt = record.updatedAt
     }
@@ -32,6 +40,9 @@ public struct MatterDraft: Sendable, Equatable {
     public var judge: String
     public var docketNumber: String
     public var practiceArea: String
+    public var clientNames: String
+    public var matterDescription: String
+    public var internalMatterID: String
     public var notes: String
 
     public init(
@@ -42,6 +53,9 @@ public struct MatterDraft: Sendable, Equatable {
         judge: String = "",
         docketNumber: String = "",
         practiceArea: String = "",
+        clientNames: String = "",
+        matterDescription: String = "",
+        internalMatterID: String = "",
         notes: String = ""
     ) {
         self.name = name
@@ -51,6 +65,9 @@ public struct MatterDraft: Sendable, Equatable {
         self.judge = judge
         self.docketNumber = docketNumber
         self.practiceArea = practiceArea
+        self.clientNames = clientNames
+        self.matterDescription = matterDescription
+        self.internalMatterID = internalMatterID
         self.notes = notes
     }
 
@@ -63,6 +80,9 @@ public struct MatterDraft: Sendable, Equatable {
             judge: record.judge ?? "",
             docketNumber: record.docketNumber ?? "",
             practiceArea: record.practiceArea ?? "",
+            clientNames: record.clientNames ?? "",
+            matterDescription: record.matterDescription ?? "",
+            internalMatterID: record.internalMatterID ?? "",
             notes: record.notes ?? ""
         )
     }
@@ -148,6 +168,9 @@ public final class MattersController: ObservableObject {
             judge: draft.judge,
             docketNumber: draft.docketNumber,
             practiceArea: draft.practiceArea,
+            clientNames: draft.clientNames,
+            matterDescription: draft.matterDescription,
+            internalMatterID: draft.internalMatterID,
             notes: draft.notes,
             defaultChatTitle: "General — \(trimmedName)"
         )
@@ -185,6 +208,9 @@ public final class MattersController: ObservableObject {
             judge: draft.judge,
             docketNumber: draft.docketNumber,
             practiceArea: draft.practiceArea,
+            clientNames: draft.clientNames,
+            matterDescription: draft.matterDescription,
+            internalMatterID: draft.internalMatterID,
             notes: draft.notes
         )
         _ = try? store.auditEvents.recordEvent(

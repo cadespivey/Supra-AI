@@ -216,6 +216,13 @@ private struct ResultDetailSheet: View {
     let result: ResearchSessionController.SessionResult
     @Environment(\.dismiss) private var dismiss
 
+    /// The current result from the controller, so the review badge reflects an
+    /// in-sheet review immediately instead of the (stale) snapshot captured when
+    /// the sheet was presented.
+    private var liveResult: ResearchSessionController.SessionResult {
+        controller.resultsByQuery.values.flatMap { $0 }.first { $0.id == result.id } ?? result
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
@@ -241,7 +248,7 @@ private struct ResultDetailSheet: View {
                     Section("Snippet") { Text(snippet).font(.callout) }
                 }
                 Section("Review") {
-                    ReviewBadge(state: result.reviewState)
+                    ReviewBadge(state: liveResult.reviewState)
                     ResultReviewMenu(controller: controller, resultID: result.id)
                 }
                 Section("Raw metadata") {

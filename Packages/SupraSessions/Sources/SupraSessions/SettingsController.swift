@@ -10,9 +10,16 @@ import SupraStore
 public final class SettingsController: ObservableObject {
     static let generationDefaultsKey = "generation.default"
 
+    public enum CourtListenerTokenSource: String, Sendable {
+        case none
+        case keychain
+        case environment
+    }
+
     /// True when a CourtListener API token is stored in the Keychain. Published
     /// so the Settings UI reflects save/clear without re-reading the Keychain.
     @Published public private(set) var hasCourtListenerToken = false
+    @Published public private(set) var courtListenerTokenSource: CourtListenerTokenSource = .none
     private let tokenStore: any APIKeyStoreProtocol
 
     /// Choosing a preset snaps temperature/topP to that preset's character so
@@ -22,9 +29,13 @@ public final class SettingsController: ObservableObject {
     @Published public var preset: GenerationPreset {
         didSet {
             guard preset != oldValue else { return }
-            let params = preset.samplingParameters
-            topP = params.topP
-            temperature = params.temperature // persists via temperature's didSet
+            let defaults = preset.defaultOptions
+            topP = defaults.topP
+            topK = defaults.topK
+            maxContextTokens = defaults.maxContextTokens
+            thinkingBudget = defaults.thinkingBudget
+            maxOutputTokens = defaults.maxOutputTokens
+            temperature = defaults.temperature // persists via temperature's didSet
         }
     }
     @Published public var temperature: Double { didSet { persist() } }
@@ -35,6 +46,9 @@ public final class SettingsController: ObservableObject {
 
     private let store: SupraStore
     private var topP: Double
+    private var topK: Int?
+    private var maxContextTokens: Int
+    private var thinkingBudget: ThinkingBudget
 
     public init(
         store: SupraStore,
@@ -44,7 +58,7 @@ public final class SettingsController: ObservableObject {
         self.store = store
         self.appVersion = appVersion
         self.modelsDirectoryPath = ManagedModelStorage.modelsDirectory().path
-        self.tokenStore = tokenStore ?? KeychainTokenStore()
+        self.tokenStore = tokenStore ?? EnvironmentBackedTokenStore(primary: KeychainTokenStore())
 
         let stored = (try? store.appSettings.getSetting(Self.generationDefaultsKey, as: GenerationOptions.self))
             ?? GenerationOptions()
@@ -52,7 +66,10 @@ public final class SettingsController: ObservableObject {
         self.temperature = stored.temperature
         self.maxOutputTokens = stored.maxOutputTokens
         self.topP = stored.topP
-        self.hasCourtListenerToken = (try? self.tokenStore.hasCourtListenerToken()) ?? false
+        self.topK = stored.topK
+        self.maxContextTokens = stored.maxContextTokens
+        self.thinkingBudget = stored.thinkingBudget
+        refreshCourtListenerTokenState()
     }
 
     /// Stores a CourtListener API token in the Keychain (spec §2.4). Empty
@@ -61,12 +78,12 @@ public final class SettingsController: ObservableObject {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         try? tokenStore.saveCourtListenerToken(trimmed)
-        hasCourtListenerToken = (try? tokenStore.hasCourtListenerToken()) ?? false
+        refreshCourtListenerTokenState()
     }
 
     public func clearCourtListenerToken() {
         try? tokenStore.deleteCourtListenerToken()
-        hasCourtListenerToken = (try? tokenStore.hasCourtListenerToken()) ?? false
+        refreshCourtListenerTokenState()
     }
 
     public var currentOptions: GenerationOptions {
@@ -74,11 +91,26 @@ public final class SettingsController: ObservableObject {
             preset: preset,
             temperature: temperature,
             topP: topP,
-            maxOutputTokens: maxOutputTokens
+            topK: topK,
+            maxContextTokens: maxContextTokens,
+            maxOutputTokens: maxOutputTokens,
+            thinkingBudget: thinkingBudget
         )
     }
 
     private func persist() {
         try? store.appSettings.setSetting(Self.generationDefaultsKey, value: currentOptions)
+    }
+
+    private func refreshCourtListenerTokenState() {
+        hasCourtListenerToken = (try? tokenStore.hasCourtListenerToken()) ?? false
+        if let environmentStore = tokenStore as? EnvironmentBackedTokenStore,
+           environmentStore.hasEnvironmentCourtListenerToken {
+            courtListenerTokenSource = .environment
+        } else if hasCourtListenerToken {
+            courtListenerTokenSource = .keychain
+        } else {
+            courtListenerTokenSource = .none
+        }
     }
 }

@@ -82,6 +82,45 @@ final class SupraNetworkingTests: XCTestCase {
         XCTAssertFalse(record.requestMetadataJSON?.localizedCaseInsensitiveContains("authorization") ?? true)
     }
 
+    func testAuthorizedHTTPClientRedactsPrivilegedQueryTermsFromLogByDefault() async throws {
+        let store = try makeStore()
+        let spy = TransportSpy()
+        let client = AuthorizedHTTPClient(
+            keyStore: InMemoryKeyStore(token: "secret-token"),
+            policy: NetworkPolicyService(),
+            logger: NetworkRequestLogger(repository: store.networkRequests),
+            transport: { request in await spy.respond(to: request, statusCode: 200) }
+        )
+        let url = try XCTUnwrap(URL(string: "https://www.courtlistener.com/api/rest/v4/search/?q=trade%20secret%20misappropriation&type=o"))
+        _ = try await client.send(URLRequest(url: url))
+
+        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
+        let metadata = record.requestMetadataJSON ?? ""
+        XCTAssertFalse(metadata.localizedCaseInsensitiveContains("misappropriation"), "raw privileged query terms must not be persisted")
+        XCTAssertFalse(metadata.localizedCaseInsensitiveContains("trade"), "raw privileged query terms must not be persisted")
+        XCTAssertTrue(metadata.contains("q="), "the parameter name should still be recorded for auditability")
+        // The transport still receives the real, un-redacted query.
+        let sent = await spy.lastRequest()
+        XCTAssertTrue(sent?.url?.query?.contains("misappropriation") ?? false)
+    }
+
+    func testAuthorizedHTTPClientKeepsQueryTermsWhenLoggingExplicitlyEnabled() async throws {
+        let store = try makeStore()
+        let spy = TransportSpy()
+        let client = AuthorizedHTTPClient(
+            keyStore: InMemoryKeyStore(token: "secret-token"),
+            policy: NetworkPolicyService(),
+            logger: NetworkRequestLogger(repository: store.networkRequests),
+            redactsQueryValues: false,
+            transport: { request in await spy.respond(to: request, statusCode: 200) }
+        )
+        let url = try XCTUnwrap(URL(string: "https://www.courtlistener.com/api/rest/v4/search/?q=noncompete&type=o"))
+        _ = try await client.send(URLRequest(url: url))
+
+        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
+        XCTAssertTrue(record.requestMetadataJSON?.localizedCaseInsensitiveContains("noncompete") ?? false)
+    }
+
     func testAuthorizedHTTPClientLogsBlockedPolicyRequestWithoutSending() async throws {
         let store = try makeStore()
         let spy = TransportSpy()

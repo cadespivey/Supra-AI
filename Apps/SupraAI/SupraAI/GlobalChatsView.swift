@@ -3,8 +3,8 @@ import SupraSessions
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The first persisted global chat flow: pick or create a chat, send a prompt
-/// to the loaded model, and watch the answer stream in.
+/// The first persisted global chat flow: pick or create a chat, route the prompt,
+/// and watch the answer stream in.
 struct GlobalChatsView: View {
     /// How the chat list is presented in the bar. The global Chats screen uses a
     /// dropdown; a matter's Chat tab shows its chats inline (no matter selector,
@@ -130,7 +130,7 @@ struct GlobalChatsView: View {
                 ContentUnavailableView(
                     "Start a Conversation",
                     systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Ask the loaded model a question to begin.")
+                    description: Text("Ask a question to begin.")
                 )
             }
         }
@@ -167,7 +167,7 @@ struct GlobalChatsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             case .idle:
-                Text("Load a model in the Models tab to start chatting.")
+                Text("Task models load on demand. Assign them in Models for model answers; verification can run without one.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -289,16 +289,45 @@ struct GlobalChatsView: View {
     }
 
     private var canSend: Bool {
-        library.loadedModelID != nil
-            && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func send() {
-        guard canSend, let modelID = library.loadedModelID else { return }
-        controller.send(prompt: draft, modelID: modelID, attachments: attachments)
-        draft = ""
-        attachments = []
-        attachmentError = nil
+        guard canSend else { return }
+        let rawPrompt = draft
+        let rawAttachments = attachments
+        let router = ModelRouter(configuration: .fromEnvironment())
+        let routed = router.routePrompt(rawPrompt)
+        guard controller.canSendRoutedPrompt(routed) else {
+            attachmentError = "Enter a prompt, paste text to verify, or use `/critique` after an assistant draft."
+            return
+        }
+
+        Task { @MainActor in
+            var modelID: ModelID?
+            if controller.requiresRuntimeModel(for: routed) {
+                switch await library.ensureLoadedRoutedModelID(
+                    for: routed.route.role,
+                    configuration: router.configuration
+                ) {
+                case let .success(loaded):
+                    modelID = loaded
+                case let .failure(issue):
+                    attachmentError = issue.message
+                    return
+                }
+            }
+            draft = ""
+            attachments = []
+            attachmentError = nil
+            controller.send(
+                prompt: routed.prompt,
+                modelID: modelID,
+                attachments: rawAttachments,
+                route: routed.route,
+                displayPrompt: rawPrompt
+            )
+        }
     }
 
     // MARK: - Status bar
@@ -322,7 +351,7 @@ struct GlobalChatsView: View {
             Button { showGenerationSettings.toggle() } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "slider.horizontal.3")
-                    Text(settings.preset.rawValue.capitalized)
+                    Text(settings.preset.displayName)
                 }
             }
             .buttonStyle(.plain)
@@ -341,7 +370,7 @@ struct GlobalChatsView: View {
         case .loaded: library.loadedModel?.displayName ?? "Model loaded"
         case .loading: "Loading model…"
         case .failed: "Model failed to load"
-        case .idle: "No model loaded"
+        case .idle: "Runtime idle"
         }
     }
 
@@ -358,8 +387,8 @@ struct GlobalChatsView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Generation").font(.headline)
             Picker("Preset", selection: $settings.preset) {
-                ForEach(GenerationPreset.allCases, id: \.self) { preset in
-                    Text(preset.rawValue.capitalized).tag(preset)
+                ForEach(GenerationPreset.userSelectableDefaults, id: \.self) { preset in
+                    Text(preset.displayName).tag(preset)
                 }
             }
             .pickerStyle(.segmented)

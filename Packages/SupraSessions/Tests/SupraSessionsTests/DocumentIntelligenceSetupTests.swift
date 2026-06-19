@@ -109,7 +109,7 @@ private let capableToolchain = DocumentToolchainCapabilities(
     heicDecoding: true, supportedFamilies: ["pdf"], ocrLanguages: ["en-US"]
 )
 
-/// Runtime client stub that reports a loaded chat model and loads embeddings at a
+/// Runtime client stub that reports a loaded runtime text model and loads embeddings at a
 /// configurable dimension, honoring the request's expected-dimension check.
 private final class SetupStubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     private let embeddingDimension: Int
