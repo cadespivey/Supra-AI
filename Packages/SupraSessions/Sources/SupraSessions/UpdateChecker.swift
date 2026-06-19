@@ -57,7 +57,9 @@ public enum ReleaseUpdateChecker {
     public static func evaluate(release: GitHubRelease, currentVersion: String) -> AvailableUpdate? {
         let latest = release.tagName.trimmingCharacters(in: Self.versionPrefix)
         guard !release.prerelease, isNewer(latest, than: currentVersion) else { return nil }
-        let asset = release.assets.first { $0.name.hasSuffix(".zip") || $0.name.hasSuffix(".dmg") }
+        // Prefer the .dmg (drag-to-install) over the .zip.
+        let asset = release.assets.first { $0.name.hasSuffix(".dmg") }
+            ?? release.assets.first { $0.name.hasSuffix(".zip") }
         return AvailableUpdate(version: latest, releaseURL: release.htmlURL, downloadURL: asset?.browserDownloadURL)
     }
 
