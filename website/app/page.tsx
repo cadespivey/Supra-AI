@@ -1,7 +1,7 @@
 import { CapabilityGrid } from "@/components/CapabilityGrid";
 import { FinalCta } from "@/components/FinalCta";
 import { Hero } from "@/components/Hero";
-import { PrivacyArchitectureDiagram } from "@/components/PrivacyArchitectureDiagram";
+import { PrivacySection } from "@/components/PrivacySection";
 import { SourceGroundingStack } from "@/components/SourceGroundingStack";
 
 export default function Home() {
@@ -10,7 +10,7 @@ export default function Home() {
       <Hero />
       <SourceGroundingStack />
       <CapabilityGrid />
-      <PrivacyArchitectureDiagram />
+      <PrivacySection />
       <FinalCta />
     </main>
   );
