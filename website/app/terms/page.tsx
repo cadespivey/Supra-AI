@@ -13,7 +13,7 @@ const sections = [
   },
   {
     title: "No legal advice",
-    body: "Supra AI does not provide legal advice and is not a law firm. Its outputs are tools to support an attorney's independent judgment, not a substitute for it.",
+    body: "Supra AI does not provide legal advice and is not a law firm. Its outputs are tools to support an attorney’s independent judgment, not a substitute for it.",
   },
   {
     title: "No attorney-client relationship",
@@ -33,7 +33,7 @@ const sections = [
   },
   {
     title: "No warranty",
-    body: 'The software is provided "as is" and "as available," without warranties of any kind, express or implied, including merchantability, fitness for a particular purpose, accuracy, and non-infringement, to the fullest extent permitted by law.',
+    body: 'The software is provided “as is” and “as available,” without warranties of any kind, express or implied, including merchantability, fitness for a particular purpose, accuracy, and non-infringement, to the fullest extent permitted by law.',
   },
   {
     title: "Limitation of liability",
@@ -53,23 +53,25 @@ export default function TermsPage() {
       intro="These terms govern use of the Supra AI public beta. They are written conservatively and will be finalized before general release."
     >
       <DraftNotice />
-      <div className="space-y-5">
+      <div className="space-y-8">
         {sections.map((section) => (
           <section
             key={section.title}
-            className="rounded-2xl border border-supra-border bg-supra-navyPanel p-6"
+            className="border-t border-supra-border pt-5"
           >
-            <h2 className="text-2xl text-supra-white">{section.title}</h2>
-            <p className="mt-4 text-base leading-7 text-supra-muted">
+            <h2 className="text-xl text-supra-white">{section.title}</h2>
+            <p className="measure-wide mt-3 text-base leading-[1.55] text-supra-muted">
               {section.body}
             </p>
           </section>
         ))}
-        <section>
-          <h2 className="mb-5 text-2xl text-supra-white">
+        <section className="border-t border-supra-border pt-5">
+          <h2 className="text-xl text-supra-white">
             Public GitHub Issues warning
           </h2>
-          <FeedbackWarning />
+          <div className="mt-4">
+            <FeedbackWarning />
+          </div>
         </section>
       </div>
     </PageShell>

@@ -21,10 +21,7 @@ const trustLinks = [
 
 function FooterLink({ href, label }: { href: string; label: string }) {
   return (
-    <Link
-      href={href}
-      className="text-sm leading-7 text-supra-muted transition-colors hover:text-supra-gold"
-    >
+    <Link href={href} className="link-quiet text-sm leading-7">
       {label}
     </Link>
   );
@@ -54,7 +51,7 @@ export function SiteFooter() {
 
         <div className="grid gap-10 sm:grid-cols-3">
           <div>
-            <h2 className="font-caps text-xs font-bold uppercase text-supra-white">
+            <h2 className="font-caps text-xs uppercase text-supra-muted">
               Product
             </h2>
             <div className="mt-4 flex flex-col">
@@ -65,7 +62,7 @@ export function SiteFooter() {
           </div>
 
           <div>
-            <h2 className="font-caps text-xs font-bold uppercase text-supra-white">
+            <h2 className="font-caps text-xs uppercase text-supra-muted">
               Trust
             </h2>
             <div className="mt-4 flex flex-col">
@@ -76,7 +73,7 @@ export function SiteFooter() {
           </div>
 
           <div>
-            <h2 className="font-caps text-xs font-bold uppercase text-supra-white">
+            <h2 className="font-caps text-xs uppercase text-supra-muted">
               Project
             </h2>
             <div className="mt-4 flex flex-col">
@@ -86,7 +83,7 @@ export function SiteFooter() {
               <FeedbackWarning compact />
               <Link
                 href={GITHUB_ISSUES_URL}
-                className="mt-4 inline-flex text-sm text-supra-gold underline-offset-4 transition hover:underline"
+                className="link link-ref mt-4 inline-flex text-sm"
               >
                 Issues
               </Link>

@@ -4,17 +4,13 @@ type FeedbackWarningProps = {
 
 export function FeedbackWarning({ compact = false }: FeedbackWarningProps) {
   return (
-    <aside
-      className={`rounded-2xl border border-supra-gold/35 bg-supra-navyPanel ${
-        compact ? "p-4" : "p-6"
-      }`}
-    >
-      <h2 className="font-caps text-xs font-bold uppercase text-supra-gold">
-        Public feedback only.
+    <aside className={`border-l-2 border-supra-gold/60 ${compact ? "pl-4" : "pl-5"}`}>
+      <h2 className="font-caps text-xs uppercase text-supra-gold">
+        Public feedback only
       </h2>
       <p
-        className={`mt-3 text-supra-muted ${
-          compact ? "text-xs leading-6" : "text-sm leading-7"
+        className={`measure text-supra-muted ${
+          compact ? "mt-2 text-xs leading-[1.5]" : "mt-3 text-sm leading-[1.55]"
         }`}
       >
         GitHub Issues are public. Do not include attorney-client privileged

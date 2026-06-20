@@ -77,7 +77,7 @@ function StepMockBody({ index }: { index: number }) {
             </span>
           </div>
           <div className="flex justify-end">
-            <span className="rounded-lg bg-supra-gold px-3 py-1.5 font-caps text-[0.6rem] uppercase tracking-wide text-supra-navyDeep">
+            <span className="rounded-lg bg-supra-gold px-3 py-1.5 font-caps text-[0.6rem] uppercase text-supra-navyDeep">
               Ask
             </span>
           </div>
@@ -90,10 +90,10 @@ function StepMockBody({ index }: { index: number }) {
           <div className={`${bar} w-5/6`} />
           <div className={`${bar} w-2/3`} />
           <div className="mt-3 flex gap-2">
-            <span className="rounded-full border border-supra-gold/50 px-2.5 py-1 font-caps text-[0.55rem] uppercase tracking-wide text-supra-gold">
+            <span className="rounded-full border border-supra-gold/50 px-2.5 py-1 font-caps text-[0.55rem] uppercase text-supra-gold">
               Source 1
             </span>
-            <span className="rounded-full border border-supra-border px-2.5 py-1 font-caps text-[0.55rem] uppercase tracking-wide text-supra-muted">
+            <span className="rounded-full border border-supra-border px-2.5 py-1 font-caps text-[0.55rem] uppercase text-supra-muted">
               Source 2
             </span>
           </div>
@@ -146,13 +146,13 @@ function StepMock({
   return (
     <div
       aria-hidden="true"
-      className="rounded-2xl border border-supra-border bg-supra-navy p-4"
+      className="rounded-md border border-supra-border bg-supra-navy p-4"
     >
       <div className="flex items-center gap-2 border-b border-supra-border pb-3">
         <span className="h-2.5 w-2.5 rounded-full bg-supra-border" />
         <span className="h-2.5 w-2.5 rounded-full bg-supra-border" />
         <span className="h-2.5 w-2.5 rounded-full bg-supra-gold/50" />
-        <span className="ml-2 truncate font-caps text-[0.6rem] uppercase tracking-wide text-supra-muted">
+        <span className="ml-2 truncate font-caps text-[0.6rem] uppercase text-supra-muted">
           {title}
         </span>
       </div>
@@ -168,27 +168,27 @@ export default function ProductPage() {
       title="How Supra AI works"
       intro="Supra AI is organized around the way legal work actually moves: matters, documents, questions, sources, verification, and drafts."
     >
-      <div className="space-y-6">
+      <ol className="list-none space-y-10">
         {steps.map((step, index) => (
-          <article
+          <li
             key={step.title}
-            className="grid gap-6 rounded-2xl border border-supra-border bg-supra-navyPanel p-6 md:grid-cols-[0.9fr_1.1fr] md:items-center"
+            className="grid gap-x-10 gap-y-6 border-t border-supra-border pt-8 md:grid-cols-[0.9fr_1.1fr] md:items-center"
           >
             <div>
-              <p className="font-caps text-xs font-bold uppercase text-supra-gold">
+              <p className="font-caps text-xs uppercase text-supra-gold">
                 Step {String(index + 1).padStart(2, "0")}
               </p>
-              <h2 className="mt-3 text-3xl text-supra-white">{step.title}</h2>
-              <p className="mt-4 text-base leading-7 text-supra-muted">
+              <h2 className="mt-3 text-2xl text-supra-white">{step.title}</h2>
+              <p className="measure mt-4 text-base leading-[1.55] text-supra-muted">
                 {step.body}
               </p>
             </div>
             <StepMock title={step.title}>
               <StepMockBody index={index} />
             </StepMock>
-          </article>
+          </li>
         ))}
-      </div>
+      </ol>
     </PageShell>
   );
 }

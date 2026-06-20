@@ -23,7 +23,7 @@ const setupSteps = [
 const formats = [
   {
     label: ".dmg",
-    body: "Opens a disk image; drag Supra AI into your Applications folder. The standard macOS install.",
+    body: "Recommended. Opens a disk image; drag Supra AI into your Applications folder — the standard macOS install.",
   },
   {
     label: ".zip",
@@ -33,8 +33,8 @@ const formats = [
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-supra-border bg-supra-navyPanel p-6">
-      <h2 className="text-2xl text-supra-white">{title}</h2>
+    <section className="border-t border-supra-border pt-6">
+      <h2 className="text-xl text-supra-white">{title}</h2>
       {children}
     </section>
   );
@@ -47,53 +47,48 @@ export default function DownloadPage() {
       title="Download Supra AI for macOS"
       intro="Supra AI is a public beta for legal professionals on Apple Silicon Macs. Choose the format you prefer — both contain the same app."
     >
-      <div className="grid gap-5">
-        <section className="rounded-2xl border border-supra-gold/40 bg-supra-navyPanelLight p-7">
-          <p className="font-caps text-xs font-bold uppercase text-supra-gold">
+      <div className="space-y-12">
+        <section className="border-t-2 border-supra-gold/60 pt-7">
+          <p className="font-caps text-xs uppercase text-supra-gold">
             Get Supra AI
           </p>
-          <h2 className="mt-3 text-3xl text-supra-white">
-            Choose your download
-          </h2>
+          <h2 className="mt-3 text-2xl text-supra-white">Choose your download</h2>
           <div className="mt-6">
             <DownloadButtons />
           </div>
 
-          <div className="mt-7 grid gap-4 border-t border-supra-border pt-6 sm:grid-cols-2">
+          <dl className="mt-8 grid gap-x-10 gap-y-5 sm:grid-cols-2">
             {formats.map((format) => (
               <div key={format.label}>
-                <p className="font-caps text-xs font-bold uppercase text-supra-gold">
+                <dt className="font-caps text-xs uppercase text-supra-gold">
                   {format.label}
-                </p>
-                <p className="mt-2 text-sm leading-7 text-supra-muted">
+                </dt>
+                <dd className="mt-2 text-base leading-[1.55] text-supra-muted">
                   {format.body}
-                </p>
+                </dd>
               </div>
             ))}
-          </div>
+          </dl>
 
-          <div className="mt-6 flex flex-wrap gap-5 border-t border-supra-border pt-6">
-            <Link
-              href={GITHUB_RELEASES_URL}
-              className="text-supra-gold underline-offset-4 hover:underline"
-            >
+          <div className="mt-8 flex flex-wrap gap-x-8 gap-y-2">
+            <Link href={GITHUB_RELEASES_URL} className="link link-ref">
               All releases &amp; changelog
             </Link>
-            <Link
-              href={GITHUB_REPO_URL}
-              className="text-supra-gold underline-offset-4 hover:underline"
-            >
+            <Link href={GITHUB_REPO_URL} className="link link-ref">
               View source code
             </Link>
           </div>
         </section>
 
-        <div className="grid gap-5 lg:grid-cols-2">
+        <div className="grid gap-x-12 gap-y-12 lg:grid-cols-2">
           <Panel title="Requirements">
             <ul className="mt-5 space-y-3">
               {requirements.map((item) => (
-                <li key={item} className="flex gap-3 text-supra-muted">
-                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-supra-gold" />
+                <li
+                  key={item}
+                  className="flex gap-3 text-base leading-[1.5] text-supra-muted"
+                >
+                  <span className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-supra-gold" />
                   <span>{item}</span>
                 </li>
               ))}
@@ -103,7 +98,10 @@ export default function DownloadPage() {
           <Panel title="Guided setup">
             <ol className="mt-5 space-y-3">
               {setupSteps.map((item, index) => (
-                <li key={item} className="flex gap-3 text-supra-muted">
+                <li
+                  key={item}
+                  className="flex gap-4 text-base leading-[1.5] text-supra-muted"
+                >
                   <span className="font-caps text-xs text-supra-gold">
                     {String(index + 1).padStart(2, "0")}
                   </span>
@@ -114,12 +112,14 @@ export default function DownloadPage() {
           </Panel>
         </div>
 
-        <section>
-          <h2 className="mb-5 text-2xl text-supra-white">Beta feedback</h2>
-          <FeedbackWarning />
+        <section className="border-t border-supra-border pt-6">
+          <h2 className="text-xl text-supra-white">Beta feedback</h2>
+          <div className="mt-5">
+            <FeedbackWarning />
+          </div>
           <Link
             href={GITHUB_ISSUES_URL}
-            className="mt-5 inline-flex text-supra-gold underline-offset-4 hover:underline"
+            className="link link-ref mt-5 inline-block"
           >
             Report an issue on GitHub
           </Link>
