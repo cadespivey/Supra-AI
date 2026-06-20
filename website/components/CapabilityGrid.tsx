@@ -22,56 +22,45 @@ const capabilities = [
 export function CapabilityGrid() {
   return (
     <Section>
-      <div className="max-w-3xl">
-        <p className="font-caps text-xs font-bold uppercase text-supra-gold">
+      <div className="measure-wide">
+        <p className="font-caps text-xs uppercase text-supra-gold">
           Capabilities
         </p>
-        <h2 className="mt-4 text-4xl leading-tight text-supra-white sm:text-5xl">
+        <h2 className="mt-4 text-3xl leading-[1.15] text-supra-white">
           Built for legal work that stays grounded.
         </h2>
-        <p className="mt-6 text-lg leading-8 text-supra-muted">
+        <p className="mt-6 text-lg leading-[1.5] text-supra-muted">
           Supra AI combines local generation with legal research, document
           intelligence, and review workflows designed for attorneys.
         </p>
       </div>
 
-      <div className="mt-12 grid gap-5 lg:grid-cols-[0.95fr_1.3fr]">
-        <article className="rounded-2xl border border-supra-gold/40 bg-supra-navyPanelLight p-6 sm:p-8">
-          <p className="font-caps text-xs font-bold uppercase text-supra-gold">
-            Featured
-          </p>
-          <h3 className="mt-5 text-3xl text-supra-white">Local generation</h3>
-          <p className="mt-5 text-lg leading-8 text-supra-muted">
+      <div className="mt-14 grid gap-x-12 gap-y-10 lg:grid-cols-[0.9fr_1.3fr]">
+        <div className="border-t-2 border-supra-gold/60 pt-6">
+          <p className="font-caps text-xs uppercase text-supra-gold">Featured</p>
+          <h3 className="mt-4 text-2xl text-supra-white">Local generation</h3>
+          <p className="mt-4 text-base leading-[1.55] text-supra-muted">
             Supra AI runs models locally on Apple Silicon, so your files and
             prompts do not need to leave your Mac for generation.
           </p>
-          <div className="mt-10 grid grid-cols-1 gap-3 border-t border-supra-border pt-6 sm:grid-cols-3">
-            {["MLX runtime", "Local model", "On-device embeddings"].map(
-              (label) => (
-                <div
-                  key={label}
-                  className="flex min-h-16 items-center justify-center rounded-xl border border-supra-border bg-supra-navy px-3 py-3 text-center font-caps text-xs font-bold uppercase leading-tight tracking-wide text-supra-muted"
-                >
-                  {label}
-                </div>
-              ),
-            )}
-          </div>
-        </article>
-
-        <div className="grid gap-5 sm:grid-cols-2">
-          {capabilities.map((item) => (
-            <article
-              key={item.title}
-              className="rounded-2xl border border-supra-border bg-supra-navyPanel p-6"
-            >
-              <h3 className="text-2xl text-supra-white">{item.title}</h3>
-              <p className="mt-4 text-base leading-7 text-supra-muted">
-                {item.body}
-              </p>
-            </article>
-          ))}
+          <p className="mt-6 font-caps text-xs uppercase text-supra-muted">
+            MLX runtime · Local model · On-device embeddings
+          </p>
         </div>
+
+        <dl className="grid gap-x-10 gap-y-8 sm:grid-cols-2">
+          {capabilities.map((item) => (
+            <div
+              key={item.title}
+              className="border-t border-supra-border pt-5"
+            >
+              <dt className="text-xl text-supra-white">{item.title}</dt>
+              <dd className="mt-3 text-base leading-[1.55] text-supra-muted">
+                {item.body}
+              </dd>
+            </div>
+          ))}
+        </dl>
       </div>
     </Section>
   );

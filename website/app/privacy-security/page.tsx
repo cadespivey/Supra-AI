@@ -40,7 +40,7 @@ export default function PrivacySecurityPage() {
       title="Privacy & Security"
       intro="Supra AI is designed around local processing, limited network access, and attorney-controlled review."
     >
-      <div className="grid gap-5 lg:grid-cols-3">
+      <div className="grid gap-x-12 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
         {panels.map((panel) => (
           <BoundaryPanel key={panel.title} {...panel} />
         ))}
