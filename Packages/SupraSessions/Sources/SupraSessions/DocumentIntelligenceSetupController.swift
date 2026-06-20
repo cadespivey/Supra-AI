@@ -66,9 +66,16 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
 
     public var isReadyForImport: Bool { isComplete }
 
+    /// True when a runtime chat model is loaded right now or has successfully
+    /// loaded at least once before. The setup step stays satisfied (green) after
+    /// the runtime unloads the model, since loading proved it works.
+    public var chatModelReady: Bool {
+        chatModelLoaded || settings.chatModelLastLoadedAt != nil
+    }
+
     /// True when every setup step passes, so the user may mark setup complete.
     public var canCompleteSetup: Bool {
-        chatModelLoaded
+        chatModelReady
             && selectedEmbeddingModel != nil
             && embeddingTestPassed
             && (toolchain?.meetsMinimumForSetup ?? false)
@@ -78,7 +85,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     /// Human-readable list of steps still outstanding, for the Settings UI.
     public var outstandingSteps: [String] {
         var steps: [String] = []
-        if !chatModelLoaded { steps.append("Load a runtime text model in the Models tab.") }
+        if !chatModelReady { steps.append("Load a runtime text model in the Models tab.") }
         if selectedEmbeddingModel == nil { steps.append("Download and select an embedding model.") }
         else if !embeddingTestPassed { steps.append("Test-load the selected embedding model.") }
         if !(toolchain?.meetsMinimumForSetup ?? false) { steps.append("Confirm the local extraction/OCR toolchain.") }

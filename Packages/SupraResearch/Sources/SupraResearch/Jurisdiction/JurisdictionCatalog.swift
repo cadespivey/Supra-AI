@@ -274,7 +274,9 @@ public struct JurisdictionCatalog: Sendable {
                 jurisdictionName: "Federal",
                 mandatoryAuthorities: ["Supreme Court of the United States", "Relevant United States Court of Appeals"],
                 persuasiveAuthorities: ["Federal district courts and specialty tribunals as appropriate to the issue"],
-                courtListenerIDs: []
+                // SCOTUS + every circuit, so selecting "Federal Courts" actually
+                // bounds the CourtListener query instead of searching all courts.
+                courtListenerIDs: ["scotus", "ca1", "ca2", "ca3", "ca4", "ca5", "ca6", "ca7", "ca8", "ca9", "ca10", "ca11", "cadc", "cafc"]
             )
         }
 
@@ -454,6 +456,14 @@ private extension JurisdictionCatalog {
             case .none:
                 continue
             }
+        }
+        // Every state/territory gets a selectable aggregate even when the bundled
+        // court list has no detailed section for it, so jurisdiction pickers and
+        // prompt inference can cover all 50 states (court IDs stay best-effort —
+        // SCOTUS plus any mapped state courts for that state).
+        for stateName in statePostalCodes.keys.sorted() where !emittedStateAggregates.contains(stateName) {
+            emittedStateAggregates.insert(stateName)
+            append(makeStateAggregateOption(stateName))
         }
         return options
     }

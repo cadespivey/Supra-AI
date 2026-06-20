@@ -31,6 +31,24 @@ public final class GlobalChatController: ObservableObject {
     private var lastLegalPacketsByChatID: [String: LegalSourcePacket] = [:]
     private var activeGenerationID: GenerationID?
 
+    /// Top-level jurisdiction options for the global chat's jurisdiction selector
+    /// (Federal courts plus each state's aggregate court group), Federal first.
+    public let topLevelJurisdictions: [JurisdictionOption]
+
+    /// The user's jurisdiction choice for global-chat legal research. Empty means
+    /// "auto-detect" — infer one from the prompt; otherwise a `JurisdictionOption`
+    /// id that hard-bounds CourtListener to that jurisdiction's courts. Persisted
+    /// app-wide, but only for the global scope (matter chats are bound by their
+    /// matter's jurisdiction instead).
+    @Published public var jurisdictionOverrideID: String = "" {
+        didSet {
+            guard oldValue != jurisdictionOverrideID, case .global = scope else { return }
+            try? store.appSettings.setSetting(Self.jurisdictionOverrideKey, value: jurisdictionOverrideID)
+        }
+    }
+
+    static let jurisdictionOverrideKey = "globalChat.jurisdictionOverride"
+
     public init(
         store: SupraStore,
         runtimeClient: any RuntimeClientProtocol,
@@ -56,6 +74,10 @@ public final class GlobalChatController: ObservableObject {
             ),
             baseURLOverride: legalConfiguration.courtListenerBaseURL
         )
+        self.topLevelJurisdictions = Self.makeTopLevelJurisdictions()
+        if case .global = scope {
+            self.jurisdictionOverrideID = (try? store.appSettings.getSetting(Self.jurisdictionOverrideKey, as: String.self)) ?? ""
+        }
     }
 
     // MARK: - Chat list
@@ -166,7 +188,13 @@ public final class GlobalChatController: ObservableObject {
         case .legalVerify:
             return false
         case .legalQA, .legalResearch:
-            let classification = classificationApplyingMatterScope(LegalQueryClassifier.classify(routed.prompt))
+            // Must mirror legalResearchOutput's classification (incl. the chat's
+            // jurisdiction selection/inference); otherwise an auto-detected
+            // jurisdiction would let research proceed without a model loaded.
+            let classification = classificationApplyingChatJurisdiction(
+                classificationApplyingMatterScope(LegalQueryClassifier.classify(routed.prompt)),
+                prompt: routed.prompt
+            )
             return !(routed.route.requiresJurisdiction && classification.needsJurisdictionForAuthority)
         case .legalCritique, .drafting, .generalQA:
             return true
@@ -240,6 +268,13 @@ public final class GlobalChatController: ObservableObject {
 
             let chatID = try ensureSelectedChat().id
 
+            // Replay prior turns so the model can answer follow-ups in context.
+            // Captured before appending the new user message.
+            let history = Self.conversationHistory(
+                from: (try? store.chats.fetchMessages(chatID: chatID))?.map(ChatMessage.init) ?? [],
+                budget: Self.historyCharBudget
+            )
+
             _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
             let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
             let generationID = GenerationID()
@@ -264,6 +299,7 @@ public final class GlobalChatController: ObservableObject {
                 modelID: modelID,
                 prompt: modelPrompt,
                 systemPrompt: systemPrompt,
+                history: history,
                 options: options
             )
 
@@ -540,7 +576,10 @@ public final class GlobalChatController: ObservableObject {
         systemPrompt: String?,
         options: GenerationOptions
     ) async throws -> LegalWorkflowResult {
-        let classification = classificationApplyingMatterScope(LegalQueryClassifier.classify(prompt))
+        let classification = classificationApplyingChatJurisdiction(
+            classificationApplyingMatterScope(LegalQueryClassifier.classify(prompt)),
+            prompt: prompt
+        )
         if route.requiresJurisdiction, classification.needsJurisdictionForAuthority {
             let message = """
             I need the jurisdiction before I can give source-grounded legal authority. Please specify the state, federal circuit, court, or other governing jurisdiction. If you only want a general non-authoritative overview, use `/draft` or ask for a general overview.
@@ -950,6 +989,114 @@ public final class GlobalChatController: ObservableObject {
             jurisdiction: matter.jurisdiction,
             court: matter.court
         )
+    }
+
+    /// Applies the global chat's jurisdiction selection — or, when set to
+    /// auto-detect, a jurisdiction inferred from the prompt — so CourtListener
+    /// research is actually bounded. No-op for matter chats, which are already
+    /// bound by `classificationApplyingMatterScope`.
+    private func classificationApplyingChatJurisdiction(
+        _ classification: LegalQueryClassification,
+        prompt: String
+    ) -> LegalQueryClassification {
+        guard scopedMatterID == nil else { return classification }
+
+        let isExplicit = !jurisdictionOverrideID.isEmpty
+        let option: JurisdictionOption?
+        if isExplicit {
+            option = JurisdictionCatalog.shared.option(id: jurisdictionOverrideID)
+        } else if classification.jurisdiction == nil {
+            option = inferredJurisdictionOption(from: prompt)
+        } else {
+            option = nil
+        }
+        guard let option else { return classification }
+
+        let scope = JurisdictionCatalog.shared.authorityScope(for: option)
+        var scoped = classification
+        if isExplicit {
+            // A deliberate selection hard-bounds research to that jurisdiction.
+            scoped.jurisdiction = scope.jurisdictionName
+            scoped.jurisdictionContext = scope.modelContext
+            scoped.courtIDs = scope.courtListenerIDs
+        } else {
+            // An inferred jurisdiction only fills gaps the classifier left, so an
+            // explicit jurisdiction named in the prompt still wins.
+            if scoped.needsJurisdictionForAuthority {
+                scoped.jurisdiction = scope.jurisdictionName
+            }
+            scoped.jurisdictionContext = scope.modelContext
+            if scoped.courtIDs.isEmpty {
+                scoped.courtIDs = scope.courtListenerIDs
+            }
+        }
+        return scoped
+    }
+
+    /// Best-effort detection of a jurisdiction named in the prompt across every
+    /// state aggregate plus the federal courts — broader than the classifier's
+    /// built-in shortlist, used only as the auto-detect fallback.
+    private func inferredJurisdictionOption(from prompt: String) -> JurisdictionOption? {
+        let lower = prompt.lowercased()
+        func mentions(_ needle: String) -> Bool {
+            guard !needle.isEmpty else { return false }
+            let pattern = "(^|[^a-z])" + NSRegularExpression.escapedPattern(for: needle.lowercased()) + "([^a-z]|$)"
+            return lower.range(of: pattern, options: .regularExpression) != nil
+        }
+        // Longest state name first so e.g. "West Virginia" isn't captured by the
+        // "Virginia" aggregate (substring), or "North Dakota" by "Dakota".
+        let stateOptions = topLevelJurisdictions
+            .filter { $0.state != nil }
+            .sorted { ($0.state?.count ?? 0) > ($1.state?.count ?? 0) }
+        if let state = stateOptions.first(where: { mentions($0.state ?? "") }) {
+            return state
+        }
+        if lower.range(
+            of: #"(^|[^a-z])(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|federal|d\.?c\.?)\s+circuit"#,
+            options: .regularExpression
+        ) != nil || mentions("federal court") || mentions("federal courts") {
+            return topLevelJurisdictions.first { $0.id == "federal-courts" }
+        }
+        return nil
+    }
+
+    private static func makeTopLevelJurisdictions() -> [JurisdictionOption] {
+        JurisdictionCatalog.shared.options
+            .filter { $0.level == .jurisdiction }
+            .sorted { lhs, rhs in
+                if (lhs.id == "federal-courts") != (rhs.id == "federal-courts") {
+                    return lhs.id == "federal-courts"
+                }
+                return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+            }
+    }
+
+    /// Maximum characters of prior conversation replayed as context, keeping the
+    /// most recent turns within a budget so long chats don't overflow the window.
+    static let historyCharBudget = 16_000
+
+    /// Prior turns to replay (oldest→newest), selecting the most recent within the
+    /// budget. Assistant chain-of-thought is stripped so only answers are fed back.
+    static func conversationHistory(from messages: [ChatMessage], budget: Int) -> [GenerateRequest.Turn] {
+        var turns: [GenerateRequest.Turn] = []
+        var used = 0
+        for message in messages.reversed() {
+            let role: GenerateRequest.Role
+            switch message.role {
+            case .user: role = .user
+            case .assistant: role = .assistant
+            case .system: continue
+            }
+            let raw = message.role == .assistant
+                ? ReasoningContent.answer(from: message.content)
+                : message.content
+            let content = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !content.isEmpty else { continue }
+            if !turns.isEmpty, used + content.count > budget { break }
+            turns.append(GenerateRequest.Turn(role: role, content: content))
+            used += content.count
+        }
+        return turns.reversed()
     }
 
     private static func sameJurisdiction(_ lhs: String?, _ rhs: String) -> Bool {

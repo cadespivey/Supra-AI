@@ -11,6 +11,7 @@ protocol ChatModelController: Sendable {
     func generate(
         prompt: String,
         systemPrompt: String?,
+        history: [GenerateRequest.Turn],
         options: GenerationOptions,
         onToken: @escaping @Sendable (String) async -> Void
     ) async throws -> RuntimeMetrics
@@ -87,6 +88,7 @@ actor MLXModelController: ChatModelController {
     func generate(
         prompt: String,
         systemPrompt: String?,
+        history: [GenerateRequest.Turn],
         options rawOptions: GenerationOptions,
         onToken: @escaping @Sendable (String) async -> Void
     ) async throws -> RuntimeMetrics {
@@ -103,6 +105,7 @@ actor MLXModelController: ChatModelController {
             container: container,
             prompt: prompt,
             systemPrompt: systemPrompt,
+            history: history,
             options: options,
             templateSupportsThinkingToggle: templateSupportsThinkingToggle
         )
@@ -186,6 +189,7 @@ private func generationStream(
     container: ModelContainer,
     prompt: String,
     systemPrompt: String?,
+    history: [GenerateRequest.Turn],
     options: GenerationOptions,
     templateSupportsThinkingToggle: Bool
 ) async throws -> AsyncStream<Generation> {
@@ -195,7 +199,7 @@ private func generationStream(
         ? ["enable_thinking": options.thinkingBudget.enablesModelThinking]
         : nil
     let userInput = UserInput(
-        chat: chatMessages(prompt: prompt, systemPrompt: systemPrompt),
+        chat: chatMessages(prompt: prompt, systemPrompt: systemPrompt, history: history),
         additionalContext: additionalContext
     )
     let input = try await container.prepare(input: userInput)
@@ -212,12 +216,24 @@ private func generationStream(
     )
 }
 
-private func chatMessages(prompt: String, systemPrompt: String?) -> [Chat.Message] {
+private func chatMessages(
+    prompt: String,
+    systemPrompt: String?,
+    history: [GenerateRequest.Turn]
+) -> [Chat.Message] {
     var messages: [Chat.Message] = []
 
     let trimmedSystemPrompt = systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
     if let trimmedSystemPrompt, !trimmedSystemPrompt.isEmpty {
         messages.append(.system(trimmedSystemPrompt))
+    }
+
+    // Prior turns so the model can answer follow-ups in context.
+    for turn in history {
+        switch turn.role {
+        case .user: messages.append(.user(turn.content))
+        case .assistant: messages.append(.assistant(turn.content))
+        }
     }
 
     messages.append(.user(prompt))
