@@ -228,6 +228,24 @@ final class ModelDownloadControllerTests: XCTestCase {
         XCTAssertNil(empty.recommendedModel(for: .legalReasoning))
     }
 
+    @MainActor
+    func testRecommendedHighQualityReasoningIsDeterministicLargestModel() throws {
+        let store = try makeStore()
+        let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
+        // Both fit the high-quality reasoning route — its 6-bit plan default isn't
+        // published, so neither matches it and the choice falls to the heuristic.
+        // The recommendation must be deterministic (the larger 32B model), not flip
+        // with `fetchModels()` ordering.
+        _ = try library.addModel(displayName: "Qwen3 30B A3B Thinking 2507 (4-bit)", path: "/m/Qwen3-30B-A3B-Thinking-2507-4bit", bookmarkData: nil)
+        _ = try library.addModel(displayName: "DeepSeek-R1 Distill Qwen 32B (4-bit)", path: "/m/DeepSeek-R1-Distill-Qwen-32B-4bit", bookmarkData: nil)
+        library.refresh()
+
+        let first = library.recommendedModel(for: .legalReasoningHighQuality)?.path
+        let second = library.recommendedModel(for: .legalReasoningHighQuality)?.path
+        XCTAssertEqual(first, "/m/DeepSeek-R1-Distill-Qwen-32B-4bit")
+        XCTAssertEqual(first, second)
+    }
+
     // MARK: - Helpers
 
     private func tempDir() -> URL {

@@ -251,6 +251,110 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.messages.last?.status, .completed)
     }
 
+    /// An explicit jurisdiction selection in a global chat must bind CourtListener
+    /// (so research proceeds instead of asking) and bound the query's court IDs.
+    func testGlobalChatExplicitJurisdictionBoundsCourtListenerQuery() async throws {
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Answer with sources."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        controller.loadChats()
+        controller.jurisdictionOverrideID = "federal-courts"
+
+        // The prompt names no jurisdiction; the explicit selection must bind it.
+        await controller.performSend(
+            prompt: "What are the elements of promissory estoppel?",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        XCTAssertEqual(controller.messages.last?.content, "Answer with sources.")
+        XCTAssertFalse(court.requests.isEmpty)
+        // Federal selection → SCOTUS + circuits, never an unbounded (empty) query.
+        XCTAssertTrue(court.requests.allSatisfy { !$0.courtIDs.isEmpty })
+        XCTAssertTrue(court.requests.contains { $0.courtIDs.contains("scotus") })
+    }
+
+    /// Auto-detect must infer a jurisdiction the classifier's built-in shortlist
+    /// misses (Wyoming), so research is still bounded rather than asking.
+    func testGlobalChatAutoDetectsJurisdictionFromPrompt() async throws {
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Answer."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        controller.loadChats()
+        // jurisdictionOverrideID stays "" (auto-detect).
+
+        await controller.performSend(
+            prompt: "Research the Wyoming promissory estoppel doctrine.",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        XCTAssertEqual(controller.messages.last?.content, "Answer.")
+        XCTAssertFalse(court.requests.isEmpty)
+        XCTAssertTrue(court.requests.allSatisfy { !$0.courtIDs.isEmpty })
+    }
+
+    private static let singleResultResponse = CourtListenerSearchResponse(
+        count: 1,
+        results: [
+            CourtListenerSearchResultDTO(
+                absoluteURL: "/opinion/1/foo-v-bar/",
+                caseName: "Foo v. Bar",
+                citation: ["1 F.4th 1"],
+                clusterID: 1,
+                court: "United States Court of Appeals for the Ninth Circuit",
+                courtID: "ca9",
+                dateFiled: "2024-02-03",
+                opinions: [CourtListenerOpinionDTO(id: 99, snippet: "A claim was recognized.")],
+                status: "Published"
+            )
+        ]
+    )
+
+    func testConversationHistoryStripsReasoningDropsSystemAndOrdersChronologically() {
+        let messages: [ChatMessage] = [
+            ChatMessage(id: "1", role: .user, content: "First question", status: .completed),
+            ChatMessage(id: "2", role: .assistant, content: "<think>pondering</think>The answer.", status: .completed),
+            ChatMessage(id: "3", role: .system, content: "a system note", status: .completed),
+            ChatMessage(id: "4", role: .user, content: "Second question", status: .completed)
+        ]
+        let history = GlobalChatController.conversationHistory(from: messages, budget: 16_000)
+
+        XCTAssertEqual(history.map(\.role), [.user, .assistant, .user])  // system dropped
+        XCTAssertEqual(history[0].content, "First question")
+        XCTAssertFalse(history[1].content.contains("pondering"))        // chain-of-thought stripped
+        XCTAssertTrue(history[1].content.contains("The answer."))
+        XCTAssertEqual(history[2].content, "Second question")
+    }
+
+    func testConversationHistoryRespectsBudgetKeepingNewest() {
+        let messages: [ChatMessage] = [
+            ChatMessage(id: "1", role: .user, content: String(repeating: "a", count: 100), status: .completed),
+            ChatMessage(id: "2", role: .user, content: String(repeating: "b", count: 100), status: .completed)
+        ]
+        let history = GlobalChatController.conversationHistory(from: messages, budget: 120)
+        XCTAssertEqual(history.count, 1)
+        XCTAssertEqual(history.first?.content.first, "b")  // the newest turn is the one kept
+    }
+
     func testMatterLegalResearchPersistsSourcePacketAndVerifyUsesItWithoutModel() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")

@@ -92,6 +92,7 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
                 let metrics = try await modelController.generate(
                     prompt: request.prompt,
                     systemPrompt: request.systemPrompt,
+                    history: request.history,
                     options: request.options
                 ) { token in
                     coordinator.emitToken(token, generationID: request.generationID)

@@ -1,4 +1,6 @@
+import AppKit
 import SupraCore
+import SupraResearch
 import SupraSessions
 import SwiftUI
 import UniformTypeIdentifiers
@@ -19,8 +21,8 @@ struct GlobalChatsView: View {
     @State private var showGenerationSettings = false
     @State private var attachments: [ChatAttachmentContext] = []
     @State private var attachmentError: String?
-    @State private var showAttachmentImporter = false
     @State private var isLoadingAttachment = false
+    @FocusState private var inputFocused: Bool
 
     private let attachmentLoader = ChatAttachmentLoader()
     private static let maxAttachments = 10
@@ -38,37 +40,70 @@ struct GlobalChatsView: View {
             Divider()
             chatStatusBar
         }
+        .onAppear { inputFocused = true }
     }
 
     // MARK: - Chat selector
 
     private var chatBar: some View {
         HStack(spacing: 12) {
-            if controller.chats.isEmpty {
-                Text("No chats yet")
-                    .foregroundStyle(.secondary)
-            } else {
-                switch listStyle {
-                case .picker:
-                    Picker("Chat", selection: chatSelection) {
-                        ForEach(controller.chats) { chat in
-                            Text(chat.title).tag(chat.id as String?)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: 280)
-                case .inline:
+            switch listStyle {
+            case .picker:
+                Text(selectedChatTitle ?? "New Chat")
+                    .font(.headline)
+                    .foregroundStyle(selectedChatTitle == nil ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            case .inline:
+                if controller.chats.isEmpty {
+                    Text("No chats yet").foregroundStyle(.secondary)
+                } else {
                     inlineChatList
                 }
             }
             Spacer()
+            if listStyle == .picker {
+                chatHistoryMenu
+            }
             Button {
                 _ = try? controller.createChat()
+                inputFocused = true
             } label: {
                 Label("New Chat", systemImage: "square.and.pencil")
             }
         }
         .padding(12)
+    }
+
+    /// Reopen a saved chat without an always-visible dropdown (the inline picker
+    /// was replaced by this compact history menu).
+    private var chatHistoryMenu: some View {
+        Menu {
+            if controller.chats.isEmpty {
+                Text("No previous chats")
+            } else {
+                ForEach(controller.chats) { chat in
+                    Button {
+                        controller.select(chatID: chat.id)
+                    } label: {
+                        if controller.selectedChatID == chat.id {
+                            Label(chat.title, systemImage: "checkmark")
+                        } else {
+                            Text(chat.title)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+        }
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Recent chats")
+    }
+
+    private var selectedChatTitle: String? {
+        controller.chats.first { $0.id == controller.selectedChatID }?.title
     }
 
     /// A horizontal, always-visible list of this matter's chats (replaces the
@@ -96,13 +131,6 @@ struct GlobalChatsView: View {
                 }
             }
         }
-    }
-
-    private var chatSelection: Binding<String?> {
-        Binding(
-            get: { controller.selectedChatID },
-            set: { controller.select(chatID: $0) }
-        )
     }
 
     // MARK: - Messages
@@ -181,7 +209,7 @@ struct GlobalChatsView: View {
                 TextField("Message", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...6)
-                    .disabled(controller.isGenerating)
+                    .focused($inputFocused)
                     .onSubmit(send)
 
                 if controller.isGenerating {
@@ -198,13 +226,6 @@ struct GlobalChatsView: View {
             }
         }
         .padding(12)
-        .fileImporter(
-            isPresented: $showAttachmentImporter,
-            allowedContentTypes: [.image, .plainText, .text, .sourceCode, .pdf, .data],
-            allowsMultipleSelection: true
-        ) { result in
-            if case let .success(urls) = result { addAttachments(urls) }
-        }
     }
 
     // MARK: - Attachments (global chat only)
@@ -214,7 +235,7 @@ struct GlobalChatsView: View {
     private var attachButton: some View {
         Button {
             attachmentError = nil
-            showAttachmentImporter = true
+            presentAttachmentPicker()
         } label: {
             if isLoadingAttachment {
                 ProgressView().controlSize(.small)
@@ -260,6 +281,21 @@ struct GlobalChatsView: View {
                     .buttonStyle(.plain).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// A standalone, movable/resizable open panel (run modally) rather than a
+    /// SwiftUI `.fileImporter` sheet, which on macOS attaches to the window and
+    /// forced it to resize.
+    private func presentAttachmentPicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.image, .pdf, .plainText, .text, .rtf, .data]
+        panel.prompt = "Attach"
+        panel.message = "Choose files or images to attach to this chat"
+        guard panel.runModal() == .OK else { return }
+        addAttachments(panel.urls)
     }
 
     private func addAttachments(_ urls: [URL]) {
@@ -320,6 +356,9 @@ struct GlobalChatsView: View {
             draft = ""
             attachments = []
             attachmentError = nil
+            // Keep the cursor in the composer so the user can type a follow-up
+            // immediately instead of clicking back into the field.
+            inputFocused = true
             controller.send(
                 prompt: routed.prompt,
                 modelID: modelID,
@@ -348,6 +387,9 @@ struct GlobalChatsView: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
+            if listStyle == .picker {
+                jurisdictionMenu
+            }
             Button { showGenerationSettings.toggle() } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "slider.horizontal.3")
@@ -363,6 +405,35 @@ struct GlobalChatsView: View {
         .font(.caption)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+    }
+
+    /// Bounds global-chat legal research (CourtListener) to a jurisdiction's
+    /// courts. "Auto-detect" infers one from the prompt; picking a jurisdiction
+    /// hard-bounds it. Sized to sit beside the model name and generation settings.
+    private var jurisdictionMenu: some View {
+        Menu {
+            Picker("Jurisdiction", selection: $controller.jurisdictionOverrideID) {
+                Text("Auto-detect from prompt").tag("")
+                ForEach(controller.topLevelJurisdictions) { option in
+                    Text(option.displayName).tag(option.id)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "building.columns")
+                Text(jurisdictionLabel).lineLimit(1)
+            }
+        }
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Bounds legal research to this jurisdiction's courts on CourtListener")
+    }
+
+    private var jurisdictionLabel: String {
+        guard !controller.jurisdictionOverrideID.isEmpty else { return "Auto-detect" }
+        return controller.topLevelJurisdictions
+            .first { $0.id == controller.jurisdictionOverrideID }?
+            .displayName ?? "Auto-detect"
     }
 
     private var modelStatusText: String {
@@ -426,6 +497,33 @@ private struct MessageRow: View {
     }
 
     var body: some View {
+        if message.role == .user {
+            userBubble
+        } else {
+            assistantRow
+        }
+    }
+
+    /// User turns: a right-aligned bubble with blue text, like a text
+    /// conversation. The bubble itself is a neutral tint so the blue text stays
+    /// legible (blue-on-blue fails contrast, especially in dark mode).
+    private var userBubble: some View {
+        HStack {
+            Spacer(minLength: 48)
+            Text(attributedContent)
+                .textSelection(.enabled)
+                .lineLimit(nil)
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                .accessibilityLabel(Text("You said: \(displayContent)"))
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    /// Assistant (and system) turns: full-width, with the collapsible reasoning.
+    private var assistantRow: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(roleLabel)
@@ -456,6 +554,7 @@ private struct MessageRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(roleColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
 
