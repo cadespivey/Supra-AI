@@ -22,9 +22,9 @@ export function Hero() {
           </span>
         </h1>
         <p className="mt-4 max-w-2xl text-base leading-7 text-supra-muted sm:text-lg">
-          Supra AI runs locally on your Mac. Your files stay on your machine. No
-          internet is required, except when you choose to use CourtListener
-          research.
+          Once it&apos;s set up, Supra AI runs locally on your Mac. Your matter
+          files, prompts, and generated work stay on your machine — optional
+          CourtListener research is the only feature that uses the network.
         </p>
         <Link
           href="/download"
@@ -32,6 +32,21 @@ export function Hero() {
         >
           Download for macOS →
         </Link>
+        <div className="mt-10 flex flex-wrap items-center justify-center gap-2">
+          {[
+            "Runs on-device",
+            "Apple Silicon · MLX",
+            "Source-grounded",
+            "CourtListener optional",
+          ].map((tag) => (
+            <span
+              key={tag}
+              className="rounded-full border border-supra-border px-4 py-1.5 font-caps text-xs uppercase tracking-wide text-supra-muted"
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
       </div>
     </Section>
   );
