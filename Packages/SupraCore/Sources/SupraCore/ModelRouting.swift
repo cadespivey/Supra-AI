@@ -76,7 +76,7 @@ public struct LegalModelConfiguration: Codable, Hashable, Sendable {
     public init(
         backend: ModelBackend = .mlx,
         legalReasoningModel: String = "Qwen3-30B-A3B-Thinking-2507-MLX-4bit",
-        legalReasoningHighQualityModel: String = "Qwen3-30B-A3B-Thinking-2507-MLX-6bit",
+        legalReasoningHighQualityModel: String = "DeepSeek-R1-Distill-Qwen-32B-MLX-4bit",
         draftingModel: String = "Qwen3-30B-A3B-Instruct-2507-MLX-4bit",
         critiqueModel: String = "DeepSeek-R1-Distill-Qwen-32B-MLX-4bit",
         defaultContextTokens: Int = 32_768,
@@ -109,7 +109,7 @@ public struct LegalModelConfiguration: Codable, Hashable, Sendable {
         LegalModelConfiguration(
             backend: ModelBackend(rawValue: environment["SUPRA_MODEL_BACKEND"]?.lowercased() ?? "") ?? .mlx,
             legalReasoningModel: environment.nonEmpty("SUPRA_MODEL_LEGAL_REASONING") ?? "Qwen3-30B-A3B-Thinking-2507-MLX-4bit",
-            legalReasoningHighQualityModel: environment.nonEmpty("SUPRA_MODEL_LEGAL_REASONING_HIGH_QUALITY") ?? "Qwen3-30B-A3B-Thinking-2507-MLX-6bit",
+            legalReasoningHighQualityModel: environment.nonEmpty("SUPRA_MODEL_LEGAL_REASONING_HIGH_QUALITY") ?? "DeepSeek-R1-Distill-Qwen-32B-MLX-4bit",
             draftingModel: environment.nonEmpty("SUPRA_MODEL_DRAFTING") ?? "Qwen3-30B-A3B-Instruct-2507-MLX-4bit",
             critiqueModel: environment.nonEmpty("SUPRA_MODEL_CRITIQUE") ?? "DeepSeek-R1-Distill-Qwen-32B-MLX-4bit",
             defaultContextTokens: environment.positiveInt("SUPRA_DEFAULT_CONTEXT_TOKENS") ?? 32_768,
