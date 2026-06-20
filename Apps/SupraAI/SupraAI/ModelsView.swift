@@ -41,22 +41,6 @@ struct ModelsView: View {
     private var modelList: some View {
         List {
             Section {
-                ForEach(ModelRole.allCases, id: \.self) { role in
-                    ModelRoleAssignmentRow(
-                        role: role,
-                        models: library.models,
-                        assignedModelID: assignmentBinding(for: role),
-                        resolvedModel: library.resolvedModel(for: role),
-                        recommendedModel: library.recommendedModel(for: role)
-                    )
-                }
-            } header: {
-                Text("Task Models")
-            } footer: {
-                Text("Each chat route loads its assigned model before generation. The runtime holds one model at a time.")
-            }
-
-            Section {
                 if library.models.isEmpty {
                     noModelsRow
                 } else {
@@ -68,6 +52,14 @@ struct ModelsView: View {
                 }
             } header: {
                 Text("Registered Models")
+            }
+
+            Section {
+                RuntimeModelSetupView(library: library, downloader: downloader)
+            } header: {
+                Text("Task Models")
+            } footer: {
+                Text("Download a text model, assign it to each chat task, then load it. The runtime holds one model at a time.")
             }
 
             Section {
@@ -131,13 +123,6 @@ struct ModelsView: View {
             return modelID == model.id
         }
         return false
-    }
-
-    private func assignmentBinding(for role: ModelRole) -> Binding<String> {
-        Binding(
-            get: { library.roleAssignments.modelID(for: role) ?? "" },
-            set: { newValue in library.assignModel(newValue.isEmpty ? nil : newValue, to: role) }
-        )
     }
 
     /// Whether this model is the one actually loaded into the runtime right now —
@@ -305,6 +290,156 @@ private struct ModelRoleAssignmentRow: View {
         case .critique:
             "checkmark.seal"
         }
+    }
+}
+
+/// Guided setup for the runtime text models, mirroring the embedding-model flow:
+/// 1) download → 2) assign to each task (recommending from what's downloaded) →
+/// 3) load & verify.
+private struct RuntimeModelSetupView: View {
+    @ObservedObject var library: ModelLibrary
+    @ObservedObject var downloader: ModelDownloadController
+    @State private var downloadSelection = ""
+    @State private var loadSelection = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            step(number: 1, title: "Download a model") {
+                Picker("Model to download", selection: $downloadSelection) {
+                    Text("Choose a model…").tag("")
+                    ForEach(ModelCatalog.curated) { model in
+                        Text("\(model.displayName) · ~\(sizeText(model.approxSizeGB)) GB").tag(model.repoID)
+                    }
+                }
+                .labelsHidden()
+                .disabled(downloader.isBusy)
+                .onChange(of: downloadSelection) { _, newValue in
+                    if let model = ModelCatalog.curated.first(where: { $0.repoID == newValue }) {
+                        downloader.downloadCatalogModel(model)
+                    }
+                }
+                downloadStatus
+                Text("For a model not listed (custom repo), use Download Model in the toolbar.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+
+            step(number: 2, title: "Assign to tasks", enabled: !library.models.isEmpty) {
+                if library.models.isEmpty {
+                    Text("Download a model first.").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    VStack(spacing: 6) {
+                        ForEach(ModelRole.allCases, id: \.self) { role in
+                            ModelRoleAssignmentRow(
+                                role: role,
+                                models: library.models,
+                                assignedModelID: assignmentBinding(for: role),
+                                resolvedModel: library.resolvedModel(for: role),
+                                recommendedModel: library.recommendedModel(for: role)
+                            )
+                        }
+                    }
+                }
+            }
+
+            step(number: 3, title: "Load & verify", enabled: !library.models.isEmpty) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Model to load", selection: $loadSelection) {
+                        Text("Choose a model…").tag("")
+                        ForEach(library.models) { model in
+                            Text(model.displayName).tag(model.id)
+                        }
+                        if !loadSelection.isEmpty, !library.models.contains(where: { $0.id == loadSelection }) {
+                            Text("Missing model").tag(loadSelection)
+                        }
+                    }
+                    .labelsHidden()
+                    HStack(spacing: 8) {
+                        Button("Load") {
+                            let id = loadSelection
+                            guard !id.isEmpty else { return }
+                            Task { await library.activateAndLoad(modelID: id) }
+                        }
+                        .disabled(loadSelection.isEmpty || isLoading)
+                        loadStatus
+                    }
+                }
+            }
+        }
+    }
+
+    private var isLoading: Bool {
+        if case .loading = library.loadState { return true }
+        return false
+    }
+
+    @ViewBuilder private var loadStatus: some View {
+        switch library.loadState {
+        case .loaded:
+            Label(library.loadedModel.map { "Loaded: \($0.displayName)" } ?? "Loaded", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green).lineLimit(1)
+        case .loading:
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.small)
+                Text("Loading…").font(.caption).foregroundStyle(.secondary)
+            }
+        case let .failed(message):
+            Text(message).font(.caption).foregroundStyle(.orange).lineLimit(1).truncationMode(.middle)
+        case .idle:
+            Text("Not loaded.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var downloadStatus: some View {
+        switch downloader.state {
+        case let .preparing(repoID):
+            Text("Preparing \(repoID)…").font(.caption).foregroundStyle(.secondary)
+        case let .downloading(_, completed, total, file):
+            VStack(alignment: .leading, spacing: 2) {
+                ProgressView(value: Double(completed), total: Double(max(total, 1)))
+                Text("\(completed)/\(total) — \(file)").font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+        case let .finished(_, displayName):
+            Text("Downloaded \(displayName). Assign it below.").font(.caption).foregroundStyle(.green)
+        case let .failed(message):
+            Text(message).font(.caption).foregroundStyle(.red)
+        case .idle:
+            EmptyView()
+        }
+    }
+
+    private func assignmentBinding(for role: ModelRole) -> Binding<String> {
+        Binding(
+            get: { library.roleAssignments.modelID(for: role) ?? "" },
+            set: { newValue in library.assignModel(newValue.isEmpty ? nil : newValue, to: role) }
+        )
+    }
+
+    private func sizeText(_ gb: Double) -> String {
+        gb == gb.rounded() ? String(Int(gb)) : String(format: "%.1f", gb)
+    }
+
+    @ViewBuilder
+    private func step(
+        number: Int,
+        title: String,
+        enabled: Bool = true,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("\(number)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 16, height: 16)
+                    .background(enabled ? Color.accentColor : Color.secondary, in: Circle())
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(enabled ? .primary : .secondary)
+            }
+            content()
+                .padding(.leading, 22)
+        }
+        .opacity(enabled ? 1 : 0.6)
     }
 }
 

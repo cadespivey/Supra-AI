@@ -19,6 +19,7 @@ struct GlobalChatsView: View {
     var listStyle: ChatListStyle = .picker
     @State private var draft = ""
     @State private var showGenerationSettings = false
+    @State private var showJurisdiction = false
     @State private var attachments: [ChatAttachmentContext] = []
     @State private var attachmentError: String?
     @State private var isLoadingAttachment = false
@@ -407,33 +408,62 @@ struct GlobalChatsView: View {
         .padding(.vertical, 6)
     }
 
-    /// Bounds global-chat legal research (CourtListener) to a jurisdiction's
-    /// courts. "Auto-detect" infers one from the prompt; picking a jurisdiction
-    /// hard-bounds it. Sized to sit beside the model name and generation settings.
+    /// Bounds global-chat legal research (CourtListener) to a jurisdiction. Styled
+    /// like the generation-settings button to its right: a plain button opening a
+    /// popover with the picker (Federal broken down by circuit) and the related-
+    /// federal option.
     private var jurisdictionMenu: some View {
-        Menu {
-            Picker("Jurisdiction", selection: $controller.jurisdictionOverrideID) {
-                Text("Auto-detect from prompt").tag("")
-                ForEach(controller.topLevelJurisdictions) { option in
-                    Text(option.displayName).tag(option.id)
-                }
-            }
-        } label: {
+        Button { showJurisdiction.toggle() } label: {
             HStack(spacing: 4) {
                 Image(systemName: "building.columns")
                 Text(jurisdictionLabel).lineLimit(1)
             }
         }
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Bounds legal research to this jurisdiction's courts on CourtListener")
+        .buttonStyle(.plain)
+        .help("Bounds legal research (CourtListener) to a jurisdiction")
+        .popover(isPresented: $showJurisdiction, arrowEdge: .bottom) {
+            jurisdictionSettings
+        }
+    }
+
+    private var jurisdictionSettings: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Jurisdiction").font(.headline)
+            Picker("Jurisdiction", selection: $controller.jurisdictionOverrideID) {
+                Text("Auto-detect from prompt").tag("")
+                Section("Federal") {
+                    Text("All federal courts").tag("federal-courts")
+                    ForEach(controller.federalCircuits) { option in
+                        Text(option.displayName).tag(option.id)
+                    }
+                }
+                Section("States & territories") {
+                    ForEach(controller.stateJurisdictions) { option in
+                        Text(option.displayName).tag(option.id)
+                    }
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            Toggle("Include related federal courts", isOn: $controller.includeRelatedFederal)
+                .disabled(!selectedIsState)
+                .help("For a state, also search the federal circuit and district courts that apply its law.")
+            Text("Bounds CourtListener research to the selected jurisdiction. Auto-detect infers it from your prompt.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .padding()
+        .frame(width: 320)
     }
 
     private var jurisdictionLabel: String {
-        guard !controller.jurisdictionOverrideID.isEmpty else { return "Auto-detect" }
-        return controller.topLevelJurisdictions
-            .first { $0.id == controller.jurisdictionOverrideID }?
-            .displayName ?? "Auto-detect"
+        let id = controller.jurisdictionOverrideID
+        guard !id.isEmpty else { return "Auto-detect" }
+        return JurisdictionCatalog.shared.option(id: id)?.displayName ?? "Auto-detect"
+    }
+
+    /// The related-federal toggle only affects an explicit state selection.
+    private var selectedIsState: Bool {
+        JurisdictionCatalog.shared.option(id: controller.jurisdictionOverrideID)?.system == .state
     }
 
     private var modelStatusText: String {
@@ -488,6 +518,7 @@ private struct MessageRow: View {
     /// only while the response is still generating, and stays collapsed for
     /// completed/reloaded messages so chat history isn't a wall of reasoning.
     @State private var reasoningExpandedOverride: Bool?
+    @State private var isHovered = false
 
     private var reasoningExpanded: Binding<Bool> {
         Binding(
@@ -504,13 +535,12 @@ private struct MessageRow: View {
         }
     }
 
-    /// User turns: a right-aligned bubble with blue text, like a text
-    /// conversation. The bubble itself is a neutral tint so the blue text stays
-    /// legible (blue-on-blue fails contrast, especially in dark mode).
+    /// User turns: a right-aligned bubble with blue text on a neutral tint, like a
+    /// text conversation.
     private var userBubble: some View {
         HStack {
             Spacer(minLength: 48)
-            Text(attributedContent)
+            Text(displayContent)
                 .textSelection(.enabled)
                 .lineLimit(nil)
                 .foregroundStyle(Color.accentColor)
@@ -522,21 +552,25 @@ private struct MessageRow: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
-    /// Assistant (and system) turns: full-width, with the collapsible reasoning.
+    /// Assistant (and system) turns: full-width on the plain window background —
+    /// no bubble, no "Supra" heading (that's inherent) — rendered as rich-text
+    /// Markdown, with the collapsible reasoning and a copy action on hover.
     private var assistantRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(roleLabel)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(roleColor)
-                if message.isStreaming {
-                    ProgressView().controlSize(.small)
+        VStack(alignment: .leading, spacing: 6) {
+            if showsHeader {
+                HStack(spacing: 6) {
+                    if message.role == .system {
+                        Text("System").font(.caption.weight(.semibold)).foregroundStyle(.orange)
+                    }
+                    if message.isStreaming {
+                        ProgressView().controlSize(.small)
+                    }
+                    statusBadge
                 }
-                statusBadge
             }
             if let reasoning {
                 DisclosureGroup(isExpanded: reasoningExpanded) {
-                    Text(reasoning)
+                    Text(EmojiStripper.strip(reasoning))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
@@ -549,30 +583,17 @@ private struct MessageRow: View {
                 }
                 .tint(.secondary)
             }
-            Text(attributedContent)
+            MarkdownView(text: displayContent)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if showsCopy {
+                copyButton
+                    .opacity(isHovered ? 1 : 0.35)
+            }
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(roleColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    /// The answer rendered as Markdown (bold/italic/code/links/lists), with line
-    /// breaks preserved. Falls back to plain text if it can't be parsed (e.g. a
-    /// partially-streamed message), so streaming never shows a parse error.
-    private var attributedContent: AttributedString {
-        // Only the assistant's answer is rendered as Markdown. User/system rows are
-        // shown verbatim so a prompt containing literal **/`code`/[label](…) is
-        // preserved exactly in the transcript.
-        guard message.role == .assistant else { return AttributedString(displayContent) }
-        return (try? AttributedString(
-            markdown: displayContent,
-            options: AttributedString.MarkdownParsingOptions(
-                interpretedSyntax: .inlineOnlyPreservingWhitespace,
-                failurePolicy: .returnPartiallyParsedIfPossible
-            )
-        )) ?? AttributedString(displayContent)
+        .padding(.vertical, 4)
+        .onHover { isHovered = $0 }
     }
 
     /// The model's chain-of-thought, available once its `</think>` boundary has
@@ -583,20 +604,35 @@ private struct MessageRow: View {
         return (block?.isEmpty ?? true) ? nil : block
     }
 
-    private var roleLabel: String {
-        switch message.role {
-        case .user: "You"
-        case .assistant: "Supra"
-        case .system: "System"
+    private var hasStatusBadge: Bool {
+        switch message.status {
+        case .cancelled, .failed, .interrupted: true
+        default: false
         }
     }
 
-    private var roleColor: Color {
-        switch message.role {
-        case .user: .accentColor
-        case .assistant: .secondary
-        case .system: .orange
+    /// Only show a header row when there's something to say — a system tag, the
+    /// streaming spinner, or a status badge. Plain answers get no heading.
+    private var showsHeader: Bool {
+        message.role == .system || message.isStreaming || hasStatusBadge
+    }
+
+    private var showsCopy: Bool {
+        message.role == .assistant && !message.isStreaming && !displayContent.isEmpty
+    }
+
+    private var copyButton: some View {
+        Button {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            // Emoji-stripped Markdown — clean to paste elsewhere.
+            pasteboard.setString(EmojiStripper.strip(displayContent), forType: .string)
+        } label: {
+            Label("Copy", systemImage: "doc.on.doc").font(.caption)
         }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .help("Copy this response as Markdown")
     }
 
     private var displayContent: String {
@@ -634,5 +670,355 @@ private struct MessageRow: View {
         Text(text)
             .font(.caption2.weight(.semibold))
             .foregroundStyle(color)
+    }
+}
+
+// MARK: - Markdown rendering
+
+/// A dependency-free Markdown renderer for assistant responses: headings, lists,
+/// fenced code, block quotes, GitHub-style tables, and inline emphasis/code/links.
+/// Renders the shapes an LLM commonly emits as rich text (not raw markup), and
+/// degrades gracefully on partial/streaming input.
+struct MarkdownView: View {
+    let text: String
+    @State private var blocks: [MarkdownBlock] = []
+    @State private var sourceText: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(blocks.indices, id: \.self) { index in
+                MarkdownBlockView(block: blocks[index])
+            }
+        }
+        .onAppear(perform: refresh)
+        .onChange(of: text) { _, _ in refresh() }
+    }
+
+    /// Parse only when the text actually changes, so hover/selection re-renders
+    /// don't re-parse. Emojis are stripped once here (never inside code spacing,
+    /// because the stripper only removes real emoji glyphs).
+    private func refresh() {
+        guard text != sourceText else { return }
+        sourceText = text
+        blocks = MarkdownParser.parse(EmojiStripper.strip(text))
+    }
+}
+
+enum MarkdownColumnAlign {
+    case leading, center, trailing
+
+    var alignment: Alignment {
+        switch self {
+        case .leading: .leading
+        case .center: .center
+        case .trailing: .trailing
+        }
+    }
+}
+
+enum MarkdownBlock {
+    case heading(level: Int, text: String)
+    case paragraph(String)
+    case bulletList([String])
+    case numberedList([String])
+    case codeBlock(String)
+    case quote(String)
+    case table(headers: [String], rows: [[String]], aligns: [MarkdownColumnAlign])
+    case rule
+}
+
+private struct MarkdownBlockView: View {
+    let block: MarkdownBlock
+
+    var body: some View {
+        switch block {
+        case let .heading(level, text):
+            Text(MarkdownInline.attributed(text))
+                .font(headingFont(level))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, level <= 2 ? 2 : 0)
+        case let .paragraph(text):
+            Text(MarkdownInline.attributed(text))
+                .fixedSize(horizontal: false, vertical: true)
+        case let .bulletList(items):
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(items.indices, id: \.self) { idx in
+                    listRow(marker: "•", text: items[idx])
+                }
+            }
+        case let .numberedList(items):
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(items.indices, id: \.self) { idx in
+                    listRow(marker: "\(idx + 1).", text: items[idx])
+                }
+            }
+        case let .codeBlock(code):
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(code)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+        case let .quote(text):
+            HStack(alignment: .top, spacing: 8) {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Color.secondary.opacity(0.4))
+                    .frame(width: 3)
+                Text(MarkdownInline.attributed(text))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case let .table(headers, rows, aligns):
+            MarkdownTableView(headers: headers, rows: rows, aligns: aligns)
+        case .rule:
+            Divider()
+        }
+    }
+
+    private func listRow(marker: String, text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(marker).foregroundStyle(.secondary).monospacedDigit()
+            Text(MarkdownInline.attributed(text)).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func headingFont(_ level: Int) -> Font {
+        switch level {
+        case 1: .title2.weight(.bold)
+        case 2: .title3.weight(.bold)
+        case 3: .headline
+        default: .subheadline.weight(.semibold)
+        }
+    }
+}
+
+private struct MarkdownTableView: View {
+    let headers: [String]
+    let rows: [[String]]
+    let aligns: [MarkdownColumnAlign]
+
+    var body: some View {
+        Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 6) {
+            GridRow {
+                ForEach(headers.indices, id: \.self) { column in
+                    Text(MarkdownInline.attributed(headers[column]))
+                        .font(.callout.weight(.semibold))
+                        .frame(maxWidth: .infinity, alignment: alignment(column))
+                }
+            }
+            Divider()
+            ForEach(rows.indices, id: \.self) { row in
+                GridRow {
+                    ForEach(headers.indices, id: \.self) { column in
+                        Text(MarkdownInline.attributed(cell(row, column)))
+                            .frame(maxWidth: .infinity, alignment: alignment(column))
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.15)))
+    }
+
+    private func cell(_ row: Int, _ column: Int) -> String {
+        guard row < rows.count, column < rows[row].count else { return "" }
+        return rows[row][column]
+    }
+
+    private func alignment(_ column: Int) -> Alignment {
+        column < aligns.count ? aligns[column].alignment : .leading
+    }
+}
+
+/// Inline spans (bold/italic/`code`/links) via Foundation's Markdown parser, with
+/// a plain-text fallback so partial/streaming text never shows a parse error.
+enum MarkdownInline {
+    static func attributed(_ text: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: text,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        )) ?? AttributedString(text)
+    }
+}
+
+/// Splits raw Markdown into block elements. Line-based and forgiving: anything it
+/// doesn't recognize becomes a paragraph, so it never throws on LLM output.
+enum MarkdownParser {
+    static func parse(_ raw: String) -> [MarkdownBlock] {
+        var blocks: [MarkdownBlock] = []
+        let lines = raw.components(separatedBy: "\n")
+        var paragraph: [String] = []
+        var i = 0
+
+        func flushParagraph() {
+            let joined = paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty { blocks.append(.paragraph(joined)) }
+            paragraph.removeAll()
+        }
+
+        while i < lines.count {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("```") {
+                flushParagraph()
+                var code: [String] = []
+                i += 1
+                while i < lines.count, !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                    code.append(lines[i]); i += 1
+                }
+                if i < lines.count { i += 1 }
+                blocks.append(.codeBlock(code.joined(separator: "\n")))
+                continue
+            }
+
+            if let heading = heading(trimmed) {
+                flushParagraph()
+                blocks.append(.heading(level: heading.level, text: heading.text)); i += 1; continue
+            }
+
+            if isRule(trimmed) {
+                flushParagraph(); blocks.append(.rule); i += 1; continue
+            }
+
+            if trimmed.contains("|"), i + 1 < lines.count, isTableSeparator(lines[i + 1]) {
+                flushParagraph()
+                let (table, consumed) = parseTable(lines, start: i)
+                blocks.append(table); i += consumed; continue
+            }
+
+            if trimmed.hasPrefix(">") {
+                flushParagraph()
+                var quoted: [String] = []
+                while i < lines.count {
+                    let line = lines[i].trimmingCharacters(in: .whitespaces)
+                    guard line.hasPrefix(">") else { break }
+                    quoted.append(String(line.dropFirst()).trimmingCharacters(in: .whitespaces))
+                    i += 1
+                }
+                blocks.append(.quote(quoted.joined(separator: "\n"))); continue
+            }
+
+            if isBullet(trimmed) {
+                flushParagraph()
+                var items: [String] = []
+                while i < lines.count, isBullet(lines[i].trimmingCharacters(in: .whitespaces)) {
+                    items.append(bulletText(lines[i].trimmingCharacters(in: .whitespaces))); i += 1
+                }
+                blocks.append(.bulletList(items)); continue
+            }
+
+            if isNumbered(trimmed) {
+                flushParagraph()
+                var items: [String] = []
+                while i < lines.count, isNumbered(lines[i].trimmingCharacters(in: .whitespaces)) {
+                    items.append(numberedText(lines[i].trimmingCharacters(in: .whitespaces))); i += 1
+                }
+                blocks.append(.numberedList(items)); continue
+            }
+
+            if trimmed.isEmpty {
+                flushParagraph(); i += 1; continue
+            }
+
+            paragraph.append(trimmed); i += 1
+        }
+        flushParagraph()
+        return blocks
+    }
+
+    private static func heading(_ line: String) -> (level: Int, text: String)? {
+        guard line.hasPrefix("#") else { return nil }
+        var level = 0
+        var index = line.startIndex
+        while index < line.endIndex, line[index] == "#", level < 6 {
+            level += 1; index = line.index(after: index)
+        }
+        guard level > 0, index < line.endIndex, line[index] == " " else { return nil }
+        return (level, String(line[index...]).trimmingCharacters(in: .whitespaces))
+    }
+
+    private static func isRule(_ line: String) -> Bool {
+        let stripped = line.replacingOccurrences(of: " ", with: "")
+        guard stripped.count >= 3 else { return false }
+        return stripped.allSatisfy { $0 == "-" } || stripped.allSatisfy { $0 == "*" } || stripped.allSatisfy { $0 == "_" }
+    }
+
+    private static func isBullet(_ line: String) -> Bool {
+        line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ")
+    }
+
+    private static func bulletText(_ line: String) -> String {
+        String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func isNumbered(_ line: String) -> Bool {
+        var index = line.startIndex
+        var digits = 0
+        while index < line.endIndex, line[index].isNumber {
+            digits += 1; index = line.index(after: index)
+        }
+        guard digits > 0, index < line.endIndex, line[index] == "." || line[index] == ")" else { return false }
+        let next = line.index(after: index)
+        return next < line.endIndex && line[next] == " "
+    }
+
+    private static func numberedText(_ line: String) -> String {
+        guard let marker = line.firstIndex(where: { $0 == "." || $0 == ")" }) else { return line }
+        return String(line[line.index(after: marker)...]).trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func isTableSeparator(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains("-"), trimmed.contains("|") else { return false }
+        return trimmed.allSatisfy { $0 == "|" || $0 == "-" || $0 == ":" || $0 == " " }
+    }
+
+    private static func splitRow(_ line: String) -> [String] {
+        var trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("|") { trimmed.removeFirst() }
+        if trimmed.hasSuffix("|") { trimmed.removeLast() }
+        return trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    private static func parseTable(_ lines: [String], start: Int) -> (MarkdownBlock, Int) {
+        let headers = splitRow(lines[start])
+        let aligns = splitRow(lines[start + 1]).map { spec -> MarkdownColumnAlign in
+            let left = spec.hasPrefix(":")
+            let right = spec.hasSuffix(":")
+            if left && right { return .center }
+            if right { return .trailing }
+            return .leading
+        }
+        var rows: [[String]] = []
+        var i = start + 2
+        while i < lines.count {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, trimmed.contains("|") else { break }
+            rows.append(splitRow(lines[i])); i += 1
+        }
+        return (.table(headers: headers, rows: rows, aligns: aligns), i - start)
+    }
+}
+
+/// Removes emoji so they never reach the chat or the clipboard, WITHOUT touching
+/// text symbols that double as content (✓ ✗ → ⚖ ™ © …) or code spacing. It strips
+/// only default-emoji glyphs and characters forced to emoji presentation by a
+/// variation selector — so it's safe to run over the whole answer, code included.
+enum EmojiStripper {
+    static func strip(_ text: String) -> String {
+        guard text.contains(where: isEmoji) else { return text }
+        return String(text.filter { !isEmoji($0) })
+    }
+
+    private static func isEmoji(_ character: Character) -> Bool {
+        character.unicodeScalars.contains { scalar in
+            scalar.properties.isEmojiPresentation || scalar.value == 0xFE0F
+        }
     }
 }

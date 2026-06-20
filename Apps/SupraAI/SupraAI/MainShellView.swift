@@ -26,7 +26,6 @@ struct MainShellView: View {
                 }
                 detailView
                     .frame(minWidth: 640, minHeight: 420)
-                    .toolbar { toolbar }
             }
         }
         .sheet(isPresented: $showNewMatter) {
@@ -88,28 +87,11 @@ struct MainShellView: View {
                 settings: environment.settingsController,
                 profile: environment.assistantProfileController,
                 documentSetup: environment.documentSetupController,
-                embeddingDownloader: environment.embeddingDownloadController,
                 update: environment.updateController
             )
         }
     }
 
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            SupraToolbarIconButton("New Matter", systemImage: "case") {
-                showNewMatter = true
-            }
-        }
-
-        // A compact runtime indicator plus the consistent runtime action.
-        ToolbarItemGroup(placement: .primaryAction) {
-            ModelStatusToolbarItem(library: environment.modelLibrary)
-            SupraToolbarIconButton("Refresh Runtime Status", systemImage: "arrow.clockwise") {
-                Task { await environment.refreshRuntimeStatus() }
-            }
-        }
-    }
 }
 
 /// Hosts a matter's workspace, resolving the matter from the (observed) controller
@@ -132,33 +114,6 @@ private struct MatterDetailView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-}
-
-/// A subtle toolbar status for the runtime's currently loaded model.
-private struct ModelStatusToolbarItem: View {
-    @ObservedObject var library: ModelLibrary
-
-    var body: some View {
-        switch library.loadState {
-        case .loaded:
-            label("Runtime model loaded", systemImage: "checkmark.circle.fill", color: .green)
-        case .idle:
-            label("Runtime idle", systemImage: "cpu", color: .secondary)
-        case .loading:
-            label("Loading model…", systemImage: "hourglass", color: .secondary)
-        case .failed:
-            label("Model failed to load", systemImage: "exclamationmark.triangle.fill", color: .orange)
-        }
-    }
-
-    private func label(_ title: String, systemImage: String, color: Color) -> some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 14.5, weight: .medium))
-            .foregroundStyle(color)
-            .frame(width: 28, height: 28)
-            .accessibilityLabel(title)
-            .help(title)
     }
 }
 
@@ -189,12 +144,14 @@ struct SupraToolbarIconButton: View {
                 .font(.system(size: 15, weight: .regular))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(foregroundStyle)
-                .frame(width: 30, height: 26)
+                // Even, square padding around the glyph (the old 30×26 left more
+                // horizontal than vertical room, which read as off-center).
+                .frame(width: 28, height: 28)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(Color.secondary.opacity(isHovered && isEnabled ? 0.16 : 0))
                 )
-                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .buttonStyle(.plain)
         .opacity(isEnabled ? 1 : 0.4)

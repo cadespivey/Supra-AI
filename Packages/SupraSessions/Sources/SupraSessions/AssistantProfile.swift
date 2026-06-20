@@ -119,7 +119,14 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
         }
 
         var cites: [String] = []
-        if !citationStyle.isEmpty { cites.append("- Citation style: \(citationStyle).") }
+        if !citationStyle.isEmpty {
+            cites.append("- Citation style: \(citationStyle).")
+            // Fold in the baked-in guidance for a recognized style/state so the
+            // assistant cites the way that jurisdiction expects.
+            if let guidance = CitationStyleCatalog.style(named: citationStyle)?.guidance {
+                cites.append("- \(guidance)")
+            }
+        }
         if !citationNotes.isEmpty { cites.append("- \(citationNotes)") }
         if !cites.isEmpty { profile.append("## Citations\n" + cites.joined(separator: "\n")) }
 
