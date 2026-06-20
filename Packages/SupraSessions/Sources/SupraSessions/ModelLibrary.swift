@@ -137,10 +137,40 @@ public final class ModelLibrary: ObservableObject {
         if let configured = matchingModel(forIdentifier: configuration.modelIdentifier(for: role)) {
             return configured
         }
-        return models
-            .map { (model: $0, score: Self.suitabilityScore(of: $0, for: role)) }
-            .max { $0.score < $1.score }?
-            .model
+        // When several registered models fit equally (e.g. two reasoning models
+        // for a reasoning route), break the tie deterministically — otherwise the
+        // suggestion flips with `fetchModels()` ordering. Prefer the larger model
+        // (more parameters → higher quality), then the alphabetically earlier name.
+        return models.max { lhs, rhs in
+            let lhsScore = Self.suitabilityScore(of: lhs, for: role)
+            let rhsScore = Self.suitabilityScore(of: rhs, for: role)
+            if lhsScore != rhsScore { return lhsScore < rhsScore }
+            let lhsScale = Self.parameterScale(of: lhs)
+            let rhsScale = Self.parameterScale(of: rhs)
+            if lhsScale != rhsScale { return lhsScale < rhsScale }
+            return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedDescending
+        }
+    }
+
+    /// Best-effort parameter count in billions parsed from the model name/path
+    /// (e.g. "Qwen3-30B" → 30, "...-32B-4bit" → 32), used only as a deterministic
+    /// recommendation tiebreak. Returns 0 when no size is encoded.
+    private static func parameterScale(of model: ModelSummary) -> Int {
+        let text = (model.displayName + " " + model.path).lowercased()
+        var best = 0
+        var number = 0
+        var hasDigits = false
+        for character in text {
+            if let digit = character.wholeNumberValue {
+                number = number * 10 + digit
+                hasDigits = true
+            } else {
+                if hasDigits, character == "b" { best = max(best, number) }
+                number = 0
+                hasDigits = false
+            }
+        }
+        return best
     }
 
     private static func suitabilityScore(of model: ModelSummary, for role: ModelRole) -> Int {

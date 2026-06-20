@@ -8,6 +8,8 @@ import SwiftUI
 struct ModelsView: View {
     @ObservedObject var library: ModelLibrary
     @ObservedObject var downloader: ModelDownloadController
+    @ObservedObject var documentSetup: DocumentIntelligenceSetupController
+    @ObservedObject var embeddingDownloader: EmbeddingModelDownloadController
     @State private var showDownloadSheet = false
 
     var body: some View {
@@ -66,6 +68,14 @@ struct ModelsView: View {
                 }
             } header: {
                 Text("Registered Models")
+            }
+
+            Section {
+                EmbeddingModelSetupView(setup: documentSetup, downloader: embeddingDownloader)
+            } header: {
+                Text("Embedding Model")
+            } footer: {
+                Text("Embeddings power document semantic search. This is the same setup as Settings → Document Intelligence.")
             }
         }
     }

@@ -131,7 +131,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(maxWidth: 680, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func revealInFinder(_ path: String) {
@@ -380,8 +380,17 @@ private struct DocumentIntelligenceSection: View {
                 if setup.isBusy { ProgressView().controlSize(.small) }
             }
 
-            stepRow("Runtime text model loaded", done: setup.chatModelLoaded, detail: "Load a registered model in the Models tab.")
-            embeddingRow
+            stepRow(
+                "Runtime text model loaded",
+                done: setup.chatModelReady,
+                detail: setup.chatModelReady ? "A runtime model has loaded successfully." : "Load a registered model in the Models tab."
+            )
+            stepRow(
+                "Embedding model",
+                done: setup.selectedEmbeddingModel != nil && setup.embeddingTestPassed,
+                detail: setup.selectedEmbeddingModel?.displayName ?? "None selected."
+            )
+            EmbeddingModelSetupView(setup: setup, downloader: downloader)
             stepRow(
                 "Extraction / OCR toolchain",
                 done: setup.toolchain?.meetsMinimumForSetup ?? false,
@@ -428,59 +437,6 @@ private struct DocumentIntelligenceSection: View {
         }
     }
 
-    private var embeddingRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            stepRow(
-                "Embedding model",
-                done: setup.selectedEmbeddingModel != nil && setup.embeddingTestPassed,
-                detail: setup.selectedEmbeddingModel?.displayName ?? "None selected."
-            )
-            if let selected = setup.selectedEmbeddingModel {
-                HStack {
-                    Text(selected.displayName).font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Test Load") { Task { await setup.testLoadEmbeddingModel() } }
-                        .controlSize(.small)
-                        .disabled(setup.isBusy)
-                }
-            }
-            Picker("Download", selection: $downloadSelection) {
-                Text("Choose a model to download…").tag("")
-                ForEach(EmbeddingModelCatalog.curated) { model in
-                    Text("\(model.displayName) · \(model.dimension)d · ~\(model.approxSizeMB) MB").tag(model.repoID)
-                }
-            }
-            .labelsHidden()
-            .disabled(downloader.isBusy)
-            .onChange(of: downloadSelection) { _, newValue in
-                if let model = EmbeddingModelCatalog.model(repoID: newValue) {
-                    downloader.downloadCatalogModel(model)
-                }
-            }
-            downloadStatus
-        }
-    }
-
-    @State private var downloadSelection = ""
-
-    @ViewBuilder private var downloadStatus: some View {
-        switch downloader.state {
-        case .preparing(let repo):
-            Text("Preparing \(repo)…").font(.caption).foregroundStyle(.secondary)
-        case let .downloading(_, completed, total, file):
-            VStack(alignment: .leading, spacing: 2) {
-                ProgressView(value: Double(completed), total: Double(max(total, 1)))
-                Text("\(completed)/\(total) — \(file)").font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-            }
-        case let .finished(_, name):
-            Text("Downloaded \(name). Test-load it to finish setup.").font(.caption).foregroundStyle(.green)
-        case let .failed(message):
-            Text(message).font(.caption).foregroundStyle(.red)
-        case .idle:
-            EmptyView()
-        }
-    }
-
     private func stepRow(
         _ title: String,
         done: Bool,
@@ -496,6 +452,123 @@ private struct DocumentIntelligenceSection: View {
             }
             Spacer()
             trailing()
+        }
+    }
+}
+
+/// Shared embedding-model setup flow, presented as a linear sequence:
+/// 1) download a model, 2) select it for use, 3) test-load it. Surfaced both in
+/// Settings → Document Intelligence and in the Models tab so it isn't buried.
+struct EmbeddingModelSetupView: View {
+    @ObservedObject var setup: DocumentIntelligenceSetupController
+    @ObservedObject var downloader: EmbeddingModelDownloadController
+    @State private var downloadSelection = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            step(number: 1, title: "Download a model") {
+                Picker("Embedding model to download", selection: $downloadSelection) {
+                    Text("Choose a model…").tag("")
+                    ForEach(EmbeddingModelCatalog.curated) { model in
+                        Text("\(model.displayName) · \(model.dimension)d · ~\(model.approxSizeMB) MB").tag(model.repoID)
+                    }
+                }
+                .labelsHidden()
+                .disabled(downloader.isBusy)
+                .onChange(of: downloadSelection) { _, newValue in
+                    if let model = EmbeddingModelCatalog.model(repoID: newValue) {
+                        downloader.downloadCatalogModel(model)
+                    }
+                }
+                downloadStatus
+            }
+
+            step(number: 2, title: "Select for use", enabled: !setup.availableEmbeddingModels.isEmpty) {
+                if setup.availableEmbeddingModels.isEmpty {
+                    Text("No embedding models downloaded yet.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Picker("Active embedding model", selection: activeSelection) {
+                        ForEach(setup.availableEmbeddingModels) { model in
+                            Text(model.displayName).tag(model.id)
+                        }
+                    }
+                    .labelsHidden()
+                }
+            }
+
+            step(number: 3, title: "Test load", enabled: setup.selectedEmbeddingModel != nil) {
+                if let selected = setup.selectedEmbeddingModel {
+                    HStack(alignment: .firstTextBaseline) {
+                        Image(systemName: setup.embeddingTestPassed ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(setup.embeddingTestPassed ? .green : .secondary)
+                        Text(setup.embeddingTestPassed
+                             ? "\(selected.displayName) loaded successfully."
+                             : "Test-load \(selected.displayName) to confirm it works.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Test Load") { Task { await setup.testLoadEmbeddingModel() } }
+                            .controlSize(.small)
+                            .disabled(setup.isBusy)
+                    }
+                } else {
+                    Text("Download and select a model first.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            if let message = setup.message {
+                Text(message).font(.caption).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private var activeSelection: Binding<String> {
+        Binding(
+            get: { setup.selectedEmbeddingModel?.id ?? "" },
+            set: { setup.selectEmbeddingModel(id: $0) }
+        )
+    }
+
+    @ViewBuilder
+    private func step(
+        number: Int,
+        title: String,
+        enabled: Bool = true,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("\(number)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 16, height: 16)
+                    .background(enabled ? Color.accentColor : Color.secondary, in: Circle())
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(enabled ? .primary : .secondary)
+            }
+            content()
+                .padding(.leading, 22)
+        }
+        .opacity(enabled ? 1 : 0.6)
+    }
+
+    @ViewBuilder private var downloadStatus: some View {
+        switch downloader.state {
+        case .preparing(let repo):
+            Text("Preparing \(repo)…").font(.caption).foregroundStyle(.secondary)
+        case let .downloading(_, completed, total, file):
+            VStack(alignment: .leading, spacing: 2) {
+                ProgressView(value: Double(completed), total: Double(max(total, 1)))
+                Text("\(completed)/\(total) — \(file)").font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+        case let .finished(_, name):
+            Text("Downloaded \(name). Now select it and test-load.").font(.caption).foregroundStyle(.green)
+        case let .failed(message):
+            Text(message).font(.caption).foregroundStyle(.red)
+        case .idle:
+            EmptyView()
         }
     }
 }
