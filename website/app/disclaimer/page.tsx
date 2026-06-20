@@ -37,19 +37,19 @@ export default function DisclaimerPage() {
       intro="Supra AI is a legal research, drafting, and document-analysis tool for legal professionals. It is not a substitute for attorney judgment."
     >
       <DraftNotice />
-      <div className="grid gap-5 md:grid-cols-2">
+      <div className="grid gap-x-12 gap-y-8 md:grid-cols-2">
         {sections.map((section) => (
           <section
             key={section.title}
-            className="rounded-2xl border border-supra-border bg-supra-navyPanel p-6"
+            className="border-t border-supra-border pt-5"
           >
-            <h2 className="text-2xl text-supra-white">{section.title}</h2>
-            <p className="mt-4 text-base leading-7 text-supra-muted">
+            <h2 className="text-xl text-supra-white">{section.title}</h2>
+            <p className="measure-wide mt-3 text-base leading-[1.55] text-supra-muted">
               {section.body}
             </p>
           </section>
         ))}
-        <section className="md:col-span-2">
+        <section className="pt-2 md:col-span-2">
           <FeedbackWarning />
         </section>
       </div>

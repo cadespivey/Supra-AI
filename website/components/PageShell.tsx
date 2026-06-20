@@ -13,14 +13,14 @@ export function PageShell({ eyebrow, title, intro, children }: PageShellProps) {
       <section className="border-b border-supra-border bg-supra-navyDeep px-6 py-20 sm:py-24">
         <div className="mx-auto max-w-6xl">
           {eyebrow ? (
-            <p className="font-caps text-xs font-bold uppercase text-supra-gold">
+            <p className="font-caps text-xs uppercase text-supra-gold">
               {eyebrow}
             </p>
           ) : null}
-          <h1 className="mt-4 max-w-4xl text-5xl leading-tight text-supra-white sm:text-6xl">
+          <h1 className="mt-4 max-w-[18ch] text-3xl leading-[1.12] text-supra-white sm:text-4xl">
             {title}
           </h1>
-          <p className="mt-6 max-w-3xl text-lg leading-8 text-supra-muted sm:text-xl">
+          <p className="measure-wide mt-6 text-xl leading-[1.5] text-supra-muted">
             {intro}
           </p>
         </div>
