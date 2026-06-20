@@ -68,7 +68,9 @@ button:focus-visible {
   color: #c4a459;
   border-radius: 0.3rem;
   padding: 0 0.12em;
-  margin: 0 -0.12em;
+  /* Negative inline margin only, so the hover tint gets breathing room without
+     clobbering vertical margin utilities (mt-*, etc.) on links. */
+  margin-inline: -0.12em;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
   transition:
@@ -94,7 +96,9 @@ button:focus-visible {
   color: #a8b0bd;
   border-radius: 0.3rem;
   padding: 0 0.12em;
-  margin: 0 -0.12em;
+  /* Negative inline margin only, so the hover tint gets breathing room without
+     clobbering vertical margin utilities (mt-*, etc.) on links. */
+  margin-inline: -0.12em;
   transition:
     background-color 0.15s ease,
     color 0.15s ease;
