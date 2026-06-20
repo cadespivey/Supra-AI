@@ -193,6 +193,14 @@ public final class MatterDocumentsController: ObservableObject {
         (try? store.documentLibrary.fetchTags(documentID: documentID)) ?? []
     }
 
+    /// The classifier's suggested categorization for a document, if it has been
+    /// classified (1.3.2). Decoded from the stored classification metadata.
+    public func classification(forDocument documentID: String) -> DocumentClassification? {
+        guard let json = documents.first(where: { $0.id == documentID })?.classificationMetadataJSON,
+              let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(DocumentClassification.self, from: data)
+    }
+
     public func toggleTag(_ tagID: String, on documentID: String) {
         let assigned = tags(forDocument: documentID).contains { $0.id == tagID }
         if assigned {

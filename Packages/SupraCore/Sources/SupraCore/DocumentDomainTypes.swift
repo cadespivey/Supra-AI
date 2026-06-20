@@ -52,6 +52,7 @@ public enum DocumentProcessingPhase: String, Codable, CaseIterable, Hashable, Se
     case chunking
     case fullTextIndexing = "full_text_indexing"
     case semanticEmbedding = "semantic_embedding"
+    case classifying
     case finalizingReport = "finalizing_report"
     case complete
     case failed
