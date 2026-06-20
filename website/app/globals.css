@@ -21,6 +21,7 @@
 html {
   background: #10223d;
   scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -28,8 +29,21 @@ body {
   margin: 0;
   background: #10223d;
   color: #f4f6f8;
+  /* Body text first: a comfortable reading size and leading (Butterick). */
   font-family: var(--font-equity), Georgia, "Times New Roman", serif;
+  font-size: 1.0625rem;
+  line-height: 1.5;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Restrained measure for running text — ~45-90 chars per line. */
+.measure {
+  max-width: 38rem;
+}
+.measure-wide {
+  max-width: 46rem;
 }
 
 a {
@@ -37,12 +51,71 @@ a {
   text-decoration: none;
 }
 
+/* Keyboard focus needs a visible indicator since links are not underlined. */
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid #c4a459;
+  outline-offset: 2px;
+  border-radius: 0.2rem;
+}
+
+/*
+ * Links, Butterick style: no underline. A content link is set in gold and
+ * gets a soft rounded background tint on hover. Inline references add a small
+ * superscript ring (a non-color cue, which also keeps them accessible).
+ */
+.link {
+  color: #c4a459;
+  border-radius: 0.3rem;
+  padding: 0 0.12em;
+  margin: 0 -0.12em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+.link:hover {
+  background: rgba(196, 164, 89, 0.16);
+}
+.link:active {
+  color: #a89054;
+}
+
+.link-ref::after {
+  content: "\FEFF°";
+  margin-left: 0.06em;
+  font-size: 0.8em;
+  vertical-align: 0.35em;
+}
+
+/* Quiet nav/footer link: muted until hover, then gold with the same tint. */
+.link-quiet {
+  color: #a8b0bd;
+  border-radius: 0.3rem;
+  padding: 0 0.12em;
+  margin: 0 -0.12em;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+.link-quiet:hover {
+  color: #c4a459;
+  background: rgba(196, 164, 89, 0.12);
+}
+
 ::selection {
   background: rgba(196, 164, 89, 0.35);
   color: #f4f6f8;
 }
 
+/* Small caps / caps labels always carry letterspacing (Butterick: 5-12%). */
 .font-caps {
   font-family: var(--font-equity-caps), Georgia, "Times New Roman", serif;
-  letter-spacing: 0;
+  letter-spacing: 0.09em;
+}
+
+/* Hairline rule used to separate content without boxes. */
+.rule {
+  border-top: 1px solid #3a465a;
 }

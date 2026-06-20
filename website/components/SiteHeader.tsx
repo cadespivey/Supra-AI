@@ -23,8 +23,8 @@ export function SiteHeader() {
               <li key={item.href}>
                 <Link
                   href={item.href}
-                  className={`font-caps text-xs uppercase text-supra-muted transition-colors hover:text-supra-gold sm:text-[0.8rem] ${
-                    item.accent ? "text-supra-gold" : ""
+                  className={`font-caps text-xs uppercase sm:text-[0.8rem] ${
+                    item.accent ? "link" : "link-quiet"
                   }`}
                 >
                   {item.label}

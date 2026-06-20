@@ -17,7 +17,7 @@ const sections = [
   },
   {
     title: "CourtListener research",
-    body: "When you enable CourtListener research, the app sends your search queries to the CourtListener API to retrieve authority. This is the opt-in network feature for legal research. Review CourtListener's own terms and privacy policy for how they handle requests.",
+    body: "When you enable CourtListener research, the app sends your search queries to the CourtListener API to retrieve authority. This is the opt-in network feature for legal research. Review CourtListener’s own terms and privacy policy for how they handle requests.",
   },
   {
     title: "Model downloads and updates",
@@ -49,9 +49,11 @@ export default function PrivacyPage() {
       intro="Supra AI is built around local processing. This policy explains the limited data the website and app touch."
     >
       <DraftNotice />
-      <div className="mb-6 rounded-2xl border border-supra-gold/35 bg-supra-navyPanel p-6">
-        <h2 className="text-2xl text-supra-white">The short version</h2>
-        <p className="mt-4 text-base leading-7 text-supra-muted">
+      <div className="mb-12 border-l-2 border-supra-gold/60 pl-5">
+        <p className="font-caps text-xs uppercase text-supra-gold">
+          The short version
+        </p>
+        <p className="measure-wide mt-2 text-lg leading-[1.5] text-supra-white">
           The app processes your matter documents and generated work locally on
           your Mac and does not send them to us. Aside from fetching the app and
           its models and checking for updates, optional CourtListener research is
@@ -60,19 +62,19 @@ export default function PrivacyPage() {
         </p>
       </div>
 
-      <div className="grid gap-5 md:grid-cols-2">
+      <div className="grid gap-x-12 gap-y-8 md:grid-cols-2">
         {sections.map((section) => (
           <section
             key={section.title}
-            className="rounded-2xl border border-supra-border bg-supra-navyPanel p-6"
+            className="border-t border-supra-border pt-5"
           >
-            <h2 className="text-2xl text-supra-white">{section.title}</h2>
-            <p className="mt-4 text-base leading-7 text-supra-muted">
+            <h2 className="text-xl text-supra-white">{section.title}</h2>
+            <p className="measure-wide mt-3 text-base leading-[1.55] text-supra-muted">
               {section.body}
             </p>
           </section>
         ))}
-        <section className="md:col-span-2">
+        <section className="pt-2 md:col-span-2">
           <FeedbackWarning />
         </section>
       </div>

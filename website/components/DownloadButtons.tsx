@@ -68,30 +68,24 @@ export function DownloadButtons() {
 
   return (
     <div>
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap items-center gap-x-7 gap-y-3">
         <a
           href={release.dmgUrl}
-          className="inline-flex flex-col rounded-xl border border-supra-gold bg-supra-gold px-5 py-3 text-supra-navyDeep transition hover:bg-supra-white"
+          className="inline-flex items-center rounded-md bg-supra-gold px-5 py-3 text-base text-supra-navyDeep transition hover:bg-supra-white"
         >
-          <span className="text-base font-bold">Download .dmg</span>
-          <span className="font-caps text-xs uppercase tracking-wide opacity-80">
-            Recommended · drag to install
-          </span>
+          Download for macOS&nbsp;·&nbsp;.dmg
         </a>
-        <a
-          href={release.zipUrl}
-          className="inline-flex flex-col rounded-xl border border-supra-border px-5 py-3 text-supra-white transition hover:border-supra-gold hover:text-supra-gold"
-        >
-          <span className="text-base">Download .zip</span>
-          <span className="font-caps text-xs uppercase tracking-wide text-supra-muted">
-            Plain app bundle
-          </span>
+        <a href={release.zipUrl} className="link text-base">
+          or download .zip
         </a>
       </div>
 
-      <p className="mt-4 text-sm text-supra-muted">
-        {release.resolved ? "Latest release" : "Current release"}:{" "}
-        <span className="text-supra-white">{release.tag}</span> · Apple Silicon,
+      <p
+        aria-live="polite"
+        className="mt-4 font-caps text-xs uppercase text-supra-muted"
+      >
+        {release.resolved ? "Latest release" : "Current release"}{" "}
+        <span className="text-supra-white">{release.tag}</span> · Apple Silicon ·
         macOS 15+
       </p>
     </div>
