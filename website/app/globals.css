@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-supra-navy: #10223d;
+  --color-supra-navyDeep: #081526;
+  --color-supra-navyPanel: #172a46;
+  --color-supra-navyPanelLight: #223147;
+  --color-supra-gold: #c4a459;
+  --color-supra-goldDark: #a89054;
+  --color-supra-white: #f4f6f8;
+  --color-supra-muted: #a8b0bd;
+  --color-supra-border: #3a465a;
+  --font-serif: var(--font-equity), Georgia, "Times New Roman", serif;
+  --font-caps: var(--font-equity-caps), Georgia, "Times New Roman", serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: #10223d;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: #10223d;
+  color: #f4f6f8;
+  font-family: var(--font-equity), Georgia, "Times New Roman", serif;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::selection {
+  background: rgba(196, 164, 89, 0.35);
+  color: #f4f6f8;
+}
+
+.font-caps {
+  font-family: var(--font-equity-caps), Georgia, "Times New Roman", serif;
+  letter-spacing: 0;
+}
