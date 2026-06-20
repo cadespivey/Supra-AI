@@ -224,6 +224,22 @@ public struct JurisdictionCatalog: Sendable {
         bestMatch(jurisdiction: jurisdiction, court: court).map(authorityScope(for:))
     }
 
+    /// Federal courts whose work commonly applies a state's law — the state's U.S.
+    /// Court of Appeals circuit plus the federal district/bankruptcy courts sitting
+    /// in that state, plus SCOTUS. Used to optionally broaden a state-bound search
+    /// (e.g. a federal court applying state law under diversity jurisdiction).
+    public func relatedFederalCourtIDs(forState state: String) -> [String] {
+        var ids: [String] = []
+        if let circuit = federalCircuitByState[state] {
+            ids.append(circuit.id)
+        }
+        for option in options where option.system == .federal && option.state == state {
+            ids.append(contentsOf: option.courtListenerIDs)
+        }
+        ids.append("scotus")
+        return uniquePreservingOrder(ids)
+    }
+
     public static func courtFilterIDs(from filter: String?) -> [String] {
         uniquePreservingOrder(
             (filter ?? "")

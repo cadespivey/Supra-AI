@@ -87,6 +87,12 @@ public final class DocumentImportService: @unchecked Sendable {
         var folderCache: [String: String?] = [:]  // managed relative dir path -> folder id
 
         for source in sources {
+            // User-picked / dropped files are security-scoped under the App
+            // Sandbox. Imports run asynchronously on the processing queue — long
+            // after the picker callback — so we must (re)open scope here or every
+            // read fails. App-owned/temp URLs return false and need no scope.
+            let scoped = source.startAccessingSecurityScopedResource()
+            defer { if scoped { source.stopAccessingSecurityScopedResource() } }
             try await importEntry(
                 at: source,
                 relativeDir: "",

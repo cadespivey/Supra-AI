@@ -31,9 +31,18 @@ public final class GlobalChatController: ObservableObject {
     private var lastLegalPacketsByChatID: [String: LegalSourcePacket] = [:]
     private var activeGenerationID: GenerationID?
 
-    /// Top-level jurisdiction options for the global chat's jurisdiction selector
-    /// (Federal courts plus each state's aggregate court group), Federal first.
-    public let topLevelJurisdictions: [JurisdictionOption]
+    /// Top-level jurisdiction options (Federal courts plus each state's aggregate
+    /// court group), Federal first. Internal — the UI uses `federalCircuits` and
+    /// `stateJurisdictions` instead.
+    private let topLevelJurisdictions: [JurisdictionOption]
+
+    /// The federal circuit courts, for the picker's Federal section.
+    public let federalCircuits: [JurisdictionOption]
+
+    /// The state/territory aggregates (top-level options minus the federal one).
+    public var stateJurisdictions: [JurisdictionOption] {
+        topLevelJurisdictions.filter { $0.id != "federal-courts" }
+    }
 
     /// The user's jurisdiction choice for global-chat legal research. Empty means
     /// "auto-detect" — infer one from the prompt; otherwise a `JurisdictionOption`
@@ -47,7 +56,17 @@ public final class GlobalChatController: ObservableObject {
         }
     }
 
+    /// When a state is selected, also search the federal courts that apply its law
+    /// (its circuit + district courts). Persisted app-wide for the global scope.
+    @Published public var includeRelatedFederal: Bool = false {
+        didSet {
+            guard oldValue != includeRelatedFederal, case .global = scope else { return }
+            try? store.appSettings.setSetting(Self.includeRelatedFederalKey, value: includeRelatedFederal)
+        }
+    }
+
     static let jurisdictionOverrideKey = "globalChat.jurisdictionOverride"
+    static let includeRelatedFederalKey = "globalChat.includeRelatedFederal"
 
     public init(
         store: SupraStore,
@@ -75,8 +94,10 @@ public final class GlobalChatController: ObservableObject {
             baseURLOverride: legalConfiguration.courtListenerBaseURL
         )
         self.topLevelJurisdictions = Self.makeTopLevelJurisdictions()
+        self.federalCircuits = Self.makeFederalCircuits()
         if case .global = scope {
             self.jurisdictionOverrideID = (try? store.appSettings.getSetting(Self.jurisdictionOverrideKey, as: String.self)) ?? ""
+            self.includeRelatedFederal = (try? store.appSettings.getSetting(Self.includeRelatedFederalKey, as: Bool.self)) ?? false
         }
     }
 
@@ -1018,7 +1039,12 @@ public final class GlobalChatController: ObservableObject {
             // A deliberate selection hard-bounds research to that jurisdiction.
             scoped.jurisdiction = scope.jurisdictionName
             scoped.jurisdictionContext = scope.modelContext
-            scoped.courtIDs = scope.courtListenerIDs
+            var ids = scope.courtListenerIDs
+            // Optionally fold in the federal courts that apply this state's law.
+            if includeRelatedFederal, option.system == .state, let state = option.state {
+                ids += JurisdictionCatalog.shared.relatedFederalCourtIDs(forState: state)
+            }
+            scoped.courtIDs = Self.uniqued(ids)
         } else {
             // An inferred jurisdiction only fills gaps the classifier left, so an
             // explicit jurisdiction named in the prompt still wins.
@@ -1069,6 +1095,28 @@ public final class GlobalChatController: ObservableObject {
                 }
                 return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
             }
+    }
+
+    private static func makeFederalCircuits() -> [JurisdictionOption] {
+        let order = ["ca1", "ca2", "ca3", "ca4", "ca5", "ca6", "ca7", "ca8", "ca9", "ca10", "ca11", "cadc", "cafc"]
+        var seen = Set<String>()
+        var circuits: [JurisdictionOption] = []
+        for option in JurisdictionCatalog.shared.options where option.level == .federalAppellate {
+            let key = option.courtListenerIDs.first ?? option.id
+            guard seen.insert(key).inserted else { continue }
+            circuits.append(option)
+        }
+        return circuits.sorted { lhs, rhs in
+            let lhsRank = order.firstIndex(of: lhs.courtListenerIDs.first ?? "") ?? Int.max
+            let rhsRank = order.firstIndex(of: rhs.courtListenerIDs.first ?? "") ?? Int.max
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+
+    private static func uniqued(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { seen.insert($0).inserted }
     }
 
     /// Maximum characters of prior conversation replayed as context, keeping the
