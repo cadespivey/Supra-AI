@@ -36,7 +36,7 @@ export function CapabilityGrid() {
       </div>
 
       <div className="mt-12 grid gap-5 lg:grid-cols-[0.95fr_1.3fr]">
-        <article className="rounded-2xl border border-supra-gold/40 bg-supra-navyPanelLight p-8">
+        <article className="rounded-2xl border border-supra-gold/40 bg-supra-navyPanelLight p-6 sm:p-8">
           <p className="font-caps text-xs font-bold uppercase text-supra-gold">
             Featured
           </p>
@@ -45,13 +45,17 @@ export function CapabilityGrid() {
             Supra AI runs models locally on Apple Silicon, so your files and
             prompts do not need to leave your Mac for generation.
           </p>
-          <div
-            aria-hidden="true"
-            className="mt-10 grid grid-cols-3 gap-3 border-t border-supra-border pt-6"
-          >
-            <div className="h-14 rounded-xl border border-supra-border bg-supra-navy" />
-            <div className="h-14 rounded-xl border border-supra-border bg-supra-navy" />
-            <div className="h-14 rounded-xl border border-supra-border bg-supra-navy" />
+          <div className="mt-10 grid grid-cols-1 gap-3 border-t border-supra-border pt-6 sm:grid-cols-3">
+            {["MLX runtime", "Local model", "On-device embeddings"].map(
+              (label) => (
+                <div
+                  key={label}
+                  className="flex min-h-16 items-center justify-center rounded-xl border border-supra-border bg-supra-navy px-3 py-3 text-center font-caps text-xs font-bold uppercase leading-tight tracking-wide text-supra-muted"
+                >
+                  {label}
+                </div>
+              ),
+            )}
           </div>
         </article>
 

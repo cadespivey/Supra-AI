@@ -55,11 +55,27 @@ export function SourceGroundingStack() {
             an unsupported assertion from model memory.
           </StackCard>
 
-          <div className="rounded-2xl border border-supra-border bg-supra-navyPanelLight p-4">
-            <p className="text-base italic text-supra-muted">
-              Ask a legal question, draft from a matter file, or verify a
-              proposition...
+          <div className="rounded-2xl border border-supra-border bg-supra-navyPanelLight p-5">
+            <p className="font-caps text-xs font-bold uppercase tracking-wide text-supra-gold">
+              Example
             </p>
+            <p className="mt-3 text-base italic text-supra-muted">
+              {"“Does the implied warranty of habitability cover this defect?”"}
+            </p>
+            <div className="mt-4 rounded-xl border border-supra-border bg-supra-navy p-4">
+              <p className="text-sm leading-7 text-supra-white">
+                Analysis grounded in the excerpts above, with each proposition
+                tied to the source that supports it.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span className="rounded-full border border-supra-gold/50 px-3 py-1 font-caps text-xs uppercase tracking-wide text-supra-gold">
+                  Source · §
+                </span>
+                <span className="rounded-full border border-supra-border px-3 py-1 font-caps text-xs uppercase tracking-wide text-supra-muted">
+                  Matter doc
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
