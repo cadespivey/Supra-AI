@@ -9,7 +9,6 @@ struct SettingsView: View {
     @ObservedObject var settings: SettingsController
     @ObservedObject var profile: AssistantProfileController
     @ObservedObject var documentSetup: DocumentIntelligenceSetupController
-    @ObservedObject var embeddingDownloader: EmbeddingModelDownloadController
     @ObservedObject var update: UpdateController
     @State private var courtListenerToken = ""
 
@@ -17,10 +16,7 @@ struct SettingsView: View {
         Form {
             AssistantProfileSection(profile: profile)
 
-            DocumentIntelligenceSection(
-                setup: documentSetup,
-                downloader: embeddingDownloader
-            )
+            DocumentIntelligenceSection(setup: documentSetup)
 
 
             Section("Generation Defaults") {
@@ -39,14 +35,20 @@ struct SettingsView: View {
                             .monospacedDigit()
                     }
                     Slider(value: $settings.temperature, in: 0...1, step: 0.05)
+                    Text("Lower is more precise, deterministic, and consistent — best for legal accuracy. Higher is more varied and creative, with more risk of drift or invented detail.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
 
-                Stepper(
-                    "Max output tokens: \(settings.maxOutputTokens)",
-                    value: $settings.maxOutputTokens,
-                    in: 128...8192,
-                    step: 128
-                )
+                VStack(alignment: .leading, spacing: 4) {
+                    Stepper(
+                        "Max output tokens: \(settings.maxOutputTokens)",
+                        value: $settings.maxOutputTokens,
+                        in: 128...8192,
+                        step: 128
+                    )
+                    Text("The longest a single answer can be (≈¾ of a word per token). Higher allows fuller answers but uses more memory and takes longer; it doesn't change accuracy.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
 
             Section {
@@ -122,12 +124,21 @@ struct SettingsView: View {
                 Text("Checks GitHub for newer releases of Supra AI. It only fetches the latest version number — no usage data is sent — and only when you ask or turn on automatic checks.")
             }
 
-            Section("About") {
-                AboutBanner()
-                LabeledContent(
-                    "Version",
-                    value: "\(settings.appVersion.marketingVersion) (\(settings.appVersion.buildNumber))"
-                )
+            Section {
+                AboutBanner(version: settings.appVersion.marketingVersion)
+                Link(destination: URL(string: "https://github.com/cadespivey/Supra-AI")!) {
+                    Label("GitHub repository", systemImage: "chevron.left.forwardslash.chevron.right")
+                }
+                Link(destination: URL(string: "https://www.courtlistener.com")!) {
+                    Label("CourtListener", systemImage: "books.vertical")
+                }
+                Link(destination: URL(string: "https://free.law")!) {
+                    Label("Free Law Project", systemImage: "building.columns")
+                }
+            } header: {
+                Text("About")
+            } footer: {
+                Text("Supra AI's legal research is powered by CourtListener and the Free Law Project — free, nonprofit resources. Please consider creating a free account to support and sustain their work.")
             }
         }
         .formStyle(.grouped)
@@ -162,25 +173,22 @@ struct SettingsView: View {
     }
 }
 
-/// Branded About banner: the § mark, the name, and the "See Supra" tagline.
+/// Branded About banner: the app icon, name, tagline, and version.
 private struct AboutBanner: View {
+    let version: String
+
     var body: some View {
         HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 14)
-                .fill(BrandColors.navy)
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
                 .frame(width: 60, height: 60)
-                .overlay(
-                    Text("§")
-                        .font(.system(size: 38, weight: .semibold, design: .serif))
-                        .foregroundStyle(BrandColors.gold)
-                )
             VStack(alignment: .leading, spacing: 2) {
                 Text("Supra AI").font(.title3.weight(.semibold))
                 Text("Secure legal AI without compromise.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("See Supra.")
-                    .font(.callout.italic())
+                Text("Version \(version)")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -247,11 +255,28 @@ private struct AssistantProfileSection: View {
         }
 
         Section {
-            TextField(
-                "Citation style",
-                text: $profile.profile.citationStyle,
-                prompt: Text("e.g. Bluebook, ALWD, or your court's local rules")
-            )
+            Picker("Citation style", selection: $profile.profile.citationStyle) {
+                Text("Not set").tag("")
+                Section("General") {
+                    ForEach(CitationStyleCatalog.general) { style in
+                        Text(style.displayName).tag(style.displayName)
+                    }
+                }
+                Section("State-specific") {
+                    ForEach(CitationStyleCatalog.states) { style in
+                        Text(style.displayName).tag(style.displayName)
+                    }
+                }
+                // Keep a previously-typed custom value selectable so it isn't lost.
+                if !profile.profile.citationStyle.isEmpty,
+                   CitationStyleCatalog.style(named: profile.profile.citationStyle) == nil {
+                    Text(profile.profile.citationStyle).tag(profile.profile.citationStyle)
+                }
+            }
+            .pickerStyle(.menu)
+            if let style = CitationStyleCatalog.style(named: profile.profile.citationStyle) {
+                Text(style.guidance).font(.caption).foregroundStyle(.secondary)
+            }
             VStack(alignment: .leading, spacing: 4) {
                 Text("Citation notes").font(.caption).foregroundStyle(.secondary)
                 TextField(
@@ -362,7 +387,6 @@ private struct AssistantProfileSection: View {
 /// notifications. Import is blocked until this is complete.
 private struct DocumentIntelligenceSection: View {
     @ObservedObject var setup: DocumentIntelligenceSetupController
-    @ObservedObject var downloader: EmbeddingModelDownloadController
 
     var body: some View {
         Section {
@@ -388,9 +412,8 @@ private struct DocumentIntelligenceSection: View {
             stepRow(
                 "Embedding model",
                 done: setup.selectedEmbeddingModel != nil && setup.embeddingTestPassed,
-                detail: setup.selectedEmbeddingModel?.displayName ?? "None selected."
+                detail: setup.selectedEmbeddingModel.map { "\($0.displayName) — manage it in the Models tab." } ?? "Download, select, and test-load one in the Models tab."
             )
-            EmbeddingModelSetupView(setup: setup, downloader: downloader)
             stepRow(
                 "Extraction / OCR toolchain",
                 done: setup.toolchain?.meetsMinimumForSetup ?? false,
@@ -456,9 +479,8 @@ private struct DocumentIntelligenceSection: View {
     }
 }
 
-/// Shared embedding-model setup flow, presented as a linear sequence:
-/// 1) download a model, 2) select it for use, 3) test-load it. Surfaced both in
-/// Settings → Document Intelligence and in the Models tab so it isn't buried.
+/// Guided embedding-model setup flow, presented as a linear sequence: 1) download
+/// a model, 2) select it for use, 3) test-load it. Shown in the Models tab.
 struct EmbeddingModelSetupView: View {
     @ObservedObject var setup: DocumentIntelligenceSetupController
     @ObservedObject var downloader: EmbeddingModelDownloadController
