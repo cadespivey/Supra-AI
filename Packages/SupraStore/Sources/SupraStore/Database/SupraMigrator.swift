@@ -755,6 +755,12 @@ public enum SupraMigrator {
             }
         }
 
+        migrator.registerMigration("v039_add_document_classification_metadata") { db in
+            try db.alter(table: "matter_documents") { table in
+                table.add(column: "classification_metadata_json", .text)
+            }
+        }
+
         return migrator
     }
 

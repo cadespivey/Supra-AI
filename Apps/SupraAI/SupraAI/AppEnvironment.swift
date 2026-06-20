@@ -74,7 +74,12 @@ final class AppEnvironment: ObservableObject {
                 let model = try? store.documentSettings.fetchSelectedEmbeddingModel()
                 let embedder = model.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
                 return DocumentIndexingService(store: store, embedder: embedder)
-            }
+            },
+            // Suggests a taxonomy category for each imported document using the
+            // assigned task model. Self-skips when no model is loadable.
+            classificationService: DocumentClassificationService(
+                store: store, modelLibrary: modelLibrary, runtimeClient: runtimeClient
+            )
         )
         self.documentQueue = queue
         self.mattersController = MattersController(

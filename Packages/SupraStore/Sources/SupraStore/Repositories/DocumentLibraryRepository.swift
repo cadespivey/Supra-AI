@@ -305,14 +305,28 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
         }
     }
 
+    /// Persists the document classifier's structured result (1.3.2) — the serialized
+    /// `DocumentClassification` JSON, or nil to clear it.
+    public func updateClassification(documentID: String, classificationMetadataJSON: String?) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE matter_documents SET classification_metadata_json = ?, updated_at = ? WHERE id = ?",
+                arguments: [classificationMetadataJSON, Date(), documentID]
+            )
+        }
+    }
+
     /// Marks a document's extracted text as user-edited and its index stale, so a
     /// later indexing pass re-chunks/re-embeds it (plan §6.2, §7.1).
     public func markTextEdited(documentID: String) throws {
         try writer.write { db in
+            // Clearing the classification re-opens the document for re-classification
+            // on the next pass — its content changed, so its old category may not fit.
             try db.execute(
                 sql: """
                 UPDATE matter_documents
-                SET has_user_edited_text = 1, extraction_status = ?, index_status = ?, updated_at = ?
+                SET has_user_edited_text = 1, extraction_status = ?, index_status = ?,
+                    classification_metadata_json = NULL, updated_at = ?
                 WHERE id = ?
                 """,
                 arguments: [
