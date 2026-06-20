@@ -77,7 +77,9 @@ struct MainShellView: View {
         case .models:
             ModelsView(
                 library: environment.modelLibrary,
-                downloader: environment.modelDownloadController
+                downloader: environment.modelDownloadController,
+                documentSetup: environment.documentSetupController,
+                embeddingDownloader: environment.embeddingDownloadController
             )
         case .diagnostics:
             DiagnosticsView()
@@ -184,26 +186,21 @@ struct SupraToolbarIconButton: View {
     var body: some View {
         Button(role: role, action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 14.5, weight: .medium))
+                .font(.system(size: 15, weight: .regular))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(foregroundStyle)
-                .frame(width: 28, height: 28)
-                .background(backgroundFill, in: Circle())
-                .overlay {
-                    Circle()
-                        .strokeBorder(Color.secondary.opacity(isHovered && isEnabled ? 0.18 : 0.10), lineWidth: 0.5)
-                }
-                .contentShape(Circle())
+                .frame(width: 30, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.secondary.opacity(isHovered && isEnabled ? 0.16 : 0))
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
-        .opacity(isEnabled ? 1 : 0.45)
+        .opacity(isEnabled ? 1 : 0.4)
         .onHover { isHovered = $0 }
         .accessibilityLabel(Text(title))
         .help(title)
-    }
-
-    private var backgroundFill: Color {
-        Color.secondary.opacity(isHovered && isEnabled ? 0.18 : 0.10)
     }
 
     private var foregroundStyle: Color {

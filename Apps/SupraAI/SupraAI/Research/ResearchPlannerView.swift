@@ -20,7 +20,9 @@ struct ResearchPlannerView: View {
     @State private var endDate = Date()
     @State private var routingMessage: String?
     @State private var selectedCourtID: String
-    @State private var jurisdictionSearch: String
+    /// Throwaway sink for the autocomplete field's court binding; the planner
+    /// derives its court filter from `selectedCourtID` via `selectedScope`.
+    @State private var jurisdictionCourt = ""
 
     init(controller: ResearchSessionController, library: ModelLibrary, matter: MatterSummary) {
         self.controller = controller
@@ -32,7 +34,6 @@ struct ResearchPlannerView: View {
             partyPerspective: matter.partyPerspective.rawValue
         ))
         _selectedCourtID = State(initialValue: selected?.id ?? "")
-        _jurisdictionSearch = State(initialValue: selected?.displayName ?? (matter.court ?? matter.jurisdiction))
     }
 
     var body: some View {
@@ -48,17 +49,13 @@ struct ResearchPlannerView: View {
                     TextField("Legal issue or question", text: $draft.issueText, axis: .vertical)
                         .lineLimit(3...6)
                         .accessibilityIdentifier("planner.issue")
-                    JurisdictionSelectionField(
-                        title: "Jurisdiction",
+                    JurisdictionAutocompleteField(
+                        jurisdiction: $draft.jurisdiction,
+                        court: $jurisdictionCourt,
                         selectedCourtID: $selectedCourtID,
-                        searchText: $jurisdictionSearch,
-                        onSelect: applyJurisdiction
+                        invalid: false
                     )
-                    TextField("Governing jurisdiction", text: $draft.jurisdiction)
-                        .accessibilityIdentifier("planner.jurisdiction")
-                        .onChange(of: draft.jurisdiction) { _, newValue in
-                            clearSelectionIfManualJurisdiction(newValue)
-                        }
+                    .accessibilityIdentifier("planner.jurisdiction")
                 }
 
                 Section("Filters (optional)") {
@@ -227,18 +224,6 @@ struct ResearchPlannerView: View {
             return JurisdictionCatalog.shared.authorityScope(for: option)
         }
         return JurisdictionCatalog.shared.authorityScope(jurisdiction: draft.jurisdiction)
-    }
-
-    private func applyJurisdiction(_ option: JurisdictionOption?) {
-        guard let option else { return }
-        draft.jurisdiction = option.jurisdictionName
-    }
-
-    private func clearSelectionIfManualJurisdiction(_ value: String) {
-        guard let option = JurisdictionCatalog.shared.option(id: selectedCourtID) else { return }
-        if option.jurisdictionName.compare(value, options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame {
-            selectedCourtID = ""
-        }
     }
 
     private func splitList(_ text: String) -> [String] {

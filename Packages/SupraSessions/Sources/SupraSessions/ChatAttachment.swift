@@ -20,9 +20,11 @@ public struct ChatAttachmentContext: Identifiable, Sendable, Equatable {
 /// Turns a picked file into a `ChatAttachmentContext` for a global chat.
 ///
 /// Images/screenshots are OCR'd to text; plain-text/markdown/html/xml are read
-/// directly. Heavy document formats (PDF, Word, spreadsheets, email) are rejected
-/// with a nudge to open a matter, so the document pipeline handles them rather
-/// than dumping unprocessed content into the model's context window.
+/// directly; documents (PDF, Word, spreadsheets, email, RTF) have their text
+/// extracted via `ExtractionService` — with an OCR fallback for scanned PDFs —
+/// and capped so a large file can't overflow the model's context window. This
+/// lets the chat's "+" button analyze documents inline rather than turning them
+/// away.
 public struct ChatAttachmentLoader: Sendable {
     public enum LoadFailure: Error, LocalizedError, Equatable {
         case openInMatter(name: String, kind: String)
@@ -42,9 +44,14 @@ public struct ChatAttachmentLoader: Sendable {
     }
 
     private let ocr: any DocumentOCRService
+    private let extractor: ExtractionService
 
-    public init(ocr: any DocumentOCRService = VisionOCRService()) {
+    public init(
+        ocr: any DocumentOCRService = VisionOCRService(),
+        extractor: ExtractionService = ExtractionService()
+    ) {
         self.ocr = ocr
+        self.extractor = extractor
     }
 
     public func load(url: URL) async throws -> ChatAttachmentContext {
@@ -59,18 +66,47 @@ public struct ChatAttachmentLoader: Sendable {
             let result = try await ocr.recognizeImage(at: url)
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { throw LoadFailure.empty(name: name) }
-            return ChatAttachmentContext(name: name, text: text)
+            return ChatAttachmentContext(name: name, text: Self.capped(text))
         }
 
         if isPlainTextLike(family: family, utType: utType) {
             guard let text = readText(url)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
                 throw LoadFailure.unreadable(name: name)
             }
-            return ChatAttachmentContext(name: name, text: text)
+            return ChatAttachmentContext(name: name, text: Self.capped(text))
         }
 
-        let kind = url.pathExtension.isEmpty ? "These" : url.pathExtension.uppercased()
-        throw LoadFailure.openInMatter(name: name, kind: kind)
+        // Documents (PDF, Word, spreadsheet, email, RTF) — extract their text so
+        // they can be analyzed inline rather than turned away.
+        guard family != nil else { throw LoadFailure.unreadable(name: name) }
+        return try await loadDocument(url: url, name: name, family: family)
+    }
+
+    private func loadDocument(
+        url: URL,
+        name: String,
+        family: SupportedDocumentTypes.ExtractionFamily?
+    ) async throws -> ChatAttachmentContext {
+        let result: ExtractionResult
+        do {
+            result = try await extractor.extract(fileURL: url)
+        } catch {
+            throw LoadFailure.unreadable(name: name)
+        }
+        var text = result.combinedText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // A scanned PDF has no embedded text; OCR its rendered pages instead.
+        if text.isEmpty, result.needsOCR, family == .pdf {
+            let pages = try await ocr.recognizePDFPages(at: url, pageIndices: nil)
+            text = pages
+                .sorted { $0.key < $1.key }
+                .map(\.value.text)
+                .joined(separator: "\n\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        guard !text.isEmpty else { throw LoadFailure.empty(name: name) }
+        return ChatAttachmentContext(name: name, text: Self.capped(text))
     }
 
     private func isPlainTextLike(family: SupportedDocumentTypes.ExtractionFamily?, utType: UTType?) -> Bool {
@@ -86,5 +122,15 @@ public struct ChatAttachmentLoader: Sendable {
         if let text = try? String(contentsOf: url, encoding: .utf8) { return text }
         if let data = try? Data(contentsOf: url) { return String(data: data, encoding: .utf8) }
         return nil
+    }
+
+    /// Caps an attachment's injected text so a large document can't overflow the
+    /// model's context window; the model still sees a substantial excerpt.
+    static let maxCharacters = 40_000
+
+    static func capped(_ text: String) -> String {
+        guard text.count > maxCharacters else { return text }
+        return String(text.prefix(maxCharacters))
+            + "\n\n[Attachment truncated to the first \(maxCharacters) characters for analysis.]"
     }
 }

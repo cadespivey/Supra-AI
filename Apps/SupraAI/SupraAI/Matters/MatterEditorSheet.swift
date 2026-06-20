@@ -33,14 +33,12 @@ struct MatterEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showValidation = false
     @State private var selectedCourtID: String
-    @State private var jurisdictionSearch: String
 
     init(mode: Mode, draft: MatterDraft, onSave: @escaping (MatterDraft) -> Void) {
         let selected = JurisdictionCatalog.shared.bestMatch(jurisdiction: draft.jurisdiction, court: draft.court)
         self.mode = mode
         self._draft = State(initialValue: draft)
         self._selectedCourtID = State(initialValue: selected?.id ?? "")
-        self._jurisdictionSearch = State(initialValue: selected?.displayName ?? draft.court.ifEmpty(draft.jurisdiction))
         self.onSave = onSave
     }
 
@@ -53,17 +51,13 @@ struct MatterEditorSheet: View {
             Form {
                 Section("Required") {
                     field("Matter name", text: $draft.name, invalid: nameInvalid, message: "Name is required.")
-                    JurisdictionSelectionField(
-                        title: "Jurisdiction",
+                    JurisdictionAutocompleteField(
+                        jurisdiction: $draft.jurisdiction,
+                        court: $draft.court,
                         selectedCourtID: $selectedCourtID,
-                        searchText: $jurisdictionSearch,
-                        onSelect: applyJurisdiction
+                        invalid: jurisdictionInvalid
                     )
-                    field("Governing jurisdiction", text: $draft.jurisdiction, invalid: jurisdictionInvalid, message: "Jurisdiction is required.")
-                        .onChange(of: draft.jurisdiction) { _, newValue in
-                            clearSelectionIfManualJurisdiction(newValue)
-                        }
-                    Picker("Party perspective", selection: $draft.partyPerspective) {
+                    Picker("Client perspective", selection: $draft.partyPerspective) {
                         ForEach(PartyPerspective.allCases, id: \.self) { perspective in
                             Text(perspective.rawValue.capitalized).tag(perspective)
                         }
@@ -75,10 +69,10 @@ struct MatterEditorSheet: View {
                         .lineLimit(1...3)
                     TextField("Matter description", text: $draft.matterDescription, axis: .vertical)
                         .lineLimit(2...6)
-                    TextField("Internal matter ID number", text: $draft.internalMatterID)
+                    TextField("Internal matter ID", text: $draft.internalMatterID)
                     TextField("Court", text: $draft.court)
                     TextField("Judge", text: $draft.judge)
-                    TextField("Docket number", text: $draft.docketNumber)
+                    TextField("Case number", text: $draft.docketNumber)
                     TextField("Practice area", text: $draft.practiceArea)
                     TextField("Notes", text: $draft.notes, axis: .vertical)
                         .lineLimit(2...5)
@@ -128,86 +122,168 @@ struct MatterEditorSheet: View {
         dismiss()
     }
 
-    private func applyJurisdiction(_ option: JurisdictionOption?) {
-        guard let option else { return }
-        draft.jurisdiction = option.jurisdictionName
-        draft.court = option.level == .jurisdiction ? "" : option.displayName
-    }
-
-    private func clearSelectionIfManualJurisdiction(_ value: String) {
-        guard let option = JurisdictionCatalog.shared.option(id: selectedCourtID) else { return }
-        if option.jurisdictionName.compare(value, options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame {
-            selectedCourtID = ""
-        }
-    }
 }
 
-struct JurisdictionSelectionField: View {
-    let title: String
+/// Single-field jurisdiction picker for the New Matter form: type to get live
+/// court/jurisdiction suggestions, pick one, or mark the matter N/A when no
+/// jurisdiction is relevant. Replaces the older search-box-plus-dropdown flow.
+struct JurisdictionAutocompleteField: View {
+    @Binding var jurisdiction: String
+    @Binding var court: String
     @Binding var selectedCourtID: String
-    @Binding var searchText: String
-    var onSelect: (JurisdictionOption?) -> Void
+    let invalid: Bool
+
+    @State private var query: String
 
     private let catalog = JurisdictionCatalog.shared
 
+    init(
+        jurisdiction: Binding<String>,
+        court: Binding<String>,
+        selectedCourtID: Binding<String>,
+        invalid: Bool
+    ) {
+        self._jurisdiction = jurisdiction
+        self._court = court
+        self._selectedCourtID = selectedCourtID
+        self.invalid = invalid
+        let initial = JurisdictionCatalog.shared.option(id: selectedCourtID.wrappedValue)?.displayName
+            ?? court.wrappedValue.ifEmpty(jurisdiction.wrappedValue)
+        self._query = State(initialValue: initial)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            TextField("Search courts or jurisdictions", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-            Picker(title, selection: selection) {
-                Text("Manual / custom jurisdiction").tag("")
-                ForEach(pickerOptions, id: \.id) { option in
-                    Text(option.menuTitle).tag(option.id)
+            HStack(spacing: 8) {
+                TextField("Jurisdiction or court", text: queryBinding)
+                if isNotApplicable {
+                    Button("Clear") { clear() }
+                        .buttonStyle(.borderless)
+                        .font(.callout)
+                } else {
+                    Button("N/A") { selectNotApplicable() }
+                        .buttonStyle(.borderless)
+                        .font(.callout)
+                        .help("This matter has no relevant jurisdiction")
                 }
             }
-            .pickerStyle(.menu)
 
-            if let selectedOption {
-                let scope = catalog.authorityScope(for: selectedOption)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(scope.mandatoryAuthorities.joined(separator: "; "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if !scope.courtListenerIDs.isEmpty {
-                        Text("CourtListener: \(scope.courtListenerIDs.joined(separator: ", "))")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(2)
+            if showSuggestions {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, option in
+                        if index > 0 { Divider() }
+                        Button { select(option) } label: {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(option.displayName)
+                                    .foregroundStyle(.primary)
+                                if let detail = optionDetail(option) {
+                                    Text(detail)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.secondary.opacity(0.08)))
             }
+
+            footer
         }
     }
 
-    private var selection: Binding<String> {
-        Binding(
-            get: { selectedCourtID },
-            set: { newValue in
-                selectedCourtID = newValue
-                guard let option = catalog.option(id: newValue) else {
-                    onSelect(nil)
-                    return
+    @ViewBuilder
+    private var footer: some View {
+        if invalid {
+            Text("Jurisdiction is required. Choose N/A if it doesn't apply.")
+                .font(.caption)
+                .foregroundStyle(.red)
+        } else if let scope = selectedScope {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(scope.mandatoryAuthorities.joined(separator: "; "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !scope.courtListenerIDs.isEmpty {
+                    Text("CourtListener: \(scope.courtListenerIDs.joined(separator: ", "))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
                 }
-                searchText = option.displayName
-                onSelect(option)
+            }
+        } else if isNotApplicable {
+            Text("No specific jurisdiction — authority scoping is disabled for this matter.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            Text("Type to search courts and jurisdictions, or choose N/A.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var queryBinding: Binding<String> {
+        Binding(
+            get: { query },
+            set: { newValue in
+                query = newValue
+                selectedCourtID = ""
+                jurisdiction = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                court = ""
             }
         )
     }
 
-    private var selectedOption: JurisdictionOption? {
-        catalog.option(id: selectedCourtID)
+    private var suggestions: [JurisdictionOption] {
+        catalog.search(query, limit: 6)
     }
 
-    private var pickerOptions: [JurisdictionOption] {
-        var options: [JurisdictionOption] = []
-        if let selectedOption {
-            options.append(selectedOption)
-        }
-        for option in catalog.search(searchText, limit: 80) where !options.contains(where: { $0.id == option.id }) {
-            options.append(option)
-        }
-        return options
+    private var showSuggestions: Bool {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isNotApplicable else { return false }
+        if let selected = catalog.option(id: selectedCourtID), selected.displayName == query { return false }
+        return !suggestions.isEmpty
+    }
+
+    private var isNotApplicable: Bool {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("N/A") == .orderedSame
+    }
+
+    private var selectedScope: JurisdictionAuthorityScope? {
+        catalog.option(id: selectedCourtID).map(catalog.authorityScope(for:))
+    }
+
+    private func optionDetail(_ option: JurisdictionOption) -> String? {
+        let parts = [option.jurisdictionName, option.level.displayName]
+            .filter { !$0.isEmpty && $0 != option.displayName }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func select(_ option: JurisdictionOption) {
+        query = option.displayName
+        selectedCourtID = option.id
+        jurisdiction = option.jurisdictionName
+        court = option.level == .jurisdiction ? "" : option.displayName
+    }
+
+    private func selectNotApplicable() {
+        query = "N/A"
+        selectedCourtID = ""
+        jurisdiction = "N/A"
+        court = ""
+    }
+
+    private func clear() {
+        query = ""
+        selectedCourtID = ""
+        jurisdiction = ""
+        court = ""
     }
 }
 
