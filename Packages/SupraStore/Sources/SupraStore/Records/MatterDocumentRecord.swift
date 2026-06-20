@@ -28,6 +28,10 @@ public struct MatterDocumentRecord: Codable, FetchableRecord, PersistableRecord,
     public var hasUserEditedText: Bool
     public var extractionWarningsJSON: String?
     public var extractionErrorsJSON: String?
+    /// The document classifier's result (serialized `DocumentClassification` JSON),
+    /// or nil if not yet classified. Holds the suggested primary/secondary tags and
+    /// the structured metadata used for retrieval, filtering, and privilege review.
+    public var classificationMetadataJSON: String?
     public var metadataCreatedAt: Date?
     public var metadataModifiedAt: Date?
     public var importedAt: Date
@@ -56,6 +60,7 @@ public struct MatterDocumentRecord: Codable, FetchableRecord, PersistableRecord,
         hasUserEditedText: Bool = false,
         extractionWarningsJSON: String? = nil,
         extractionErrorsJSON: String? = nil,
+        classificationMetadataJSON: String? = nil,
         metadataCreatedAt: Date? = nil,
         metadataModifiedAt: Date? = nil,
         importedAt: Date = Date(),
@@ -83,6 +88,7 @@ public struct MatterDocumentRecord: Codable, FetchableRecord, PersistableRecord,
         self.hasUserEditedText = hasUserEditedText
         self.extractionWarningsJSON = extractionWarningsJSON
         self.extractionErrorsJSON = extractionErrorsJSON
+        self.classificationMetadataJSON = classificationMetadataJSON
         self.metadataCreatedAt = metadataCreatedAt
         self.metadataModifiedAt = metadataModifiedAt
         self.importedAt = importedAt
@@ -112,6 +118,7 @@ public struct MatterDocumentRecord: Codable, FetchableRecord, PersistableRecord,
         case hasUserEditedText = "has_user_edited_text"
         case extractionWarningsJSON = "extraction_warnings_json"
         case extractionErrorsJSON = "extraction_errors_json"
+        case classificationMetadataJSON = "classification_metadata_json"
         case metadataCreatedAt = "metadata_created_at"
         case metadataModifiedAt = "metadata_modified_at"
         case importedAt = "imported_at"

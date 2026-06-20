@@ -33,6 +33,9 @@ public final class DocumentProcessingQueue: ObservableObject {
     private let store: SupraStore
     private let importService: DocumentImportService
     private let makeIndexingService: @Sendable () -> DocumentIndexingService
+    /// The document classifier, or nil when classification is disabled (e.g. no
+    /// runtime). Best-effort and main-actor isolated; never fails a job.
+    private let classificationService: DocumentClassificationService?
     private let notifier: any DocumentNotifying
 
     /// In-memory source URLs for not-yet-run import jobs (originals are not
@@ -45,11 +48,13 @@ public final class DocumentProcessingQueue: ObservableObject {
         store: SupraStore,
         importService: DocumentImportService,
         makeIndexingService: @escaping @Sendable () -> DocumentIndexingService,
+        classificationService: DocumentClassificationService? = nil,
         notifier: any DocumentNotifying = SystemDocumentNotifier()
     ) {
         self.store = store
         self.importService = importService
         self.makeIndexingService = makeIndexingService
+        self.classificationService = classificationService
         self.notifier = notifier
     }
 
@@ -169,6 +174,13 @@ public final class DocumentProcessingQueue: ObservableObject {
             setPhase(job.id, .semanticEmbedding)
             let indexer = makeIndexingService()
             _ = try await indexer.indexMatter(matterID: job.matterID)
+
+            // Suggest a taxonomy category for each new document (best-effort; a
+            // classification failure or missing model never fails the job).
+            if let classificationService {
+                setPhase(job.id, .classifying)
+                _ = await classificationService.classifyMatter(matterID: job.matterID)
+            }
 
             try? store.documentJobs.updateJobProgress(id: job.id, phase: .finalizingReport)
             try? store.documentJobs.completeJob(id: job.id)

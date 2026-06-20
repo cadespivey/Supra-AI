@@ -195,7 +195,10 @@ struct MatterDocumentsView: View {
     }
 
     private func documentRow(_ doc: MatterDocumentRecord) -> some View {
-        HStack {
+        // The suggestion chips come from the stored classification metadata; the
+        // user's own tags are shown separately (the classifier creates no tags).
+        let classification = controller.classification(forDocument: doc.id)
+        return HStack {
             Image(systemName: doc.parentDocumentID == nil ? "doc.text" : "paperclip")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
@@ -204,6 +207,9 @@ struct MatterDocumentsView: View {
                     statusBadge(doc.status)
                     if let summary = doc.ocrConfidenceSummary {
                         Text(summary).font(.caption2).foregroundStyle(.orange)
+                    }
+                    if let classification {
+                        classificationChips(classification)
                     }
                     ForEach(controller.tags(forDocument: doc.id)) { tag in
                         Text(tag.name).font(.caption2)
@@ -240,6 +246,48 @@ struct MatterDocumentsView: View {
             .buttonStyle(.borderless)
         }
         .padding(.vertical, 2)
+    }
+
+    /// The classifier's suggested categorization, shown inline on a document row:
+    /// the primary category prominently, secondary categories lightly, plus
+    /// privilege/confidential flags. These are AI suggestions (hover for the
+    /// reasoning); editing a document's text clears them for re-classification.
+    @ViewBuilder
+    private func classificationChips(_ classification: DocumentClassification) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "sparkles").font(.system(size: 8))
+            Text(classification.primaryCategory.displayName)
+        }
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(.tint)
+        .padding(.horizontal, 6).padding(.vertical, 1)
+        .background(Color.accentColor.opacity(0.18), in: Capsule())
+        .help(classificationTooltip(classification))
+
+        ForEach(classification.secondaryCategories, id: \.self) { category in
+            Text(category.displayName).font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(Color.accentColor.opacity(0.08), in: Capsule())
+        }
+
+        if classification.isPrivilegedLikely {
+            Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.orange)
+                .help("Privilege appears likely from the content — review before producing.")
+        }
+        if classification.isConfidentialLikely {
+            Image(systemName: "eye.slash.fill").font(.caption2).foregroundStyle(.secondary)
+                .help("Confidential or sensitive information appears likely.")
+        }
+    }
+
+    private func classificationTooltip(_ classification: DocumentClassification) -> String {
+        var parts = ["Suggested category: \(classification.primaryCategory.displayName)"]
+        if classification.confidence > 0 {
+            parts.append("\(Int((classification.confidence * 100).rounded()))% confidence")
+        }
+        if !classification.reasoningSummary.isEmpty { parts.append(classification.reasoningSummary) }
+        return parts.joined(separator: " · ")
     }
 
     private var searchResults: some View {
@@ -393,6 +441,7 @@ struct MatterDocumentsView: View {
         case .chunking: "Chunking…"
         case .fullTextIndexing: "Indexing…"
         case .semanticEmbedding: "Embedding…"
+        case .classifying: "Classifying…"
         case .finalizingReport: "Finishing…"
         default: "Processing…"
         }
