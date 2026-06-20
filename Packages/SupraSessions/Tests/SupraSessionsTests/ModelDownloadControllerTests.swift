@@ -194,9 +194,12 @@ final class ModelDownloadControllerTests: XCTestCase {
             )
         }
 
-        // The plan's 6-bit high-quality model isn't published by mlx-community, so the
-        // HQ route has no auto-resolved model until one is assigned manually.
-        XCTAssertNil(library.resolvedModel(for: .legalReasoningHighQuality))
+        // The high-quality reasoning route now defaults to DeepSeek-R1-Distill-Qwen-32B
+        // (the 6-bit Qwen3 was never published), so it auto-resolves to that model too.
+        XCTAssertEqual(
+            library.resolvedModel(for: .legalReasoningHighQuality)?.path,
+            "/models/\(ManagedModelStorage.folderName(forRepoID: "mlx-community/DeepSeek-R1-Distill-Qwen-32B-4bit"))"
+        )
     }
 
     @MainActor
@@ -232,10 +235,10 @@ final class ModelDownloadControllerTests: XCTestCase {
     func testRecommendedHighQualityReasoningIsDeterministicLargestModel() throws {
         let store = try makeStore()
         let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
-        // Both fit the high-quality reasoning route — its 6-bit plan default isn't
-        // published, so neither matches it and the choice falls to the heuristic.
-        // The recommendation must be deterministic (the larger 32B model), not flip
-        // with `fetchModels()` ordering.
+        // The high-quality reasoning route resolves to its DeepSeek-R1-Distill-32B
+        // default deterministically; and even when no configured default matches,
+        // score ties break by size then name (the larger 32B model) so the
+        // recommendation never flips with `fetchModels()` ordering.
         _ = try library.addModel(displayName: "Qwen3 30B A3B Thinking 2507 (4-bit)", path: "/m/Qwen3-30B-A3B-Thinking-2507-4bit", bookmarkData: nil)
         _ = try library.addModel(displayName: "DeepSeek-R1 Distill Qwen 32B (4-bit)", path: "/m/DeepSeek-R1-Distill-Qwen-32B-4bit", bookmarkData: nil)
         library.refresh()
