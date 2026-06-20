@@ -50,22 +50,6 @@ export function SourceGroundingStack() {
             The response is framed as analysis tied to the source packet, not as
             an unsupported assertion from model memory.
           </StackLayer>
-
-          <div className="rule pt-6">
-            <p className="font-caps text-xs uppercase text-supra-gold">
-              Example
-            </p>
-            <p className="mt-3 text-lg italic leading-[1.5] text-supra-white">
-              {"“Does the implied warranty of habitability cover this defect?”"}
-            </p>
-            <p className="mt-3 text-base leading-[1.55] text-supra-muted">
-              Analysis grounded in the excerpts above, with each proposition
-              tied to the source that supports it.
-            </p>
-            <p className="mt-4 font-caps text-xs uppercase text-supra-muted">
-              Cited — source&nbsp;§ · matter document
-            </p>
-          </div>
         </div>
       </div>
     </Section>
