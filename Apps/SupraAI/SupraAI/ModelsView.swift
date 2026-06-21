@@ -11,6 +11,8 @@ struct ModelsView: View {
     @ObservedObject var documentSetup: DocumentIntelligenceSetupController
     @ObservedObject var embeddingDownloader: EmbeddingModelDownloadController
     @State private var showDownloadSheet = false
+    @State private var pendingDelete: ModelSummary?
+    @State private var deleteBlocked: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -36,6 +38,53 @@ struct ModelsView: View {
                 // Clear a finished/failed banner on close (no-op mid-download).
                 .onDisappear { downloader.dismissResult() }
         }
+        .confirmationDialog(
+            pendingDelete.map { "Delete “\($0.displayName)”?" } ?? "Delete model?",
+            isPresented: deleteConfirmBinding,
+            titleVisibility: .visible
+        ) {
+            Button(deleteButtonTitle, role: .destructive) {
+                if let model = pendingDelete { confirmDelete(model) }
+                pendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: {
+            Text(deleteMessage)
+        }
+        .alert("Couldn't delete model", isPresented: deleteBlockedBinding) {
+            Button("OK", role: .cancel) { deleteBlocked = nil }
+        } message: {
+            Text(deleteBlocked ?? "")
+        }
+    }
+
+    private var deleteConfirmBinding: Binding<Bool> {
+        Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
+    }
+
+    private var deleteBlockedBinding: Binding<Bool> {
+        Binding(get: { deleteBlocked != nil }, set: { if !$0 { deleteBlocked = nil } })
+    }
+
+    private var deleteButtonTitle: String {
+        guard let model = pendingDelete else { return "Delete" }
+        return library.isManagedDownload(model) ? "Delete Files" : "Remove"
+    }
+
+    private var deleteMessage: String {
+        guard let model = pendingDelete else { return "" }
+        if library.isManagedDownload(model) {
+            return "This permanently deletes the downloaded model files from disk to free space. You can re-download it later. Any task roles assigned to it are cleared."
+        }
+        return "This unregisters the model from Supra AI. The folder on your disk is left in place. Any task roles assigned to it are cleared."
+    }
+
+    private func confirmDelete(_ model: ModelSummary) {
+        Task { @MainActor in
+            if case let .blocked(message) = await library.deleteModel(modelID: model.id) {
+                deleteBlocked = message
+            }
+        }
     }
 
     private var modelList: some View {
@@ -47,6 +96,16 @@ struct ModelsView: View {
                     ForEach(library.models) { model in
                         ModelRow(model: model, isLoading: isLoading(model), isLoaded: isLoaded(model), loadDisabled: isAnyLoading) {
                             Task { await library.activateAndLoad(modelID: model.id) }
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) { pendingDelete = model } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) { pendingDelete = model } label: {
+                                Label("Delete Model", systemImage: "trash")
+                            }
                         }
                     }
                 }

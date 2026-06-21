@@ -224,6 +224,64 @@ public final class ModelLibrary: ObservableObject {
         return ModelSummary(record: record)
     }
 
+    public enum DeleteModelResult: Equatable, Sendable {
+        case deleted
+        case blocked(message: String)
+    }
+
+    /// Removes a registered model. For app-downloaded (managed) models this also
+    /// deletes the files from disk to reclaim space; for user-registered folders it
+    /// only unregisters (the user's folder is never touched). If the model is
+    /// currently loaded it's unloaded from the runtime first, and any task-role
+    /// assignments pointing at it are cleared so no "Missing model" ghost remains.
+    @discardableResult
+    public func deleteModel(modelID: String) async -> DeleteModelResult {
+        if case let .loading(id) = loadState, id == modelID {
+            return .blocked(message: "This model is still loading. Wait for it to finish before deleting it.")
+        }
+        guard let record = try? store.models.fetchModel(id: modelID) else {
+            return .blocked(message: "The model could not be found.")
+        }
+
+        // Evict it from the runtime first if it's the one currently loaded.
+        if loadedModelID?.rawValue.uuidString == modelID {
+            _ = try? await runtimeClient.unloadModel()
+            loadState = .idle
+        }
+
+        do {
+            try store.models.deleteModel(id: modelID)
+        } catch {
+            return .blocked(message: error.localizedDescription)
+        }
+
+        // Reclaim disk only for app-managed downloads — never delete a user folder.
+        if ManagedModelStorage.isManaged(path: record.path) {
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: record.path))
+        }
+
+        // Clear task-role assignments that referenced the deleted model.
+        var updated = roleAssignments
+        var changed = false
+        for role in ModelRole.allCases where updated.modelID(for: role) == modelID {
+            updated.setModelID(nil, for: role)
+            changed = true
+        }
+        if changed {
+            roleAssignments = updated
+            persistRoleAssignments()
+        }
+
+        refresh()
+        return .deleted
+    }
+
+    /// Whether the model's files live in app-managed storage (so deleting it frees
+    /// disk) versus a user-registered folder (delete only unregisters it).
+    public func isManagedDownload(_ model: ModelSummary) -> Bool {
+        ManagedModelStorage.isManaged(path: model.path)
+    }
+
     /// Marks the given model active in the store and loads it into the runtime service.
     public func activateAndLoad(modelID modelIDString: String) async {
         // Ignore overlapping loads so concurrent taps cannot leave the published

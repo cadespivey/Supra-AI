@@ -31,6 +31,17 @@ public final class ModelRepository: @unchecked Sendable {
         }
     }
 
+    /// Removes a model registration. Returns false if no row matched. Historical
+    /// references that store the model's id as a plain string (generation sessions,
+    /// validation runs) are intentionally left untouched — they're an audit trail,
+    /// not foreign keys.
+    @discardableResult
+    public func deleteModel(id: String) throws -> Bool {
+        try writer.write { db in
+            try ModelRecord.deleteOne(db, key: id)
+        }
+    }
+
     public func setActiveModel(id: String) throws {
         try writer.write { db in
             let now = Date()
