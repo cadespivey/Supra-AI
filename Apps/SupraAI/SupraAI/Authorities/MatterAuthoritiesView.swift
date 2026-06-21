@@ -6,6 +6,7 @@ import SwiftUI
 struct MatterAuthoritiesView: View {
     @ObservedObject var controller: AuthoritiesController
     var onNewResearch: () -> Void = {}
+    @State private var pendingDelete: AuthoritiesController.AuthorityItem?
 
     var body: some View {
         NavigationStack {
@@ -28,6 +29,16 @@ struct MatterAuthoritiesView: View {
                 } else {
                     List(controller.authorities) { authority in
                         NavigationLink(value: authority.id) { row(authority) }
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) { pendingDelete = authority } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                            .contextMenu {
+                                Button(role: .destructive) { pendingDelete = authority } label: {
+                                    Label("Delete Authority", systemImage: "trash")
+                                }
+                            }
                     }
                 }
             }
@@ -35,7 +46,24 @@ struct MatterAuthoritiesView: View {
                 AuthorityDetailView(controller: controller, authorityID: id)
             }
         }
+        .confirmationDialog(
+            pendingDelete.map { "Remove “\($0.caseName)”?" } ?? "Remove authority?",
+            isPresented: deleteConfirmationBinding,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Authority", role: .destructive) {
+                if let authority = pendingDelete { controller.deleteAuthority(id: authority.id) }
+                pendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: {
+            Text("This removes it from the matter's authority library. You can re-add it by saving the result again from Research.")
+        }
         .onAppear { controller.load() }
+    }
+
+    private var deleteConfirmationBinding: Binding<Bool> {
+        Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
     }
 
     private func row(_ authority: AuthoritiesController.AuthorityItem) -> some View {

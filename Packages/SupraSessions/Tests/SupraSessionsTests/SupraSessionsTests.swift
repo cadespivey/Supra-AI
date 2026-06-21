@@ -1531,6 +1531,39 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "authority_saved" })
     }
 
+    func testDeleteAuthorityRemovesItAndReSaveRevivesIt() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let sessionID = try seedApprovedSession(store, matterID: matter.id)
+        let dto = CourtListenerSearchResultDTO(caseName: "Roe v. Doe", citation: ["1 U.S. 1"], rawResultJSON: "{}")
+        let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
+        let runController = makeRunController(store: store, matterID: matter.id, client: client)
+        runController.openSession(sessionID)
+        await runController.runApprovedSearches()
+        let results = runController.resultsByQuery.values.flatMap { $0 }
+        let resultID = results[0].id
+        runController.reviewResult(resultID, as: .saveAsAuthority)
+
+        let authorities = AuthoritiesController(store: store, matterID: matter.id)
+        authorities.load()
+        let authorityID = try XCTUnwrap(authorities.authorities.first?.id)
+        XCTAssertEqual(authorities.authorities.count, 1)
+
+        authorities.deleteAuthority(id: authorityID)
+        XCTAssertTrue(authorities.authorities.isEmpty)
+        XCTAssertTrue(try store.authorities.fetchAuthorities(matterID: matter.id).isEmpty)
+        XCTAssertTrue(
+            try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "authority_soft_deleted" }
+        )
+
+        // Re-saving the same result revives the soft-deleted authority (the unique
+        // (matter, research_result) slot is reused, not duplicated).
+        runController.reviewResult(resultID, as: .saveAsAuthority)
+        authorities.load()
+        XCTAssertEqual(authorities.authorities.count, 1)
+        XCTAssertEqual(authorities.authorities.first?.id, authorityID)
+    }
+
     func testSkipDoesNotCreateAuthority() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")

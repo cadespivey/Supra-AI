@@ -28,6 +28,7 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
     public var rawMetadataJSON: String
     public var createdAt: Date
     public var updatedAt: Date
+    public var deletedAt: Date?
 
     public init(
         id: String = UUID().uuidString,
@@ -52,7 +53,8 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
         userNotes: String? = nil,
         rawMetadataJSON: String = "{}",
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        deletedAt: Date? = nil
     ) {
         self.id = id
         self.matterID = matterID
@@ -77,6 +79,7 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
         self.rawMetadataJSON = rawMetadataJSON
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -103,5 +106,6 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
         case rawMetadataJSON = "raw_metadata_json"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case deletedAt = "deleted_at"
     }
 }

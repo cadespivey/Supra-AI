@@ -591,6 +591,10 @@ public final class ResearchSessionController: ObservableObject {
         reviewState: ResearchResultReviewState, useStatus: AuthorityUseStatus
     ) {
         if let existing = try? store.authorities.fetchAuthority(researchResultID: result.id) {
+            // Re-saving a previously removed authority brings it back into the library.
+            if existing.deletedAt != nil {
+                try? store.authorities.reviveAuthority(id: existing.id)
+            }
             // The review classification (review_state) always reflects the latest
             // action. Use-status, however, is library-managed: on an existing
             // authority it may only change along the §11.4 transition graph, so a
@@ -669,21 +673,23 @@ public final class ResearchSessionController: ObservableObject {
     }
 
     private func makeResultRecord(_ dto: CourtListenerSearchResultDTO, queryID: String) -> ResearchResultRecord {
-        let citationJSON = (try? JSONEncoder().encode(dto.citation))
+        // Sanitize highlight markup / HTML entities before persisting.
+        let cleanCitations = CourtListenerText.cleanList(dto.citation)
+        let citationJSON = (try? JSONEncoder().encode(cleanCitations))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
         return ResearchResultRecord(
             researchQueryID: queryID,
             clusterID: dto.clusterID.map(String.init),
             opinionID: dto.opinions.first?.id.map(String.init),
-            caseName: dto.caseName ?? dto.caseNameFull ?? "Untitled case",
-            caseNameFull: dto.caseNameFull,
+            caseName: CourtListenerText.clean(dto.caseName) ?? CourtListenerText.clean(dto.caseNameFull) ?? "Untitled case",
+            caseNameFull: CourtListenerText.clean(dto.caseNameFull),
             citationJSON: citationJSON,
             preferredCitation: CourtListenerMapper.preferredCitation(for: dto),
-            court: dto.court,
+            court: CourtListenerText.clean(dto.court),
             courtID: dto.courtID,
             dateFiled: Self.parseDate(dto.dateFiled),
-            docketNumber: dto.docketNumber,
-            snippet: dto.opinions.first?.snippet,
+            docketNumber: CourtListenerText.clean(dto.docketNumber),
+            snippet: CourtListenerText.clean(dto.opinions.first?.snippet),
             absoluteURL: dto.absoluteURL,
             rawResultJSON: dto.rawResultJSON
         )
