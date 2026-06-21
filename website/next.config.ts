@@ -1,19 +1,16 @@
 import type { NextConfig } from "next";
 
 // Static export for GitHub Pages.
-// The site is currently served from the project subpath
-// https://cadespivey.github.io/Supra-AI/, so it needs a basePath.
-// To move to the apex domain (https://supralegal.ai):
-//   1. Set basePath to "" (or delete the property).
-//   2. Add a CNAME file in public/ containing `supralegal.ai`.
-//   3. Point Porkbun DNS at GitHub Pages and set the custom domain in repo settings.
+// The site is served from the apex custom domain https://supralegal.ai/ (root),
+// so no basePath is set — assets resolve from "/" (e.g. /_next/static/...).
+// The custom domain is pinned by website/public/CNAME (copied into out/ on every
+// build) plus the GitHub repo's Pages settings + DNS.
 const isStaticExport = process.env.STATIC_EXPORT === "1";
 
 const nextConfig: NextConfig = {
   ...(isStaticExport
     ? {
         output: "export",
-        basePath: "/Supra-AI",
         trailingSlash: true,
         images: {
           unoptimized: true,
