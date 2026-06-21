@@ -8,8 +8,10 @@ struct AuthorityDetailView: View {
     @ObservedObject var controller: AuthoritiesController
     let authorityID: String
 
+    @Environment(\.dismiss) private var dismiss
     @State private var citation = ""
     @State private var notes = ""
+    @State private var confirmingDelete = false
 
     var body: some View {
         Group {
@@ -71,8 +73,27 @@ struct AuthorityDetailView: View {
                         .textSelection(.enabled)
                 }
             }
+
+            Section {
+                Button(role: .destructive) { confirmingDelete = true } label: {
+                    Label("Delete Authority", systemImage: "trash")
+                }
+            }
         }
         .formStyle(.grouped)
+        .confirmationDialog(
+            "Remove “\(authority.caseName)”?",
+            isPresented: $confirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Authority", role: .destructive) {
+                controller.deleteAuthority(id: authorityID)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes it from the matter's authority library. You can re-add it by saving the result again from Research.")
+        }
         .onAppear {
             citation = authority.preferredCitation ?? ""
             notes = authority.userNotes ?? ""

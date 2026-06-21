@@ -226,6 +226,7 @@ struct MatterWorkspaceView: View {
         case "research_queries_approved": "Research Queries Approved"
         case "courtlistener_search_started": "CourtListener Search Started"
         case "authority_status_changed": "Authority Status Changed"
+        case "authority_soft_deleted": "Authority Removed"
         case "structured_output_created": "Structured Output Created"
         case "structured_output_repaired": "Structured Output Repaired"
         case "qa_generated": "Document Q&A Generated"

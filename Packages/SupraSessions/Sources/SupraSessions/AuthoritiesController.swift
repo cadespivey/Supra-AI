@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import SupraCore
+import SupraResearch
 import SupraStore
 
 /// The matter's authority library (spec §11): lists saved authorities and edits
@@ -36,15 +37,17 @@ public final class AuthoritiesController: ObservableObject {
     public func load() {
         authorities = ((try? store.authorities.fetchAuthorities(matterID: matterID)) ?? []).map { record in
             let citations = (try? JSONDecoder().decode([String].self, from: Data(record.citationJSON.utf8))) ?? []
+            // Defensive: authorities saved before CourtListener-text sanitization
+            // can still carry `<mark>` highlight markup / HTML entities.
             return AuthorityItem(
                 id: record.id,
-                caseName: record.caseName,
-                caseNameFull: record.caseNameFull,
-                citations: citations,
-                preferredCitation: record.preferredCitation,
-                court: record.court,
+                caseName: CourtListenerText.clean(record.caseName) ?? record.caseName,
+                caseNameFull: CourtListenerText.clean(record.caseNameFull),
+                citations: CourtListenerText.cleanList(citations),
+                preferredCitation: CourtListenerText.clean(record.preferredCitation),
+                court: CourtListenerText.clean(record.court),
                 dateFiled: record.dateFiled,
-                docketNumber: record.docketNumber,
+                docketNumber: CourtListenerText.clean(record.docketNumber),
                 absoluteURL: record.absoluteURL,
                 reviewState: record.reviewState,
                 useStatus: AuthorityUseStatus(rawValue: record.useStatus) ?? .unverified,
@@ -52,6 +55,19 @@ public final class AuthoritiesController: ObservableObject {
                 rawMetadataJSON: record.rawMetadataJSON
             )
         }
+    }
+
+    /// Soft-deletes a saved authority (removes it from the library). Writes an
+    /// `authority_soft_deleted` audit event, mirroring document soft-delete.
+    public func deleteAuthority(id: String) {
+        guard let item = authorities.first(where: { $0.id == id }) else { return }
+        _ = try? store.authorities.softDeleteAuthority(id: id)
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID, eventType: "authority_soft_deleted", actor: "user",
+            summary: "Removed authority “\(item.caseName)”",
+            relatedTable: "authorities", relatedID: id
+        )
+        load()
     }
 
     /// Changes use status only when the transition is permitted (spec §11.4),

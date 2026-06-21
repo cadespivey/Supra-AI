@@ -761,6 +761,12 @@ public enum SupraMigrator {
             }
         }
 
+        migrator.registerMigration("v040_add_authority_soft_delete") { db in
+            try db.alter(table: "authorities") { table in
+                table.add(column: "deleted_at", .datetime)
+            }
+        }
+
         return migrator
     }
 

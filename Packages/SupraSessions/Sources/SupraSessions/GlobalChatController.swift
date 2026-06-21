@@ -1267,21 +1267,23 @@ public final class GlobalChatController: ObservableObject {
         queryID: String,
         reviewState: ResearchResultReviewState = .unreviewed
     ) -> ResearchResultRecord {
-        let citationJSON = (try? JSONEncoder().encode(dto.citation))
+        // Sanitize highlight markup / HTML entities before persisting.
+        let cleanCitations = CourtListenerText.cleanList(dto.citation)
+        let citationJSON = (try? JSONEncoder().encode(cleanCitations))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
         return ResearchResultRecord(
             researchQueryID: queryID,
             clusterID: dto.clusterID.map(String.init),
             opinionID: dto.opinions.first?.id.map(String.init),
-            caseName: dto.caseName ?? dto.caseNameFull ?? "Untitled case",
-            caseNameFull: dto.caseNameFull,
+            caseName: CourtListenerText.clean(dto.caseName) ?? CourtListenerText.clean(dto.caseNameFull) ?? "Untitled case",
+            caseNameFull: CourtListenerText.clean(dto.caseNameFull),
             citationJSON: citationJSON,
             preferredCitation: CourtListenerMapper.preferredCitation(for: dto),
-            court: dto.court,
+            court: CourtListenerText.clean(dto.court),
             courtID: dto.courtID,
             dateFiled: Self.parseCourtListenerDate(dto.dateFiled),
-            docketNumber: dto.docketNumber,
-            snippet: dto.opinions.first?.snippet,
+            docketNumber: CourtListenerText.clean(dto.docketNumber),
+            snippet: CourtListenerText.clean(dto.opinions.first?.snippet),
             absoluteURL: dto.absoluteURL,
             reviewState: reviewState.rawValue,
             rawResultJSON: dto.rawResultJSON
@@ -1291,21 +1293,22 @@ public final class GlobalChatController: ObservableObject {
     private static func legalAuthority(from result: ResearchResultRecord) -> LegalAuthority {
         let citations = (try? JSONDecoder().decode([String].self, from: Data(result.citationJSON.utf8))) ?? []
         let dateFiled = result.dateFiled.map(Self.courtListenerDateFormatter.string(from:))
+        // Defensive: rows persisted before sanitization can still carry `<mark>`.
         var authority = LegalAuthority(
             id: result.opinionID.map { "courtlistener:opinion:\($0)" }
                 ?? result.clusterID.map { "courtlistener:cluster:\($0)" }
                 ?? "research_result:\(result.id)",
             authorityType: .case,
-            caseName: result.caseName,
-            citation: result.preferredCitation,
-            citations: citations,
-            court: result.court,
+            caseName: CourtListenerText.clean(result.caseName),
+            citation: CourtListenerText.clean(result.preferredCitation),
+            citations: CourtListenerText.cleanList(citations),
+            court: CourtListenerText.clean(result.court),
             courtID: result.courtID,
-            jurisdiction: result.courtID ?? result.court,
+            jurisdiction: result.courtID ?? CourtListenerText.clean(result.court),
             dateFiled: dateFiled,
             url: CourtListenerMapper.displayURL(for: CourtListenerSearchResultDTO(absoluteURL: result.absoluteURL))?.absoluteString ?? result.absoluteURL,
-            snippet: result.snippet,
-            text: result.snippet,
+            snippet: CourtListenerText.clean(result.snippet),
+            text: CourtListenerText.clean(result.snippet),
             clusterId: result.clusterID,
             opinionId: result.opinionID,
             docketNumber: result.docketNumber
