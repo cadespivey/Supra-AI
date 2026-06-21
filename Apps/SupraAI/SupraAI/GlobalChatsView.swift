@@ -17,6 +17,9 @@ struct GlobalChatsView: View {
     @ObservedObject var library: ModelLibrary
     @ObservedObject var settings: SettingsController
     var listStyle: ChatListStyle = .picker
+    /// Matters available as "move chat to…" targets, shown only in the global
+    /// (`.picker`) chat. Nil inside a matter (chats there already belong to it).
+    var matters: MattersController?
     @State private var draft = ""
     @State private var showGenerationSettings = false
     @State private var showJurisdiction = false
@@ -25,10 +28,43 @@ struct GlobalChatsView: View {
     @State private var isLoadingAttachment = false
     @FocusState private var inputFocused: Bool
 
+    // Chat-history sidebar state (global chat only).
+    @State private var chatSearch = ""
+    @State private var suggestions: [ChatSuggestion] = []
+    @State private var renamingChat: ChatSummary?
+    @State private var renameText = ""
+    @State private var pendingDeleteChat: ChatSummary?
+
     private let attachmentLoader = ChatAttachmentLoader()
     private static let maxAttachments = 10
 
     var body: some View {
+        Group {
+            if listStyle == .picker {
+                HStack(spacing: 0) {
+                    chatHistorySidebar
+                    Divider()
+                    chatColumn
+                }
+            } else {
+                chatColumn
+            }
+        }
+        .onAppear {
+            inputFocused = true
+            if listStyle == .picker {
+                matters?.loadMatters()
+                if suggestions.isEmpty { suggestions = ChatSuggestions.sample() }
+            }
+        }
+        // Rotate the example prompts every time the chat window goes blank/empty
+        // (new chat, deleted chat, or a moved chat) so they don't get stale.
+        .onChange(of: controller.selectedChatID) { _, _ in
+            if listStyle == .picker { suggestions = ChatSuggestions.sample() }
+        }
+    }
+
+    private var chatColumn: some View {
         VStack(spacing: 0) {
             chatBar
             Divider()
@@ -41,7 +77,6 @@ struct GlobalChatsView: View {
             Divider()
             chatStatusBar
         }
-        .onAppear { inputFocused = true }
     }
 
     // MARK: - Chat selector
@@ -63,11 +98,9 @@ struct GlobalChatsView: View {
                 }
             }
             Spacer()
-            if listStyle == .picker {
-                chatHistoryMenu
-            }
             Button {
-                _ = try? controller.createChat()
+                controller.startNewChat()
+                if listStyle == .picker { suggestions = ChatSuggestions.sample() }
                 inputFocused = true
             } label: {
                 Label("New Chat", systemImage: "square.and.pencil")
@@ -76,31 +109,176 @@ struct GlobalChatsView: View {
         .padding(12)
     }
 
-    /// Reopen a saved chat without an always-visible dropdown (the inline picker
-    /// was replaced by this compact history menu).
-    private var chatHistoryMenu: some View {
-        Menu {
-            if controller.chats.isEmpty {
-                Text("No previous chats")
+    // MARK: - Chat history sidebar (global chat)
+
+    /// An interior sidebar (within the global Chats detail) listing every chat,
+    /// searchable by title, with per-chat rename / move-to-matter / delete actions.
+    private var chatHistorySidebar: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Chats").font(.headline)
+                Spacer()
+                Button {
+                    controller.startNewChat()
+                    suggestions = ChatSuggestions.sample()
+                    inputFocused = true
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .buttonStyle(.borderless)
+                .help("New chat")
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            chatSearchField
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+
+            Divider()
+
+            if filteredChats.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: chatSearch.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
+                    Text(chatSearch.isEmpty ? "No chats yet" : "No matches")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
             } else {
-                ForEach(controller.chats) { chat in
-                    Button {
-                        controller.select(chatID: chat.id)
-                    } label: {
-                        if controller.selectedChatID == chat.id {
-                            Label(chat.title, systemImage: "checkmark")
-                        } else {
-                            Text(chat.title)
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(filteredChats) { chat in
+                            chatHistoryRow(chat)
                         }
                     }
+                    .padding(8)
                 }
             }
-        } label: {
-            Image(systemName: "clock.arrow.circlepath")
         }
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Recent chats")
+        .frame(width: 248)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .alert("Rename Chat", isPresented: renameAlertBinding) {
+            TextField("Chat name", text: $renameText)
+            Button("Cancel", role: .cancel) { renamingChat = nil }
+            Button("Save") {
+                if let chat = renamingChat {
+                    controller.renameChat(chatID: chat.id, title: renameText)
+                }
+                renamingChat = nil
+            }
+        }
+        .confirmationDialog(
+            pendingDeleteChat.map { "Delete “\($0.title)”?" } ?? "Delete chat?",
+            isPresented: deleteConfirmBinding,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Chat", role: .destructive) {
+                if let chat = pendingDeleteChat { controller.deleteChat(chatID: chat.id) }
+                pendingDeleteChat = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDeleteChat = nil }
+        } message: {
+            Text("This removes the chat from your history. This can't be undone from the app.")
+        }
+    }
+
+    private var chatSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
+            TextField("Search chats", text: $chatSearch)
+                .textFieldStyle(.plain)
+                .font(.callout)
+            if !chatSearch.isEmpty {
+                Button { chatSearch = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Clear search")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func chatHistoryRow(_ chat: ChatSummary) -> some View {
+        let selected = controller.selectedChatID == chat.id
+        return Button {
+            controller.select(chatID: chat.id)
+            inputFocused = true
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(chat.title)
+                    .lineLimit(1)
+                    .font(.callout.weight(selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                Text(chat.updatedAt, format: .relative(presentation: .named))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                selected ? Color.accentColor.opacity(0.15) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .contextMenu { chatRowMenu(chat) }
+    }
+
+    @ViewBuilder
+    private func chatRowMenu(_ chat: ChatSummary) -> some View {
+        Button {
+            renameText = chat.title
+            renamingChat = chat
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+
+        if let matters, !matters.matters.isEmpty {
+            Menu {
+                ForEach(matters.matters) { matter in
+                    Button(matter.name) {
+                        controller.moveChat(chatID: chat.id, toMatter: matter.id)
+                    }
+                }
+            } label: {
+                Label("Move to Matter", systemImage: "folder")
+            }
+        }
+
+        Divider()
+
+        Button(role: .destructive) {
+            pendingDeleteChat = chat
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+    }
+
+    /// Chats whose title matches the search box (case-insensitive). Empty search
+    /// shows everything, newest first (the controller's ordering).
+    private var filteredChats: [ChatSummary] {
+        let query = chatSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return controller.chats }
+        return controller.chats.filter { $0.title.lowercased().contains(query) }
+    }
+
+    private var renameAlertBinding: Binding<Bool> {
+        Binding(get: { renamingChat != nil }, set: { if !$0 { renamingChat = nil } })
+    }
+
+    private var deleteConfirmBinding: Binding<Bool> {
+        Binding(get: { pendingDeleteChat != nil }, set: { if !$0 { pendingDeleteChat = nil } })
     }
 
     private var selectedChatTitle: String? {
@@ -147,22 +325,104 @@ struct GlobalChatsView: View {
                 }
                 .padding(16)
             }
-            .onChange(of: controller.messages.last?.content) { _, _ in
-                if let lastID = controller.messages.last?.id {
-                    withAnimation { proxy.scrollTo(lastID, anchor: .bottom) }
-                }
-            }
+            .onChange(of: controller.messages.last?.content) { _, _ in scrollToLast(proxy) }
+            // A new turn whose content matches the prior last message (or a chat
+            // switch) wouldn't trip the content observer, so anchor on count too.
+            .onChange(of: controller.messages.count) { _, _ in scrollToLast(proxy) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
             if controller.messages.isEmpty {
-                ContentUnavailableView(
-                    "Start a Conversation",
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Ask a question to begin.")
-                )
+                if listStyle == .picker {
+                    suggestionsEmptyState
+                } else {
+                    ContentUnavailableView(
+                        "Start a Conversation",
+                        systemImage: "bubble.left.and.bubble.right",
+                        description: Text("Ask a question to begin.")
+                    )
+                }
             }
         }
+    }
+
+    private func scrollToLast(_ proxy: ScrollViewProxy) {
+        guard let lastID = controller.messages.last?.id else { return }
+        withAnimation { proxy.scrollTo(lastID, anchor: .bottom) }
+    }
+
+    // MARK: - Example prompts (global chat empty state)
+
+    /// The blank global-chat state: a friendly heading plus a 2×2 grid of rotating
+    /// example prompts. Tapping one sends it (the same path as typing + Send).
+    private var suggestionsEmptyState: some View {
+        VStack(spacing: 18) {
+            VStack(spacing: 6) {
+                Text("§")
+                    .font(.system(size: 44, weight: .semibold, design: .serif))
+                    .foregroundStyle(.tertiary)
+                Text("How can I help with your legal work?")
+                    .font(.title3.weight(.semibold))
+                Text("Pick a starting point or ask anything.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
+                spacing: 10
+            ) {
+                ForEach(suggestions) { suggestion in
+                    suggestionCard(suggestion)
+                }
+            }
+            .frame(maxWidth: 620)
+
+            Button {
+                suggestions = ChatSuggestions.sample()
+            } label: {
+                Label("Show different examples", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func suggestionCard(_ suggestion: ChatSuggestion) -> some View {
+        Button {
+            submit(suggestion.prompt)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: suggestion.systemImage)
+                    .font(.callout)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(suggestion.title)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text(suggestion.prompt)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.secondary.opacity(0.15))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .help("Send: \(suggestion.prompt)")
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -331,7 +591,14 @@ struct GlobalChatsView: View {
 
     private func send() {
         guard canSend else { return }
-        let rawPrompt = draft
+        submit(draft)
+    }
+
+    /// The shared send path for both the composer and the example-prompt cards.
+    /// Routes the prompt, loads the role model if needed, then streams the answer.
+    private func submit(_ rawPrompt: String) {
+        guard !rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,
+              !controller.isGenerating else { return }
         let rawAttachments = attachments
         let router = ModelRouter(configuration: .fromEnvironment())
         let routed = router.routePrompt(rawPrompt)

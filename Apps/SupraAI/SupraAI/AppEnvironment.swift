@@ -98,6 +98,10 @@ final class AppEnvironment: ObservableObject {
         try? store.validation.markUnfinishedRunsCancelled()
         modelLibrary.refresh()
         chatController.loadChats()
+        // Each launch opens the global chat fresh — a blank new chat with example
+        // prompts — rather than reopening the last conversation. The prior chats
+        // stay one click away in the history sidebar.
+        chatController.startNewChat()
         await refreshRuntimeStatus()
         // If the runtime already holds a model from a previous session, re-enable
         // chat without forcing the user to re-load it (the chat gate keys on
