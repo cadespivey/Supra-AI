@@ -209,29 +209,46 @@ struct GlobalChatsView: View {
 
     private func chatHistoryRow(_ chat: ChatSummary) -> some View {
         let selected = controller.selectedChatID == chat.id
-        return Button {
-            controller.select(chatID: chat.id)
-            inputFocused = true
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(chat.title)
-                    .lineLimit(1)
-                    .font(.callout.weight(selected ? .semibold : .regular))
-                    .foregroundStyle(selected ? Color.accentColor : Color.primary)
-                Text(chat.updatedAt, format: .relative(presentation: .named))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+        return HStack(spacing: 4) {
+            Button {
+                controller.select(chatID: chat.id)
+                inputFocused = true
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(chat.title)
+                        .lineLimit(1)
+                        .font(.callout.weight(selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                    Text(chat.updatedAt, format: .relative(presentation: .named))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(
-                selected ? Color.accentColor.opacity(0.15) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .buttonStyle(.plain)
+
+            // Always-visible action affordance (more discoverable than relying on
+            // right-click alone); disabled while this chat is still generating.
+            Menu {
+                chatRowMenu(chat)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .fixedSize()
+            .foregroundStyle(.secondary)
+            .opacity(selected ? 1 : 0.7)
+            .disabled(controller.isGenerating && selected)
+            .help("Chat actions")
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            selected ? Color.accentColor.opacity(0.15) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 6)
+        )
         .contextMenu { chatRowMenu(chat) }
     }
 

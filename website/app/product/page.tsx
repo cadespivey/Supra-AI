@@ -3,28 +3,28 @@ import { PageShell } from "@/components/PageShell";
 
 const steps = [
   {
+    title: "Configure local models",
+    body: "Assign separate local MLX models for legal reasoning, high-quality research, drafting, and critique, then load the runtime on device.",
+  },
+  {
+    title: "Start in global chat",
+    body: "Open to a fresh legal prompt set, search prior global chats by title, delete stale chats, or move a chat into a matter when it becomes case-specific.",
+  },
+  {
     title: "Open a matter",
-    body: "Begin inside a matter workspace that keeps research, documents, drafts, and review artifacts together.",
+    body: "Keep matter chats, research sessions, authorities, documents, structured outputs, and audit history in one workspace.",
   },
   {
     title: "Import documents",
-    body: "Bring in matter files so the workspace can analyze the material already under attorney control.",
+    body: "Bring in matter files for OCR, extraction, chunking, local embedding search, cited Q&A, and fact chronologies.",
   },
   {
-    title: "Ask a legal question",
-    body: "Frame a research or drafting question against the matter context and available source material.",
+    title: "Review grounded answers",
+    body: "Run CourtListener-backed legal research or document Q&A, then inspect the sources and verification warnings before relying on the work.",
   },
   {
-    title: "Review a source-grounded answer",
-    body: "Read analysis alongside the sources and excerpts that support it before moving forward.",
-  },
-  {
-    title: "Verify citations",
-    body: "Treat citation-sensitive output as a review workflow, with correction before reliance.",
-  },
-  {
-    title: "Draft, critique, or revise",
-    body: "Turn grounded research and document context into attorney-reviewed work product.",
+    title: "Draft, critique, or export",
+    body: "Turn reviewed research and document context into attorney-edited drafts, critique passes, chronologies, and exportable work product.",
   },
 ];
 
@@ -32,7 +32,63 @@ const bar = "h-2 rounded-full bg-supra-border";
 
 function StepMockBody({ index }: { index: number }) {
   switch (index) {
-    case 0: // Open a matter — matter list
+    case 0: // Configure local models
+      return (
+        <div className="space-y-2">
+          {[
+            ["Legal reasoning", "Qwen3 30B"],
+            ["High-quality research", "DeepSeek-R1"],
+            ["Drafting", "Qwen3 Instruct"],
+          ].map(([role, model]) => (
+            <div
+              key={role}
+              className="flex items-center justify-between gap-3 rounded-lg border border-supra-border bg-supra-navyPanel px-3 py-2"
+            >
+              <span className="text-[0.7rem] text-supra-muted">{role}</span>
+              <span className="rounded-md bg-supra-navyPanelLight px-2 py-1 text-[0.62rem] text-supra-gold">
+                {model}
+              </span>
+            </div>
+          ))}
+        </div>
+      );
+    case 1: // Start in global chat — history + suggestions
+      return (
+        <div className="grid grid-cols-[0.8fr_1.2fr] gap-3">
+          <div className="space-y-2 rounded-lg border border-supra-border bg-supra-navyPanel p-2">
+            <div className="rounded-md border border-supra-border bg-supra-navy px-2 py-1 text-[0.62rem] text-supra-muted">
+              Search chats
+            </div>
+            {["Lease review", "Removal deadline", "Privilege memo"].map(
+              (chat, i) => (
+                <div
+                  key={chat}
+                  className={`rounded-md px-2 py-1.5 text-[0.66rem] ${
+                    i === 0
+                      ? "bg-supra-navyPanelLight text-supra-gold"
+                      : "text-supra-muted"
+                  }`}
+                >
+                  {chat}
+                </div>
+              ),
+            )}
+          </div>
+          <div className="grid content-center gap-2">
+            {["Draft objections", "Research estoppel", "Check citations", "Plan deposition"].map(
+              (prompt) => (
+                <div
+                  key={prompt}
+                  className="rounded-lg border border-supra-border bg-supra-navyPanel px-3 py-2 text-[0.66rem] text-supra-muted"
+                >
+                  {prompt}
+                </div>
+              ),
+            )}
+          </div>
+        </div>
+      );
+    case 2: // Open a matter — matter list
       return (
         <div className="space-y-2">
           {["Smith v. Aldridge", "Estate of Calloway", "Northwind LLC"].map(
@@ -50,7 +106,7 @@ function StepMockBody({ index }: { index: number }) {
           )}
         </div>
       );
-    case 1: // Import documents — file grid
+    case 3: // Import documents — file grid
       return (
         <div className="grid grid-cols-2 gap-2">
           {["Complaint.pdf", "Lease.pdf", "Exhibit-A.pdf", "Notes.docx"].map(
@@ -68,22 +124,7 @@ function StepMockBody({ index }: { index: number }) {
           )}
         </div>
       );
-    case 2: // Ask a question — prompt bar
-      return (
-        <div className="space-y-3">
-          <div className="rounded-xl border border-supra-border bg-supra-navyPanel px-3 py-3">
-            <span className="text-xs italic text-supra-muted">
-              {"Is the indemnity clause enforceable here?"}
-            </span>
-          </div>
-          <div className="flex justify-end">
-            <span className="rounded-lg bg-supra-gold px-3 py-1.5 font-caps text-[0.6rem] uppercase text-supra-navyDeep">
-              Ask
-            </span>
-          </div>
-        </div>
-      );
-    case 3: // Source-grounded answer — text + citation chips
+    case 4: // Source-grounded answer — text + citation chips
       return (
         <div className="space-y-2">
           <div className={bar} />
@@ -97,30 +138,6 @@ function StepMockBody({ index }: { index: number }) {
               Source 2
             </span>
           </div>
-        </div>
-      );
-    case 4: // Verify citations — checklist
-      return (
-        <div className="space-y-2">
-          {["Citation format", "Quotation match", "Still good law"].map(
-            (check, i) => (
-              <div
-                key={check}
-                className="flex items-center gap-3 rounded-lg border border-supra-border bg-supra-navyPanel px-3 py-2"
-              >
-                <span
-                  className={`flex h-4 w-4 items-center justify-center rounded-full text-[0.6rem] ${
-                    i < 2
-                      ? "bg-supra-gold text-supra-navyDeep"
-                      : "border border-supra-border text-supra-muted"
-                  }`}
-                >
-                  {i < 2 ? "✓" : ""}
-                </span>
-                <span className="text-[0.7rem] text-supra-muted">{check}</span>
-              </div>
-            ),
-          )}
         </div>
       );
     default: // Draft — document lines
@@ -166,7 +183,7 @@ export default function ProductPage() {
     <PageShell
       eyebrow="Product"
       title="How Supra AI works"
-      intro="Supra AI is organized around the way legal work actually moves: matters, documents, questions, sources, verification, and drafts."
+      intro="Supra AI is organized around the way legal work actually moves: local model control, global questions, matter workspaces, documents, sources, verification, and drafts."
     >
       <ol className="list-none space-y-10">
         {steps.map((step, index) => (

@@ -119,7 +119,12 @@ These are demoable selling points with no marketing presence:
 ## 3. Recommended product-page screenshots (prioritized)
 
 The product page currently renders hand-coded mockups and never shows real UI.
-Replace/supplement with real captures, in this order:
+Replace/supplement with real captures, in this order.
+
+> **Sanitize first.** Do not ship the raw 1.3.2 screenshots — they expose the
+> local macOS username, full model file paths, saved-token state, and non-legal
+> chat content. Capture from a demo matter with a generic user and redact paths
+> before publishing.
 
 **Tier 1 — core differentiators**
 1. **Matter workspace with the tab bar visible** (Chat · Research · Authorities ·
@@ -187,6 +192,10 @@ Severity: **BLOCKER** (stops a core task / unrecoverable) · **BUG** ·
 **Diagnostics — `DiagnosticsView.swift`**
 - _Works:_ clean read-only status with a per-state "Next Step" hint (matches the
   attached screenshot) and Refresh.
+- **BUG (confusing labels):** the screenshot shows "Runtime service unavailable"
+  / "Model unloaded" while also listing a loaded model name — reads as
+  contradictory. Distinguish "last-configured / registered model" from "currently
+  loaded runtime model," and show the connection-state timestamp.
 - **GAP:** it's a dead-end for action — "Next Step" tells you to go to Models or
   relaunch but offers no button to jump there, retry the connection, or restart
   the runtime. Recorded diagnostic events are never surfaced here.
