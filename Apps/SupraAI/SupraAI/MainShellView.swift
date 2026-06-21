@@ -72,7 +72,12 @@ struct MainShellView: View {
     private func routeView(_ route: AppRoute) -> some View {
         switch route {
         case .globalChats:
-            GlobalChatsView(controller: environment.chatController, library: environment.modelLibrary, settings: environment.settingsController)
+            GlobalChatsView(
+                controller: environment.chatController,
+                library: environment.modelLibrary,
+                settings: environment.settingsController,
+                matters: environment.mattersController
+            )
         case .models:
             ModelsView(
                 library: environment.modelLibrary,

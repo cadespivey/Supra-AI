@@ -28,8 +28,9 @@ export function Hero() {
         </h1>
         <p className="measure mt-6 text-lg leading-[1.5] text-supra-muted">
           Once it’s set up, Supra AI runs locally on your Mac. Your matter files,
-          prompts, and generated work stay on your machine — optional
-          CourtListener research is the only feature that uses the network.
+          prompts, and generated work stay on your machine — the only network
+          calls are downloading models, optional CourtListener research, and the
+          update checks you opt into.
         </p>
         <Link href="/download" className="link mt-10 inline-block text-lg">
           Download for macOS →

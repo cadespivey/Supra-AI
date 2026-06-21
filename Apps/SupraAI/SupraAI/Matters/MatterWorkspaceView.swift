@@ -222,6 +222,7 @@ struct MatterWorkspaceView: View {
         switch eventType {
         case "matter_created": "Matter Created"
         case "matter_updated": "Matter Updated"
+        case "chat_moved_to_matter": "Chat Moved Into Matter"
         case "research_queries_approved": "Research Queries Approved"
         case "courtlistener_search_started": "CourtListener Search Started"
         case "authority_status_changed": "Authority Status Changed"

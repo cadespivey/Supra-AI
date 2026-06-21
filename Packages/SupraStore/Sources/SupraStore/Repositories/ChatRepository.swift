@@ -52,6 +52,47 @@ public final class ChatRepository: @unchecked Sendable {
         }
     }
 
+    /// Renames a chat (used by the chat-history sidebar). Touches `updated_at` so
+    /// the row keeps its place in the most-recent-first ordering.
+    public func renameChat(id: String, title: String) throws {
+        try writer.write { db in
+            let now = Date()
+            try db.execute(
+                sql: "UPDATE chats SET title = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+                arguments: [title, now, id]
+            )
+        }
+    }
+
+    /// Soft-deletes a chat (sets `deleted_at`). Its messages stay in place — every
+    /// fetch already filters on `deleted_at IS NULL`, so the chat simply disappears
+    /// from the list.
+    public func softDeleteChat(id: String) throws {
+        try writer.write { db in
+            let now = Date()
+            try db.execute(
+                sql: "UPDATE chats SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                arguments: [now, now, id]
+            )
+        }
+    }
+
+    /// Re-homes a global chat into a matter. Messages reference the chat by id, so
+    /// they follow it automatically; only the chat's scope/owner changes.
+    public func moveChatToMatter(id: String, matterID: String) throws {
+        try writer.write { db in
+            let now = Date()
+            try db.execute(
+                sql: """
+                UPDATE chats
+                SET scope = 'matter', matter_id = ?, updated_at = ?
+                WHERE id = ? AND deleted_at IS NULL
+                """,
+                arguments: [matterID, now, id]
+            )
+        }
+    }
+
     public func fetchMessages(chatID: String) throws -> [MessageRecord] {
         try writer.read { db in
             try MessageRecord.fetchAll(

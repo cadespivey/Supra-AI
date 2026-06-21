@@ -156,6 +156,71 @@ public final class GlobalChatController: ObservableObject {
         messages = (try? store.chats.fetchMessages(chatID: selectedChatID))?.map(ChatMessage.init) ?? []
     }
 
+    /// Opens a fresh, blank chat: deselects the current chat (clearing the message
+    /// list) without yet persisting a row. The actual chat is created lazily on the
+    /// first send, titled from that first message — so the history doesn't fill up
+    /// with empty "New Chat" placeholders. Drives the example-prompt empty state.
+    public func startNewChat() {
+        select(chatID: nil)
+    }
+
+    /// Renames a chat from the history sidebar. No-op on an empty title.
+    public func renameChat(chatID: String, title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try? store.chats.renameChat(id: chatID, title: trimmed)
+        chats = fetchScopedChats()
+    }
+
+    /// Soft-deletes a chat. If it was the selected chat, the view falls back to the
+    /// blank new-chat state (example prompts).
+    public func deleteChat(chatID: String) {
+        try? store.chats.softDeleteChat(id: chatID)
+        chats = fetchScopedChats()
+        if selectedChatID == chatID {
+            select(chatID: nil)
+        }
+    }
+
+    /// Re-homes a global chat into a matter (e.g. a chat that turned out to belong
+    /// to a matter). Only valid from the global scope; the chat leaves the global
+    /// list and, if selected, the view returns to the blank new-chat state.
+    public func moveChat(chatID: String, toMatter matterID: String) {
+        guard case .global = scope else { return }
+        guard let moved = chats.first(where: { $0.id == chatID }) else { return }
+        try? store.chats.moveChatToMatter(id: chatID, matterID: matterID)
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID,
+            eventType: "chat_moved_to_matter",
+            actor: "user",
+            summary: "Moved chat “\(moved.title)” into this matter",
+            relatedTable: "chats",
+            relatedID: chatID
+        )
+        chats = fetchScopedChats()
+        if selectedChatID == chatID {
+            select(chatID: nil)
+        }
+    }
+
+    /// A concise chat title derived from the first user message (first words, up to
+    /// ~48 chars on a word boundary). Falls back to "New Chat" for empty input.
+    static func derivedTitle(from prompt: String) -> String {
+        let collapsed = prompt
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard !collapsed.isEmpty else { return "New Chat" }
+        let maxLength = 48
+        guard collapsed.count > maxLength else { return collapsed }
+        let prefix = collapsed.prefix(maxLength)
+        if let lastSpace = prefix.lastIndex(of: " ") {
+            let trimmed = prefix[..<lastSpace].trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty { return trimmed + "…" }
+        }
+        return prefix.trimmingCharacters(in: .whitespaces) + "…"
+    }
+
     // MARK: - Sending
 
     /// Sends a prompt in the selected chat against the given (already loaded) model.
@@ -287,7 +352,7 @@ public final class GlobalChatController: ObservableObject {
                 return
             }
 
-            let chatID = try ensureSelectedChat().id
+            let chatID = try ensureSelectedChat(titleHint: displayBase).id
 
             // Replay prior turns so the model can answer follow-ups in context.
             // Captured before appending the new user message.
@@ -417,7 +482,7 @@ public final class GlobalChatController: ObservableObject {
         systemPrompt: String?,
         options: GenerationOptions
     ) async throws {
-        let chatID = try ensureSelectedChat().id
+        let chatID = try ensureSelectedChat(titleHint: prompt).id
         let priorAssistantDraft = latestAssistantDraft()
 
         _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
@@ -1367,11 +1432,15 @@ public final class GlobalChatController: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
-    private func ensureSelectedChat() throws -> ChatSummary {
+    /// Returns the selected chat, creating one lazily if none is selected. When a
+    /// chat is created here, `titleHint` (the first user message) becomes its title
+    /// so the history sidebar shows something meaningful instead of "New Chat".
+    private func ensureSelectedChat(titleHint: String? = nil) throws -> ChatSummary {
         if let selectedChatID, let existing = chats.first(where: { $0.id == selectedChatID }) {
             return existing
         }
-        return try createChat()
+        let title = titleHint.map(Self.derivedTitle(from:)) ?? "New Chat"
+        return try createChat(title: title)
     }
 
     private func updateMessage(id: String, content: String, status: MessageStatus) {
