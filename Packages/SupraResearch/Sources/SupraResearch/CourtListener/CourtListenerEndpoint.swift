@@ -13,11 +13,12 @@ public enum CourtListenerEndpoint {
     }
 
     /// The opinion-detail endpoint `/api/rest/v4/opinions/{id}/` on the
-    /// allow-listed host — used to fetch full opinion text + HTML.
+    /// allow-listed host — used to fetch full opinion text + HTML. The trailing
+    /// slash is the canonical DRF form (avoids a 301 redirect round-trip).
     static func opinionURL(id: Int, baseURLOverride: String? = nil) -> URL {
-        apiBaseURL(baseURLOverride)
-            .appendingPathComponent("opinions")
-            .appendingPathComponent(String(id))
+        let base = apiBaseURL(baseURLOverride)
+        return URL(string: base.absoluteString + "/opinions/\(id)/")
+            ?? base.appendingPathComponent("opinions").appendingPathComponent(String(id))
     }
 
     private static func apiBaseURL(_ override: String? = nil) -> URL {

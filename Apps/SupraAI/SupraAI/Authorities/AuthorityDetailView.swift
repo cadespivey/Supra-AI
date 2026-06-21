@@ -195,11 +195,14 @@ private struct OpinionWebView: NSViewRepresentable {
         config.defaultWebpagePreferences.allowsContentJavaScript = false
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+        context.coordinator.load(Self.document(for: html), into: webView)
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        webView.loadHTMLString(Self.document(for: html), baseURL: nil)
+        // Coordinator no-ops if the document is unchanged, so SwiftUI re-renders
+        // don't reload (and don't re-issue resource loads).
+        context.coordinator.load(Self.document(for: html), into: webView)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -219,6 +222,41 @@ private struct OpinionWebView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
+        private var loadedDocument: String?
+        private var ruleList: WKContentRuleList?
+
+        /// Loads the opinion document once, only AFTER installing a content-rule
+        /// list that blocks every remote (http/https) load. Third-party opinion
+        /// markup can carry absolute-URL images/stylesheets/iframes; with
+        /// JavaScript already disabled, this also stops those subresources from
+        /// reaching off-`courtlistener.com` hosts (which would bypass the app's
+        /// network allow-list). The in-memory document still renders; clicked links
+        /// are intercepted below and opened in the browser.
+        func load(_ document: String, into webView: WKWebView) {
+            guard loadedDocument != document else { return }
+            loadedDocument = document
+            installBlockRule(on: webView) {
+                webView.loadHTMLString(document, baseURL: nil)
+            }
+        }
+
+        private func installBlockRule(on webView: WKWebView, then load: @escaping () -> Void) {
+            if let ruleList {
+                webView.configuration.userContentController.add(ruleList)
+                load()
+                return
+            }
+            let source = #"[{"trigger":{"url-filter":"^https?://"},"action":{"type":"block"}}]"#
+            guard let store = WKContentRuleListStore.default() else { load(); return }
+            store.compileContentRuleList(forIdentifier: "supra-block-remote", encodedContentRuleList: source) { [weak self] list, _ in
+                if let list {
+                    self?.ruleList = list
+                    webView.configuration.userContentController.add(list)
+                }
+                load()
+            }
+        }
+
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,

@@ -68,7 +68,12 @@ public enum CourtListenerText {
             ("&quot;", "\""), ("&#34;", "\""),
             ("&lt;", "<"), ("&gt;", ">"),
             ("&#39;", "'"), ("&apos;", "'"),
-            ("&nbsp;", " "), ("&sect;", "§"), ("&#167;", "§")
+            ("&nbsp;", " "), ("&sect;", "§"), ("&#167;", "§"),
+            // Smart punctuation common in case text / case names.
+            ("&rsquo;", "’"), ("&#8217;", "’"), ("&lsquo;", "‘"), ("&#8216;", "‘"),
+            ("&ldquo;", "“"), ("&#8220;", "“"), ("&rdquo;", "”"), ("&#8221;", "”"),
+            ("&ndash;", "–"), ("&#8211;", "–"), ("&mdash;", "—"), ("&#8212;", "—"),
+            ("&hellip;", "…"), ("&#8230;", "…")
         ]
         for (entity, replacement) in entities {
             output = output.replacingOccurrences(of: entity, with: replacement)
