@@ -295,6 +295,49 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(audits.contains { $0.eventType == "chat_moved_to_matter" })
     }
 
+    func testMoveToMissingMatterSurfacesErrorAndRecordsNoAudit() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+        await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
+        let chatID = try XCTUnwrap(controller.selectedChatID)
+
+        controller.moveChat(chatID: chatID, toMatter: "nonexistent-matter-id")
+
+        // The move failed cleanly: the chat stays in the global list and NO phantom
+        // "moved" audit event is recorded against the missing matter.
+        XCTAssertEqual(controller.chats.map(\.id), [chatID])
+        XCTAssertEqual(controller.selectedChatID, chatID)
+        XCTAssertNotNil(controller.errorMessage)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(relatedTable: "chats", relatedID: chatID).isEmpty)
+    }
+
+    func testMatterStartNewChatThenSendCreatesMatterScopedTitledChat() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = GlobalChatController(store: store, runtimeClient: stub, scope: .matter(id: matter.id))
+        controller.loadChats()
+        let initialCount = controller.chats.count   // the default "General — Acme" chat
+
+        // "New Chat" in a matter clears selection; the chat is created lazily on send.
+        controller.startNewChat()
+        XCTAssertNil(controller.selectedChatID)
+
+        await controller.performSend(
+            prompt: "Draft a tolling agreement",
+            modelID: ModelID(),
+            systemPrompt: nil,
+            options: GenerationOptions()
+        )
+
+        let matterChats = try store.chats.fetchMatterChats(matterID: matter.id)
+        XCTAssertEqual(matterChats.count, initialCount + 1)         // a new matter-scoped chat exists
+        XCTAssertTrue(try store.chats.fetchGlobalChats().isEmpty)   // it is NOT global
+        XCTAssertEqual(controller.chats.first?.title, "Draft a tolling agreement")  // auto-titled, not "New Chat"
+    }
+
     func testChatSuggestionsSampleIsDistinctAndSized() {
         let four = ChatSuggestions.sample(count: 4)
         XCTAssertEqual(four.count, 4)
