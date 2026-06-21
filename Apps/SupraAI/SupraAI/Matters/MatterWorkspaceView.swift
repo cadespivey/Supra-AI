@@ -151,7 +151,12 @@ struct MatterWorkspaceView: View {
             }
         case .authorities:
             if let authorities = controller.authoritiesController {
-                MatterAuthoritiesView(controller: authorities, onNewResearch: { tab = .research })
+                MatterAuthoritiesView(
+                    controller: authorities,
+                    documentsController: controller.documentsController,
+                    onNewResearch: { tab = .research },
+                    onShowDocuments: { tab = .documents }
+                )
             } else {
                 placeholder(
                     "Authorities unavailable",
