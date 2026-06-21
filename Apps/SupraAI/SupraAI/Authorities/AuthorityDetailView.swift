@@ -3,6 +3,7 @@ import SupraCore
 import SupraResearch
 import SupraSessions
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 /// Authority detail: metadata, editable preferred citation + notes, and a
@@ -146,11 +147,12 @@ struct AuthorityDetailView: View {
         }
     }
 
+    /// A filesystem-safe base name (no extension) derived from the case name.
     static func fileName(for caseName: String) -> String {
         let base = caseName
             .replacingOccurrences(of: "[^A-Za-z0-9 .-]", with: "", options: .regularExpression)
             .replacingOccurrences(of: " ", with: "-")
-        return (base.isEmpty ? "opinion" : String(base.prefix(80))) + ".html"
+        return base.isEmpty ? "opinion" : String(base.prefix(80))
     }
 }
 
@@ -159,15 +161,17 @@ struct AuthorityDetailView: View {
 struct OpinionHTMLSheet: View {
     let title: String
     let html: String
+    /// Base file name (no extension); the exporter adds `.html`.
     let suggestedFileName: String
     @Environment(\.dismiss) private var dismiss
+    @State private var exporting = false
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text(title).font(.headline).lineLimit(1)
                 Spacer()
-                Button { downloadHTML() } label: { Label("Download HTML…", systemImage: "arrow.down.circle") }
+                Button { exporting = true } label: { Label("Download HTML…", systemImage: "arrow.down.circle") }
                 Button("Done") { dismiss() }
             }
             .padding(12)
@@ -175,15 +179,30 @@ struct OpinionHTMLSheet: View {
             OpinionWebView(html: html)
         }
         .frame(minWidth: 680, minHeight: 560)
+        // .fileExporter presents reliably from within a sheet (NSSavePanel.runModal
+        // does not — it conflicts with the window-modal sheet and never appears).
+        .fileExporter(
+            isPresented: $exporting,
+            document: HTMLFileDocument(text: OpinionWebView.document(for: html)),
+            contentType: .html,
+            defaultFilename: suggestedFileName
+        ) { _ in }
+    }
+}
+
+/// A minimal HTML document for SwiftUI's `.fileExporter`.
+struct HTMLFileDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.html] }
+    var text: String
+
+    init(text: String) { self.text = text }
+
+    init(configuration: ReadConfiguration) throws {
+        text = configuration.file.regularFileContents.map { String(decoding: $0, as: UTF8.self) } ?? ""
     }
 
-    private func downloadHTML() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.html]
-        panel.nameFieldStringValue = suggestedFileName
-        panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? Data(OpinionWebView.document(for: html).utf8).write(to: url)
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
     }
 }
 
