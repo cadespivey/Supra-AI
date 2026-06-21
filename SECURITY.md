@@ -43,6 +43,9 @@ need an explicit, documented justification.
   selection** run locally. No prompt, document, or query leaves the device for generation.
 - The **only** network egress is explicit and user-initiated:
   - **CourtListener** legal research (allow-listed; see below).
+  - **Opinion PDF downloads** from CourtListener's public storage CDN
+    (`storage.courtlistener.com`), only when you click Download PDF on an authority.
+    The API token is **never** sent to the CDN.
   - **Model / embedding downloads** during setup (explicit user action; local thereafter).
 - The document-intelligence pipeline performs **no** network I/O at all.
 - **No telemetry or analytics.**
@@ -50,7 +53,9 @@ need an explicit, documented justification.
 ### Default-deny networking
 
 - Every request passes through a network policy that **denies by default**. Only
-  `courtlistener.com` / `www.courtlistener.com` are allow-listed.
+  `courtlistener.com` / `www.courtlistener.com` (API, token-authenticated) and
+  `storage.courtlistener.com` (public asset CDN, used token-free for opinion PDF
+  downloads) are allow-listed.
 - Plain `http`, embedded credentials, and non-allow-listed hosts are rejected.
 - Every request — approved or blocked — is logged (path only, never the `Authorization`
   header or token). Local rolling rate-limit counters block requests at CourtListener's

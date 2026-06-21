@@ -10,7 +10,8 @@ orders, see [`Docs/Milestones/`](Docs/Milestones/).
 
 - **Local-first.** Model generation, document processing, OCR, embeddings, search, and
   source selection all run on the user's Mac. The only network egress is explicit,
-  user-initiated: CourtListener legal research and model/embedding downloads.
+  user-initiated: CourtListener legal research, token-free opinion PDF downloads from
+  CourtListener's storage CDN, and model/embedding downloads.
 - **Source-grounded, verifiable output.** Legal answers are constrained to retrieved
   authority; document answers and chronologies are constrained to selected sources. A
   citation verifier flags unsupported or unresolved claims rather than presenting them as
@@ -146,7 +147,9 @@ existing convention where a repository owns several related tables.
 
 ## Security & privacy posture
 
-- **On-device generation**; default-deny network with only CourtListener allowlisted.
+- **On-device generation**; default-deny network with only CourtListener allowlisted
+  (API host token-authenticated; `storage.courtlistener.com` CDN used token-free for
+  opinion PDF downloads).
 - **Secrets in the Keychain** (CourtListener token), never in SQLite, logs, diagnostics, or
   exports.
 - **Privilege-aware logging** — query terms are stored as stable fingerprints unless the user

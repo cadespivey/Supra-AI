@@ -74,6 +74,20 @@ final class CourtListenerTextTests: XCTestCase {
         XCTAssertEqual(dto.bestHTML, "<p>cited</p>")
     }
 
+    func testCourtListenerPDFURLOnlyForStoredPDF() {
+        XCTAssertEqual(
+            CourtListenerOpinionDetailDTO(localPath: "pdf/2009/04/file.pdf").courtListenerPDFURL?.absoluteString,
+            "https://storage.courtlistener.com/pdf/2009/04/file.pdf"
+        )
+        XCTAssertEqual(
+            CourtListenerOpinionDetailDTO(localPath: "/pdf/x.pdf").courtListenerPDFURL?.host,
+            "storage.courtlistener.com"
+        )
+        XCTAssertNil(CourtListenerOpinionDetailDTO(localPath: "txt/2009/file.txt").courtListenerPDFURL)
+        XCTAssertNil(CourtListenerOpinionDetailDTO(localPath: "").courtListenerPDFURL)
+        XCTAssertNil(CourtListenerOpinionDetailDTO().courtListenerPDFURL)
+    }
+
     func testNormalizeSanitizesCaseNameAndCitations() {
         let dto = CourtListenerSearchResultDTO(
             caseName: "<mark>United</mark> States v. Winstar Corp.",

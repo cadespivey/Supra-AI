@@ -2,6 +2,18 @@ import Foundation
 
 public protocol AuthorizedHTTPClientProtocol: Sendable {
     func send(_ request: URLRequest, relatedResearchSessionID: String?) async throws -> (Data, HTTPURLResponse)
+
+    /// Sends an allow-listed, rate-limited, logged request WITHOUT attaching the
+    /// CourtListener token — for public resources (e.g. opinion PDFs on the
+    /// CourtListener storage CDN) where the token must not be sent off the API host.
+    func sendUnauthenticated(_ request: URLRequest, relatedResearchSessionID: String?) async throws -> (Data, HTTPURLResponse)
+}
+
+public extension AuthorizedHTTPClientProtocol {
+    /// Default so conformers that don't fetch public resources still compile.
+    func sendUnauthenticated(_ request: URLRequest, relatedResearchSessionID: String?) async throws -> (Data, HTTPURLResponse) {
+        throw AuthorizedHTTPClientError.invalidResponse
+    }
 }
 
 public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecked Sendable {
@@ -36,6 +48,24 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         _ request: URLRequest,
         relatedResearchSessionID: String? = nil
     ) async throws -> (Data, HTTPURLResponse) {
+        try await perform(request, authenticated: true, relatedResearchSessionID: relatedResearchSessionID)
+    }
+
+    public func sendUnauthenticated(
+        _ request: URLRequest,
+        relatedResearchSessionID: String? = nil
+    ) async throws -> (Data, HTTPURLResponse) {
+        try await perform(request, authenticated: false, relatedResearchSessionID: relatedResearchSessionID)
+    }
+
+    /// Shared request path: policy check → rate-limit → (optional) token → log →
+    /// transport → log. `authenticated == false` skips token injection entirely so
+    /// the `Authorization` header is never sent (used for the public storage CDN).
+    private func perform(
+        _ request: URLRequest,
+        authenticated: Bool,
+        relatedResearchSessionID: String?
+    ) async throws -> (Data, HTTPURLResponse) {
         guard let url = request.url else {
             throw NetworkPolicyError.invalidURL
         }
@@ -69,24 +99,25 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
             throw error
         }
 
-        guard let token = try keyStore.loadCourtListenerToken()?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !token.isEmpty else {
-            throw AuthorizedHTTPClientError.missingToken
+        var outgoing = request
+        if authenticated {
+            guard let token = try keyStore.loadCourtListenerToken()?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !token.isEmpty else {
+                throw AuthorizedHTTPClientError.missingToken
+            }
+            outgoing.setValue("application/json", forHTTPHeaderField: "Accept")
+            outgoing.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
         }
-
-        var authorizedRequest = request
-        authorizedRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-        authorizedRequest.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
 
         let logID = try await logger.recordApprovedRequest(
             url: url,
             method: method,
             relatedResearchSessionID: relatedResearchSessionID,
-            requestMetadataJSON: requestMetadataJSON(for: authorizedRequest)
+            requestMetadataJSON: requestMetadataJSON(for: outgoing)
         )
 
         do {
-            let (data, response) = try await transport(authorizedRequest)
+            let (data, response) = try await transport(outgoing)
             guard let httpResponse = response as? HTTPURLResponse else {
                 try await logger.finishRequest(
                     id: logID,
