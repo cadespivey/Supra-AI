@@ -1,4 +1,5 @@
 import SupraDesignSystem
+import SupraResearch
 import SupraSessions
 import SwiftUI
 
@@ -215,6 +216,9 @@ private struct ResultDetailSheet: View {
     @ObservedObject var controller: ResearchSessionController
     let result: ResearchSessionController.SessionResult
     @Environment(\.dismiss) private var dismiss
+    @State private var opinion: CourtListenerOpinionDetailDTO?
+    @State private var loadingOpinion = false
+    @State private var showHTML = false
 
     /// The current result from the controller, so the review badge reflects an
     /// in-sheet review immediately instead of the (stale) snapshot captured when
@@ -243,9 +247,21 @@ private struct ResultDetailSheet: View {
                     if let path = result.absoluteURL, let url = URL(string: "https://www.courtlistener.com" + path) {
                         Link("View on CourtListener", destination: url)
                     }
+                    if loadingOpinion {
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Loading opinion…").foregroundStyle(.secondary) }
+                    } else if opinion?.bestHTML != nil {
+                        Button { showHTML = true } label: { Label("View opinion (HTML)", systemImage: "doc.richtext") }
+                    }
                 }
-                if let snippet = result.snippet, !snippet.isEmpty {
-                    Section("Snippet") { Text(snippet).font(.callout) }
+                if let passage = enrichedPassage {
+                    Section("Excerpt") { Text(passage).font(.callout).textSelection(.enabled) }
+                } else if let snippet = result.snippet, !snippet.isEmpty {
+                    Section("Snippet") {
+                        Text(snippet).font(.callout)
+                        if loadingOpinion {
+                            Text("Loading a longer passage…").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 Section("Review") {
                     ReviewBadge(state: liveResult.reviewState)
@@ -263,5 +279,31 @@ private struct ResultDetailSheet: View {
         }
         // §14.4 inspector-panel width behavior.
         .frame(minWidth: 320, idealWidth: 420, maxWidth: 560, minHeight: 480, idealHeight: 600)
+        .sheet(isPresented: $showHTML) {
+            if let html = opinion?.bestHTML {
+                OpinionHTMLSheet(
+                    title: result.caseName,
+                    html: html,
+                    suggestedFileName: AuthorityDetailView.fileName(for: result.caseName)
+                )
+            }
+        }
+        .onAppear(perform: loadOpinionIfPossible)
+    }
+
+    /// A ~50–100 word passage from the full opinion, windowed on the search snippet
+    /// so it shows the relevant language. Nil until the opinion loads.
+    private var enrichedPassage: String? {
+        CourtListenerText.passage(from: opinion?.bodyText, around: result.snippet)
+    }
+
+    private func loadOpinionIfPossible() {
+        guard opinion == nil, !loadingOpinion,
+              result.opinionID != nil, controller.hasCourtListenerToken else { return }
+        loadingOpinion = true
+        Task { @MainActor in
+            opinion = await controller.fetchOpinionDetail(opinionID: result.opinionID)
+            loadingOpinion = false
+        }
     }
 }

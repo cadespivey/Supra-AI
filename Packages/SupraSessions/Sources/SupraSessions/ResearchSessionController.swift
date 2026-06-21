@@ -116,6 +116,7 @@ public final class ResearchSessionController: ObservableObject {
         public let dateFiled: Date?
         public let docketNumber: String?
         public let snippet: String?
+        public let opinionID: String?
         public let reviewState: String
         public let absoluteURL: String?
         public let rawResultJSON: String
@@ -172,6 +173,14 @@ public final class ResearchSessionController: ObservableObject {
 
     public var hasCourtListenerToken: Bool {
         (try? tokenStore.hasCourtListenerToken()) ?? false
+    }
+
+    /// Fetches a result's full opinion (text + HTML) from CourtListener's
+    /// allow-listed opinion-detail endpoint, for a longer passage and HTML view.
+    /// Returns nil when there's no opinion id or the fetch fails.
+    public func fetchOpinionDetail(opinionID: String?) async -> CourtListenerOpinionDetailDTO? {
+        guard let opinionID, let id = Int(opinionID) else { return nil }
+        return try? await courtListenerClient.fetchOpinion(id: id)
     }
 
     public func loadSessions() {
@@ -660,10 +669,17 @@ public final class ResearchSessionController: ObservableObject {
         var grouped: [String: [SessionResult]] = [:]
         for query in queries {
             grouped[query.id] = ((try? store.research.fetchResults(queryID: query.id)) ?? []).map { record in
+                // Defensive cleaning: rows saved before sanitization may still carry
+                // `<mark>` highlight markup / HTML entities.
                 SessionResult(
-                    id: record.id, caseName: record.caseName, caseNameFull: record.caseNameFull,
-                    citation: record.preferredCitation, court: record.court, dateFiled: record.dateFiled,
-                    docketNumber: record.docketNumber, snippet: record.snippet,
+                    id: record.id,
+                    caseName: CourtListenerText.clean(record.caseName) ?? record.caseName,
+                    caseNameFull: CourtListenerText.clean(record.caseNameFull),
+                    citation: CourtListenerText.clean(record.preferredCitation),
+                    court: CourtListenerText.clean(record.court), dateFiled: record.dateFiled,
+                    docketNumber: CourtListenerText.clean(record.docketNumber),
+                    snippet: CourtListenerText.clean(record.snippet),
+                    opinionID: record.opinionID,
                     reviewState: record.reviewState, absoluteURL: record.absoluteURL,
                     rawResultJSON: record.rawResultJSON
                 )
