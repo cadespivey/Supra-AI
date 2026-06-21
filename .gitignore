@@ -4,6 +4,8 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 build/
+website/.next/
+website/node_modules/
 
 # Local environment config — may hold the CourtListener API token. Never commit.
 .env
