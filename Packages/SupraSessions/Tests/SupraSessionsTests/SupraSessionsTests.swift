@@ -201,6 +201,156 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertNotNil(controller.selectedChatID)
     }
 
+    // MARK: - Chat history (rename / delete / move) + auto-title
+
+    func testFirstSendAutoTitlesChatFromPrompt() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What are the elements of negligence?",
+            modelID: ModelID(),
+            systemPrompt: nil,
+            options: GenerationOptions()
+        )
+
+        XCTAssertEqual(controller.chats.first?.title, "What are the elements of negligence?")
+        XCTAssertNotEqual(controller.chats.first?.title, "New Chat")
+    }
+
+    func testDerivedTitleTruncatesOnWordBoundary() {
+        let long = "Please draft a comprehensive demand letter regarding unpaid invoices owed by a former client"
+        let title = GlobalChatController.derivedTitle(from: long)
+        XCTAssertTrue(title.hasSuffix("…"))
+        XCTAssertLessThanOrEqual(title.count, 49)
+        XCTAssertFalse(title.dropLast().hasSuffix(" "))
+        XCTAssertEqual(GlobalChatController.derivedTitle(from: "   "), "New Chat")
+        XCTAssertEqual(GlobalChatController.derivedTitle(from: "Short one"), "Short one")
+    }
+
+    func testStartNewChatClearsSelectionWithoutCreatingEmptyRow() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+        await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
+        XCTAssertNotNil(controller.selectedChatID)
+
+        controller.startNewChat()
+        XCTAssertNil(controller.selectedChatID)
+        XCTAssertTrue(controller.messages.isEmpty)
+        // The prior chat is preserved; no empty placeholder was created.
+        XCTAssertEqual(controller.chats.count, 1)
+    }
+
+    func testRenameChatUpdatesTitle() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+        await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
+        let chatID = try XCTUnwrap(controller.selectedChatID)
+
+        controller.renameChat(chatID: chatID, title: "Negligence research")
+        XCTAssertEqual(controller.chats.first { $0.id == chatID }?.title, "Negligence research")
+        // Blank rename is a no-op.
+        controller.renameChat(chatID: chatID, title: "   ")
+        XCTAssertEqual(controller.chats.first { $0.id == chatID }?.title, "Negligence research")
+    }
+
+    func testDeleteChatRemovesFromListAndDeselects() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+        await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
+        let chatID = try XCTUnwrap(controller.selectedChatID)
+
+        controller.deleteChat(chatID: chatID)
+        XCTAssertTrue(controller.chats.isEmpty)
+        XCTAssertNil(controller.selectedChatID)
+        XCTAssertTrue(controller.messages.isEmpty)
+        XCTAssertTrue(try store.chats.fetchGlobalChats().isEmpty)
+    }
+
+    func testMoveChatToMatterRemovesFromGlobalAndRecordsAudit() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+        await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
+        let chatID = try XCTUnwrap(controller.selectedChatID)
+
+        controller.moveChat(chatID: chatID, toMatter: matter.id)
+
+        XCTAssertTrue(controller.chats.isEmpty)
+        XCTAssertNil(controller.selectedChatID)
+        XCTAssertTrue(try store.chats.fetchGlobalChats().isEmpty)
+        let matterChats = try store.chats.fetchMatterChats(matterID: matter.id)
+        XCTAssertTrue(matterChats.contains { $0.id == chatID })
+        let audits = try store.auditEvents.fetchEvents(matterID: matter.id)
+        XCTAssertTrue(audits.contains { $0.eventType == "chat_moved_to_matter" })
+    }
+
+    func testMoveToMissingMatterSurfacesErrorAndRecordsNoAudit() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+        await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
+        let chatID = try XCTUnwrap(controller.selectedChatID)
+
+        controller.moveChat(chatID: chatID, toMatter: "nonexistent-matter-id")
+
+        // The move failed cleanly: the chat stays in the global list and NO phantom
+        // "moved" audit event is recorded against the missing matter.
+        XCTAssertEqual(controller.chats.map(\.id), [chatID])
+        XCTAssertEqual(controller.selectedChatID, chatID)
+        XCTAssertNotNil(controller.errorMessage)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(relatedTable: "chats", relatedID: chatID).isEmpty)
+    }
+
+    func testMatterStartNewChatThenSendCreatesMatterScopedTitledChat() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = GlobalChatController(store: store, runtimeClient: stub, scope: .matter(id: matter.id))
+        controller.loadChats()
+        let initialCount = controller.chats.count   // the default "General — Acme" chat
+
+        // "New Chat" in a matter clears selection; the chat is created lazily on send.
+        controller.startNewChat()
+        XCTAssertNil(controller.selectedChatID)
+
+        await controller.performSend(
+            prompt: "Draft a tolling agreement",
+            modelID: ModelID(),
+            systemPrompt: nil,
+            options: GenerationOptions()
+        )
+
+        let matterChats = try store.chats.fetchMatterChats(matterID: matter.id)
+        XCTAssertEqual(matterChats.count, initialCount + 1)         // a new matter-scoped chat exists
+        XCTAssertTrue(try store.chats.fetchGlobalChats().isEmpty)   // it is NOT global
+        XCTAssertEqual(controller.chats.first?.title, "Draft a tolling agreement")  // auto-titled, not "New Chat"
+    }
+
+    func testChatSuggestionsSampleIsDistinctAndSized() {
+        let four = ChatSuggestions.sample(count: 4)
+        XCTAssertEqual(four.count, 4)
+        XCTAssertEqual(Set(four.map(\.id)).count, 4)
+
+        // Requesting more than the catalog returns the whole catalog, de-duplicated.
+        let everything = ChatSuggestions.sample(count: ChatSuggestions.all.count + 10)
+        XCTAssertEqual(everything.count, ChatSuggestions.all.count)
+        XCTAssertEqual(Set(ChatSuggestions.all.map(\.id)).count, ChatSuggestions.all.count)
+        XCTAssertGreaterThanOrEqual(ChatSuggestions.all.count, 30)
+        XCTAssertTrue(ChatSuggestions.sample(count: 0).isEmpty)
+    }
+
     func testDraftRouteUsesDraftingPresetAndPromptWithoutResearch() async throws {
         let store = try makeStore()
         let route = ModelRouter(configuration: LegalModelConfiguration(draftingModel: "Draft")).route(for: .drafting)

@@ -32,6 +32,9 @@ unverified authority as settled law.
   exportable structured outputs — all scoped per matter.
 - **Matter workspace.** Organize chats, research sessions, authorities, documents, and outputs by
   matter, with an audit trail.
+- **Global chat management.** Global Chat opens to a fresh set of legal prompt starters, keeps a
+  searchable, title-based chat history in an interior sidebar, and lets you rename, delete, or move a
+  chat into a matter when it turns out to be case-specific.
 - **Privacy by default.** Privileged query terms are redacted (stored as stable fingerprints) in
   logs and diagnostics unless explicitly enabled; the CourtListener token lives in the Keychain,
   bound to the device.

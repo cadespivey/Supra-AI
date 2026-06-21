@@ -52,6 +52,74 @@ public final class ChatRepository: @unchecked Sendable {
         }
     }
 
+    /// Renames a chat (used by the chat-history sidebar). Touches `updated_at` so
+    /// the row keeps its place in the most-recent-first ordering.
+    public func renameChat(id: String, title: String) throws {
+        try writer.write { db in
+            let now = Date()
+            try db.execute(
+                sql: "UPDATE chats SET title = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+                arguments: [title, now, id]
+            )
+        }
+    }
+
+    /// Soft-deletes a chat (sets `deleted_at`). Its messages stay in place — every
+    /// fetch already filters on `deleted_at IS NULL`, so the chat simply disappears
+    /// from the list. Returns `false` if no live chat with that id exists, so the
+    /// caller can avoid acting on a delete that didn't happen.
+    @discardableResult
+    public func softDeleteChat(id: String, deletedAt: Date = Date()) throws -> Bool {
+        try writer.write { db in
+            guard try ChatRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM chats WHERE id = ? AND deleted_at IS NULL",
+                arguments: [id]
+            ) != nil else {
+                return false
+            }
+            try db.execute(
+                sql: "UPDATE chats SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                arguments: [deletedAt, deletedAt, id]
+            )
+            return true
+        }
+    }
+
+    /// Re-homes a global chat into a matter. Messages reference the chat by id, so
+    /// they follow it automatically; only the chat's scope/owner changes. Validates
+    /// that both the chat and target matter still exist and returns the updated
+    /// record (or `nil` if either is gone), so the caller never records a move that
+    /// didn't actually happen.
+    @discardableResult
+    public func moveChatToMatter(id: String, matterID: String, movedAt: Date = Date()) throws -> ChatRecord? {
+        try writer.write { db in
+            guard try MatterRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM matters WHERE id = ? AND deleted_at IS NULL",
+                arguments: [matterID]
+            ) != nil else {
+                return nil
+            }
+            guard try ChatRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM chats WHERE id = ? AND deleted_at IS NULL",
+                arguments: [id]
+            ) != nil else {
+                return nil
+            }
+            try db.execute(
+                sql: """
+                UPDATE chats
+                SET scope = 'matter', matter_id = ?, updated_at = ?
+                WHERE id = ? AND deleted_at IS NULL
+                """,
+                arguments: [matterID, movedAt, id]
+            )
+            return try ChatRecord.fetchOne(db, key: id)
+        }
+    }
+
     public func fetchMessages(chatID: String) throws -> [MessageRecord] {
         try writer.read { db in
             try MessageRecord.fetchAll(
