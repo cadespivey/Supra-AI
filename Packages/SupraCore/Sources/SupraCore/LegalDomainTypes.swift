@@ -49,6 +49,17 @@ public enum AuthorityUseStatus: String, Codable, CaseIterable, Hashable, Sendabl
     case needsCitatorCheck = "needs_citator_check"
     case userMarkedVerified = "user_marked_verified"
     case doNotUse = "do_not_use"
+
+    /// Human-readable label for display (the raw value is the persisted token).
+    public var displayName: String {
+        switch self {
+        case .unverified: "Unverified"
+        case .retrievedFromCourtListener: "Retrieved from CourtListener"
+        case .needsCitatorCheck: "Needs citator check"
+        case .userMarkedVerified: "Marked verified"
+        case .doNotUse: "Do not use"
+        }
+    }
 }
 
 public enum StructuredOutputType: String, Codable, CaseIterable, Hashable, Sendable {

@@ -145,7 +145,7 @@ struct MatterAuthoritiesView: View {
             .foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 ReviewBadge(state: authority.reviewState)
-                Text(authority.useStatus.rawValue)
+                Text(authority.useStatus.displayName)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

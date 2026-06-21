@@ -113,7 +113,7 @@ public final class AuthoritiesController: ObservableObject {
         try? store.authorities.updateUseStatus(authorityID: authorityID, useStatus: target)
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "authority_status_changed", actor: "user",
-            summary: "“\(item.caseName)”: \(item.useStatus.rawValue) → \(target.rawValue)",
+            summary: "“\(item.caseName)”: \(item.useStatus.displayName) → \(target.displayName)",
             relatedTable: "authorities", relatedID: authorityID
         )
         load()

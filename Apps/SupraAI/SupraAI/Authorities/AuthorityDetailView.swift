@@ -68,14 +68,14 @@ struct AuthorityDetailView: View {
 
             Section("Status") {
                 LabeledContent("Review") { ReviewBadge(state: authority.reviewState) }
-                LabeledContent("Use status", value: authority.useStatus.rawValue)
+                LabeledContent("Use status", value: authority.useStatus.displayName)
                 let allowed = authority.useStatus.allowedTransitions
                 if allowed.isEmpty {
                     Text("No further transitions available.").font(.caption).foregroundStyle(.secondary)
                 } else {
                     Menu("Change Use Status") {
                         ForEach(allowed, id: \.self) { target in
-                            Button(target.rawValue) { controller.changeUseStatus(authorityID: authorityID, to: target) }
+                            Button(target.displayName) { controller.changeUseStatus(authorityID: authorityID, to: target) }
                         }
                     }
                 }
