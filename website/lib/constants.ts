@@ -15,7 +15,7 @@ export const GITHUB_LATEST_RELEASE_API = `https://api.github.com/repos/${GITHUB_
 // JavaScript, and if the GitHub API is unreachable. Bump on each release (or
 // wire the release workflow to update it); the runtime fetch normally takes
 // over and points at whatever the latest release actually is.
-export const FALLBACK_RELEASE_TAG = "v1.3.3";
-export const FALLBACK_RELEASE_VERSION = "1.3.3";
+export const FALLBACK_RELEASE_TAG = "v1.3.4";
+export const FALLBACK_RELEASE_VERSION = "1.3.4";
 export const DOWNLOAD_DMG_URL = `${GITHUB_REPO_URL}/releases/download/${FALLBACK_RELEASE_TAG}/SupraAI-${FALLBACK_RELEASE_VERSION}.dmg`;
 export const DOWNLOAD_ZIP_URL = `${GITHUB_REPO_URL}/releases/download/${FALLBACK_RELEASE_TAG}/SupraAI-${FALLBACK_RELEASE_VERSION}.zip`;
