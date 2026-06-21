@@ -1836,6 +1836,35 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertNotNil(library.loadedModelID)
     }
 
+    func testDeleteModelUnregistersClearsRoleAssignmentAndUnloads() async throws {
+        let store = try makeStore()
+        let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient(
+            loadResult: LoadModelResponse(status: .loaded, modelID: ModelID())
+        ))
+        let model = try library.addModel(displayName: "Local 32B", path: "/tmp/delete-model", bookmarkData: nil)
+        library.assignModel(model.id, to: .legalReasoning)
+        await library.activateAndLoad(modelID: model.id)
+        XCTAssertNotNil(library.loadedModelID)
+
+        let result = await library.deleteModel(modelID: model.id)
+
+        XCTAssertEqual(result, .deleted)
+        XCTAssertTrue(library.models.isEmpty)
+        XCTAssertNil(try store.models.fetchModel(id: model.id))
+        XCTAssertNil(library.roleAssignments.modelID(for: .legalReasoning))
+        XCTAssertEqual(library.loadState, .idle, "deleting the loaded model unloads it")
+    }
+
+    func testIsManagedDownloadDistinguishesManagedFromUserFolder() throws {
+        let store = try makeStore()
+        let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
+        let managedPath = ManagedModelStorage.modelsDirectory().appendingPathComponent("org__model").path
+        let managed = try library.addModel(displayName: "Downloaded", path: managedPath, bookmarkData: nil)
+        let userFolder = try library.addModel(displayName: "User", path: "/Users/x/Models/m", bookmarkData: Data([1]))
+        XCTAssertTrue(library.isManagedDownload(managed))
+        XCTAssertFalse(library.isManagedDownload(userFolder))
+    }
+
     func testActivateSurfacesLoadFailure() async throws {
         let store = try makeStore()
         let stub = StubRuntimeClient(loadResult: LoadModelResponse(

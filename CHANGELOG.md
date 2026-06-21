@@ -11,7 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Models: delete a registered model** (swipe / context menu in the Models tab,
+  with confirmation). App-downloaded models have their files removed from disk to
+  reclaim space; user-registered folders are only unregistered (the folder is left
+  in place). Deleting unloads the model if it's loaded and clears any task-role
+  assignments so no "Missing model" entry is left behind.
 
 ## [1.3.4] - 2026-06-21
 
