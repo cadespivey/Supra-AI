@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.3.4] - 2026-06-21
+
 ### Added
 
 - **Authorities: delete a saved authority** (swipe / context menu / detail button),
@@ -206,7 +210,8 @@ acceptance criteria and a validation suite.
   default.
 - No telemetry. See [SECURITY.md](SECURITY.md) for the full model.
 
-[Unreleased]: https://github.com/cadespivey/Supra-AI/compare/v1.3.3...HEAD
+[Unreleased]: https://github.com/cadespivey/Supra-AI/compare/v1.3.4...HEAD
+[1.3.4]: https://github.com/cadespivey/Supra-AI/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/cadespivey/Supra-AI/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/cadespivey/Supra-AI/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/cadespivey/Supra-AI/compare/v1.3.0...v1.3.1
