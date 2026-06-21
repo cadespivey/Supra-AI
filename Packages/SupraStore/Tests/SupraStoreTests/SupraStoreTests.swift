@@ -59,6 +59,45 @@ final class SupraStoreTests: XCTestCase {
         XCTAssertEqual(try store.matters.fetchMatters().count, 1)
     }
 
+    func testSoftDeleteChatHidesItButPreservesMessagesAndReportsMissing() throws {
+        let store = try makeStore()
+        let chat = try store.chats.createGlobalChat(title: "Global")
+        _ = try store.chats.appendUserMessage(chatID: chat.id, content: "Preserve me")
+
+        XCTAssertTrue(try store.chats.softDeleteChat(id: chat.id))
+        XCTAssertFalse(try store.chats.softDeleteChat(id: chat.id))      // already gone
+        XCTAssertFalse(try store.chats.softDeleteChat(id: "no-such-chat"))
+
+        XCTAssertTrue(try store.chats.fetchGlobalChats().isEmpty)
+        XCTAssertEqual(try store.chats.fetchMessages(chatID: chat.id).single?.content, "Preserve me")
+    }
+
+    func testMoveGlobalChatToMatterRetainsConversationAndValidatesTargets() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let chat = try store.chats.createGlobalChat(title: "Global issue")
+        _ = try store.chats.appendUserMessage(chatID: chat.id, content: "Move this")
+
+        // A missing matter or missing chat returns nil and changes nothing.
+        XCTAssertNil(try store.chats.moveChatToMatter(id: chat.id, matterID: "no-such-matter"))
+        XCTAssertNil(try store.chats.moveChatToMatter(id: "no-such-chat", matterID: matter.id))
+        XCTAssertEqual(try store.chats.fetchGlobalChats().map(\.id), [chat.id])
+
+        let moved = try XCTUnwrap(store.chats.moveChatToMatter(id: chat.id, matterID: matter.id))
+        XCTAssertEqual(moved.scope, "matter")
+        XCTAssertEqual(moved.matterID, matter.id)
+        XCTAssertTrue(try store.chats.fetchGlobalChats().isEmpty)
+        XCTAssertEqual(try store.chats.fetchMatterChats(matterID: matter.id).map(\.id), [chat.id])
+        XCTAssertEqual(try store.chats.fetchMessages(chatID: chat.id).single?.content, "Move this")
+    }
+
+    func testRenameChatUpdatesTitle() throws {
+        let store = try makeStore()
+        let chat = try store.chats.createGlobalChat(title: "New Chat")
+        try store.chats.renameChat(id: chat.id, title: "Negligence research")
+        XCTAssertEqual(try store.chats.fetchGlobalChats().single?.title, "Negligence research")
+    }
+
     func testMatterMetadataRoundTrips() throws {
         let store = try makeStore()
 
