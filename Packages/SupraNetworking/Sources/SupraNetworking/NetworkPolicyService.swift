@@ -11,7 +11,10 @@ public final class NetworkPolicyService: NetworkPolicyServiceProtocol, @unchecke
     public init(
         allowedHosts: Set<String> = [
             "www.courtlistener.com",
-            "courtlistener.com"
+            "courtlistener.com",
+            // CourtListener's own public asset CDN — used only for user-initiated,
+            // token-free opinion PDF downloads (see SECURITY.md).
+            "storage.courtlistener.com"
         ]
     ) {
         self.allowedHosts = Set(allowedHosts.map { $0.lowercased() })

@@ -67,6 +67,44 @@ public final class AuthoritiesController: ObservableObject {
         return try? await courtListenerClient.fetchOpinion(id: id)
     }
 
+    /// The app-managed location of a previously-downloaded opinion PDF, or nil if
+    /// none has been downloaded for this opinion.
+    public func storedOpinionPDF(opinionID: String?) -> URL? {
+        guard let opinionID, let url = Self.opinionPDFURL(opinionID: opinionID) else { return nil }
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// Downloads the opinion PDF from CourtListener's storage CDN into app-managed
+    /// storage and returns its local URL (nil on failure). The token is never sent
+    /// to the CDN. Subsequent opens reuse the stored file via `storedOpinionPDF`.
+    public func downloadOpinionPDF(opinionID: String?, from cdnURL: URL) async -> URL? {
+        guard let opinionID, let destination = Self.opinionPDFURL(opinionID: opinionID) else { return nil }
+        if FileManager.default.fileExists(atPath: destination.path) { return destination }
+        guard let data = try? await courtListenerClient.downloadOpinionPDF(from: cdnURL),
+              data.starts(with: [0x25, 0x50, 0x44, 0x46]) // "%PDF" magic — reject non-PDF bodies
+        else { return nil }
+        do {
+            try data.write(to: destination, options: .atomic)
+            return destination
+        } catch {
+            return nil
+        }
+    }
+
+    /// `Application Support/SupraAI/OpinionPDFs/opinion-<id>.pdf` (inside the app
+    /// container — no file-access entitlement needed).
+    private static func opinionPDFURL(opinionID: String) -> URL? {
+        let safeID = opinionID.filter { $0.isNumber || $0.isLetter || $0 == "-" }
+        guard !safeID.isEmpty,
+              let support = try? FileManager.default.url(
+                for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+              )
+        else { return nil }
+        let dir = support.appendingPathComponent("SupraAI/OpinionPDFs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("opinion-\(safeID).pdf")
+    }
+
     public func load() {
         authorities = ((try? store.authorities.fetchAuthorities(matterID: matterID)) ?? []).map { record in
             let citations = (try? JSONDecoder().decode([String].self, from: Data(record.citationJSON.utf8))) ?? []

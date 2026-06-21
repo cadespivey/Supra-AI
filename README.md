@@ -128,8 +128,9 @@ cd Packages/SupraSessions && swift test
 
 ## Privacy & legal-safety design
 
-- Generation is **on-device**; only CourtListener research makes network calls, through an
-  allow-listed, rate-limited, Keychain-authenticated client.
+- Generation is **on-device**; the only network calls are CourtListener research (through an
+  allow-listed, rate-limited, Keychain-authenticated client) and user-initiated, token-free
+  opinion PDF downloads from CourtListener's storage CDN.
 - Legal answers are constrained to retrieved authority; the citation verifier flags unsupported
   citations/quotes and jurisdiction mismatches, and structured outputs that assert authority always
   carry a verification banner.

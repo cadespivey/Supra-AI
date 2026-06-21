@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 import SupraCore
 import SupraResearch
 import SupraSessions
@@ -19,6 +20,9 @@ struct AuthorityDetailView: View {
     @State private var opinion: CourtListenerOpinionDetailDTO?
     @State private var loadingOpinion = false
     @State private var showHTML = false
+    @State private var pdfURL: URL?
+    @State private var downloadingPDF = false
+    @State private var pdfExporting = false
 
     var body: some View {
         Group {
@@ -45,8 +49,15 @@ struct AuthorityDetailView: View {
                 }
                 if loadingOpinion {
                     HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Loading opinion…").foregroundStyle(.secondary) }
-                } else if opinion?.bestHTML != nil {
-                    Button { showHTML = true } label: { Label("View opinion (HTML)", systemImage: "doc.richtext") }
+                } else {
+                    if opinion?.bestHTML != nil {
+                        Button { showHTML = true } label: { Label("View opinion (HTML)", systemImage: "doc.richtext") }
+                    }
+                    if downloadingPDF {
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Downloading PDF…").foregroundStyle(.secondary) }
+                    } else if pdfURL == nil, opinion?.courtListenerPDFURL != nil {
+                        Button { downloadPDF() } label: { Label("Download PDF", systemImage: "arrow.down.doc") }
+                    }
                 }
             }
 
@@ -79,6 +90,15 @@ struct AuthorityDetailView: View {
                             Button(target.displayName) { controller.changeUseStatus(authorityID: authorityID, to: target) }
                         }
                     }
+                }
+            }
+
+            if let pdfURL {
+                Section("Opinion PDF") {
+                    OpinionPDFView(url: pdfURL)
+                        .frame(minHeight: 360)
+                        .listRowInsets(EdgeInsets())
+                    Button { pdfExporting = true } label: { Label("Save a copy…", systemImage: "square.and.arrow.down") }
                 }
             }
 
@@ -125,9 +145,16 @@ struct AuthorityDetailView: View {
                 )
             }
         }
+        .fileExporter(
+            isPresented: $pdfExporting,
+            document: pdfURL.flatMap { try? PDFFileDocument(url: $0) },
+            contentType: .pdf,
+            defaultFilename: Self.fileName(for: authority.caseName)
+        ) { _ in }
         .onAppear {
             citation = authority.preferredCitation ?? ""
             notes = authority.userNotes ?? ""
+            pdfURL = controller.storedOpinionPDF(opinionID: authority.opinionID)
             loadOpinionIfPossible(authority)
         }
     }
@@ -144,6 +171,16 @@ struct AuthorityDetailView: View {
         Task { @MainActor in
             opinion = await controller.fetchOpinionDetail(opinionID: authority.opinionID)
             loadingOpinion = false
+        }
+    }
+
+    private func downloadPDF() {
+        guard let authority = controller.authorities.first(where: { $0.id == authorityID }),
+              let cdnURL = opinion?.courtListenerPDFURL else { return }
+        downloadingPDF = true
+        Task { @MainActor in
+            pdfURL = await controller.downloadOpinionPDF(opinionID: authority.opinionID, from: cdnURL)
+            downloadingPDF = false
         }
     }
 
@@ -289,5 +326,41 @@ private struct OpinionWebView: NSViewRepresentable {
             }
             decisionHandler(.allow)
         }
+    }
+}
+
+/// In-app preview of a downloaded opinion PDF.
+private struct OpinionPDFView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.displayMode = .singlePageContinuous
+        view.displaysPageBreaks = true
+        view.document = PDFDocument(url: url)
+        return view
+    }
+
+    func updateNSView(_ view: PDFView, context: Context) {
+        if view.document?.documentURL != url {
+            view.document = PDFDocument(url: url)
+        }
+    }
+}
+
+/// Wraps an on-disk PDF for SwiftUI's `.fileExporter` ("Save a copy…").
+struct PDFFileDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.pdf] }
+    let data: Data
+
+    init(url: URL) throws { data = try Data(contentsOf: url) }
+
+    init(configuration: ReadConfiguration) throws {
+        data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
     }
 }

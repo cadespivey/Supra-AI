@@ -14,6 +14,9 @@ public struct CourtListenerOpinionDetailDTO: Codable, Sendable, Equatable {
     public let htmlColumbia: String?
     public let downloadURL: String?
     public let absoluteURL: String?
+    /// CourtListener's stored copy of the source file, relative to the storage
+    /// CDN (e.g. `pdf/2009/04/.../file.pdf`). Empty for text-only opinions.
+    public let localPath: String?
 
     public init(
         id: Int? = nil,
@@ -23,7 +26,8 @@ public struct CourtListenerOpinionDetailDTO: Codable, Sendable, Equatable {
         htmlLawbox: String? = nil,
         htmlColumbia: String? = nil,
         downloadURL: String? = nil,
-        absoluteURL: String? = nil
+        absoluteURL: String? = nil,
+        localPath: String? = nil
     ) {
         self.id = id
         self.plainText = plainText
@@ -33,6 +37,7 @@ public struct CourtListenerOpinionDetailDTO: Codable, Sendable, Equatable {
         self.htmlColumbia = htmlColumbia
         self.downloadURL = downloadURL
         self.absoluteURL = absoluteURL
+        self.localPath = localPath
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -44,6 +49,19 @@ public struct CourtListenerOpinionDetailDTO: Codable, Sendable, Equatable {
         case htmlColumbia = "html_columbia"
         case downloadURL = "download_url"
         case absoluteURL = "absolute_url"
+        case localPath = "local_path"
+    }
+
+    /// The CourtListener-hosted PDF URL on the storage CDN, when the stored file is
+    /// a PDF. Nil for text-only opinions or non-PDF stored files. This is the only
+    /// host the app downloads opinion PDFs from (no token sent).
+    public var courtListenerPDFURL: URL? {
+        guard let localPath else { return nil }
+        let trimmed = localPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.lowercased().hasSuffix(".pdf") else { return nil }
+        let path = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        return URL(string: "https://storage.courtlistener.com/" + encoded)
     }
 
     /// The richest HTML available, preferring CourtListener's citation-linked

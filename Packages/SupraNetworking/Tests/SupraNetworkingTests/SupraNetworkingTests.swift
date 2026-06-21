@@ -19,6 +19,14 @@ final class SupraNetworkingTests: XCTestCase {
         XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "https://user:pass@www.courtlistener.com/api/rest/v4/search/"))))
     }
 
+    func testNetworkPolicyAllowsCourtListenerStorageCDNButNotOtherHosts() throws {
+        let policy = NetworkPolicyService()
+        XCTAssertTrue(policy.isAllowed(try XCTUnwrap(URL(string: "https://storage.courtlistener.com/pdf/2009/file.pdf"))))
+        // A look-alike / arbitrary storage host is still blocked.
+        XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "https://storage.example.com/x.pdf"))))
+        XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "http://storage.courtlistener.com/x.pdf"))))
+    }
+
     func testRateLimitTrackerBlocksAtConfiguredLimit() async throws {
         let tracker = RateLimitTracker(limits: .init(perMinute: 2, perHour: 10, perDay: 10))
         let now = Date()

@@ -10,6 +10,9 @@ public protocol CourtListenerClientProtocol: Sendable {
     /// Fetches a single opinion's full text + HTML from the allow-listed
     /// opinion-detail endpoint.
     func fetchOpinion(id: Int) async throws -> CourtListenerOpinionDetailDTO
+
+    /// Downloads an opinion PDF from CourtListener's storage CDN (no token sent).
+    func downloadOpinionPDF(from url: URL) async throws -> Data
 }
 
 public extension CourtListenerClientProtocol {
@@ -20,6 +23,11 @@ public extension CourtListenerClientProtocol {
 
     /// Default so stubs/conformers that don't fetch opinion detail still compile.
     func fetchOpinion(id: Int) async throws -> CourtListenerOpinionDetailDTO {
+        throw CourtListenerError.invalidResponse
+    }
+
+    /// Default so conformers that don't download PDFs still compile.
+    func downloadOpinionPDF(from url: URL) async throws -> Data {
         throw CourtListenerError.invalidResponse
     }
 }
@@ -118,6 +126,45 @@ public final class CourtListenerClient: CourtListenerClientProtocol, @unchecked 
                 throw CourtListenerError.missingToken
             case .invalidResponse:
                 throw CourtListenerError.invalidResponse
+            }
+        } catch {
+            throw CourtListenerError.transportFailed(error.localizedDescription)
+        }
+    }
+
+    public func downloadOpinionPDF(from url: URL) async throws -> Data {
+        // Defense in depth: only the CourtListener storage CDN, never the original
+        // court `download_url` (arbitrary host) or the API host (which would attach
+        // the token). The network policy also enforces the allow-list.
+        guard url.scheme?.lowercased() == "https",
+              url.host?.lowercased() == "storage.courtlistener.com" else {
+            throw CourtListenerError.invalidResponse
+        }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "GET"
+
+        do {
+            let (data, response) = try await httpClient.sendUnauthenticated(urlRequest, relatedResearchSessionID: nil)
+            switch response.statusCode {
+            case 200..<300:
+                return data
+            case 401, 403:
+                throw CourtListenerError.authenticationFailed
+            case 429:
+                throw CourtListenerError.throttled(retryAfter: Self.retryAfterSeconds(from: response))
+            case 500...599:
+                throw CourtListenerError.serverError(statusCode: response.statusCode)
+            default:
+                throw CourtListenerError.invalidResponse
+            }
+        } catch let error as CourtListenerError {
+            throw error
+        } catch let error as NetworkPolicyError {
+            switch error {
+            case .localRateLimitExceeded:
+                throw CourtListenerError.localRateLimitExceeded
+            default:
+                throw CourtListenerError.blockedByNetworkPolicy
             }
         } catch {
             throw CourtListenerError.transportFailed(error.localizedDescription)

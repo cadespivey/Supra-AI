@@ -11,7 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Authorities: delete a saved authority** (swipe / context menu / detail button),
+  and **import your own research** (PDF/Word/RTF/text) through the matter document
+  pipeline so the model can RAG over it via Ask Documents.
+- **Opinion text + HTML/PDF in the Authority and Research detail.** A longer
+  50–100-word excerpt (windowed on the search snippet), an in-app **opinion HTML
+  viewer** (JavaScript off; remote subresources blocked) with HTML download, and a
+  **Download PDF** action with an in-app **PDF preview** between Status and Notes.
+
+### Changed
+
+- Research results/citations are sanitized of CourtListener highlight markup
+  (`<mark>`) and HTML entities; the preferred citation is reporter-ranked (official
+  U.S. Reports / S. Ct. / L. Ed. over regional/specialty reporters).
+- The research query-planner prompt asks for diverse, operator-aware queries.
+- Authority **use status** displays human-readable labels (e.g. "Retrieved from
+  CourtListener") instead of raw `snake_case` tokens.
+
+### Fixed
+
+- "Download HTML…" on the opinion viewer now works (it used an app-modal save panel
+  that never appeared from within a sheet; now uses `.fileExporter`).
+
+### Security
+
+- Opinion PDF downloads use CourtListener's public storage CDN
+  (`storage.courtlistener.com`) only, token-free, on explicit user action; the
+  allow-list and SECURITY.md are updated accordingly.
 
 ## [1.3.3] - 2026-06-21
 
