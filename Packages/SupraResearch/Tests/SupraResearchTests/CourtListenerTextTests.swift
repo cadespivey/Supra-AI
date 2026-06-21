@@ -38,6 +38,31 @@ final class CourtListenerTextTests: XCTestCase {
         XCTAssertLessThan(CourtListenerMapper.reporterRank("526 U.S. 434"), CourtListenerMapper.reporterRank("923 F.3d 1234"))
     }
 
+    func testPassageReturnsShortBodyUnchanged() {
+        XCTAssertEqual(CourtListenerText.passage(from: "A short opinion body."), "A short opinion body.")
+        XCTAssertNil(CourtListenerText.passage(from: "   "))
+        XCTAssertNil(CourtListenerText.passage(from: nil))
+    }
+
+    func testPassageWindowsAroundAnchorAndCapsLength() {
+        let body = (1...300).map { "word\($0)" }.joined(separator: " ") + " the absolute priority rule applies here " + (301...600).map { "word\($0)" }.joined(separator: " ")
+        let passage = try! XCTUnwrap(CourtListenerText.passage(from: body, around: "the absolute priority rule", targetWords: 60))
+        XCTAssertTrue(passage.contains("absolute priority rule"))
+        XCTAssertTrue(passage.hasPrefix("…"))
+        XCTAssertLessThanOrEqual(passage.split(separator: " ").count, 62)
+    }
+
+    func testPassageStripsHtmlBodyWhenNoPlainText() {
+        let dto = CourtListenerOpinionDetailDTO(html: "<p>Held: the <mark>statute</mark> bars the claim.</p>")
+        XCTAssertEqual(dto.bodyText, "Held: the statute bars the claim.")
+        XCTAssertEqual(dto.bestHTML, "<p>Held: the <mark>statute</mark> bars the claim.</p>")
+    }
+
+    func testBestHTMLPrefersCitationLinkedMarkup() {
+        let dto = CourtListenerOpinionDetailDTO(html: "<p>plain</p>", htmlWithCitations: "<p>cited</p>")
+        XCTAssertEqual(dto.bestHTML, "<p>cited</p>")
+    }
+
     func testNormalizeSanitizesCaseNameAndCitations() {
         let dto = CourtListenerSearchResultDTO(
             caseName: "<mark>United</mark> States v. Winstar Corp.",
