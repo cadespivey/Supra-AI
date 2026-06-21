@@ -38,6 +38,17 @@ final class CourtListenerTextTests: XCTestCase {
         XCTAssertLessThan(CourtListenerMapper.reporterRank("526 U.S. 434"), CourtListenerMapper.reporterRank("923 F.3d 1234"))
     }
 
+    func testCleanDecodesSmartPunctuation() {
+        XCTAssertEqual(CourtListenerText.clean("People&#8217;s &ldquo;Bank&rdquo;"), "People’s “Bank”")
+        XCTAssertEqual(CourtListenerText.clean("Roe &ndash; Doe &mdash; 1999"), "Roe – Doe — 1999")
+    }
+
+    func testOpinionURLUsesTrailingSlashOnAllowedHost() {
+        let url = CourtListenerEndpoint.opinionURL(id: 12345)
+        XCTAssertEqual(url.host, "www.courtlistener.com")
+        XCTAssertTrue(url.absoluteString.hasSuffix("/api/rest/v4/opinions/12345/"), url.absoluteString)
+    }
+
     func testPassageReturnsShortBodyUnchanged() {
         XCTAssertEqual(CourtListenerText.passage(from: "A short opinion body."), "A short opinion body.")
         XCTAssertNil(CourtListenerText.passage(from: "   "))
