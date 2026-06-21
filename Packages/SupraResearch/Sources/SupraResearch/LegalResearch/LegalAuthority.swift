@@ -89,7 +89,7 @@ public enum LegalAuthorityNormalizer {
             ?? clusterID.map { "courtlistener:cluster:\($0)" }
             ?? "courtlistener:result:\(stableResultID(for: result))"
 
-        var citations = result.citation
+        var citations = CourtListenerText.cleanList(result.citation)
         if let neutral = clean(result.neutralCite) {
             citations.append(neutral)
         }
@@ -129,13 +129,7 @@ public enum LegalAuthorityNormalizer {
     }
 
     private static func clean(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value
-            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        CourtListenerText.clean(value)
     }
 
     private static func stableResultID(for result: CourtListenerSearchResultDTO) -> String {

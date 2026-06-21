@@ -6,12 +6,21 @@ public protocol CourtListenerClientProtocol: Sendable {
         _ request: CourtListenerSearchRequest,
         relatedResearchSessionID: String?
     ) async throws -> CourtListenerSearchResponse
+
+    /// Fetches a single opinion's full text + HTML from the allow-listed
+    /// opinion-detail endpoint.
+    func fetchOpinion(id: Int) async throws -> CourtListenerOpinionDetailDTO
 }
 
 public extension CourtListenerClientProtocol {
     /// Convenience for callers that don't link the request to a session.
     func searchOpinions(_ request: CourtListenerSearchRequest) async throws -> CourtListenerSearchResponse {
         try await searchOpinions(request, relatedResearchSessionID: nil)
+    }
+
+    /// Default so stubs/conformers that don't fetch opinion detail still compile.
+    func fetchOpinion(id: Int) async throws -> CourtListenerOpinionDetailDTO {
+        throw CourtListenerError.invalidResponse
     }
 }
 
@@ -38,6 +47,50 @@ public final class CourtListenerClient: CourtListenerClientProtocol, @unchecked 
             case 200..<300:
                 do {
                     return try CourtListenerSearchResponse.decodePreservingRawResults(from: data)
+                } catch {
+                    throw CourtListenerError.decodingFailed
+                }
+            case 401, 403:
+                throw CourtListenerError.authenticationFailed
+            case 429:
+                throw CourtListenerError.throttled(retryAfter: Self.retryAfterSeconds(from: response))
+            case 500...599:
+                throw CourtListenerError.serverError(statusCode: response.statusCode)
+            default:
+                throw CourtListenerError.invalidResponse
+            }
+        } catch let error as CourtListenerError {
+            throw error
+        } catch let error as NetworkPolicyError {
+            switch error {
+            case .localRateLimitExceeded:
+                throw CourtListenerError.localRateLimitExceeded
+            default:
+                throw CourtListenerError.blockedByNetworkPolicy
+            }
+        } catch let error as AuthorizedHTTPClientError {
+            switch error {
+            case .missingToken:
+                throw CourtListenerError.missingToken
+            case .invalidResponse:
+                throw CourtListenerError.invalidResponse
+            }
+        } catch {
+            throw CourtListenerError.transportFailed(error.localizedDescription)
+        }
+    }
+
+    public func fetchOpinion(id: Int) async throws -> CourtListenerOpinionDetailDTO {
+        let url = CourtListenerEndpoint.opinionURL(id: id, baseURLOverride: baseURLOverride)
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "GET"
+
+        do {
+            let (data, response) = try await httpClient.send(urlRequest, relatedResearchSessionID: nil)
+            switch response.statusCode {
+            case 200..<300:
+                do {
+                    return try JSONDecoder().decode(CourtListenerOpinionDetailDTO.self, from: data)
                 } catch {
                     throw CourtListenerError.decodingFailed
                 }

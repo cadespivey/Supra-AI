@@ -49,6 +49,39 @@ public final class AuthorityRepository: @unchecked Sendable {
         }
     }
 
+    /// Soft-deletes a saved authority. Returns false if no live authority with that
+    /// id exists. The row stays (the `(matter_id, research_result_id)` unique index
+    /// still holds its slot), so re-saving the same result revives it via
+    /// `reviveAuthority` rather than inserting a duplicate.
+    @discardableResult
+    public func softDeleteAuthority(id: String, deletedAt: Date = Date()) throws -> Bool {
+        try writer.write { db in
+            guard try AuthorityRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM authorities WHERE id = ? AND deleted_at IS NULL",
+                arguments: [id]
+            ) != nil else { return false }
+            try db.execute(
+                sql: "UPDATE authorities SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                arguments: [deletedAt, deletedAt, id]
+            )
+            return true
+        }
+    }
+
+    /// Clears a soft-delete, bringing a previously-removed authority back into the
+    /// library (used when the same research result is saved again).
+    public func reviveAuthority(id: String) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE authorities SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+                arguments: [Date(), id]
+            )
+        }
+    }
+
+    /// Finds the authority for a research result, including soft-deleted ones, so
+    /// the save path can detect and revive a previously-removed authority.
     public func fetchAuthority(researchResultID: String) throws -> AuthorityRecord? {
         try writer.read { db in
             try AuthorityRecord.fetchOne(
@@ -97,7 +130,7 @@ public final class AuthorityRepository: @unchecked Sendable {
                 db,
                 sql: """
                 SELECT * FROM authorities
-                WHERE matter_id = ?
+                WHERE matter_id = ? AND deleted_at IS NULL
                 ORDER BY updated_at DESC
                 """,
                 arguments: [matterID]

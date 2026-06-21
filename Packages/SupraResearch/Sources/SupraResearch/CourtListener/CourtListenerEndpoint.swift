@@ -12,6 +12,14 @@ public enum CourtListenerEndpoint {
         apiBaseURL().appendingPathComponent("search")
     }
 
+    /// The opinion-detail endpoint `/api/rest/v4/opinions/{id}/` on the
+    /// allow-listed host — used to fetch full opinion text + HTML.
+    static func opinionURL(id: Int, baseURLOverride: String? = nil) -> URL {
+        apiBaseURL(baseURLOverride)
+            .appendingPathComponent("opinions")
+            .appendingPathComponent(String(id))
+    }
+
     private static func apiBaseURL(_ override: String? = nil) -> URL {
         let fallback = URL(string: "https://www.courtlistener.com/api/rest/v4")!
         let rawBaseURL = override ?? ProcessInfo.processInfo.environment["SUPRA_COURTLISTENER_BASE_URL"]
