@@ -220,6 +220,26 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertNotEqual(controller.chats.first?.title, "New Chat")
     }
 
+    func testAutoTitleUsesRoutedPromptNotRawSlashCommand() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+
+        // The view sends the routed (slash-stripped) prompt plus the raw text as
+        // displayPrompt. The title should come from the routed prompt.
+        await controller.performSend(
+            prompt: "draft a tolling agreement",
+            modelID: ModelID(),
+            systemPrompt: nil,
+            options: GenerationOptions(),
+            displayPrompt: "/draft a tolling agreement"
+        )
+
+        XCTAssertEqual(controller.chats.first?.title, "draft a tolling agreement")
+        XCTAssertFalse(controller.chats.first?.title.hasPrefix("/") ?? true)
+    }
+
     func testDerivedTitleTruncatesOnWordBoundary() {
         let long = "Please draft a comprehensive demand letter regarding unpaid invoices owed by a former client"
         let title = GlobalChatController.derivedTitle(from: long)
