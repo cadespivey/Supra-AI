@@ -393,7 +393,11 @@ struct GlobalChatsView: View {
 
     private func suggestionCard(_ suggestion: ChatSuggestion) -> some View {
         Button {
-            submit(suggestion.prompt)
+            // Fill the composer (don't auto-send) so the user can add the
+            // specifics legal prompts usually need — jurisdiction, party, or the
+            // document the prompt refers to — before sending.
+            draft = suggestion.prompt
+            inputFocused = true
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: suggestion.systemImage)
@@ -422,7 +426,7 @@ struct GlobalChatsView: View {
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .help("Send: \(suggestion.prompt)")
+        .help("Use this prompt: \(suggestion.prompt)")
     }
 
     private func errorBanner(_ message: String) -> some View {
