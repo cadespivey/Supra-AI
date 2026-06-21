@@ -171,6 +171,7 @@ struct GlobalChatsView: View {
                 }
                 renamingChat = nil
             }
+            .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .confirmationDialog(
             pendingDeleteChat.map { "Delete “\($0.title)”?" } ?? "Delete chat?",

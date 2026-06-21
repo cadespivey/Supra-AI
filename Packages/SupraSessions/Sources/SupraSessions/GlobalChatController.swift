@@ -381,7 +381,9 @@ public final class GlobalChatController: ObservableObject {
                 return
             }
 
-            let chatID = try ensureSelectedChat(titleHint: displayBase).id
+            // Title from the routed prompt (slash command already stripped), so a
+            // "/draft …" chat is titled by its content — matching the legal path.
+            let chatID = try ensureSelectedChat(titleHint: prompt).id
 
             // Replay prior turns so the model can answer follow-ups in context.
             // Captured before appending the new user message.
