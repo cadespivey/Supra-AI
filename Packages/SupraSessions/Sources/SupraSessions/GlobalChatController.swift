@@ -160,46 +160,75 @@ public final class GlobalChatController: ObservableObject {
     /// list) without yet persisting a row. The actual chat is created lazily on the
     /// first send, titled from that first message — so the history doesn't fill up
     /// with empty "New Chat" placeholders. Drives the example-prompt empty state.
+    /// No-op while a response is still streaming.
     public func startNewChat() {
+        guard !isGenerating else { return }
+        errorMessage = nil
         select(chatID: nil)
     }
 
-    /// Renames a chat from the history sidebar. No-op on an empty title.
+    /// Renames a chat from the history sidebar. No-op on an empty title; surfaces a
+    /// store failure rather than swallowing it.
     public func renameChat(chatID: String, title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        try? store.chats.renameChat(id: chatID, title: trimmed)
-        chats = fetchScopedChats()
+        do {
+            try store.chats.renameChat(id: chatID, title: trimmed)
+            chats = fetchScopedChats()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
-    /// Soft-deletes a chat. If it was the selected chat, the view falls back to the
-    /// blank new-chat state (example prompts).
+    /// Soft-deletes a chat. Blocked while that chat is still generating (so a live
+    /// stream can't write into a deleted chat). If the deleted chat was selected,
+    /// the view falls back to the blank new-chat state (example prompts).
     public func deleteChat(chatID: String) {
-        try? store.chats.softDeleteChat(id: chatID)
-        chats = fetchScopedChats()
-        if selectedChatID == chatID {
-            select(chatID: nil)
+        guard !(isGenerating && selectedChatID == chatID) else {
+            errorMessage = "Stop the current generation before deleting this chat."
+            return
+        }
+        do {
+            try store.chats.softDeleteChat(id: chatID)
+            chats = fetchScopedChats()
+            if selectedChatID == chatID {
+                select(chatID: nil)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
     /// Re-homes a global chat into a matter (e.g. a chat that turned out to belong
-    /// to a matter). Only valid from the global scope; the chat leaves the global
-    /// list and, if selected, the view returns to the blank new-chat state.
+    /// to a matter). Only valid from the global scope, and blocked while that chat
+    /// is still generating. The audit event is recorded only after the move is
+    /// confirmed by the store, so a failed move never logs a phantom "moved" event.
     public func moveChat(chatID: String, toMatter matterID: String) {
         guard case .global = scope else { return }
-        guard let moved = chats.first(where: { $0.id == chatID }) else { return }
-        try? store.chats.moveChatToMatter(id: chatID, matterID: matterID)
-        _ = try? store.auditEvents.recordEvent(
-            matterID: matterID,
-            eventType: "chat_moved_to_matter",
-            actor: "user",
-            summary: "Moved chat “\(moved.title)” into this matter",
-            relatedTable: "chats",
-            relatedID: chatID
-        )
-        chats = fetchScopedChats()
-        if selectedChatID == chatID {
-            select(chatID: nil)
+        guard !(isGenerating && selectedChatID == chatID) else {
+            errorMessage = "Stop the current generation before moving this chat."
+            return
+        }
+        let title = chats.first(where: { $0.id == chatID })?.title ?? "chat"
+        do {
+            guard try store.chats.moveChatToMatter(id: chatID, matterID: matterID) != nil else {
+                errorMessage = "That chat or matter is no longer available."
+                return
+            }
+            _ = try? store.auditEvents.recordEvent(
+                matterID: matterID,
+                eventType: "chat_moved_to_matter",
+                actor: "user",
+                summary: "Moved chat “\(title)” into this matter",
+                relatedTable: "chats",
+                relatedID: chatID
+            )
+            chats = fetchScopedChats()
+            if selectedChatID == chatID {
+                select(chatID: nil)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
