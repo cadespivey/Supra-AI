@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import SupraCore
+import SupraNetworking
 import SupraResearch
 import SupraStore
 
@@ -18,6 +19,7 @@ public final class AuthoritiesController: ObservableObject {
         public let dateFiled: Date?
         public let docketNumber: String?
         public let absoluteURL: String?
+        public let opinionID: String?
         public let reviewState: String
         public let useStatus: AuthorityUseStatus
         public let userNotes: String?
@@ -28,10 +30,41 @@ public final class AuthoritiesController: ObservableObject {
 
     private let store: SupraStore
     public let matterID: String
+    private let courtListenerClient: any CourtListenerClientProtocol
+    private let tokenStore: any APIKeyStoreProtocol
 
-    public init(store: SupraStore, matterID: String) {
+    public init(
+        store: SupraStore,
+        matterID: String,
+        legalConfiguration: LegalModelConfiguration = .fromEnvironment(),
+        tokenStore: (any APIKeyStoreProtocol)? = nil,
+        courtListenerClient: (any CourtListenerClientProtocol)? = nil
+    ) {
         self.store = store
         self.matterID = matterID
+        let resolvedTokenStore = tokenStore ?? EnvironmentBackedTokenStore(primary: KeychainTokenStore())
+        self.tokenStore = resolvedTokenStore
+        self.courtListenerClient = courtListenerClient ?? CourtListenerClient(
+            httpClient: AuthorizedHTTPClient(
+                keyStore: resolvedTokenStore,
+                policy: NetworkPolicyService(),
+                logger: NetworkRequestLogger(repository: store.networkRequests),
+                redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
+            ),
+            baseURLOverride: legalConfiguration.courtListenerBaseURL
+        )
+    }
+
+    public var hasCourtListenerToken: Bool {
+        (try? tokenStore.hasCourtListenerToken()) ?? false
+    }
+
+    /// Fetches the full opinion (text + HTML) for an authority from CourtListener's
+    /// allow-listed opinion-detail endpoint. Returns nil if there's no opinion id
+    /// or the fetch fails. Used to show a longer passage and an HTML view/download.
+    public func fetchOpinionDetail(opinionID: String?) async -> CourtListenerOpinionDetailDTO? {
+        guard let opinionID, let id = Int(opinionID) else { return nil }
+        return try? await courtListenerClient.fetchOpinion(id: id)
     }
 
     public func load() {
@@ -49,6 +82,7 @@ public final class AuthoritiesController: ObservableObject {
                 dateFiled: record.dateFiled,
                 docketNumber: CourtListenerText.clean(record.docketNumber),
                 absoluteURL: record.absoluteURL,
+                opinionID: record.opinionID,
                 reviewState: record.reviewState,
                 useStatus: AuthorityUseStatus(rawValue: record.useStatus) ?? .unverified,
                 userNotes: record.userNotes,
