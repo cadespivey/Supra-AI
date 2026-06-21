@@ -8,10 +8,10 @@ export const metadata: Metadata = {
   title: "Supra AI | Local Legal AI for macOS",
   description:
     "Supra AI is a locally run legal AI workspace for macOS, designed for private legal research, source-grounded answers, citation verification, and attorney review.",
-  // Update to https://supralegal.ai when the site moves to the apex domain.
-  metadataBase: new URL("https://cadespivey.github.io/Supra-AI"),
-  // The favicon is provided by the app/icon.svg file convention, which is
-  // automatically prefixed with the basePath (unlike a static metadata icon).
+  // Apex custom domain — drives canonical and Open Graph URLs.
+  metadataBase: new URL("https://supralegal.ai"),
+  // The favicon is provided by the app/icon.svg file convention, served from the
+  // site root (no basePath).
 };
 
 export default function RootLayout({
