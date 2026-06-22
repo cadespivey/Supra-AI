@@ -208,7 +208,11 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     private func embedQuery(_ query: String, embedder: any TextEmbedder) async throws -> [Float]? {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        guard let vector = try await embedder.embed([trimmed]).first else { return nil }
+        // Instruction-tuned models (BGE, mxbai) embed queries with an asymmetric
+        // prompt; passages stay raw, so this aligns with existing chunk embeddings
+        // without re-indexing. Raw for models without one.
+        let prepared = EmbeddingModelCatalog.queryText(trimmed, forModelID: embedder.modelID)
+        guard let vector = try await embedder.embed([prepared]).first else { return nil }
         return VectorMath.normalize(vector)
     }
 

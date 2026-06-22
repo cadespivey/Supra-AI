@@ -442,6 +442,12 @@ public final class GlobalChatController: ObservableObject {
                 case .generationCompleted:
                     sawTerminal = true
                     finalMetrics = event.metrics ?? finalMetrics
+                    // The runtime dropped oldest turns to fit the window — tell the
+                    // user (persist it too) rather than silently losing context.
+                    if finalMetrics?.contextTrimmed == true {
+                        try? store.chats.appendToken(to: variant.id, token: Self.contextTrimmedNotice)
+                        streamedContent += Self.contextTrimmedNotice
+                    }
                     try store.chats.completeVariant(variant.id)
                     try store.generation.completeGeneration(
                         generationID: session.id,
@@ -791,6 +797,11 @@ public final class GlobalChatController: ObservableObject {
     > ⚠️ **UNVERIFIED DRAFT — DO NOT RELY.** Automated citation verification found unsupported or mismatched authority below. Independently verify every citation, quotation, and holding before use.
 
     """
+
+    /// Appended when the runtime had to drop the oldest turns to fit the context
+    /// window, so the user knows earlier messages were not in view for this reply
+    /// rather than silently losing that context.
+    static let contextTrimmedNotice = "\n\n---\n_Note: this conversation exceeded the model's context window, so the earliest messages were dropped from view for this reply. Start a new chat to reset the context._"
 
     /// A hard verification failure: a fabricated/unsupported citation or quotation,
     /// or — when the route requires jurisdiction — a jurisdiction mismatch.

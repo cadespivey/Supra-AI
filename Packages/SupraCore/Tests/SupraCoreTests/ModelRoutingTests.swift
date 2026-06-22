@@ -101,6 +101,7 @@ final class ModelRoutingTests: XCTestCase {
             XCTAssertEqual(options.temperature, 0.0, accuracy: 0.0001)
             XCTAssertEqual(options.topP, 1.0, accuracy: 0.0001)
             XCTAssertNil(options.topK)
+            XCTAssertNil(options.repetitionPenalty, "greedy extraction must not carry a repetition penalty")
         }
 
         let repair = router.repairRoute(forStructuredOutput: .ruleSynthesis)

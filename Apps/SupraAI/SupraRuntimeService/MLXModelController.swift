@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import MLXLLM
 import MLXLMCommon
 import MLXLMTokenizers
@@ -101,7 +102,7 @@ actor MLXModelController: ChatModelController {
 
         cancellationRequested = false
 
-        let stream = try await generationStream(
+        let (stream, contextTrimmed) = try await generationStream(
             container: container,
             prompt: prompt,
             systemPrompt: systemPrompt,
@@ -151,7 +152,8 @@ actor MLXModelController: ChatModelController {
             tokensPerSecond: tokensPerSecond,
             generatedTokenCount: generatedTokenCount,
             truncated: truncated,
-            reasoningActive: reasoningActive
+            reasoningActive: reasoningActive,
+            contextTrimmed: contextTrimmed
         )
     }
 
@@ -192,28 +194,55 @@ private func generationStream(
     history: [GenerateRequest.Turn],
     options: GenerationOptions,
     templateSupportsThinkingToggle: Bool
-) async throws -> AsyncStream<Generation> {
+) async throws -> (stream: AsyncStream<Generation>, contextTrimmed: Bool) {
     // `enable_thinking` is read by Qwen3-style chat templates. Drafting and
     // ordinary chat keep it off; legal reasoning/research presets can opt in.
     let additionalContext: [String: any Sendable]? = templateSupportsThinkingToggle
         ? ["enable_thinking": options.thinkingBudget.enablesModelThinking]
         : nil
-    let userInput = UserInput(
-        chat: chatMessages(prompt: prompt, systemPrompt: systemPrompt, history: history),
-        additionalContext: additionalContext
-    )
-    let input = try await container.prepare(input: userInput)
 
-    return try await container.generate(
+    func prepared(_ turns: [GenerateRequest.Turn]) async throws -> LMInput {
+        let userInput = UserInput(
+            chat: chatMessages(prompt: prompt, systemPrompt: systemPrompt, history: turns),
+            additionalContext: additionalContext
+        )
+        return try await container.prepare(input: userInput)
+    }
+
+    // Token budget so prompt + output fit the KV window. Beyond it the
+    // RotatingKVCache silently evicts the FRONT of the prompt (the system grounding
+    // and top sources) during generation. Protect those + the live question by
+    // dropping the oldest conversation turns (the lowest-priority context) until the
+    // prompt fits; flag when we had to.
+    let budget = PromptBudget.promptTokenBudget(
+        maxContextTokens: options.maxContextTokens,
+        maxOutputTokens: options.maxOutputTokens
+    )
+    var keptHistory = history
+    var input = try await prepared(keptHistory)
+    var contextTrimmed = false
+    while input.text.tokens.size > budget, !keptHistory.isEmpty {
+        keptHistory.removeFirst()
+        contextTrimmed = true
+        input = try await prepared(keptHistory)
+    }
+    // Even with no history left the system prompt + question can exceed the window;
+    // surface that too (the controller can warn) — we still generate from what fits.
+    if input.text.tokens.size > budget { contextTrimmed = true }
+
+    let stream = try await container.generate(
         input: input,
         parameters: GenerateParameters(
             maxTokens: options.maxOutputTokens,
             maxKVSize: options.maxContextTokens,
             temperature: Float(options.temperature),
             topP: Float(options.topP),
-            topK: options.topK ?? 0
+            topK: options.topK ?? 0,
+            repetitionPenalty: options.repetitionPenalty.map { Float($0) },
+            repetitionContextSize: 256
         )
     )
+    return (stream, contextTrimmed)
 }
 
 private func chatMessages(

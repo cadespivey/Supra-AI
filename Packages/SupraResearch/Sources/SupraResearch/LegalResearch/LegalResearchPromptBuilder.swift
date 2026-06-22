@@ -15,7 +15,9 @@ public enum LegalResearchPromptBuilder {
         classification: LegalQueryClassification,
         rankedAuthorities: [RankedLegalAuthority]
     ) -> String {
-        """
+        let packetCount = min(rankedAuthorities.count, maxPacketAuthorities)
+        let labelRange = packetCount <= 1 ? "[A1]" : "[A1]–[A\(packetCount)]"
+        return """
         USER QUESTION:
         \(question)
 
@@ -38,7 +40,10 @@ public enum LegalResearchPromptBuilder {
         \(sourcePacket(rankedAuthorities.map(\.authority)))
 
         INSTRUCTIONS:
-        Answer only from the source packet. Cite every legal proposition to a source-packet citation or CourtListener URL. If the packet does not answer the question, say what is missing. Do not invent citations, quotes, dates, holdings, docket numbers, procedural posture, or subsequent history.
+        Answer only from the SOURCE PACKET above.
+        - End every sentence that states a legal proposition with the bracketed label of its supporting source, e.g. [A1]. Use only labels that appear in the packet (\(labelRange)); never invent a label.
+        - If the packet does not support a proposition, write [NEEDS AUTHORITY] instead of citing it, and say what is missing.
+        - Do not invent citations, quotes, dates, holdings, docket numbers, procedural posture, or subsequent history. Quote source text only when it appears verbatim in the packet.
         """
     }
 

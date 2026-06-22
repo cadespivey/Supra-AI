@@ -6,6 +6,11 @@ public struct GenerationOptions: Codable, Hashable, Sendable {
     public var maxContextTokens: Int
     public var maxOutputTokens: Int
     public var thinkingBudget: ThinkingBudget
+    /// Multiplicative penalty applied to recently generated tokens (>1 discourages
+    /// repetition). `nil`/≤1 disables it. Set for long-form drafting/research/critique
+    /// where 4-bit local models tend to loop or restate; left off for short or greedy
+    /// extraction/verification where every emitted token should be faithful.
+    public var repetitionPenalty: Double?
 
     public init(
         preset: GenerationPreset = .precise,
@@ -14,7 +19,8 @@ public struct GenerationOptions: Codable, Hashable, Sendable {
         topK: Int? = nil,
         maxContextTokens: Int = 32_768,
         maxOutputTokens: Int = 1024,
-        thinkingBudget: ThinkingBudget = .off
+        thinkingBudget: ThinkingBudget = .off,
+        repetitionPenalty: Double? = nil
     ) {
         self.preset = preset
         self.temperature = temperature
@@ -23,6 +29,7 @@ public struct GenerationOptions: Codable, Hashable, Sendable {
         self.maxContextTokens = maxContextTokens
         self.maxOutputTokens = maxOutputTokens
         self.thinkingBudget = thinkingBudget
+        self.repetitionPenalty = repetitionPenalty
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -33,6 +40,7 @@ public struct GenerationOptions: Codable, Hashable, Sendable {
         case maxContextTokens
         case maxOutputTokens
         case thinkingBudget
+        case repetitionPenalty
     }
 
     public init(from decoder: Decoder) throws {
@@ -53,6 +61,9 @@ public struct GenerationOptions: Codable, Hashable, Sendable {
         self.maxContextTokens = try container.decodeIfPresent(Int.self, forKey: .maxContextTokens) ?? defaults.maxContextTokens
         self.maxOutputTokens = try container.decodeIfPresent(Int.self, forKey: .maxOutputTokens) ?? defaults.maxOutputTokens
         self.thinkingBudget = try container.decodeIfPresent(ThinkingBudget.self, forKey: .thinkingBudget) ?? defaults.thinkingBudget
+        self.repetitionPenalty = container.contains(.repetitionPenalty)
+            ? try container.decode(Double?.self, forKey: .repetitionPenalty)
+            : defaults.repetitionPenalty
     }
 
     /// Coerces sampling/budget parameters into safe ranges. Applied at the runtime
@@ -66,6 +77,11 @@ public struct GenerationOptions: Codable, Hashable, Sendable {
         copy.topK = topK.map { max(0, $0) }
         copy.maxOutputTokens = min(max(maxOutputTokens, 1), 16_384)
         copy.maxContextTokens = min(max(maxContextTokens, 1), 1_048_576)
+        // A penalty of 1.0 is a no-op; clamp to a sane band and drop NaN/≤1 to nil.
+        copy.repetitionPenalty = repetitionPenalty.flatMap { value in
+            guard value.isFinite, value > 1.0 else { return nil }
+            return min(value, 2.0)
+        }
         return copy
     }
 
@@ -80,6 +96,9 @@ public struct GenerationOptions: Codable, Hashable, Sendable {
         try container.encode(maxContextTokens, forKey: .maxContextTokens)
         try container.encode(maxOutputTokens, forKey: .maxOutputTokens)
         try container.encode(thinkingBudget, forKey: .thinkingBudget)
+        // Always write it (null when nil) so the decoder distinguishes an explicit
+        // nil from a missing key — see init(from:).
+        try container.encode(repetitionPenalty, forKey: .repetitionPenalty)
     }
 }
 
@@ -118,7 +137,8 @@ public enum GenerationPreset: String, Codable, Hashable, Sendable, CaseIterable 
             topK: parameters.topK,
             maxContextTokens: parameters.maxContextTokens,
             maxOutputTokens: parameters.maxOutputTokens,
-            thinkingBudget: parameters.thinkingBudget
+            thinkingBudget: parameters.thinkingBudget,
+            repetitionPenalty: parameters.repetitionPenalty
         )
     }
 
@@ -141,28 +161,31 @@ public enum GenerationPreset: String, Codable, Hashable, Sendable, CaseIterable 
         topK: Int?,
         maxContextTokens: Int,
         maxOutputTokens: Int,
-        thinkingBudget: ThinkingBudget
+        thinkingBudget: ThinkingBudget,
+        repetitionPenalty: Double?
     ) {
         switch self {
         case .extractive:
-            (0.0, 1.0, nil, 32_768, 1024, .off)
+            (0.0, 1.0, nil, 32_768, 1024, .off, nil)
         case .precise:
-            (0.2, 0.8, nil, 32_768, 1024, .off)
+            (0.2, 0.8, nil, 32_768, 1024, .off, nil)
         case .balanced:
-            (0.5, 0.9, nil, 32_768, 2048, .off)
+            (0.5, 0.9, nil, 32_768, 2048, .off, nil)
         case .drafting:
-            (0.45, 0.95, 40, 32_768, 5000, .lowOrOff)
+            // Long-form generation: a mild repetition penalty curbs the loop/restate
+            // degeneration 4-bit local models show on multi-thousand-token drafts.
+            (0.45, 0.95, 40, 32_768, 5000, .lowOrOff, 1.1)
         case .legalReasoning:
-            (0.2, 0.9, 30, 32_768, 4096, .medium)
+            (0.2, 0.9, 30, 32_768, 4096, .medium, nil)
         case .legalResearch:
-            (0.15, 0.85, 20, 65_536, 6000, .high)
+            (0.15, 0.85, 20, 65_536, 6000, .high, 1.07)
         case .legalCritique:
-            (0.2, 0.9, 30, 32_768, 3000, .medium)
+            (0.2, 0.9, 30, 32_768, 3000, .medium, 1.07)
         case .legalVerify:
             // Verification must be reproducible: greedy decoding (temp 0, no nucleus/
             // top-k truncation) removes run-to-run variance and the marginal-sampling
             // fabrication risk on the task whose entire job is checking citations.
-            (0.0, 1.0, nil, 32_768, 3000, .medium)
+            (0.0, 1.0, nil, 32_768, 3000, .medium, nil)
         }
     }
 }
