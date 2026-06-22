@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Documents: move a document between folders** — each document row has a folder
   menu to move it into any folder, between folders, or back to All Documents
   (the data layer already supported this; it just wasn't surfaced).
+- **Imported research is filed into a "Research" folder** (auto-created per matter)
+  instead of being dropped into All Documents.
 - **Models: delete a registered model** (swipe / context menu in the Models tab,
   with confirmation). App-downloaded models have their files removed from disk to
   reclaim space; user-registered folders are only unregistered (the folder is left

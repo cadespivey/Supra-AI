@@ -156,15 +156,19 @@ public final class MatterDocumentsController: ObservableObject {
 
     // MARK: - Import
 
-    /// Imports dropped/picked files and folders, if setup is complete.
-    public func importItems(_ urls: [URL]) {
+    /// The auto-created destination folder for research imported from Authorities.
+    public static let researchFolderName = "Research"
+
+    /// Imports dropped/picked files and folders, if setup is complete. Pass a
+    /// `targetFolderID` to file the imports into a specific folder (nil = root).
+    public func importItems(_ urls: [URL], targetFolderID: String? = nil) {
         guard isImportReady() else {
             message = "Finish Document Intelligence setup in Settings before importing."
             return
         }
         guard !urls.isEmpty else { return }
         let display = urls.first?.deletingLastPathComponent().lastPathComponent
-        if queue.enqueueImport(matterID: matterID, sources: urls, sourceRootDisplay: display) == nil {
+        if queue.enqueueImport(matterID: matterID, sources: urls, sourceRootDisplay: display, targetFolderID: targetFolderID) == nil {
             // Enqueue failed (e.g. the batch/job could not be written) — surface it
             // instead of silently dropping the user's import.
             message = queue.lastError.map { "Couldn't start the import: \($0)" }
@@ -172,6 +176,28 @@ public final class MatterDocumentsController: ObservableObject {
         } else {
             message = nil
         }
+    }
+
+    /// Imports research uploaded from the Authorities tab into a dedicated
+    /// "Research" folder (created if needed) so it's grouped rather than dropped
+    /// into All Documents.
+    public func importResearchDocuments(_ urls: [URL]) {
+        guard isImportReady() else {
+            message = "Finish Document Intelligence setup in Settings before importing."
+            return
+        }
+        importItems(urls, targetFolderID: ensureResearchFolderID())
+    }
+
+    /// The id of the matter's top-level "Research" folder, creating it if absent.
+    @discardableResult
+    public func ensureResearchFolderID() -> String? {
+        if let existing = folders.first(where: { $0.parentFolderID == nil && $0.name == Self.researchFolderName }) {
+            return existing.id
+        }
+        let created = try? store.documentLibrary.createFolder(matterID: matterID, name: Self.researchFolderName)
+        reload()
+        return created?.id
     }
 
     // MARK: - Folders

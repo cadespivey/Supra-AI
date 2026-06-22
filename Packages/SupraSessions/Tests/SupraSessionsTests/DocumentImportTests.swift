@@ -115,6 +115,24 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(edited.indexStatus, DocumentIndexStatus.stale.rawValue)
     }
 
+    func testImportSourcesFilesTopLevelItemsIntoTargetFolder() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let folder = try store.documentLibrary.createFolder(matterID: matter.id, name: "Research")
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot))
+
+        _ = try await service.importSources(
+            [sourceRoot.appendingPathComponent("Contracts/agreement.txt")],
+            matterID: matter.id,
+            targetFolderID: folder.id
+        )
+
+        let imported = try XCTUnwrap(
+            store.documentLibrary.fetchDocuments(matterID: matter.id).first { $0.displayName == "agreement.txt" }
+        )
+        XCTAssertEqual(imported.folderID, folder.id, "a top-level import should land in the target folder, not root")
+    }
+
     // MARK: - Fixtures
 
     private func buildSourceTree() throws {
