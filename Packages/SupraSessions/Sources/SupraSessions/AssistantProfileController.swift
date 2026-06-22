@@ -89,13 +89,23 @@ public final class AssistantProfileController: ObservableObject {
 }
 
 extension SupraStore {
-    /// The user's composed soul document (`AssistantProfile.systemPromptKey`), read
-    /// fresh so profile edits take effect at the next generation without reselecting
-    /// a matter or relaunching. Returns nil when unset or blank, so callers fall back
-    /// to their base system prompt.
-    func composedAssistantPrompt() -> String? {
-        let stored = (try? appSettings.getSetting(AssistantProfile.systemPromptKey, as: String.self))?
+    /// The user's "soul document" composed over the given base prompt, recomposed
+    /// fresh from the saved profile (`AssistantProfile.profileKey`) at send time.
+    ///
+    /// This keeps the task/route system prompt as the LEAD instruction while the
+    /// profile (identity, jurisdiction, citation style, voice) layers on top — so a
+    /// legal answer obeys the attorney's configured citation form and jurisdiction
+    /// without the profile overriding the task's grounding/structure contract.
+    /// Reading the profile fresh means Settings edits apply at the next generation
+    /// without reselecting a matter or relaunching. Returns `base` unchanged when no
+    /// profile is configured, so callers cleanly fall back to their task prompt.
+    func composedAssistantPrompt(base: String?) -> String? {
+        guard
+            let profile = try? appSettings.getSetting(AssistantProfile.profileKey, as: AssistantProfile.self),
+            profile.isConfigured
+        else { return base }
+        let composed = profile.composedSystemPrompt(base: base)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (stored?.isEmpty ?? true) ? nil : stored
+        return composed.isEmpty ? base : composed
     }
 }

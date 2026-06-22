@@ -13,6 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Your assistant profile now shapes authoritative legal answers.** The composed
+  "soul document" (citation style, jurisdiction, voice) was silently dropped on
+  legal chat routes, structured outputs, and document Q&A — it only reached generic
+  chat. It is now layered *over* each task's system prompt (the grounding/structure
+  contract still leads), so legal answers honor your configured citation form and
+  jurisdiction. The machine-parsed research query-planner and fact chronology stay
+  profile-free so their required structure isn't perturbed.
+- **Verification and grounded document Q&A/chronology now decode deterministically**
+  (greedy: temperature 0, no nucleus/top-k truncation), mirroring the classifier.
+  Citation-checking and document extraction are now reproducible run-to-run and lose
+  the marginal-sampling fabrication risk; the creative sampling stays on the case-law
+  research-memo path only.
+- **The legal source packet is capped and length-budgeted** (top-ranked authorities,
+  per-authority text budget) so a large CourtListener result set can't overflow the
+  context window and silently evict the binding authorities or the "answer only from
+  the packet" instructions. Dropped authorities are noted in the packet.
 - **Matter Chat is now a real chat store.** The Chat tab inside a matter gets the
   same searchable history sidebar as Global Chats — start new chats and reopen old
   ones (rename / delete too), instead of the cramped inline strip. A blank matter

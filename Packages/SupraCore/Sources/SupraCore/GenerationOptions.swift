@@ -159,7 +159,10 @@ public enum GenerationPreset: String, Codable, Hashable, Sendable, CaseIterable 
         case .legalCritique:
             (0.2, 0.9, 30, 32_768, 3000, .medium)
         case .legalVerify:
-            (0.1, 0.85, 20, 32_768, 3000, .medium)
+            // Verification must be reproducible: greedy decoding (temp 0, no nucleus/
+            // top-k truncation) removes run-to-run variance and the marginal-sampling
+            // fabrication risk on the task whose entire job is checking citations.
+            (0.0, 1.0, nil, 32_768, 3000, .medium)
         }
     }
 }

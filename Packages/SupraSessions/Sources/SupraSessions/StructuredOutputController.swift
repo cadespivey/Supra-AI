@@ -392,8 +392,10 @@ public final class StructuredOutputController: ObservableObject {
     private func collect(prompt: String, modelID: ModelID, route: ModelRoute?) async throws -> String {
         let request = GenerateRequest(
             generationID: GenerationID(), modelID: modelID, prompt: prompt,
-            // Keep structured-output contracts isolated from the user's free-form
-            // profile while still applying task-specific routing instructions.
+            // The task base (default + route prompt) leads and the required-heading
+            // contract lives in the user-turn template, so layering the user's
+            // profile on top personalizes citation style / jurisdiction / voice
+            // without overriding the output structure.
             systemPrompt: structuredSystemPrompt(route),
             options: route?.options ?? GenerationOptions()
         )
@@ -401,9 +403,10 @@ public final class StructuredOutputController: ObservableObject {
     }
 
     private func structuredSystemPrompt(_ route: ModelRoute?) -> String? {
-        let parts = [defaultSystemPrompt, route?.systemPrompt]
+        let base = [defaultSystemPrompt, route?.systemPrompt]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+            .joined(separator: "\n\n")
+        return store.composedAssistantPrompt(base: base.isEmpty ? nil : base)
     }
 }

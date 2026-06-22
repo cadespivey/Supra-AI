@@ -64,7 +64,7 @@ final class ModelRoutingTests: XCTestCase {
         XCTAssertEqual(routed.route.modelIdentifier, "Reasoner-6bit")
     }
 
-    func testStructuredOutputRoutesUseTaskSpecificRoles() {
+    func testStructuredOutputRoutesUseTaskSpecificRoles() throws {
         let config = LegalModelConfiguration(
             legalReasoningModel: "Reasoner",
             legalReasoningHighQualityModel: "Reasoner-HQ",
@@ -95,6 +95,12 @@ final class ModelRoutingTests: XCTestCase {
             XCTAssertEqual(route?.modelIdentifier, "Reasoner")
             XCTAssertFalse(route?.requiresCourtListener ?? true)
             XCTAssertTrue(route?.systemPrompt.contains("legal document analysis assistant") ?? false)
+            // Grounded document routes decode greedily for faithful, reproducible
+            // extraction (the creative legalResearch sampling is case-law-only).
+            let options = try XCTUnwrap(route?.options)
+            XCTAssertEqual(options.temperature, 0.0, accuracy: 0.0001)
+            XCTAssertEqual(options.topP, 1.0, accuracy: 0.0001)
+            XCTAssertNil(options.topK)
         }
 
         let repair = router.repairRoute(forStructuredOutput: .ruleSynthesis)
