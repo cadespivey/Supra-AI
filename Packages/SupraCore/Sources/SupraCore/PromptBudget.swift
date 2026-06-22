@@ -18,6 +18,10 @@ public enum PromptBudget {
     /// the prompt during generation. Never returns less than a small floor so a
     /// degenerate configuration still attempts a generation.
     public static func promptTokenBudget(maxContextTokens: Int, maxOutputTokens: Int) -> Int {
-        max(512, maxContextTokens - maxOutputTokens - templateMargin)
+        // Reserve the output budget + a margin, but NEVER exceed the window itself: on
+        // a degenerate/hostile tiny-context config the floor must not produce a budget
+        // larger than maxContextTokens, or the trim/overflow check would never fire and
+        // the front of the prompt would be evicted without being detected.
+        min(max(1, maxContextTokens), max(512, maxContextTokens - maxOutputTokens - templateMargin))
     }
 }
