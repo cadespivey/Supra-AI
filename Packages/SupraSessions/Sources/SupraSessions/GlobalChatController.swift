@@ -541,6 +541,14 @@ public final class GlobalChatController: ObservableObject {
     ) async throws {
         let chatID = try ensureSelectedChat(titleHint: prompt).id
         let priorAssistantDraft = latestAssistantDraft()
+        // Replay prior turns so legal follow-ups ("now narrow that to the 9th Cir.",
+        // "apply that rule to my facts") resolve in context. Captured before the new
+        // user message is appended; the runtime's budget guard trims it if the packet
+        // + question leave no room.
+        let history = Self.conversationHistory(
+            from: (try? store.chats.fetchMessages(chatID: chatID))?.map(ChatMessage.init) ?? [],
+            budget: Self.historyCharBudget
+        )
 
         _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
         let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
@@ -568,6 +576,7 @@ public final class GlobalChatController: ObservableObject {
                 route: route,
                 systemPrompt: systemPrompt,
                 options: options,
+                history: history,
                 priorAssistantDraft: priorAssistantDraft
             )
             try store.chats.appendToken(to: variant.id, token: result.output)
@@ -617,6 +626,7 @@ public final class GlobalChatController: ObservableObject {
         route: ModelRoute,
         systemPrompt: String?,
         options: GenerationOptions,
+        history: [GenerateRequest.Turn],
         priorAssistantDraft: String?
     ) async throws -> LegalWorkflowResult {
         switch route.mode {
@@ -642,7 +652,8 @@ public final class GlobalChatController: ObservableObject {
                 generationID: generationID,
                 route: route,
                 systemPrompt: systemPrompt,
-                options: options
+                options: options,
+                history: history
             )
 
         case .legalCritique:
@@ -677,6 +688,7 @@ public final class GlobalChatController: ObservableObject {
                 modelID: modelID,
                 prompt: critiquePrompt,
                 systemPrompt: systemPrompt,
+                history: history,
                 options: options
             )
             let output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
@@ -717,7 +729,8 @@ public final class GlobalChatController: ObservableObject {
         generationID: GenerationID,
         route: ModelRoute,
         systemPrompt: String?,
-        options: GenerationOptions
+        options: GenerationOptions,
+        history: [GenerateRequest.Turn]
     ) async throws -> LegalWorkflowResult {
         let classification = classificationApplyingChatJurisdiction(
             classificationApplyingMatterScope(LegalQueryClassifier.classify(prompt)),
@@ -777,6 +790,7 @@ public final class GlobalChatController: ObservableObject {
             modelID: modelID,
             prompt: answerPrompt,
             systemPrompt: systemPrompt,
+            history: history,
             options: options
         )
         var output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))

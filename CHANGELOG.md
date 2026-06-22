@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry the BGE/mxbai instruction prefix these models were trained with (passages are
   embedded raw, matching the existing index — no re-indexing needed). Models without
   an asymmetric prompt are unchanged.
+- **Multi-turn legal follow-ups.** The one-shot legal answer/research and critique
+  flows previously sent no conversation history, so a follow-up like "now narrow that
+  to the 9th Circuit" or "apply that rule to my facts" lost context. They now replay
+  the prior turns (token-budgeted; the runtime's context guard trims them if the
+  packet + question leave no room). (Document Q&A remains single-shot by design — it
+  has no conversation thread.)
 - **Full opinion text for the top authorities.** CourtListener search returns only a
   short snippet, so the model previously reasoned and quoted from a sentence or two.
   The top 4 ranked authorities are now hydrated with their full opinion body (best-

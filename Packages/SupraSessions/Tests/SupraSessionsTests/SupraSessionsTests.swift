@@ -689,6 +689,56 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(box.prompt.contains("FULL OPINION BODY"), "the packet should carry the hydrated full opinion text, not just the snippet")
     }
 
+    func testLegalFollowUpCarriesPriorTurnsAsHistory() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let researchRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let court = StubCourtListenerClient(
+            response: CourtListenerSearchResponse(
+                count: 1,
+                results: [
+                    CourtListenerSearchResultDTO(
+                        absoluteURL: "/opinion/1/foo-v-bar/", caseName: "Foo v. Bar",
+                        citation: ["123 Cal. App. 5th 456"], clusterID: 1, court: "California Court of Appeal",
+                        courtID: "calctapp", dateFiled: "2024-02-03",
+                        opinions: [CourtListenerOpinionDTO(id: 99, snippet: "snippet")], status: "Published"
+                    )
+                ]
+            )
+        )
+        final class HistoryBox: @unchecked Sendable { var histories: [[GenerateRequest.Turn]] = [] }
+        let box = HistoryBox()
+        let stub = StubRuntimeClient { request in
+            box.histories.append(request.history)
+            return .events([
+                .event(request, 1, .token, token: "The clause is enforceable [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(
+            store: store, runtimeClient: stub, scope: .matter(id: matter.id), courtListenerClient: court
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Is the indemnity clause enforceable?",
+            modelID: ModelID(), systemPrompt: researchRoute.systemPrompt,
+            options: researchRoute.options, route: researchRoute
+        )
+        await controller.performSend(
+            prompt: "Now narrow that to the 9th Circuit.",
+            modelID: ModelID(), systemPrompt: researchRoute.systemPrompt,
+            options: researchRoute.options, route: researchRoute
+        )
+
+        XCTAssertEqual(box.histories.count, 2)
+        XCTAssertTrue(box.histories[0].isEmpty, "the first legal answer has no prior turns")
+        XCTAssertTrue(
+            box.histories[1].contains { $0.role == .user && $0.content.contains("indemnity clause enforceable") },
+            "the follow-up should replay the prior user turn so the model can resolve \"narrow that\""
+        )
+    }
+
     func testMatterVerifyAfterReopenUsesChatBoundPacketNotNewestMatterResearchSession() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
