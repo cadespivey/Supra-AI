@@ -92,6 +92,21 @@ final class AssistantProfileTests: XCTestCase {
         XCTAssertTrue(composed.contains("The motion should be granted."))
     }
 
+    func testWritingSamplesExcludedInGroundedContexts() {
+        var profile = AssistantProfile()
+        profile.practiceAreas = "Commercial litigation"
+        profile.voiceNotes = "Lead with the bottom line."
+        profile.writingSamples = [.init(name: "brief.txt", excerpt: "CONFIDENTIAL FACT: the settlement was $4.2M.")]
+        let composed = profile.composedSystemPrompt(base: base, includeWritingSamples: false)
+        // The verbatim excerpt (and its facts) must not appear in a grounded context.
+        XCTAssertFalse(composed.contains("## The user's writing style"))
+        XCTAssertFalse(composed.contains("### brief.txt"))
+        XCTAssertFalse(composed.contains("CONFIDENTIAL FACT"))
+        // The rest of the profile (identity, voice guidance) still applies.
+        XCTAssertTrue(composed.contains("## About the user"))
+        XCTAssertTrue(composed.contains("Lead with the bottom line."))
+    }
+
     func testIsConfigured() {
         XCTAssertFalse(AssistantProfile.empty.isConfigured)
 

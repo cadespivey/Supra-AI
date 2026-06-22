@@ -489,6 +489,8 @@ public final class StructuredOutputController: ObservableObject {
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
-        return store.composedAssistantPrompt(base: base.isEmpty ? nil : base)
+        // Structured outputs are grounded legal analysis — exclude the user's
+        // writing-style excerpts so their prose can't be mined as source facts.
+        return store.composedAssistantPrompt(base: base.isEmpty ? nil : base, includeWritingSamples: false)
     }
 }

@@ -434,6 +434,8 @@ public final class DocumentQAController: ObservableObject {
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
-        return store.composedAssistantPrompt(base: base.isEmpty ? nil : base)
+        // Document Q&A is strictly grounded in the matter's sources — exclude the
+        // user's writing-style excerpts so the model can't treat them as facts.
+        return store.composedAssistantPrompt(base: base.isEmpty ? nil : base, includeWritingSamples: false)
     }
 }
