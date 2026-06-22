@@ -6,10 +6,16 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            MainShellView()
-                .opacity(showSplash ? 0 : 1)
-                .allowsHitTesting(!showSplash)
-                .accessibilityHidden(showSplash)
+            // The main shell is a NavigationSplitView whose sidebar is backed by an
+            // AppKit NSVisualEffectView (vibrancy). That material renders straight to
+            // the window and ignores SwiftUI layer opacity, so overlaying the splash
+            // on top of a still-mounted shell let the sidebar/chrome bleed through.
+            // Swapping (shell absent until the splash dismisses) removes the vibrancy
+            // source entirely; the transitions still cross-fade the reveal.
+            if !showSplash {
+                MainShellView()
+                    .transition(.opacity)
+            }
 
             if showSplash {
                 SplashView()
