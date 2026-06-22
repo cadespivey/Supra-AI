@@ -29,8 +29,8 @@ This is an early project. Security fixes target the latest release and `main`.
 
 | Version | Supported |
 |---------|-----------|
-| 1.3.x   | ✅        |
-| < 1.3   | ❌        |
+| 1.4.x   | ✅        |
+| < 1.4   | ❌        |
 
 ## Security & privacy model
 
