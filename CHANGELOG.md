@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [1.4.1] - 2026-06-22
+
+### Fixed
+
+- **Model-picker downloads no longer fail (HTTP 401) for the higher-precision options.**
+  The 6/8-bit repo IDs added in 1.4.0 didn't exist under those names. Corrected against
+  the current Hugging Face listings: the Qwen3-30B Thinking 6/8-bit MLX quants live at
+  `lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-6bit` / `-MLX-8bit`, and the
+  DeepSeek-R1-Distill-Qwen-32B 8-bit is `mlx-community/DeepSeek-R1-Distill-Qwen-32B-MLX-8Bit`.
+  (Every other catalog entry — the 4-bit role models, the DeepSeek 6-bit, and the
+  general models — was verified against the live site and is unchanged.)
+
 ## [1.4.0] - 2026-06-22
 
 A legal-quality and safety-hardening release: the local models are tuned and scaffolded
@@ -369,7 +381,8 @@ acceptance criteria and a validation suite.
   default.
 - No telemetry. See [SECURITY.md](SECURITY.md) for the full model.
 
-[Unreleased]: https://github.com/cadespivey/Supra-AI/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/cadespivey/Supra-AI/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/cadespivey/Supra-AI/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/cadespivey/Supra-AI/compare/v1.3.4...v1.4.0
 [1.3.4]: https://github.com/cadespivey/Supra-AI/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/cadespivey/Supra-AI/compare/v1.3.2...v1.3.3
