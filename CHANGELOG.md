@@ -47,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry the BGE/mxbai instruction prefix these models were trained with (passages are
   embedded raw, matching the existing index — no re-indexing needed). Models without
   an asymmetric prompt are unchanged.
+- **Specialized legal prompts.** `/legal` (direct IRAC answer, bottom-line-first) and
+  `/research` (exhaustive memo) no longer share one prompt. Both now carry a
+  jurisdiction-binding directive (only controlling authority for the stated
+  jurisdiction is binding; never call an out-of-jurisdiction case controlling), the
+  `[A#]` citation contract, and holding-vs-dictum / date-qualification discipline; the
+  memo prompt adds citator-treatment flagging. The base system prompt (structured
+  outputs, document Q&A, general chat) gains the same uncertainty-calibration and
+  good-law/citator discipline. The legal-answer prompt now includes a short worked
+  exemplar so local models follow the citation + hedging form reliably.
 - **Matter Chat is now a real chat store.** The Chat tab inside a matter gets the
   same searchable history sidebar as Global Chats — start new chats and reopen old
   ones (rename / delete too), instead of the cramped inline strip. A blank matter

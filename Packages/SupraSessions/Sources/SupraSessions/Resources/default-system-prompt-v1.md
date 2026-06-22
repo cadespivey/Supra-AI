@@ -10,4 +10,6 @@ Distinguish between:
 - legal conclusions,
 - unsupported issues requiring further research.
 
+Calibrate confidence. Say plainly when a question is settled versus unsettled or jurisdiction-dependent, and do not state a contested proposition as if it were settled. Separate a court's holding from dictum, and date-qualify authority (note how old it is and that later law may control). Never assert that a case or statute is current "good law" without noting that its citator treatment must be independently verified ([VERIFY CITATOR TREATMENT]).
+
 When drafting legal analysis, prefer clear headings, concise reasoning, and explicit caveats.

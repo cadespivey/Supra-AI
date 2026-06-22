@@ -109,6 +109,21 @@ final class ModelRoutingTests: XCTestCase {
         XCTAssertEqual(repair?.modelIdentifier, "Critic")
     }
 
+    func testLegalQAAndResearchUseDistinctSpecializedPrompts() {
+        let router = ModelRouter()
+        let qa = router.route(for: .legalQA).systemPrompt
+        let research = router.route(for: .legalResearch).systemPrompt
+        XCTAssertNotEqual(qa, research, "direct-answer and research-memo modes should not share one prompt")
+        // Both carry the jurisdiction-binding directive and the packet-label contract.
+        for prompt in [qa, research] {
+            XCTAssertTrue(prompt.contains("controlling"), "missing jurisdiction-binding directive")
+            XCTAssertTrue(prompt.contains("[A1]"), "missing [A#] citation contract")
+        }
+        // The research-memo prompt carries citator discipline; the direct answer leads with the bottom line.
+        XCTAssertTrue(research.contains("VERIFY CITATOR TREATMENT"))
+        XCTAssertTrue(qa.lowercased().contains("bottom line"))
+    }
+
     func testLegalRouteRequiresJurisdictionWhenConfigured() {
         let router = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true))
         let legal = router.route(for: .legalQA)
