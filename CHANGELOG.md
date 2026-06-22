@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in place). Deleting unloads the model if it's loaded and clears any task-role
   assignments so no "Missing model" entry is left behind.
 
+### Fixed
+
+- **Launch splash no longer lets the window behind it show through.** The shell's
+  `NavigationSplitView` sidebar is backed by an AppKit vibrancy view that ignores
+  SwiftUI layer opacity, so the old "overlay the shell at opacity 0" approach let
+  the sidebar/chrome bleed through the splash. The shell is now swapped in only
+  after the splash dismisses (the cross-fade is preserved), so there's no vibrancy
+  to leak; the launch window size is pinned so the swap doesn't resize the window.
+
 ## [1.3.4] - 2026-06-21
 
 ### Added
