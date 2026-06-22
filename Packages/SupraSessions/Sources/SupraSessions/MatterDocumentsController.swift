@@ -48,6 +48,8 @@ public final class MatterDocumentsController: ObservableObject {
     private let isImportReady: @MainActor () -> Bool
     private let storage: DocumentStorage
     private let previewLoader: DocumentPreviewLoader
+    private var processingObserver: AnyCancellable?
+    private var pollTimer: AnyCancellable?
 
     public init(
         matterID: String,
@@ -63,6 +65,38 @@ public final class MatterDocumentsController: ObservableObject {
         self.storage = storage
         self.previewLoader = DocumentPreviewLoader(store: store, storage: storage)
         reload()
+        observeProcessing()
+    }
+
+    /// Keeps the Documents tab live during background processing. The queue only
+    /// publishes coarse phase transitions, and per-document status + classification
+    /// are written to the store inside long-running phases — so we reload on each
+    /// phase change AND poll while a job for this matter is active, so each
+    /// document's status badge and classification chips appear as it completes.
+    private func observeProcessing() {
+        processingObserver = queue.$activeJob
+            .receive(on: RunLoop.main)
+            .sink { [weak self] job in
+                guard let self else { return }
+                self.reload()
+                if job?.matterID == self.matterID {
+                    self.startPolling()
+                } else {
+                    self.stopPolling()
+                }
+            }
+    }
+
+    private func startPolling() {
+        guard pollTimer == nil else { return }
+        pollTimer = Timer.publish(every: 1.2, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.reload() }
+    }
+
+    private func stopPolling() {
+        pollTimer?.cancel()
+        pollTimer = nil
     }
 
     /// Builds an in-app preview for a search hit (opens at the matched chunk).

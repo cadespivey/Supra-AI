@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Documents tab updates live during processing.** Each document's status badge
+  and classifier category chips now appear as it finishes, without leaving and
+  re-entering the tab (the controller reloads on each processing phase and polls
+  while a job for the matter is active).
+
 ### Added
 
 - **Models: delete a registered model** (swipe / context menu in the Models tab,
