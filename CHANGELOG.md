@@ -114,6 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Higher-precision model options for citation-critical roles.** The catalog now
+  offers 6-bit and 8-bit builds of the legal-reasoning (Qwen3-30B Thinking) and
+  critique (DeepSeek-R1-Distill-32B) models. 4-bit quantization disproportionately
+  degrades the long-tail factual recall that citations / holdings / dates depend on;
+  the higher-precision builds cut those errors for users with RAM headroom (each
+  download notes its RAM needs; assign them to the role in the Models tab).
 - **Documents: move a document between folders** — each document row has a folder
   menu to move it into any folder, between folders, or back to All Documents
   (the data layer already supported this; it just wasn't surfaced).
