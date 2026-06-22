@@ -756,7 +756,13 @@ public final class GlobalChatController: ObservableObject {
         }
 
         let retrieval = try await retrieveAuthorities(for: classification, matterID: scopedMatterID)
-        let ranked = await hydrateTopAuthorities(LegalAuthorityRanker.rank(retrieval.authorities, for: classification))
+        let rankedAll = await hydrateTopAuthorities(LegalAuthorityRanker.rank(retrieval.authorities, for: classification))
+        // Cap to exactly the packet the model is shown. buildAnswerPrompt caps the
+        // SOURCE PACKET at maxPacketAuthorities, so the model only ever sees
+        // [A1]…[A maxPacketAuthorities]. The verifier and the stored packet (used by
+        // /verify) must use the SAME capped set — otherwise a fabricated [A13+] label
+        // pointing at an authority that was never in the prompt would pass as grounded.
+        let ranked = Array(rankedAll.prefix(LegalResearchPromptBuilder.maxPacketAuthorities))
         let authorities = ranked.map(\.authority)
         let packet = LegalSourcePacket(
             queryTerms: retrieval.queryTerms,
@@ -822,7 +828,13 @@ public final class GlobalChatController: ObservableObject {
                 let revisedVerification = LegalCitationVerifier.verify(
                     answer: revised, authorities: authorities, expectedJurisdiction: classification.jurisdiction
                 )
-                if revisedVerification.issues.count <= failed.issues.count {
+                // Keep the revision only if it is genuinely cleaner: never accept MORE
+                // hard failures (a soft-for-hard trade is a regression), and use the
+                // total issue count only as a tiebreak at equal hard severity.
+                let priorHard = Self.hardVerificationFailureCount(failed, route: route)
+                let revisedHard = Self.hardVerificationFailureCount(revisedVerification, route: route)
+                if revisedHard < priorHard
+                    || (revisedHard == priorHard && revisedVerification.issues.count < failed.issues.count) {
                     output = revised
                     verification = revisedVerification
                 }
@@ -868,7 +880,14 @@ public final class GlobalChatController: ObservableObject {
     /// A hard verification failure: a fabricated/unsupported citation or quotation,
     /// or — when the route requires jurisdiction — a jurisdiction mismatch.
     static func hasHardVerificationFailure(_ report: LegalVerificationReport, route: ModelRoute) -> Bool {
-        report.issues.contains { issue in
+        hardVerificationFailureCount(report, route: route) > 0
+    }
+
+    /// Number of hard-failure issues (fabricated/unsupported citation or quote; a
+    /// jurisdiction mismatch when the route requires jurisdiction). Used to ensure a
+    /// self-repair never trades a soft issue for a new hard one.
+    static func hardVerificationFailureCount(_ report: LegalVerificationReport, route: ModelRoute) -> Int {
+        report.issues.filter { issue in
             switch issue.kind {
             case .unsupportedCitation, .unsupportedQuote:
                 return true
@@ -877,7 +896,7 @@ public final class GlobalChatController: ObservableObject {
             case .missingCitation, .noRetrievedAuthorities:
                 return false
             }
-        }
+        }.count
     }
 
     /// True when at least one detected citation is actually supported by the

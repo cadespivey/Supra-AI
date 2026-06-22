@@ -32,6 +32,53 @@ final class LegalResearchWorkflowTests: XCTestCase {
         )
     }
 
+    func testLabelBeyondPacketCapIsFlaggedEvenWhenMoreAuthoritiesRetrieved() {
+        // The model only sees the first maxPacketAuthorities of the packet, so a label
+        // past that bound is fabricated even though more authorities were retrieved.
+        let authorities = (1...18).map {
+            LegalAuthority(id: "a\($0)", authorityType: .case, caseName: "Case \($0)", citation: "\($0) U.S. \($0)")
+        }
+        let report = LegalCitationVerifier.verify(answer: "The rule applies here [A15].", authorities: authorities)
+        XCTAssertTrue(
+            report.issues.contains { $0.kind == .unsupportedCitation && ($0.excerpt ?? "").contains("[A15]") },
+            "[A15] is beyond the 12-source packet the model actually saw"
+        )
+        XCTAssertFalse(report.passed)
+    }
+
+    func testIntegerOverflowLabelIsFlaggedNotDropped() {
+        let authorities = [LegalAuthority(id: "a1", authorityType: .case, caseName: "Foo v. Bar", citation: "1 U.S. 1")]
+        let report = LegalCitationVerifier.verify(answer: "Liability attaches [A99999999999999999999].", authorities: authorities)
+        XCTAssertTrue(
+            report.issues.contains { $0.kind == .unsupportedCitation },
+            "an integer-overflow label must still be flagged as out-of-range, not silently dropped"
+        )
+    }
+
+    func testFabricatedHoldingUnderValidLabelIsFlaggedWhenAuthorityTextSubstantial() {
+        // Substantial (hydrated) opinion text about leases; the cited proposition is an
+        // unrelated fabricated holding under a valid label.
+        let leaseOpinion = String(repeating: "The parties executed a commercial lease for warehouse space and disputed the renewal option. ", count: 30)
+        let authorities = [LegalAuthority(id: "a1", authorityType: .case, caseName: "Lease Co. v. Tenant", text: leaseOpinion)]
+        let answer = "The court squarely held that punitive damages are categorically barred in all securities fraud actions [A1]."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: authorities)
+        XCTAssertTrue(
+            report.issues.contains { $0.kind == .unsupportedCitation },
+            "a fabricated holding sharing almost no terms with the cited opinion must be flagged"
+        )
+    }
+
+    func testGenuineParaphraseUnderValidLabelPassesAgainstSubstantialText() {
+        let limitationsOpinion = String(repeating: "The statute of limitations for a securities fraud claim is two years from discovery of the violation. ", count: 20)
+        let authorities = [LegalAuthority(id: "a1", authorityType: .case, caseName: "Sec. v. Fraud", text: limitationsOpinion)]
+        let answer = "The limitations period for a securities fraud claim runs two years from discovery [A1]."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: authorities)
+        XCTAssertFalse(
+            report.issues.contains { $0.kind == .unsupportedCitation },
+            "a genuine paraphrase that overlaps the cited opinion must not be over-flagged"
+        )
+    }
+
     func testOutOfRangePacketLabelIsFlaggedUnsupported() {
         let authorities = [LegalAuthority(id: "a1", authorityType: .case, caseName: "Foo v. Bar", citation: "1 U.S. 1")]
         let answer = "The court held that liability attaches under the rule [A5]."

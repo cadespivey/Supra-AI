@@ -61,14 +61,19 @@ public enum LegalCitationVerifier {
             )
         }
 
-        // Packet labels ([A1]…[An]) are the answer's primary citation form. A label
-        // pointing past the packet (e.g. [A99]) is a fabricated reference.
-        for label in Set(packetLabelIndices(in: answer)) where label < 1 || label > authorities.count {
+        // The model only ever sees the first `maxPacketAuthorities` of the packet, so
+        // labels are valid only up to that bound — never the full (possibly larger)
+        // retrieved/reconstructed authority list. A label past the visible packet
+        // (e.g. [A13] when 12 were shown) points at an authority the model never saw
+        // and is a fabricated reference.
+        let packetSize = min(authorities.count, LegalResearchPromptBuilder.maxPacketAuthorities)
+        for label in Set(packetLabelIndices(in: answer)) where label < 1 || label > packetSize {
+            let shown = label == Int.max ? "[A…]" : "[A\(label)]"
             issues.append(
                 LegalVerificationIssue(
                     kind: .unsupportedCitation,
-                    message: "Cited source label [A\(label)] does not exist in the source packet.",
-                    excerpt: "[A\(label)]"
+                    message: "Cited source label \(shown) does not exist in the source packet.",
+                    excerpt: shown
                 )
             )
         }
@@ -91,12 +96,27 @@ public enum LegalCitationVerifier {
         for line in answer.components(separatedBy: .newlines) where looksLikeLegalProposition(line) {
             // A proposition is cited if it carries an in-range packet label ([A#]) or
             // a reporter/URL citation that maps to a retrieved authority.
-            let lineHasPacketLabel = packetLabelIndices(in: line).contains { $0 >= 1 && $0 <= authorities.count }
-            let lineHasKnownCitation = lineHasPacketLabel || authorities.contains { authority in
+            let lineLabels = packetLabelIndices(in: line).filter { $0 >= 1 && $0 <= packetSize }
+            let lineHasReporterCite = authorities.contains { authority in
                 authority.allCitationStrings.contains { line.localizedCaseInsensitiveContains($0) }
                     || (authority.url.map { line.localizedCaseInsensitiveContains($0) } ?? false)
             }
-            if !lineHasKnownCitation {
+            if !lineLabels.isEmpty {
+                // A label points at a real packet authority, but the model could
+                // attach a valid label to a fabricated paraphrased holding. When the
+                // cited authority has substantial (full-opinion) text, require the
+                // proposition to actually overlap it; otherwise flag it as unsupported.
+                let grounded = lineLabels.contains { propositionGrounded(line, in: authorities[$0 - 1]) }
+                if !grounded {
+                    issues.append(
+                        LegalVerificationIssue(
+                            kind: .unsupportedCitation,
+                            message: "The cited source does not appear to support this proposition.",
+                            excerpt: line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        )
+                    )
+                }
+            } else if !lineHasReporterCite {
                 issues.append(
                     LegalVerificationIssue(
                         kind: .missingCitation,
@@ -131,11 +151,13 @@ public enum LegalCitationVerifier {
             }
         }
 
-        // Packet labels count as cited strings too, so a label-only answer (the [A#]
-        // contract's expected form) is recognized as having a supported citation. An
-        // out-of-range label is also flagged unsupportedCitation above with the same
-        // "[A#]" excerpt, so it is correctly treated as unsupported, not support.
-        let labelStrings = Set(packetLabelIndices(in: answer)).map { "[A\($0)]" }
+        // In-range packet labels count as cited strings, so a label-only answer (the
+        // [A#] contract's expected form) is recognized as having a supported citation.
+        // Out-of-range / overflow labels are excluded here — they're flagged
+        // unsupportedCitation above and must never read as support.
+        let labelStrings = Set(packetLabelIndices(in: answer))
+            .filter { $0 >= 1 && $0 <= packetSize }
+            .map { "[A\($0)]" }
 
         return LegalVerificationReport(
             passed: issues.isEmpty,
@@ -172,7 +194,10 @@ public enum LegalCitationVerifier {
         let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
         return regex.matches(in: text, range: nsRange).compactMap { match in
             guard let range = Range(match.range(at: 1), in: text) else { return nil }
-            return Int(text[range])
+            // A label too large to fit in an Int (e.g. [A99999999999999999999]) is
+            // still a fabricated, out-of-range reference — map it to a sentinel so the
+            // out-of-range guard flags it instead of silently dropping the match.
+            return Int(text[range]) ?? Int.max
         }
     }
 
@@ -377,4 +402,40 @@ public enum LegalCitationVerifier {
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .joined()
     }
+
+    // Content-grounding for a labeled proposition. A valid [A#] proves the model
+    // pointed at a real packet authority, but not that the authority supports the
+    // proposition. We only judge this when the cited authority carries substantial
+    // (full-opinion) text — a bare snippet is too sparse to tell a genuine paraphrase
+    // from a fabrication, so it is never over-flagged. A sufficiently specific
+    // proposition that shares almost none of its significant terms with the opinion
+    // text is the signature of a fabricated paraphrased holding under a valid label.
+    private static let groundingMinAuthorityChars = 1200
+    private static let groundingMinPropositionTerms = 5
+    private static let groundingMinOverlap = 0.2
+
+    private static func propositionGrounded(_ line: String, in authority: LegalAuthority) -> Bool {
+        let haystack = [authority.text, authority.snippet, authority.caseName, authority.citation]
+            .compactMap { $0 }.joined(separator: " ").lowercased()
+        guard haystack.count >= groundingMinAuthorityChars else { return true }
+        let terms = significantContentTerms(line)
+        guard terms.count >= groundingMinPropositionTerms else { return true }
+        let matched = terms.filter { haystack.contains($0) }.count
+        return Double(matched) / Double(terms.count) >= groundingMinOverlap
+    }
+
+    private static func significantContentTerms(_ text: String) -> Set<String> {
+        Set(
+            text.lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { $0.count >= 5 && !contentStopwords.contains($0) }
+        )
+    }
+
+    private static let contentStopwords: Set<String> = [
+        "court", "courts", "held", "holding", "rule", "rules", "legal", "case", "cases",
+        "there", "their", "these", "those", "which", "shall", "would", "could", "should",
+        "because", "therefore", "however", "where", "when", "whether", "under", "within",
+        "about", "above", "after", "before", "between", "during", "while", "being"
+    ]
 }
