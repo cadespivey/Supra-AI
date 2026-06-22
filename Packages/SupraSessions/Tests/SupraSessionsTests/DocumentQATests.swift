@@ -8,6 +8,28 @@ import XCTest
 @MainActor
 final class DocumentQATests: XCTestCase {
 
+    func testRerankOrderPrefersModelLabelsThenBackfillsInRetrievalOrder() {
+        let retrieval = (1...5).map { "S\($0)" } // S1…S5
+        // Model prefers S3 then S1; the unknown S9 is ignored; the remaining slot is
+        // backfilled in retrieval order (S2).
+        XCTAssertEqual(
+            DocumentQAController.rerankOrder(retrievalLabels: retrieval, preferred: ["S3", "S9", "S1"], limit: 3),
+            ["S3", "S1", "S2"]
+        )
+    }
+
+    func testRerankOrderFallsBackToRetrievalOrderWhenNoValidPreferred() {
+        XCTAssertEqual(
+            DocumentQAController.rerankOrder(retrievalLabels: ["S1", "S2", "S3"], preferred: [], limit: 2),
+            ["S1", "S2"]
+        )
+    }
+
+    func testParsePacketLabelsExtractsSLabels() {
+        XCTAssertEqual(DocumentQAController.parsePacketLabels("Most relevant: S3, s1, S12."), ["S3", "S1", "S12"])
+        XCTAssertTrue(DocumentQAController.parsePacketLabels("no labels here").isEmpty)
+    }
+
     func testAutoSourceQAGeneratesCitedAnswerSavedWithSourceSet() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")

@@ -91,7 +91,7 @@ public final class DocumentQAController: ObservableObject {
 
         let isGuided = (guidedChunkIDs?.isEmpty == false)
         do {
-            let prepared = try await prepareSources(question: trimmed, scope: scope, guidedChunkIDs: guidedChunkIDs)
+            let prepared = try await prepareSources(question: trimmed, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute)
             guard !prepared.isEmpty else {
                 message = "No matching sources were found in the selected scope."
                 return nil
@@ -169,17 +169,23 @@ public final class DocumentQAController: ObservableObject {
         var warnings: [String]
     }
 
-    private func prepareSources(question: String, scope: RetrievalScope, guidedChunkIDs: [String]?) async throws -> [PreparedSource] {
+    /// Wider candidate pool retrieved before reranking, and the count actually packed
+    /// into the answer prompt.
+    static let candidatePoolSize = 30
+    static let packedSourceLimit = 10
+
+    private func prepareSources(question: String, scope: RetrievalScope, guidedChunkIDs: [String]?, modelID: ModelID?, route: ModelRoute?) async throws -> [PreparedSource] {
         if let guidedChunkIDs, !guidedChunkIDs.isEmpty {
             return prepareGuided(chunkIDs: guidedChunkIDs)
         }
-        let result = try await retrieval.retrieve(matterID: matterID, query: question, scope: scope, limit: 10)
-        return result.sources.enumerated().map { index, retrieved in
-            let label = "S\(index + 1)"
+        // Retrieve a wider candidate pool, then LLM-rerank down to the packed set so
+        // the single most on-point passage lands at S1.
+        let result = try await retrieval.retrieve(matterID: matterID, query: question, scope: scope, limit: Self.candidatePoolSize)
+        let candidates = result.sources.enumerated().map { index, retrieved -> PreparedSource in
             let low = (retrieved.ocrConfidence.map { $0 < lowConfidenceThreshold } ?? false)
             return PreparedSource(
                 source: GroundingSource(
-                    label: label, documentName: retrieved.documentName,
+                    label: "S\(index + 1)", documentName: retrieved.documentName,
                     locatorDisplay: retrieved.locator.displayString, text: retrieved.text,
                     excerpt: retrieved.excerpt, lowConfidence: low, metadata: retrieved.metadata
                 ),
@@ -187,6 +193,77 @@ public final class DocumentQAController: ObservableObject {
                 locatorJSON: retrieved.locator.encodedJSON(), rank: index,
                 warnings: low ? ["low OCR confidence"] : []
             )
+        }
+        guard let modelID else { return relabeled(Array(candidates.prefix(Self.packedSourceLimit))) }
+        return await rerankSources(candidates, question: question, modelID: modelID, route: route)
+    }
+
+    /// LLM-reranks the candidate pool to the most relevant `packedSourceLimit`,
+    /// re-labeling them S1…SN in the new order. Best-effort: a model failure, or one
+    /// that returns too few valid labels, falls back to retrieval order.
+    private func rerankSources(_ candidates: [PreparedSource], question: String, modelID: ModelID, route: ModelRoute?) async -> [PreparedSource] {
+        guard candidates.count > Self.packedSourceLimit else { return relabeled(candidates) }
+        let listing = candidates.map { "[\($0.source.label)] \($0.source.excerpt)" }.joined(separator: "\n")
+        let prompt = """
+        Rank the passages by how directly they help answer the QUESTION.
+
+        QUESTION: \(question)
+
+        PASSAGES:
+        \(listing)
+
+        Return ONLY the labels of the \(Self.packedSourceLimit) most relevant passages, most relevant first, comma-separated (e.g. S3, S1, S7). No other text.
+        """
+        var options = GenerationPreset.extractive.defaultOptions
+        options.maxOutputTokens = 256
+        let request = GenerateRequest(
+            generationID: GenerationID(), modelID: modelID, prompt: prompt,
+            systemPrompt: "You are a retrieval reranker. Output only the source labels.", options: options
+        )
+        guard let raw = try? await runtimeClient.collectGeneratedText(request) else {
+            return relabeled(Array(candidates.prefix(Self.packedSourceLimit)))
+        }
+        let order = Self.rerankOrder(
+            retrievalLabels: candidates.map(\.source.label),
+            preferred: Self.parsePacketLabels(ReasoningContent.answer(from: raw)),
+            limit: Self.packedSourceLimit
+        )
+        let byLabel = Dictionary(candidates.map { ($0.source.label, $0) }, uniquingKeysWith: { first, _ in first })
+        return relabeled(order.compactMap { byLabel[$0] })
+    }
+
+    private func relabeled(_ sources: [PreparedSource]) -> [PreparedSource] {
+        sources.enumerated().map { index, item in
+            var copy = item
+            copy.source.label = "S\(index + 1)"
+            copy.rank = index
+            return copy
+        }
+    }
+
+    /// Final source order: the model's preferred labels first (in its order, ignoring
+    /// unknown/duplicate labels), then any remaining candidates in retrieval order,
+    /// capped at `limit`.
+    nonisolated static func rerankOrder(retrievalLabels: [String], preferred: [String], limit: Int) -> [String] {
+        let valid = Set(retrievalLabels)
+        var picked: [String] = []
+        var seen = Set<String>()
+        for label in preferred where valid.contains(label) && !seen.contains(label) {
+            picked.append(label); seen.insert(label)
+            if picked.count >= limit { break }
+        }
+        for label in retrievalLabels where picked.count < limit && !seen.contains(label) {
+            picked.append(label); seen.insert(label)
+        }
+        return picked
+    }
+
+    /// Extracts S-style source labels (e.g. "S3") from a reranker's free-text reply.
+    nonisolated static func parsePacketLabels(_ text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: "[Ss]\\d+") else { return [] }
+        let ns = NSRange(text.startIndex..., in: text)
+        return regex.matches(in: text, range: ns).compactMap {
+            Range($0.range, in: text).map { String(text[$0]).uppercased() }
         }
     }
 
@@ -280,7 +357,7 @@ public final class DocumentQAController: ObservableObject {
         let isGuided = (guidedChunkIDs?.isEmpty == false)
         do {
             let readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope)) ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
-            let prepared = try await prepareSources(question: question, scope: scope, guidedChunkIDs: guidedChunkIDs)
+            let prepared = try await prepareSources(question: question, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute)
             guard !prepared.isEmpty else { message = "No matching sources were found."; return nil }
             let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: question, sources: prepared.map(\.source), mode: mode)
             let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
