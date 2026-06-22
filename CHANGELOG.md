@@ -47,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry the BGE/mxbai instruction prefix these models were trained with (passages are
   embedded raw, matching the existing index — no re-indexing needed). Models without
   an asymmetric prompt are unchanged.
+- **Structured outputs auto-complete their sections.** A generated issue-spotting /
+  rule-synthesis / argument-outline / drafting-skeleton output now runs up to two
+  automatic structure-repair passes when required sections are missing (a pass that
+  doesn't reduce the missing set is discarded, so it never pollutes the version
+  history), and multi-section outputs get a larger output-token budget so a long memo
+  isn't truncated mid-structure. "Complete in one action" is now the common case
+  instead of a manual repair step.
 - **Multi-turn legal follow-ups.** The one-shot legal answer/research and critique
   flows previously sent no conversation history, so a follow-up like "now narrow that
   to the 9th Circuit" or "apply that rule to my facts" lost context. They now replay

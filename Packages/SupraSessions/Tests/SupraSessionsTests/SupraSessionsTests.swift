@@ -1879,6 +1879,30 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).count, 1)
     }
 
+    func testCreateOutputAutoRepairsMissingSections() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        // draftingSkeleton asserts no authority, so status is driven purely by sections.
+        let contract = StructuredOutputContracts.contract(for: .draftingSkeleton)!
+        let complete = contract.requiredHeadings.joined(separator: "\n\nbody\n\n")
+        let incomplete = "\(contract.requiredHeadings.first!)\n\nonly the first section"
+        final class CallBox: @unchecked Sendable { var n = 0 }
+        let box = CallBox()
+        let stub = StubRuntimeClient { request in
+            box.n += 1
+            let markdown = box.n == 1 ? incomplete : complete   // first generation incomplete; repair completes it
+            return .events([.event(request, 1, .token, token: markdown), .event(request, 2, .generationCompleted)])
+        }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+
+        let ok = await controller.createOutput(type: .draftingSkeleton, context: "x", modelID: ModelID())
+        XCTAssertTrue(ok)
+        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.complete.rawValue, "auto-repair should fill in the missing sections")
+        XCTAssertEqual(controller.outputs[0].missingCount, 0)
+        let output = try XCTUnwrap(try store.structuredOutputs.fetchOutputs(matterID: matter.id).first)
+        XCTAssertEqual(try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).count, 2, "initial + one repair version")
+    }
+
     func testStructuredOutputUsesTaskRouteOptionsAndSystemPrompt() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
@@ -1924,12 +1948,10 @@ final class SupraSessionsTests: XCTestCase {
         }
         let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
 
+        // createOutput now auto-repairs in-line: the partial generation becomes
+        // version 1, and the repair pass completes it as version 2.
         _ = await controller.createOutput(type: .draftingSkeleton, context: "x", modelID: ModelID())
         let outputID = controller.outputs[0].id
-        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.needsReview.rawValue)
-
-        let repaired = await controller.repairOutput(outputID, modelID: ModelID())
-        XCTAssertTrue(repaired)
         XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.complete.rawValue)
         XCTAssertEqual(controller.outputs[0].missingCount, 0)
 
