@@ -2,9 +2,11 @@ import Foundation
 import SupraDocuments
 import UniformTypeIdentifiers
 
-/// A lightweight attachment for a global chat: a filename plus the text the model
-/// should see. Built by `ChatAttachmentLoader` (OCR for images, raw read for text)
-/// and injected into the prompt by `GlobalChatController`.
+/// A lightweight, session-only attachment for a chat (global or in-matter): a
+/// filename plus the text the model should see. Built by `ChatAttachmentLoader`
+/// (OCR for images, raw read for text) and injected into the prompt by
+/// `GlobalChatController`. It is never persisted to a matter's document library —
+/// it lives only in the conversation it was attached to.
 public struct ChatAttachmentContext: Identifiable, Sendable, Equatable {
     public let id: String
     public let name: String
