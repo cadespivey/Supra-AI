@@ -1490,12 +1490,15 @@ public final class GlobalChatController: ObservableObject {
 
     // MARK: - Helpers
 
-    /// Formats attachments as a grounding block prepended to the model prompt.
-    private static func attachmentsBlock(_ attachments: [ChatAttachmentContext]) -> String {
-        var lines = ["The user attached the following file(s). Use their contents as context for the question."]
-        for attachment in attachments {
+    /// Formats attachments as a labeled grounding block prepended to the model
+    /// prompt. Each file gets an `[S#]` label and the model is asked to cite claims
+    /// that rely on a file to its label, extending the cite-your-source discipline to
+    /// the drag-a-file-into-chat workflow.
+    nonisolated static func attachmentsBlock(_ attachments: [ChatAttachmentContext]) -> String {
+        var lines = ["The user attached the following file(s) as sources. Use their contents as context, and when a statement relies on an attachment, cite it inline with its label, e.g. [S1]."]
+        for (index, attachment) in attachments.enumerated() {
             lines.append("")
-            lines.append("===== \(attachment.name) =====")
+            lines.append("[S\(index + 1)] \(attachment.name)")
             lines.append(attachment.text)
         }
         return lines.joined(separator: "\n")

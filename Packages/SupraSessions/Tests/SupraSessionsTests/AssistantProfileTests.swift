@@ -7,6 +7,16 @@ final class AssistantProfileTests: XCTestCase {
 
     private let base = "BASE PROMPT"
 
+    func testAttachmentsBlockLabelsSourcesAndRequestsCitations() {
+        let block = GlobalChatController.attachmentsBlock([
+            .init(name: "lease.pdf", text: "Tenant pays rent monthly."),
+            .init(name: "notice.txt", text: "Notice dated March 1.")
+        ])
+        XCTAssertTrue(block.contains("[S1] lease.pdf"))
+        XCTAssertTrue(block.contains("[S2] notice.txt"))
+        XCTAssertTrue(block.lowercased().contains("cite"), "should ask the model to cite attachment-backed claims")
+    }
+
     func testStoreComposesProfileOverGivenBase() throws {
         let store = try makeStore()
         var profile = AssistantProfile()
