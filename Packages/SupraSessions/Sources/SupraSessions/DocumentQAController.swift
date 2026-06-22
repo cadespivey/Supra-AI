@@ -181,7 +181,7 @@ public final class DocumentQAController: ObservableObject {
                 source: GroundingSource(
                     label: label, documentName: retrieved.documentName,
                     locatorDisplay: retrieved.locator.displayString, text: retrieved.text,
-                    excerpt: retrieved.excerpt, lowConfidence: low
+                    excerpt: retrieved.excerpt, lowConfidence: low, metadata: retrieved.metadata
                 ),
                 documentID: retrieved.documentID, chunkID: retrieved.chunkID,
                 locatorJSON: retrieved.locator.encodedJSON(), rank: index,

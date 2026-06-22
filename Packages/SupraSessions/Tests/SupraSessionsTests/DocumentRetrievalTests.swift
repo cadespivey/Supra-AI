@@ -111,6 +111,33 @@ final class DocumentRetrievalTests: XCTestCase {
         )
     }
 
+    func testContextMetadataComposesTypeAndDate() {
+        var doc = MatterDocumentRecord(
+            matterID: "m", blobID: "b", folderID: nil, displayName: "lease.pdf",
+            status: MatterDocumentStatus.indexing.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue
+        )
+        doc.metadataModifiedAt = Date(timeIntervalSince1970: 1_682_899_200) // 2023-05-01 UTC
+        XCTAssertEqual(DocumentRetrievalService.contextMetadata(for: doc), "2023-05-01")
+        // No classification and no date → no descriptor.
+        let bare = MatterDocumentRecord(
+            matterID: "m", blobID: "b", folderID: nil, displayName: "x.txt",
+            status: MatterDocumentStatus.indexing.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue
+        )
+        XCTAssertNil(DocumentRetrievalService.contextMetadata(for: bare))
+    }
+
+    func testQAPromptHeaderSurfacesSourceMetadata() {
+        let source = GroundingSource(
+            label: "S1", documentName: "lease.pdf", locatorDisplay: "p.1",
+            text: "Tenant shall pay rent monthly.", excerpt: "rent monthly",
+            metadata: "Real Estate & Property · 2023-05-01"
+        )
+        let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: "When is rent due?", sources: [source], mode: .short)
+        XCTAssertTrue(prompt.contains("[S1] lease.pdf (p.1) — Real Estate & Property · 2023-05-01:"))
+    }
+
     // MARK: - Helpers
 
     @discardableResult
