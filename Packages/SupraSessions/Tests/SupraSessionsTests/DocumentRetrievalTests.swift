@@ -138,6 +138,29 @@ final class DocumentRetrievalTests: XCTestCase {
         XCTAssertTrue(prompt.contains("[S1] lease.pdf (p.1) — Real Estate & Property · 2023-05-01:"))
     }
 
+    func testExpandedChunkReportsCharSpanAcrossFoldedNeighbors() {
+        let chunks = (0..<3).map { i in
+            DocumentChunkRecord(id: "c\(i)", documentID: "d", pagePartID: "p1", chunkIndex: i, sourceKind: "text", charStart: i * 100, charEnd: i * 100 + 90, normalizedText: "chunk\(i)")
+        }
+        // Middle chunk folds both neighbors → the span covers all three.
+        let mid = DocumentRetrievalService.expandedChunk(current: chunks[1], inDocumentChunks: chunks)
+        XCTAssertEqual(mid.text, "chunk0\n\nchunk1\n\nchunk2")
+        XCTAssertEqual(mid.charStart, 0)
+        XCTAssertEqual(mid.charEnd, 290)
+        // With both neighbors excluded, the span stays the chunk's own.
+        let isolated = DocumentRetrievalService.expandedChunk(current: chunks[1], inDocumentChunks: chunks, excluding: ["c0", "c2"])
+        XCTAssertEqual(isolated.charStart, 100)
+        XCTAssertEqual(isolated.charEnd, 190)
+    }
+
+    func testQAPromptCapsOverlongSourceText() {
+        let long = String(repeating: "x", count: DocumentQAPromptBuilder.maxSourceTextChars + 500)
+        let source = GroundingSource(label: "S1", documentName: "d", locatorDisplay: "p.1", text: long, excerpt: "x")
+        let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: "Q", sources: [source], mode: .short)
+        XCTAssertTrue(prompt.contains("[source text truncated to fit the context window]"))
+        XCTAssertLessThan(prompt.count, long.count, "an overlong source must be trimmed in the prompt")
+    }
+
     // MARK: - Helpers
 
     @discardableResult

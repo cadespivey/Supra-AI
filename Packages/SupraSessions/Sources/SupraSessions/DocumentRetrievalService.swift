@@ -204,9 +204,10 @@ public final class DocumentRetrievalService: @unchecked Sendable {
 
         // Expand each selected chunk with its immediate neighbors (same page/part) so
         // an answer that straddles a chunk boundary stays groundable. Skip a neighbor
-        // that is itself a selected source to avoid duplicating it in the packet. The
-        // displayed excerpt/locator stay the original chunk's; only the model-facing
-        // text grows.
+        // that is itself a selected source to avoid duplicating it in the packet. When
+        // neighbors are folded in, widen the locator's char span to cover them so a
+        // [S#] cite to content that lives in a neighbor still resolves to a verifiable
+        // range, not just the original chunk's narrower span.
         let selectedChunkIDs = Set(sources.map(\.chunkID))
         var chunksByDocument: [String: [DocumentChunkRecord]] = [:]
         for index in sources.indices {
@@ -218,9 +219,14 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 docChunks = (try? store.documentIndex.fetchChunks(documentID: current.documentID)) ?? []
                 chunksByDocument[current.documentID] = docChunks
             }
-            sources[index].text = Self.expandedChunkText(
+            let expanded = Self.expandedChunk(
                 current: current, inDocumentChunks: docChunks, excluding: selectedChunkIDs
             )
+            sources[index].text = expanded.text
+            if expanded.text != current.normalizedText {
+                if let start = expanded.charStart { sources[index].locator.charStart = start }
+                if let end = expanded.charEnd { sources[index].locator.charEnd = end }
+            }
         }
 
         var warning: String?
@@ -261,24 +267,34 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     /// One ranked list's RRF contribution for a 1-based rank: `1 / (k + rank)`.
     static func rrfContribution(rank: Int) -> Double { 1.0 / (rrfK + Double(rank)) }
 
-    /// The chunk's text expanded with its immediate same-part neighbors, joined in
-    /// reading order. Neighbors in `excluding` (already selected as their own source)
-    /// are skipped so the packet doesn't repeat them. Returns the chunk text alone
-    /// when it has no eligible neighbors.
     static func expandedChunkText(
         current: DocumentChunkRecord,
         inDocumentChunks docChunks: [DocumentChunkRecord],
         excluding excluded: Set<String> = []
     ) -> String {
+        expandedChunk(current: current, inDocumentChunks: docChunks, excluding: excluded).text
+    }
+
+    /// The chunk's text expanded with its immediate same-part neighbors (reading
+    /// order), plus the char span covered by the included chunks. Neighbors in
+    /// `excluding` (already selected as their own source) are skipped so the packet
+    /// doesn't repeat them. Returns the chunk alone when it has no eligible neighbors.
+    static func expandedChunk(
+        current: DocumentChunkRecord,
+        inDocumentChunks docChunks: [DocumentChunkRecord],
+        excluding excluded: Set<String> = []
+    ) -> (text: String, charStart: Int?, charEnd: Int?) {
         let part = docChunks
             .filter { $0.pagePartID == current.pagePartID }
             .sorted { $0.chunkIndex < $1.chunkIndex }
         guard let pos = part.firstIndex(where: { $0.id == current.id }) else {
-            return current.normalizedText
+            return (current.normalizedText, current.charStart, current.charEnd)
         }
-        let previous = (pos > 0 && !excluded.contains(part[pos - 1].id)) ? part[pos - 1].normalizedText : nil
-        let next = (pos < part.count - 1 && !excluded.contains(part[pos + 1].id)) ? part[pos + 1].normalizedText : nil
-        return [previous, current.normalizedText, next].compactMap { $0 }.joined(separator: "\n\n")
+        let previous = (pos > 0 && !excluded.contains(part[pos - 1].id)) ? part[pos - 1] : nil
+        let next = (pos < part.count - 1 && !excluded.contains(part[pos + 1].id)) ? part[pos + 1] : nil
+        let included = [previous, current, next].compactMap { $0 }
+        let text = included.map(\.normalizedText).joined(separator: "\n\n")
+        return (text, included.compactMap(\.charStart).min(), included.compactMap(\.charEnd).max())
     }
 
     private func embedQuery(_ query: String, embedder: any TextEmbedder) async throws -> [Float]? {

@@ -38,6 +38,11 @@ public enum DocumentAnswerMode: String, Sendable, Codable {
 /// Builds Q&A and chronology prompts that require inline citations to the
 /// provided sources (plan §8.3, §8.4, §9).
 public enum DocumentQAPromptBuilder {
+    /// Per-source text budget (characters). Bounds each packed source — neighbor
+    /// expansion can triple a chunk's text — so a full packet of sources can't blow the
+    /// context window (which would silently evict the grounding contract from the front).
+    public static let maxSourceTextChars = 3000
+
     public static func buildQAPrompt(question: String, sources: [GroundingSource], mode: DocumentAnswerMode) -> String {
         var lines: [String] = []
         lines.append("You are a legal document assistant. Answer the QUESTION using ONLY the SOURCES below.")
@@ -56,7 +61,11 @@ public enum DocumentQAPromptBuilder {
             if let metadata = source.metadata, !metadata.isEmpty { header += " — \(metadata)" }
             header += ":"
             lines.append(header)
-            lines.append(source.text)
+            if source.text.count > maxSourceTextChars {
+                lines.append(String(source.text.prefix(maxSourceTextChars)) + "\n…[source text truncated to fit the context window]")
+            } else {
+                lines.append(source.text)
+            }
             lines.append("")
         }
         lines.append("QUESTION: \(question)")

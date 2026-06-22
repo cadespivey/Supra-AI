@@ -201,9 +201,16 @@ public final class DocumentQAController: ObservableObject {
     /// LLM-reranks the candidate pool to the most relevant `packedSourceLimit`,
     /// re-labeling them S1…SN in the new order. Best-effort: a model failure, or one
     /// that returns too few valid labels, falls back to retrieval order.
+    /// Per-candidate snippet length shown to the reranker. Longer than the 220-char
+    /// display excerpt so the reranker scores on the same content the answer is
+    /// grounded in (the chunk + folded neighbors), not just the leading sentence.
+    static let rerankSnippetChars = 600
+
     private func rerankSources(_ candidates: [PreparedSource], question: String, modelID: ModelID, route: ModelRoute?) async -> [PreparedSource] {
         guard candidates.count > Self.packedSourceLimit else { return relabeled(candidates) }
-        let listing = candidates.map { "[\($0.source.label)] \($0.source.excerpt)" }.joined(separator: "\n")
+        let listing = candidates
+            .map { "[\($0.source.label)] \(DocumentChunker.excerpt($0.source.text, limit: Self.rerankSnippetChars))" }
+            .joined(separator: "\n")
         let prompt = """
         Rank the passages by how directly they help answer the QUESTION.
 

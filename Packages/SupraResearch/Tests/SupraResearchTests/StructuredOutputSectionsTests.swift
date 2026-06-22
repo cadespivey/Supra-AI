@@ -28,6 +28,23 @@ final class StructuredOutputSectionsTests: XCTestCase {
         XCTAssertEqual(analysis.missing, ["## Distinctions"])
     }
 
+    func testNeedsContentPlaceholderSectionCountsAsMissing() {
+        let required = ["## Rule Statement", "## Analysis"]
+        // Rule Statement is filled only with the repair placeholder; Analysis has prose.
+        let markdown = "## Rule Statement\n\n[NEEDS CONTENT]\n\n## Analysis\n\nThe rule applies because…"
+        let analysis = StructuredOutputSections.analyze(markdown: markdown, requiredHeadings: required)
+        XCTAssertEqual(analysis.missing, ["## Rule Statement"], "a placeholder-only section is not complete")
+        XCTAssertEqual(analysis.present, ["## Analysis"])
+    }
+
+    func testEmptyBodyHeadingStillCountsAsPresent() {
+        // A heading with no body (e.g. the last heading) is still present — only an
+        // explicit [NEEDS CONTENT] placeholder marks a section incomplete.
+        let required = ["## A", "## B"]
+        let analysis = StructuredOutputSections.analyze(markdown: "## A\n\nsome text\n\n## B", requiredHeadings: required)
+        XCTAssertTrue(analysis.missing.isEmpty)
+    }
+
     func testWrongHeadingLevelCountsAsMissing() {
         let required = ["## Rule Statement"]
         let analysis = StructuredOutputSections.analyze(markdown: "### Rule Statement", requiredHeadings: required)
