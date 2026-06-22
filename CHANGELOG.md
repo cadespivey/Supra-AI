@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Matter Chat is now a real chat store.** The Chat tab inside a matter gets the
   same searchable history sidebar as Global Chats — start new chats and reopen old
-  ones (rename / delete too), instead of the cramped inline strip.
+  ones (rename / delete too), instead of the cramped inline strip. A blank matter
+  chat shows the same rotating example-prompt starters, and the conversation now
+  fills the pane (the redundant header bar is gone; the sidebar owns New Chat).
 - **Documents tab updates live during processing.** Each document's status badge
   and classifier category chips now appear as it finishes, without leaving and
   re-entering the tab (the controller reloads on each processing phase and polls
