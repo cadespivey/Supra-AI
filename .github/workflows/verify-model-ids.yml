@@ -1,0 +1,33 @@
+name: Verify model catalog IDs
+
+# Guards against shipping a model the picker can't download: every curated repoID in
+# ModelCatalog / EmbeddingModelCatalog must resolve on Hugging Face (HTTP 200). HF
+# returns 401 for a nonexistent repo, which otherwise only surfaces as a failed
+# in-app download. Runs on catalog/script changes, weekly (to catch upstream repo
+# removals or renames over time), and on demand.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Packages/SupraSessions/Sources/SupraSessions/ModelCatalog.swift"
+      - "Packages/SupraSessions/Sources/SupraSessions/EmbeddingModelCatalog.swift"
+      - "Scripts/verify-model-ids.sh"
+      - ".github/workflows/verify-model-ids.yml"
+  pull_request:
+    paths:
+      - "Packages/SupraSessions/Sources/SupraSessions/ModelCatalog.swift"
+      - "Packages/SupraSessions/Sources/SupraSessions/EmbeddingModelCatalog.swift"
+      - "Scripts/verify-model-ids.sh"
+      - ".github/workflows/verify-model-ids.yml"
+  schedule:
+    - cron: "17 8 * * 1" # Mondays 08:17 UTC — catch upstream repo removals/renames
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify catalog model IDs resolve on Hugging Face
+        run: bash Scripts/verify-model-ids.sh

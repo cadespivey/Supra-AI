@@ -38,6 +38,9 @@ ZIP="${BUILD}/SupraAI-${VERSION}.zip"
 DMG="${BUILD}/SupraAI-${VERSION}.dmg"
 SIGN_ID="${SIGN_IDENTITY:-Developer ID Application}"
 
+echo "▶︎ Verifying catalog model IDs resolve on Hugging Face…"
+"${ROOT}/Scripts/verify-model-ids.sh"
+
 rm -rf "${BUILD}"
 mkdir -p "${BUILD}"
 
