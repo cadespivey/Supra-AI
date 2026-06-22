@@ -57,6 +57,31 @@ public enum LegalResearchPromptBuilder {
     The claim is governed by a two-year statute of limitations [A1]. That period runs from the date of injury rather than discovery, absent tolling [A2]. Because suit was filed more than two years after the injury and no tolling applies on these facts, the claim is time-barred [A1][A2]. Whether the continuing-violation doctrine could revive it is [NEEDS AUTHORITY] on this packet.
     """
 
+    /// A corrective re-prompt used when the first answer fails citation verification:
+    /// it shows the specific issues, then re-states the full answer task so the model
+    /// can redo it citing only the packet.
+    public static func buildRevisionPrompt(
+        question: String,
+        classification: LegalQueryClassification,
+        rankedAuthorities: [RankedLegalAuthority],
+        priorAnswer: String,
+        issues: [LegalVerificationIssue]
+    ) -> String {
+        let issueLines = issues
+            .map { "- \($0.kind.rawValue): \($0.message)" + ($0.excerpt.map { " — \($0)" } ?? "") }
+            .joined(separator: "\n")
+        return """
+        Your previous answer FAILED automated citation verification. Produce a corrected answer.
+
+        PROBLEMS TO FIX:
+        \(issueLines.isEmpty ? "- Unsupported or missing citations." : issueLines)
+
+        Rules for the correction: cite every legal proposition to a packet label [A#] that actually supports it; remove or replace any citation, quote, holding, or date not supported by the packet; write [NEEDS AUTHORITY] where the packet does not support a proposition; never introduce an authority that is not in the packet.
+
+        \(buildAnswerPrompt(question: question, classification: classification, rankedAuthorities: rankedAuthorities))
+        """
+    }
+
     public static func buildCritiquePrompt(draft: String, authorities: [LegalAuthority]) -> String {
         """
         DRAFT TO CRITIQUE:

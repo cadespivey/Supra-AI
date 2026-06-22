@@ -739,6 +739,51 @@ final class SupraSessionsTests: XCTestCase {
         )
     }
 
+    func testLegalAnswerSelfRepairsOnHardVerificationFailure() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let researchRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let court = StubCourtListenerClient(
+            response: CourtListenerSearchResponse(
+                count: 1,
+                results: [
+                    CourtListenerSearchResultDTO(
+                        absoluteURL: "/opinion/1/foo-v-bar/", caseName: "Foo v. Bar",
+                        citation: ["123 Cal. App. 5th 456"], clusterID: 1, court: "California Court of Appeal",
+                        courtID: "calctapp", dateFiled: "2024-02-03",
+                        opinions: [CourtListenerOpinionDTO(id: 99, snippet: "snippet")], status: "Published"
+                    )
+                ]
+            )
+        )
+        final class CallBox: @unchecked Sendable { var n = 0 }
+        let box = CallBox()
+        let stub = StubRuntimeClient { request in
+            box.n += 1
+            // First answer fabricates an out-of-packet citation (hard fail); the
+            // self-repair revision cites only the in-packet label [A1].
+            let token = box.n == 1
+                ? "The rule applies, see Made Up v. Fake, 999 U.S. 1."
+                : "The rule applies [A1]."
+            return .events([.event(request, 1, .token, token: token), .event(request, 2, .generationCompleted)])
+        }
+        let controller = GlobalChatController(
+            store: store, runtimeClient: stub, scope: .matter(id: matter.id), courtListenerClient: court
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Is the rule applicable?",
+            modelID: ModelID(), systemPrompt: researchRoute.systemPrompt,
+            options: researchRoute.options, route: researchRoute
+        )
+
+        XCTAssertEqual(box.n, 2, "a hard verification failure should trigger exactly one self-repair pass")
+        let answer = controller.messages.last?.content ?? ""
+        XCTAssertFalse(answer.contains("UNVERIFIED DRAFT"), "the repaired, packet-cited answer should clear the quarantine banner")
+        XCTAssertTrue(answer.contains("[A1]"))
+    }
+
     func testMatterVerifyAfterReopenUsesChatBoundPacketNotNewestMatterResearchSession() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
