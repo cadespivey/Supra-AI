@@ -41,7 +41,7 @@ notes-to-billing-draft bridge that feeds the firm's existing billing system via 
 | 3 | Generation flow | On-demand "Generate billing draft" → editable Client·Matter·Narrative·Time table; re-generable, human-approved, nothing auto-billed. Day-level **file attachments** feed the model as time + narrative evidence. |
 | 4 | Attachments | Auto-classify + local text-extract as evidence (reuse the 1.3.2 `DocumentClassificationService` + `ExtractionService`); auto-assignment is correctable. `.msg` is unsupported by the extractor → surface "export as .eml". |
 | 5 | Time engine | User-set **sensitivity slider** (precise ↔ generous; high may infer implied workflow, e.g. research before substantive drafting). Guardrails ride at every setting: cite evidence per duration, reconcile the day, exclude apparent non-billable gaps, never fabricate time without a basis. |
-| 6 | Instructions | **Global** billing instructions (Settings) + **per-matter overrides** (free text **plus** uploaded client billing-guideline documents, extracted/summarized into that matter's controlling rules). |
+| 6 | Instructions | **Global** billing instructions (Settings) + **per-matter overrides** (free text **plus** uploaded client billing-guideline documents, whose extracted text is composed into that matter's controlling rules — verbatim budgeted excerpts as built in 1.5.0; see §5.3 note). |
 | 7 | Export | **LEDES 1998B + CSV + clipboard** (fee lines only). Makes UTBMS task/activity codes, timekeeper, rate, units, client ID, matter ID first-class on the entry model. |
 
 ### 0.2 §L defaults (locked)
@@ -215,12 +215,21 @@ Each call is small, cacheable, retryable, and independently checkable.
 ### 5.3 Instruction stack & prompt
 
 ```text
-- Instruction stack = global billing instructions ⊕ per-matter override text ⊕ summarized client
-  guideline docs (for matters appearing that day), composed via composedAssistantPrompt(base:).
+- Instruction stack = global billing instructions ⊕ per-matter override text ⊕ client guideline
+  doc excerpts (for matters appearing that day), composed by BillingInstructions.composedStack.
 - Budgeted with PromptBudget.promptTokenBudget; honor GenerationStreamCollector refusals
   (contextOverflowed / truncatedReasoning).
 - Deterministic low-temp preset (à la .legalVerify / .legalCritique).
 ```
+
+> **Implementation note (1.5.0 — drift-control §14).** Guideline docs reach the prompt as
+> **verbatim, budgeted excerpts** of their extracted text (`BillingInstructions.guidelineCharBudget`,
+> truncated at a whitespace boundary with a `…` marker), **not** a model-generated summary. Rationale:
+> (a) the composition stays fully deterministic, so the golden-fixture fidelity gate (§6.1, §12) holds;
+> (b) verbatim client rules avoid summarization loss/hallucination in a billing-compliance context.
+> Model summarization with a cached per-matter rule digest remains a possible future enhancement (it
+> would need its own fidelity gate). This does not weaken the guarantee that the matter's controlling
+> guideline rules reach the draft prompt.
 
 ### 5.4 Constrained decoding & repair
 

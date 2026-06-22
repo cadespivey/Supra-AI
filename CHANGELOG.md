@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [1.5.0] - Unreleased
+
+Milestone 4 — **ScratchPad**: turn a day's running notes into defensible, e-billable
+time entries, entirely on-device. Plus chat-input refinements across the app.
+
+### Added
+
+- **ScratchPad daily notes → billing drafts.** A new top-level section keeps one
+  timestamped daily note per date. Tag work with `@matter` and `#issue`, attach
+  work product / email / filings as evidence, then generate a reviewable billing
+  draft — a grouped, editable table of Client · Matter · Narrative · Time with
+  UTBMS task/activity codes and per-day reconciliation (totals, gaps, low-confidence
+  flags). Nothing is billed automatically; every suggested time cites its evidence.
+- **Export to LEDES 1998B, CSV, and clipboard.** Fee lines export to the 24-field
+  LEDES 1998B e-billing format, a review CSV, or tab-separated text. A pre-export
+  validator blocks a LEDES file with missing required fields (timekeeper rate,
+  client ID, firm matter ID, or an unresolved task code) and explains what to fix.
+- **ScratchPad / Billing settings.** Global billing instructions, an auto-timestamp
+  toggle, a time-inference sensitivity slider, a rounding increment, a UTBMS
+  auto-coding toggle, and the timekeeper + firm identity that populate fee lines.
+- **Per-matter Billing tab.** A matter-specific override and UTBMS code set, plus
+  client billing-guideline document uploads — all layered on top of the global
+  instructions when a draft is generated.
+- **Calendar history in ScratchPad.** Jump to any past day from a calendar
+  (defaulting to today); browsing never creates empty days.
+- **Attachments in matter chats.** The chat composer's attach button now works in a
+  matter's Chat tab too. Attachments are read into that conversation only — never
+  saved to the matter's document library.
+
+### Changed
+
+- **Refined chat composer.** A single rounded input with a leading attach button and
+  a circular send control that floats over the conversation (no bracketing dividers),
+  shared by the global Chats screen and in-matter chats. The model, jurisdiction, and
+  precision controls remain just beneath it.
+
+### Security
+
+- ScratchPad and billing run fully on-device: extraction, classification, and
+  generation are local (no network egress in any ScratchPad path); attachment and
+  note content never leave the machine.
+
 ## [1.4.1] - 2026-06-22
 
 ### Fixed

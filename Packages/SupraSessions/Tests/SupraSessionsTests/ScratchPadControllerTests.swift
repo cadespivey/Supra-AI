@@ -54,7 +54,50 @@ final class ScratchPadControllerTests: XCTestCase {
         let controller = ScratchPadController(store: store, now: fixedNow)
         controller.load()
         XCTAssertEqual(controller.currentDay?.day, "2026-06-22")
+        XCTAssertEqual(controller.displayedDate, "2026-06-22")
         XCTAssertEqual(controller.recentDays.count, 1)
+    }
+
+    func testSelectDateBrowsesWithoutCreatingThenLazyCreatesOnFirstEntry() throws {
+        let store = try makeStore()
+        let controller = ScratchPadController(store: store, now: fixedNow)
+        controller.load() // seeds today (2026-06-22)
+        XCTAssertEqual(controller.recentDays.count, 1)
+
+        // Browsing an earlier, note-less date shows an empty pad and creates no row.
+        controller.selectDate(date(2026, 6, 20))
+        XCTAssertNil(controller.currentDay, "browsing an empty date must not create a day row")
+        XCTAssertEqual(controller.displayedDate, "2026-06-20")
+        XCTAssertTrue(controller.entries.isEmpty)
+        XCTAssertEqual(controller.recentDays.count, 1, "no empty day was persisted")
+
+        // The first entry lazily persists the day, which then joins the recent list.
+        XCTAssertTrue(controller.addEntry("Backfilled note #intake"))
+        XCTAssertEqual(controller.currentDay?.day, "2026-06-20")
+        XCTAssertEqual(controller.entries.count, 1)
+        XCTAssertEqual(Set(controller.recentDays.map(\.day)), ["2026-06-22", "2026-06-20"])
+    }
+
+    func testSelectDateReopensAnExistingDay() throws {
+        let store = try makeStore()
+        let controller = ScratchPadController(store: store, now: fixedNow)
+        controller.load()
+        controller.selectDate(date(2026, 6, 18))
+        XCTAssertTrue(controller.addEntry("Earlier work #research"))
+
+        // Jump away, then back via the calendar: the saved note is reloaded.
+        controller.selectDate(date(2026, 6, 22))
+        XCTAssertTrue(controller.entries.isEmpty)
+        controller.selectDate(date(2026, 6, 18))
+        XCTAssertEqual(controller.currentDay?.day, "2026-06-18")
+        XCTAssertEqual(controller.entries.count, 1)
+        XCTAssertEqual(controller.displayedDate, "2026-06-18")
+    }
+
+    private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        var components = DateComponents()
+        components.year = year; components.month = month; components.day = day; components.hour = 12
+        return Calendar.current.date(from: components)!
     }
 
     func testAddEntryPersistsResolvedMentionsAndTags() throws {

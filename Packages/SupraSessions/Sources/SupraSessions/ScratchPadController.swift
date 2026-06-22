@@ -60,6 +60,10 @@ public struct ScratchPadAttachmentView: Identifiable, Sendable, Equatable {
 @MainActor
 public final class ScratchPadController: ObservableObject {
     @Published public private(set) var currentDay: ScratchPadDaySummary?
+    /// The calendar date currently shown ("yyyy-MM-dd"), even when no day record
+    /// exists yet (a freshly-browsed date with no notes). Drives the header title
+    /// and the history calendar's selection.
+    @Published public private(set) var displayedDate: String = ""
     @Published public private(set) var entries: [ScratchPadEntryView] = []
     @Published public private(set) var recentDays: [ScratchPadDaySummary] = []
     /// Matters available to the `@` autocomplete.
@@ -98,8 +102,30 @@ public final class ScratchPadController: ObservableObject {
     /// Switches to a previously-recorded day (read or continue editing).
     public func selectDay(id: String) {
         loadMatterChips()
+        lastAttachmentError = nil
         guard let day = try? store.scratchPad.fetchDay(id: id) else { return }
         setCurrentDay(day)
+    }
+
+    /// Opens the pad for an arbitrary calendar date (history navigation). A date
+    /// that already has notes loads them; a date with none shows an empty pad whose
+    /// day row is created lazily on the first entry/attachment — so browsing the
+    /// calendar never leaves a trail of empty days.
+    public func selectDate(_ date: Date) {
+        loadMatterChips()
+        // The attachment error belongs to the day that produced it — clear it so the
+        // banner doesn't linger after navigating to a different day.
+        lastAttachmentError = nil
+        let dayString = Self.dayString(date)
+        if let record = try? store.scratchPad.fetchDay(day: dayString) {
+            setCurrentDay(record)
+        } else {
+            displayedDate = dayString
+            currentDay = nil
+            entries = []
+            attachments = []
+            knownTags = []
+        }
     }
 
     /// Appends a new, freshly-timestamped entry. `explicitMentions` maps a typed
@@ -109,7 +135,7 @@ public final class ScratchPadController: ObservableObject {
     @discardableResult
     public func addEntry(_ text: String, explicitMentions: [String: String] = [:]) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let day = currentDay, !day.isLocked else { return false }
+        guard !trimmed.isEmpty, let day = ensurePersistedDay(), !day.isLocked else { return false }
         let parsed = ScratchPadTokenParser.parse(trimmed)
         let mentions = ScratchPadTagResolver.resolveMentions(parsed.mentions, chips: matterChips, explicit: explicitMentions)
         do {
@@ -151,7 +177,7 @@ public final class ScratchPadController: ObservableObject {
     /// Extracts a dropped/picked file locally, builds its evidence, and attaches it
     /// to the day. Sets `lastAttachmentError` on failure (e.g. an unsupported `.msg`).
     public func addAttachment(fileURL: URL, matterID: String? = nil, explicitKind: BillingEvidenceKind? = nil) async {
-        guard let day = currentDay, !day.isLocked else { return }
+        guard let day = ensurePersistedDay(), !day.isLocked else { return }
         let scoped = fileURL.startAccessingSecurityScopedResource()
         defer { if scoped { fileURL.stopAccessingSecurityScopedResource() } }
         do {
@@ -193,8 +219,21 @@ public final class ScratchPadController: ObservableObject {
 
     private func setCurrentDay(_ record: ScratchPadDayRecord) {
         currentDay = ScratchPadDaySummary(record: record)
+        displayedDate = record.day
         reloadEntries()
         reloadAttachments()
+    }
+
+    /// Returns the current day's record, persisting it from the displayed date if
+    /// the user is on a freshly-browsed date with no row yet. The row (and the
+    /// recent-days list) materializes only when the day gets its first content.
+    private func ensurePersistedDay() -> ScratchPadDaySummary? {
+        if let day = currentDay { return day }
+        guard !displayedDate.isEmpty,
+              let record = try? store.scratchPad.fetchOrCreateDay(displayedDate) else { return nil }
+        setCurrentDay(record)
+        reloadRecentDays()
+        return currentDay
     }
 
     private func reloadAttachments() {

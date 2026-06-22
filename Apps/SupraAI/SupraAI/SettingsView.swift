@@ -10,6 +10,7 @@ struct SettingsView: View {
     @ObservedObject var profile: AssistantProfileController
     @ObservedObject var documentSetup: DocumentIntelligenceSetupController
     @ObservedObject var update: UpdateController
+    @ObservedObject var billing: BillingSettingsController
     @State private var courtListenerToken = ""
 
     var body: some View {
@@ -17,6 +18,8 @@ struct SettingsView: View {
             AssistantProfileSection(profile: profile)
 
             DocumentIntelligenceSection(setup: documentSetup)
+
+            ScratchPadBillingSection(billing: billing)
 
 
             Section("Generation Defaults") {
@@ -194,6 +197,97 @@ private struct AboutBanner: View {
             Spacer()
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// ScratchPad → billing settings (Milestone 4 Phase 7, spec §9): the firm-wide
+/// billing instructions, time/rounding behaviour, auto-coding toggle, and the
+/// single configured timekeeper + firm identity that populate fee lines. Every
+/// control persists immediately. Written for a legal audience — no ML jargon.
+private struct ScratchPadBillingSection: View {
+    @ObservedObject var billing: BillingSettingsController
+
+    /// Common rounding increments offered in the picker (in hours).
+    private static let increments: [Double] = [0.1, 0.2, 0.25, 0.5, 1.0]
+
+    private var sensitivityLabel: String {
+        BillingSensitivity(value: billing.sensitivity).rawValue.capitalized
+    }
+
+    var body: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Global billing instructions").font(.caption).foregroundStyle(.secondary)
+                TextField(
+                    "Global billing instructions",
+                    text: $billing.globalInstructions,
+                    prompt: Text("e.g. No block billing; spell out abbreviations on first use; cap intra-office conferences"),
+                    axis: .vertical
+                )
+                .lineLimit(2...6)
+                .labelsHidden()
+            }
+        } header: {
+            Text("ScratchPad & Billing")
+        } footer: {
+            Text("Standing instructions applied to every billing draft. Per-matter rules (Matter → Billing) layer on top of these.")
+        }
+
+        Section {
+            Toggle("Auto-timestamp entries", isOn: $billing.autoTimestamp)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Time inference")
+                    Spacer()
+                    Text(sensitivityLabel).foregroundStyle(.secondary)
+                }
+                Slider(value: $billing.sensitivity, in: 0...1, step: 0.05) {
+                    Text("Time inference")
+                } minimumValueLabel: {
+                    Text("Precise").font(.caption2).foregroundStyle(.secondary)
+                } maximumValueLabel: {
+                    Text("Generous").font(.caption2).foregroundStyle(.secondary)
+                }
+                Text("How freely the engine infers durations. Precise bills only explicit, strong-evidence time; generous may infer implied workflow (e.g. research before drafting). Guardrails always apply — nothing is fabricated without a basis.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Picker("Round time to", selection: $billing.roundingIncrement) {
+                ForEach(Self.increments, id: \.self) { value in
+                    Text("\(BillingExporter.hoursString(value)) h").tag(value)
+                }
+                // Keep a non-standard stored increment selectable so it isn't lost.
+                if !Self.increments.contains(billing.roundingIncrement) {
+                    Text("\(BillingExporter.hoursString(billing.roundingIncrement)) h")
+                        .tag(billing.roundingIncrement)
+                }
+            }
+            Toggle("Propose UTBMS codes automatically", isOn: $billing.utbmsAutoCoding)
+        } header: {
+            Text("Time & Coding")
+        } footer: {
+            Text("Auto-timestamp records when each note is written and uses the gaps as time evidence. Turn it off to rely on written cues instead. UTBMS auto-coding proposes task/activity codes you can always edit.")
+        }
+
+        Section {
+            TextField("Timekeeper ID", text: $billing.timekeeperID, prompt: Text("e.g. TK-1001"))
+            TextField("Timekeeper name", text: $billing.timekeeperName, prompt: Text("e.g. C. Spivey"))
+            TextField("Classification", text: $billing.timekeeperClassification, prompt: Text("e.g. PARTNER, ASSOCIATE, PARALEGAL"))
+            HStack {
+                Text("Default rate")
+                Spacer()
+                Text("$").foregroundStyle(.secondary)
+                TextField("Rate", value: $billing.timekeeperRate, format: .number.precision(.fractionLength(0...2)))
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 90)
+                    .textFieldStyle(.roundedBorder)
+                Text("/ hr").foregroundStyle(.secondary)
+            }
+            TextField("Firm ID (LAW_FIRM_ID)", text: $billing.lawFirmID, prompt: Text("e.g. 98-7654321"))
+        } header: {
+            Text("Timekeeper & Firm")
+        } footer: {
+            Text("Populates the timekeeper and firm fields on every fee line. LEDES export is blocked until the rate, timekeeper ID, and firm ID are set.")
+        }
     }
 }
 

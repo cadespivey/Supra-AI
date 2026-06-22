@@ -76,16 +76,15 @@ public final class BillingDraftService {
         timekeeper: BillingTimekeeper,
         invoiceDate: String,
         globalInstructions: String = "",
-        increment: Double = 0.1
+        increment: Double = 0.1,
+        autoCoding: Bool = true,
+        autoTimestamp: Bool = true
     ) async throws -> BillingDraftResult {
         let entries = (try? store.scratchPad.entries(dayID: dayID)) ?? []
         guard !entries.isEmpty else { throw BillingDraftError.emptyDay }
         let attachments = (try? store.scratchPad.attachments(dayID: dayID)) ?? []
         let matters = (try? store.matters.fetchMatters()) ?? []
-        let profiles = Dictionary(uniqueKeysWithValues: matters.compactMap { matter -> (String, MatterBillingProfileRecord)? in
-            guard let profile = try? store.billing.billingProfile(matterID: matter.id) else { return nil }
-            return (matter.id, profile)
-        })
+        let matterRules = matters.map { rules(for: $0) }
         let dayDate = (try? store.scratchPad.fetchDay(id: dayID))?.day ?? invoiceDate
 
         let context = BillingDraftPrompt.Context(
@@ -93,10 +92,12 @@ public final class BillingDraftService {
             entries: entries,
             attachments: attachments,
             matters: matters,
-            profiles: profiles,
+            matterRules: matterRules,
             sensitivity: sensitivity,
             increment: increment,
-            globalInstructions: globalInstructions
+            globalInstructions: globalInstructions,
+            autoCoding: autoCoding,
+            autoTimestamp: autoTimestamp
         )
 
         let raw = try await generate(BillingDraftPrompt.system(), BillingDraftPrompt.user(context))
@@ -125,6 +126,41 @@ public final class BillingDraftService {
             lineCount: inputs.count,
             reconciliation: reconciliation
         )
+    }
+
+    // MARK: - Per-matter rules (instruction stack)
+
+    /// Resolves one matter's controlling billing rules: its code set and override
+    /// (from its `MatterBillingProfileRecord`) plus verbatim excerpts from any
+    /// documents tagged "billing guideline" in that matter's library.
+    func rules(for matter: MatterRecord) -> MatterBillingRules {
+        let profile = try? store.billing.billingProfile(matterID: matter.id)
+        let codeSet = profile.flatMap { BillingCodeSet(rawValue: $0.billingCodeSet) } ?? .none
+        return MatterBillingRules(
+            matterID: matter.id,
+            matterName: matter.name,
+            clientName: matter.clientNames,
+            codeSet: codeSet,
+            overrideInstructions: profile?.overrideInstructions,
+            guidelineExcerpts: guidelineExcerpts(matterID: matter.id)
+        )
+    }
+
+    /// Extracted text of the matter's billing-guideline documents (one excerpt per
+    /// doc), so the client's rules reach the prompt. Empty when none are tagged or
+    /// extraction hasn't produced text yet.
+    func guidelineExcerpts(matterID: String) -> [String] {
+        guard let tag = (try? store.documentLibrary.fetchTags(matterID: matterID))?
+            .first(where: { $0.name.compare(BillingInstructions.guidelineTagName, options: .caseInsensitive) == .orderedSame })
+        else { return [] }
+        // Sort the ids so multi-guideline matters compose a stable prompt (the
+        // scope query has no ORDER BY); the fidelity harness relies on determinism.
+        let documentIDs = ((try? store.documentLibrary.resolveScopeDocumentIDs(matterID: matterID, tagIDs: [tag.id])) ?? []).sorted()
+        return documentIDs.compactMap { documentID in
+            let parts = (try? store.documentIndex.fetchParts(documentID: documentID)) ?? []
+            let text = parts.map(\.normalizedText).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
     }
 
     // MARK: - Parsing + validation + repair
@@ -160,7 +196,11 @@ public final class BillingDraftService {
                 utbmsTaskCode: trimmedOrNil(dto.taskCode),
                 utbmsActivityCode: trimmedOrNil(dto.activityCode),
                 timekeeperID: timekeeper.id,
-                rate: timekeeper.defaultRate,
+                // nil = inherit the configured timekeeper's rate at compute/export
+                // time (single-timekeeper scope), so reconfiguring the rate in
+                // Settings flows through without regenerating. A non-nil rate is a
+                // genuine per-line override (the model never sets one).
+                rate: nil,
                 confidence: confidence,
                 evidenceJSON: trimmedOrNil(dto.evidence),
                 codeNote: trimmedOrNil(dto.codeNote),

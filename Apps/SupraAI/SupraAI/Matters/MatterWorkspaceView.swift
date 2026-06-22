@@ -21,6 +21,7 @@ struct MatterWorkspaceView: View {
         case authorities = "Authorities"
         case outputs = "Outputs"
         case documents = "Documents"
+        case billing = "Billing"
         case audit = "Audit"
 
         var id: String { rawValue }
@@ -172,6 +173,16 @@ struct MatterWorkspaceView: View {
                     "Outputs unavailable",
                     "Select the matter again to load its structured outputs.",
                     systemImage: "doc.text"
+                )
+            }
+        case .billing:
+            if let billingProfile = controller.billingProfileController {
+                MatterBillingView(controller: billingProfile)
+            } else {
+                placeholder(
+                    "Billing unavailable",
+                    "Select the matter again to load its billing rules.",
+                    systemImage: "dollarsign.square"
                 )
             }
         case .audit:

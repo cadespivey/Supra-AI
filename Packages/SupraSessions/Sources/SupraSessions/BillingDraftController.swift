@@ -40,6 +40,12 @@ public final class BillingDraftController: ObservableObject {
 
     public var timekeeper: BillingTimekeeper
     public var increment: Double = 0.1
+    /// Generation inputs sourced from Settings (Phase 7). `generate()` uses these
+    /// unless an explicit value is passed.
+    public var sensitivity: Double = BillingSensitivity.defaultValue
+    public var globalInstructions: String = ""
+    public var utbmsAutoCoding: Bool = true
+    public var autoTimestamp: Bool = true
 
     private let store: SupraStore
     private let service: BillingDraftService
@@ -50,6 +56,17 @@ public final class BillingDraftController: ObservableObject {
         self.store = store
         self.service = service
         self.timekeeper = timekeeper
+    }
+
+    /// Applies the firm's billing settings so generation and export use the
+    /// configured timekeeper, rounding, sensitivity, instructions, and auto-coding.
+    public func applySettings(_ settings: BillingSettings) {
+        timekeeper = settings.timekeeper
+        increment = settings.roundingIncrement
+        sensitivity = settings.sensitivity
+        globalInstructions = settings.globalInstructions
+        utbmsAutoCoding = settings.utbmsAutoCoding
+        autoTimestamp = settings.autoTimestamp
     }
 
     public var hasDraft: Bool { draftID != nil }
@@ -72,8 +89,9 @@ public final class BillingDraftController: ObservableObject {
     }
 
     /// Generates a new draft version for the day, carrying over any manual edits
-    /// from the previous version, then recomputes reconciliation.
-    public func generate(sensitivity: Double, globalInstructions: String = "") async {
+    /// from the previous version, then recomputes reconciliation. Without arguments
+    /// it uses the applied Settings (sensitivity, instructions, auto-coding).
+    public func generate(sensitivity: Double? = nil, globalInstructions: String? = nil) async {
         guard let dayID else { return }
         isGenerating = true
         statusMessage = nil
@@ -82,11 +100,13 @@ public final class BillingDraftController: ObservableObject {
             let previousDraftID = try? store.billing.latestDraft(dayID: dayID)?.id
             let result = try await service.generateDraft(
                 dayID: dayID,
-                sensitivity: sensitivity,
+                sensitivity: sensitivity ?? self.sensitivity,
                 timekeeper: timekeeper,
                 invoiceDate: invoiceDate,
-                globalInstructions: globalInstructions,
-                increment: increment
+                globalInstructions: globalInstructions ?? self.globalInstructions,
+                increment: increment,
+                autoCoding: utbmsAutoCoding,
+                autoTimestamp: autoTimestamp
             )
             if let previousDraftID {
                 preserveUserEdits(from: previousDraftID, into: result.draftID)
@@ -141,6 +161,7 @@ public final class BillingDraftController: ObservableObject {
     private func billingLines() -> [BillingLine] {
         let matters = (try? store.matters.fetchMatters()) ?? []
         let byID = Dictionary(uniqueKeysWithValues: matters.map { ($0.id, $0) })
+        var codeSetCache: [String: BillingCodeSet] = [:]
         return lines.map { record in
             let matter = record.matterID.flatMap { byID[$0] }
             return BillingLine(
@@ -155,9 +176,26 @@ public final class BillingDraftController: ObservableObject {
                 taskCode: record.utbmsTaskCode,
                 activityCode: record.utbmsActivityCode,
                 rate: record.rate,
-                confidence: BillingConfidence(rawValue: record.confidence) ?? .medium
+                confidence: BillingConfidence(rawValue: record.confidence) ?? .medium,
+                codeSet: record.matterID.map { codeSet(for: $0, cache: &codeSetCache) } ?? .none
             )
         }
+    }
+
+    /// The governing code set for a matter (cached per render), used by the
+    /// pre-export validator to decide whether a blank task code is a blocking gap.
+    private func codeSet(for matterID: String, cache: inout [String: BillingCodeSet]) -> BillingCodeSet {
+        if let cached = cache[matterID] { return cached }
+        let resolved = (try? store.billing.billingProfile(matterID: matterID))
+            .flatMap { BillingCodeSet(rawValue: $0.billingCodeSet) } ?? .none
+        cache[matterID] = resolved
+        return resolved
+    }
+
+    /// Blocking issues that must be fixed before LEDES export (spec §8). Empty means
+    /// the current draft is export-ready.
+    public func exportIssues() -> [BillingExportIssue] {
+        BillingExportValidator.validateForLEDES(lines: billingLines(), timekeeper: timekeeper)
     }
 
     private func recomputeReconciliation() {

@@ -79,7 +79,11 @@ struct MainShellView: View {
                 matters: environment.mattersController
             )
         case .scratchpad:
-            ScratchPadView(controller: environment.scratchPadController, billing: environment.billingDraftController)
+            ScratchPadView(
+                controller: environment.scratchPadController,
+                billing: environment.billingDraftController,
+                billingSettings: environment.billingSettingsController
+            )
         case .models:
             ModelsView(
                 library: environment.modelLibrary,
@@ -94,7 +98,8 @@ struct MainShellView: View {
                 settings: environment.settingsController,
                 profile: environment.assistantProfileController,
                 documentSetup: environment.documentSetupController,
-                update: environment.updateController
+                update: environment.updateController,
+                billing: environment.billingSettingsController
             )
         }
     }
