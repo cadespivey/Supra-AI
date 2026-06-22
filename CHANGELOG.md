@@ -56,6 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outputs, document Q&A, general chat) gains the same uncertainty-calibration and
   good-law/citator discipline. The legal-answer prompt now includes a short worked
   exemplar so local models follow the citation + hedging form reliably.
+- **Sharper document retrieval.** Hybrid search now fuses keyword (FTS) and semantic
+  candidates with Reciprocal Rank Fusion instead of a length-sensitive linear blend —
+  scale-robust ranking that rewards chunks strong in both lists. Each selected chunk
+  is also expanded with its immediate same-part neighbors before grounding, so an
+  answer that straddles a chunk boundary (a clause split mid-section) stays
+  citable instead of triggering a "sources do not support" refusal.
 - **Matter Chat is now a real chat store.** The Chat tab inside a matter gets the
   same searchable history sidebar as Global Chats — start new chats and reopen old
   ones (rename / delete too), instead of the cramped inline strip. A blank matter

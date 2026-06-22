@@ -105,14 +105,17 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
         let nameByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0.displayName) })
 
-        // FTS candidates (keyword).
+        // FTS candidates (keyword). Fused with the semantic list by Reciprocal Rank
+        // Fusion (RRF): each list contributes 1/(k + rank), summed per chunk. RRF is
+        // scale-robust (it ignores raw FTS/cosine magnitudes) and rewards chunks that
+        // rank well in BOTH lists — better top-k precision than a length-sensitive
+        // linear blend of normalized positions.
         let ftsHits = try store.documentIndex.searchChunks(matterID: matterID, query: query, documentIDs: scopeIDs, limit: 60)
-        var scores: [String: Double] = [:]          // chunkID -> combined score
+        var scores: [String: Double] = [:]          // chunkID -> combined RRF score
         var ftsMatched: Set<String> = []
         var chunkByID: [String: DocumentChunkRecord] = [:]
         for (position, chunk) in ftsHits.enumerated() {
-            let weight = 1.0 - Double(position) / Double(max(ftsHits.count, 1))
-            scores[chunk.id, default: 0] += 0.5 * weight
+            scores[chunk.id, default: 0] += Self.rrfContribution(rank: position + 1)
             ftsMatched.insert(chunk.id)
             chunkByID[chunk.id] = chunk
         }
@@ -136,8 +139,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             }
             ranked.sort { $0.score > $1.score }
             for (position, entry) in ranked.prefix(60).enumerated() {
-                let weight = 1.0 - Double(position) / 60.0
-                scores[entry.chunkID, default: 0] += 0.5 * weight
+                scores[entry.chunkID, default: 0] += Self.rrfContribution(rank: position + 1)
                 semanticBucket[entry.chunkID] = entry.score > 0.7 ? "high" : (entry.score > 0.45 ? "medium" : "low")
             }
         }
@@ -194,6 +196,27 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         }
         for index in sources.indices { sources[index].rank = index }
 
+        // Expand each selected chunk with its immediate neighbors (same page/part) so
+        // an answer that straddles a chunk boundary stays groundable. Skip a neighbor
+        // that is itself a selected source to avoid duplicating it in the packet. The
+        // displayed excerpt/locator stay the original chunk's; only the model-facing
+        // text grows.
+        let selectedChunkIDs = Set(sources.map(\.chunkID))
+        var chunksByDocument: [String: [DocumentChunkRecord]] = [:]
+        for index in sources.indices {
+            guard let current = chunkByID[sources[index].chunkID] else { continue }
+            let docChunks: [DocumentChunkRecord]
+            if let cached = chunksByDocument[current.documentID] {
+                docChunks = cached
+            } else {
+                docChunks = (try? store.documentIndex.fetchChunks(documentID: current.documentID)) ?? []
+                chunksByDocument[current.documentID] = docChunks
+            }
+            sources[index].text = Self.expandedChunkText(
+                current: current, inDocumentChunks: docChunks, excluding: selectedChunkIDs
+            )
+        }
+
         var warning: String?
         if !readiness.isFullyReady {
             warning = "Search scope is still indexing: \(readiness.readyDocuments)/\(readiness.totalDocuments) documents ready."
@@ -203,6 +226,34 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             sources: sources, readiness: readiness, incompleteScopeWarning: warning,
             usedSemantic: usedSemantic, query: query, scopeDocumentIDs: scopeIDs
         )
+    }
+
+    /// Reciprocal Rank Fusion damping constant. 60 is the value from the original
+    /// RRF paper and a robust default — large enough that top ranks aren't winner-take-
+    /// all, small enough that deep ranks contribute little.
+    static let rrfK = 60.0
+
+    /// One ranked list's RRF contribution for a 1-based rank: `1 / (k + rank)`.
+    static func rrfContribution(rank: Int) -> Double { 1.0 / (rrfK + Double(rank)) }
+
+    /// The chunk's text expanded with its immediate same-part neighbors, joined in
+    /// reading order. Neighbors in `excluding` (already selected as their own source)
+    /// are skipped so the packet doesn't repeat them. Returns the chunk text alone
+    /// when it has no eligible neighbors.
+    static func expandedChunkText(
+        current: DocumentChunkRecord,
+        inDocumentChunks docChunks: [DocumentChunkRecord],
+        excluding excluded: Set<String> = []
+    ) -> String {
+        let part = docChunks
+            .filter { $0.pagePartID == current.pagePartID }
+            .sorted { $0.chunkIndex < $1.chunkIndex }
+        guard let pos = part.firstIndex(where: { $0.id == current.id }) else {
+            return current.normalizedText
+        }
+        let previous = (pos > 0 && !excluded.contains(part[pos - 1].id)) ? part[pos - 1].normalizedText : nil
+        let next = (pos < part.count - 1 && !excluded.contains(part[pos + 1].id)) ? part[pos + 1].normalizedText : nil
+        return [previous, current.normalizedText, next].compactMap { $0 }.joined(separator: "\n\n")
     }
 
     private func embedQuery(_ query: String, embedder: any TextEmbedder) async throws -> [Float]? {

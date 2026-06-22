@@ -74,6 +74,43 @@ final class DocumentRetrievalTests: XCTestCase {
         XCTAssertTrue(result.sources.contains { $0.text.contains("damages") })
     }
 
+    func testRRFContributionRewardsTopRanksAndDualMatches() {
+        XCTAssertGreaterThan(
+            DocumentRetrievalService.rrfContribution(rank: 1),
+            DocumentRetrievalService.rrfContribution(rank: 2)
+        )
+        // A chunk ranked #3 in BOTH lists should beat one ranked #1 in a single list.
+        let dual = DocumentRetrievalService.rrfContribution(rank: 3) + DocumentRetrievalService.rrfContribution(rank: 3)
+        XCTAssertGreaterThan(dual, DocumentRetrievalService.rrfContribution(rank: 1))
+    }
+
+    func testExpandedChunkTextIncludesSamePartNeighbors() {
+        let chunks = (0..<3).map { i in
+            DocumentChunkRecord(id: "c\(i)", documentID: "d", pagePartID: "p1", chunkIndex: i, sourceKind: "text", normalizedText: "chunk\(i)")
+        }
+        // Middle chunk pulls in both neighbors, in reading order.
+        XCTAssertEqual(
+            DocumentRetrievalService.expandedChunkText(current: chunks[1], inDocumentChunks: chunks),
+            "chunk0\n\nchunk1\n\nchunk2"
+        )
+        // First chunk has only a forward neighbor.
+        XCTAssertEqual(
+            DocumentRetrievalService.expandedChunkText(current: chunks[0], inDocumentChunks: chunks),
+            "chunk0\n\nchunk1"
+        )
+        // A neighbor already selected as its own source is skipped (no duplication).
+        XCTAssertEqual(
+            DocumentRetrievalService.expandedChunkText(current: chunks[1], inDocumentChunks: chunks, excluding: ["c0"]),
+            "chunk1\n\nchunk2"
+        )
+        // A chunk in a different part is never pulled in.
+        let otherPart = DocumentChunkRecord(id: "x", documentID: "d", pagePartID: "p2", chunkIndex: 0, sourceKind: "text", normalizedText: "other")
+        XCTAssertEqual(
+            DocumentRetrievalService.expandedChunkText(current: chunks[1], inDocumentChunks: chunks + [otherPart]),
+            "chunk0\n\nchunk1\n\nchunk2"
+        )
+    }
+
     // MARK: - Helpers
 
     @discardableResult
