@@ -29,6 +29,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-authority text budget) so a large CourtListener result set can't overflow the
   context window and silently evict the binding authorities or the "answer only from
   the packet" instructions. Dropped authorities are noted in the packet.
+- **Context-window budget guard.** The runtime caps its KV cache at the context
+  window, so an oversized prompt previously rotated the *front* (system grounding +
+  top sources) out silently mid-generation. The runtime now measures the assembled
+  prompt and drops the oldest conversation turns until it fits — protecting the
+  system prompt, the current question, and the evidence — and surfaces a note when it
+  had to (instead of quietly losing context).
+- **Citations now use an explicit `[A#]` contract.** Free-form legal answers are
+  instructed to end each proposition with its source-packet label (e.g. `[A1]`), use
+  only labels that exist, and write `[NEEDS AUTHORITY]` otherwise. The citation
+  verifier recognizes in-range `[A#]` labels as citations and flags fabricated/out-of-
+  range ones — closing the "unrecognized citation format slips through" gap.
+- **Repetition penalty for long-form generation** (drafting / legal research /
+  critique presets) curbs the loop/restate degeneration 4-bit local models show on
+  multi-thousand-token drafts. Greedy extraction/verification stays penalty-free.
+- **Better semantic recall on the default embedding model.** Retrieval queries now
+  carry the BGE/mxbai instruction prefix these models were trained with (passages are
+  embedded raw, matching the existing index — no re-indexing needed). Models without
+  an asymmetric prompt are unchanged.
 - **Matter Chat is now a real chat store.** The Chat tab inside a matter gets the
   same searchable history sidebar as Global Chats — start new chats and reopen old
   ones (rename / delete too), instead of the cramped inline strip. A blank matter

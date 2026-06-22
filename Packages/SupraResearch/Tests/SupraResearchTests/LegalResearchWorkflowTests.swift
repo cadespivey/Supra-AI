@@ -22,6 +22,26 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertLessThan(packet.count, longText.count, "an overlong authority must be trimmed to its budget")
     }
 
+    func testInRangePacketLabelCountsAsACitation() {
+        let authorities = [LegalAuthority(id: "a1", authorityType: .case, caseName: "Foo v. Bar", citation: "1 U.S. 1")]
+        let answer = "The statute of limitations requires filing the claim within two years [A1]."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: authorities)
+        XCTAssertFalse(
+            report.issues.contains { $0.kind == .missingCitation },
+            "a proposition ending in an in-range [A#] label should be treated as cited"
+        )
+    }
+
+    func testOutOfRangePacketLabelIsFlaggedUnsupported() {
+        let authorities = [LegalAuthority(id: "a1", authorityType: .case, caseName: "Foo v. Bar", citation: "1 U.S. 1")]
+        let answer = "The court held that liability attaches under the rule [A5]."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: authorities)
+        XCTAssertTrue(
+            report.issues.contains { $0.kind == .unsupportedCitation && ($0.excerpt ?? "").contains("[A5]") },
+            "a label past the packet size is a fabricated reference"
+        )
+    }
+
     func testNormalizesAndRanksCourtListenerAuthority() {
         let dto = CourtListenerSearchResultDTO(
             absoluteURL: "/opinion/1/foo-v-bar/",

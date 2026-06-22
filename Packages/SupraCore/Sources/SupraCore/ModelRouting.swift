@@ -276,10 +276,12 @@ public struct ModelRouter: Sendable {
             // Grounded extraction/Q&A over the user's own documents must be faithful
             // and reproducible, so decode greedily (mirroring the classifier) while
             // keeping legalResearch's large context + output budget. The creative
-            // legalResearch sampling stays only on the case-law research-memo path.
+            // legalResearch sampling — including its repetition penalty — stays only
+            // on the case-law research-memo path.
             route.options.temperature = 0.0
             route.options.topP = 1.0
             route.options.topK = nil
+            route.options.repetitionPenalty = nil
             return route
         }
     }

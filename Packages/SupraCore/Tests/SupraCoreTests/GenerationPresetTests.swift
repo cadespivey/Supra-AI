@@ -36,6 +36,28 @@ final class GenerationPresetTests: XCTestCase {
         XCTAssertEqual(options.thinkingBudget, .high)
     }
 
+    func testLongFormPresetsCarryRepetitionPenaltyAndExtractionDoesNot() {
+        XCTAssertNotNil(GenerationPreset.drafting.defaultOptions.repetitionPenalty)
+        XCTAssertNotNil(GenerationPreset.legalResearch.defaultOptions.repetitionPenalty)
+        XCTAssertNotNil(GenerationPreset.legalCritique.defaultOptions.repetitionPenalty)
+        // Greedy/extractive/short tasks stay penalty-free so faithful repeats
+        // (dates, dollar amounts, defined terms) are not distorted.
+        XCTAssertNil(GenerationPreset.extractive.defaultOptions.repetitionPenalty)
+        XCTAssertNil(GenerationPreset.precise.defaultOptions.repetitionPenalty)
+        XCTAssertNil(GenerationPreset.legalVerify.defaultOptions.repetitionPenalty)
+    }
+
+    func testRepetitionPenaltyRoundTripsIncludingExplicitNil() throws {
+        var options = GenerationPreset.drafting.defaultOptions
+        XCTAssertNotNil(options.repetitionPenalty)
+        let decoded = try JSONDecoder().decode(GenerationOptions.self, from: try JSONEncoder().encode(options))
+        XCTAssertEqual(decoded.repetitionPenalty, options.repetitionPenalty)
+        // An explicitly cleared penalty must not be reset to the preset default.
+        options.repetitionPenalty = nil
+        let decodedNil = try JSONDecoder().decode(GenerationOptions.self, from: try JSONEncoder().encode(options))
+        XCTAssertNil(decodedNil.repetitionPenalty)
+    }
+
     func testLegalVerifyDecodesGreedilyForReproducibility() {
         let options = GenerationPreset.legalVerify.defaultOptions
         XCTAssertEqual(options.temperature, 0.0, accuracy: 0.0001, "verification must be deterministic")

@@ -16,6 +16,11 @@ public struct RuntimeMetrics: Codable, Sendable {
     /// then does a missing `</think>` imply a truncated reasoning trace — a plain
     /// model produces no think block regardless of the requested budget.
     public let reasoningActive: Bool?
+    /// True when the assembled prompt exceeded the model's context window and the
+    /// runtime had to drop the oldest conversation turns (or, if even the system
+    /// prompt + current question overflow, could not fully fit it). Lets callers warn
+    /// that earlier context was not in view rather than silently losing it.
+    public let contextTrimmed: Bool?
 
     public init(
         loadTimeMs: Int? = nil,
@@ -25,7 +30,8 @@ public struct RuntimeMetrics: Codable, Sendable {
         peakMemoryMb: Int? = nil,
         generatedTokenCount: Int? = nil,
         truncated: Bool? = nil,
-        reasoningActive: Bool? = nil
+        reasoningActive: Bool? = nil,
+        contextTrimmed: Bool? = nil
     ) {
         self.loadTimeMs = loadTimeMs
         self.firstTokenLatencyMs = firstTokenLatencyMs
@@ -35,5 +41,6 @@ public struct RuntimeMetrics: Codable, Sendable {
         self.generatedTokenCount = generatedTokenCount
         self.truncated = truncated
         self.reasoningActive = reasoningActive
+        self.contextTrimmed = contextTrimmed
     }
 }

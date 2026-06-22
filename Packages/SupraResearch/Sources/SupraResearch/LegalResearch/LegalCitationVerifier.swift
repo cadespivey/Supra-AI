@@ -61,6 +61,18 @@ public enum LegalCitationVerifier {
             )
         }
 
+        // Packet labels ([A1]…[An]) are the answer's primary citation form. A label
+        // pointing past the packet (e.g. [A99]) is a fabricated reference.
+        for label in Set(packetLabelIndices(in: answer)) where label < 1 || label > authorities.count {
+            issues.append(
+                LegalVerificationIssue(
+                    kind: .unsupportedCitation,
+                    message: "Cited source label [A\(label)] does not exist in the source packet.",
+                    excerpt: "[A\(label)]"
+                )
+            )
+        }
+
         let authorityText = authorities.map {
             [$0.text, $0.snippet, $0.caseName, $0.citation, $0.url].compactMap { $0 }.joined(separator: "\n")
         }.joined(separator: "\n\n")
@@ -77,7 +89,10 @@ public enum LegalCitationVerifier {
         }
 
         for line in answer.components(separatedBy: .newlines) where looksLikeLegalProposition(line) {
-            let lineHasKnownCitation = authorities.contains { authority in
+            // A proposition is cited if it carries an in-range packet label ([A#]) or
+            // a reporter/URL citation that maps to a retrieved authority.
+            let lineHasPacketLabel = packetLabelIndices(in: line).contains { $0 >= 1 && $0 <= authorities.count }
+            let lineHasKnownCitation = lineHasPacketLabel || authorities.contains { authority in
                 authority.allCitationStrings.contains { line.localizedCaseInsensitiveContains($0) }
                     || (authority.url.map { line.localizedCaseInsensitiveContains($0) } ?? false)
             }
@@ -141,6 +156,18 @@ public enum LegalCitationVerifier {
 
     public static func extractCitationLikeStrings(from text: String) -> [String] {
         citationMatches(in: text, patterns: reporterCitationPatterns + federalStatutoryCitationPatterns + otherAuthorityCitationPatterns + [caseNameCitationPattern, statutoryCitationPattern])
+    }
+
+    /// The numeric indices of source-packet labels (`[A1]`, `[A2]`, …) referenced in
+    /// the text. The packet labels authorities by their order, so index `n` maps to
+    /// the nth retrieved authority.
+    public static func packetLabelIndices(in text: String) -> [Int] {
+        guard let regex = try? NSRegularExpression(pattern: #"\[A(\d+)\]"#) else { return [] }
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: nsRange).compactMap { match in
+            guard let range = Range(match.range(at: 1), in: text) else { return nil }
+            return Int(text[range])
+        }
     }
 
     /// Federal statutory/regulatory forms whose section sigil ("§") sits between
