@@ -259,8 +259,11 @@ public final class DocumentQAController: ObservableObject {
     }
 
     /// Extracts S-style source labels (e.g. "S3") from a reranker's free-text reply.
+    /// Anchored so a digit-bearing word echoed from the question/excerpts (e.g.
+    /// "Windows10", "class3") doesn't yield a stray label that could promote a wrong
+    /// passage.
     nonisolated static func parsePacketLabels(_ text: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: "[Ss]\\d+") else { return [] }
+        guard let regex = try? NSRegularExpression(pattern: "(?<![A-Za-z0-9])[Ss]\\d+(?![0-9])") else { return [] }
         let ns = NSRange(text.startIndex..., in: text)
         return regex.matches(in: text, range: ns).compactMap {
             Range($0.range, in: text).map { String(text[$0]).uppercased() }

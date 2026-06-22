@@ -287,7 +287,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         // Instruction-tuned models (BGE, mxbai) embed queries with an asymmetric
         // prompt; passages stay raw, so this aligns with existing chunk embeddings
         // without re-indexing. Raw for models without one.
-        let prepared = EmbeddingModelCatalog.queryText(trimmed, forModelID: embedder.modelID)
+        let prepared = EmbeddingModelCatalog.queryText(trimmed, forModelID: embedder.modelRepoID)
         guard let vector = try await embedder.embed([prepared]).first else { return nil }
         return VectorMath.normalize(vector)
     }

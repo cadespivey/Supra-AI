@@ -211,6 +211,7 @@ private struct ValidationOCR: DocumentOCRService {
 /// Deterministic bag-of-words embedder for validation retrieval.
 private struct ValidationEmbedder: TextEmbedder {
     let modelID = "val-bow"
+    let modelRepoID = "val-bow"
     let modelDisplayName = "Validation BoW"
     let modelRevision: String? = nil
     let dimension = 64

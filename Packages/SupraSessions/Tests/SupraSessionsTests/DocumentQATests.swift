@@ -28,6 +28,8 @@ final class DocumentQATests: XCTestCase {
     func testParsePacketLabelsExtractsSLabels() {
         XCTAssertEqual(DocumentQAController.parsePacketLabels("Most relevant: S3, s1, S12."), ["S3", "S1", "S12"])
         XCTAssertTrue(DocumentQAController.parsePacketLabels("no labels here").isEmpty)
+        // Digit-bearing words echoed from the question/excerpts must not yield labels.
+        XCTAssertTrue(DocumentQAController.parsePacketLabels("Windows10 and class3 and FAS123").isEmpty)
     }
 
     func testAutoSourceQAGeneratesCitedAnswerSavedWithSourceSet() async throws {

@@ -616,26 +616,30 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertFalse(metadata.contains("Research California contract unenforceability"))
     }
 
-    func testEffectiveOptionsHonorsUIControlsWithoutBreakingRoutes() {
+    func testEffectiveOptionsHonorsUIControlsWithoutLooseningLegalRoutes() {
         let router = ModelRouter(configuration: LegalModelConfiguration())
-        let research = router.route(for: .legalResearch)   // temp 0.15, large output budget, thinking high
-        let verify = router.route(for: .legalVerify)        // temp 0 (greedy)
+        let research = router.route(for: .legalResearch)   // legal authority route, tuned temp 0.15
+        let verify = router.route(for: .legalVerify)        // legal authority route, greedy temp 0
+        let drafting = router.route(for: .drafting)         // non-legal route, temp 0.45
         var user = GenerationOptions(preset: .balanced, temperature: 0.8, maxOutputTokens: 1024)
 
-        // Research: the user's temperature applies; output budget is extend-only so the
-        // general-chat default (1024) can't truncate the route's tuned budget; route
-        // tuning (thinking) is preserved.
+        // Legal authority routes keep their tuned temperature (the user's looser global
+        // default must not raise it), but the output budget is extend-only so the
+        // general default (1024) can't truncate the route's tuned budget; thinking kept.
         let r = GlobalChatController.effectiveOptions(userOptions: user, route: research, fallback: GenerationOptions())
-        XCTAssertEqual(r.temperature, 0.8, accuracy: 0.0001)
+        XCTAssertEqual(r.temperature, research.options.temperature, accuracy: 0.0001)
         XCTAssertEqual(r.maxOutputTokens, research.options.maxOutputTokens)
         XCTAssertEqual(r.thinkingBudget, research.options.thinkingBudget)
 
-        // The user can EXTEND the output budget.
+        // Verify stays greedy.
+        XCTAssertEqual(GlobalChatController.effectiveOptions(userOptions: user, route: verify, fallback: GenerationOptions()).temperature, 0.0, accuracy: 0.0001)
+
+        // A non-legal route (drafting) honors the user's temperature.
+        XCTAssertEqual(GlobalChatController.effectiveOptions(userOptions: user, route: drafting, fallback: GenerationOptions()).temperature, 0.8, accuracy: 0.0001)
+
+        // Output budget is extend-only on a legal route.
         user.maxOutputTokens = 9000
         XCTAssertEqual(GlobalChatController.effectiveOptions(userOptions: user, route: research, fallback: GenerationOptions()).maxOutputTokens, 9000)
-
-        // A greedy/deterministic route (verification) is never loosened by the UI.
-        XCTAssertEqual(GlobalChatController.effectiveOptions(userOptions: user, route: verify, fallback: GenerationOptions()).temperature, 0.0, accuracy: 0.0001)
 
         // No route → the user's options pass straight through.
         XCTAssertEqual(GlobalChatController.effectiveOptions(userOptions: user, route: nil, fallback: GenerationOptions()).temperature, 0.8, accuracy: 0.0001)

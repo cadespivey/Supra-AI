@@ -165,6 +165,7 @@ final class DocumentRetrievalTests: XCTestCase {
 /// similar vectors, so cosine ranking is exercised without a real model.
 private struct BagOfWordsEmbedder: TextEmbedder {
     let modelID = "bow-test"
+    let modelRepoID = "bow-test"
     let modelDisplayName = "Bag of Words (test)"
     let modelRevision: String? = nil
     let dimension = 64
