@@ -71,6 +71,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header now also carries the document's type (from the classifier) and date, so the
   model can prefer the operative/executed document over a draft and weigh recency
   when sources conflict.
+- **Chat attachments are labeled, citable sources.** Files dragged into chat are now
+  given `[S1]`/`[S2]` labels with an instruction to cite attachment-backed statements
+  to them (previously unlabeled fenced text with no citation expectation), extending
+  the cite-your-source discipline to the inline-document workflow.
 - **Matter Chat is now a real chat store.** The Chat tab inside a matter gets the
   same searchable history sidebar as Global Chats — start new chats and reopen old
   ones (rename / delete too), instead of the cramped inline strip. A blank matter
