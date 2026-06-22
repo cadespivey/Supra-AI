@@ -616,6 +616,31 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertFalse(metadata.contains("Research California contract unenforceability"))
     }
 
+    func testEffectiveOptionsHonorsUIControlsWithoutBreakingRoutes() {
+        let router = ModelRouter(configuration: LegalModelConfiguration())
+        let research = router.route(for: .legalResearch)   // temp 0.15, large output budget, thinking high
+        let verify = router.route(for: .legalVerify)        // temp 0 (greedy)
+        var user = GenerationOptions(preset: .balanced, temperature: 0.8, maxOutputTokens: 1024)
+
+        // Research: the user's temperature applies; output budget is extend-only so the
+        // general-chat default (1024) can't truncate the route's tuned budget; route
+        // tuning (thinking) is preserved.
+        let r = GlobalChatController.effectiveOptions(userOptions: user, route: research, fallback: GenerationOptions())
+        XCTAssertEqual(r.temperature, 0.8, accuracy: 0.0001)
+        XCTAssertEqual(r.maxOutputTokens, research.options.maxOutputTokens)
+        XCTAssertEqual(r.thinkingBudget, research.options.thinkingBudget)
+
+        // The user can EXTEND the output budget.
+        user.maxOutputTokens = 9000
+        XCTAssertEqual(GlobalChatController.effectiveOptions(userOptions: user, route: research, fallback: GenerationOptions()).maxOutputTokens, 9000)
+
+        // A greedy/deterministic route (verification) is never loosened by the UI.
+        XCTAssertEqual(GlobalChatController.effectiveOptions(userOptions: user, route: verify, fallback: GenerationOptions()).temperature, 0.0, accuracy: 0.0001)
+
+        // No route → the user's options pass straight through.
+        XCTAssertEqual(GlobalChatController.effectiveOptions(userOptions: user, route: nil, fallback: GenerationOptions()).temperature, 0.8, accuracy: 0.0001)
+    }
+
     func testLegalResearchHydratesTopAuthorityWithFullOpinionText() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")

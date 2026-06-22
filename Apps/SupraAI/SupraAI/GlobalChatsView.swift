@@ -580,6 +580,7 @@ struct GlobalChatsView: View {
                 prompt: routed.prompt,
                 modelID: modelID,
                 attachments: rawAttachments,
+                options: settings.currentOptions,
                 route: routed.route,
                 displayPrompt: rawPrompt
             )
