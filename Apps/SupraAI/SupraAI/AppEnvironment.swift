@@ -25,6 +25,8 @@ final class AppEnvironment: ObservableObject {
     let assistantProfileController: AssistantProfileController
     let updateController: UpdateController
     let mattersController: MattersController
+    // Milestone 4: ScratchPad daily notes -> billing.
+    let scratchPadController: ScratchPadController
     // Milestone 3: document intelligence setup.
     let documentSetupController: DocumentIntelligenceSetupController
     let embeddingDownloadController: EmbeddingModelDownloadController
@@ -56,6 +58,7 @@ final class AppEnvironment: ObservableObject {
         self.settingsController = SettingsController(store: store, appVersion: appVersion)
         self.assistantProfileController = AssistantProfileController(store: store, basePrompt: systemPrompt)
         self.updateController = UpdateController(store: store, currentVersion: appVersion.marketingVersion)
+        self.scratchPadController = ScratchPadController(store: store)
 
         // Document intelligence controllers must exist before MattersController so
         // it can vend a per-matter Documents controller wired to the queue + gate.
