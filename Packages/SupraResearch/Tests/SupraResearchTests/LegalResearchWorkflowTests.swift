@@ -2,6 +2,26 @@ import SupraResearch
 import XCTest
 
 final class LegalResearchWorkflowTests: XCTestCase {
+    func testSourcePacketCapsAuthorityCountAndNotesOmissions() {
+        let many = (1...20).map { i in
+            LegalAuthority(id: "a\(i)", authorityType: .case, caseName: "Case \(i)", snippet: "snippet \(i)")
+        }
+        let packet = LegalResearchPromptBuilder.sourcePacket(many)
+        let cap = LegalResearchPromptBuilder.maxPacketAuthorities
+        XCTAssertTrue(packet.contains("[A\(cap)]"), "top-N authorities should be present")
+        XCTAssertFalse(packet.contains("[A\(cap + 1)]"), "authorities beyond the cap must be dropped from the packet")
+        XCTAssertTrue(packet.contains("\(many.count - cap) lower-ranked authorities were omitted"))
+    }
+
+    func testSourcePacketTruncatesOverlongAuthorityText() {
+        let longText = String(repeating: "x", count: LegalResearchPromptBuilder.maxAuthorityTextChars + 500)
+        let packet = LegalResearchPromptBuilder.sourcePacket([
+            LegalAuthority(id: "a1", authorityType: .case, caseName: "Big", text: longText)
+        ])
+        XCTAssertTrue(packet.contains("[text truncated to fit the context window]"))
+        XCTAssertLessThan(packet.count, longText.count, "an overlong authority must be trimmed to its budget")
+    }
+
     func testNormalizesAndRanksCourtListenerAuthority() {
         let dto = CourtListenerSearchResultDTO(
             absoluteURL: "/opinion/1/foo-v-bar/",

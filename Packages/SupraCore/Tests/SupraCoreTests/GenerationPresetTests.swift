@@ -36,6 +36,13 @@ final class GenerationPresetTests: XCTestCase {
         XCTAssertEqual(options.thinkingBudget, .high)
     }
 
+    func testLegalVerifyDecodesGreedilyForReproducibility() {
+        let options = GenerationPreset.legalVerify.defaultOptions
+        XCTAssertEqual(options.temperature, 0.0, accuracy: 0.0001, "verification must be deterministic")
+        XCTAssertEqual(options.topP, 1.0, accuracy: 0.0001)
+        XCTAssertNil(options.topK, "no top-k truncation under greedy decoding")
+    }
+
     func testUserSelectableDefaultsExcludeRouteSpecificLegalPresets() {
         XCTAssertEqual(GenerationPreset.userSelectableDefaults, [.balanced, .precise, .drafting, .extractive])
         XCTAssertFalse(GenerationPreset.userSelectableDefaults.contains(.legalResearch))

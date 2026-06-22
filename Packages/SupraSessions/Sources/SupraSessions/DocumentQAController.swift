@@ -331,8 +331,10 @@ public final class DocumentQAController: ObservableObject {
     private func collect(prompt: String, modelID: ModelID, route: ModelRoute?) async throws -> String {
         let request = GenerateRequest(
             generationID: GenerationID(), modelID: modelID, prompt: prompt,
-            // Keep document-output contracts isolated from the user's free-form
-            // profile while still applying task-specific routing instructions.
+            // The grounding contract (answer only from sources, [S#] citations, exact
+            // refusal string) leads in the base prompt + user-turn prompt, so layering
+            // the user's profile on top personalizes citation style / jurisdiction /
+            // voice without loosening the grounding discipline.
             systemPrompt: routedSystemPrompt(route),
             options: route?.options ?? GenerationOptions()
         )
@@ -341,9 +343,10 @@ public final class DocumentQAController: ObservableObject {
     }
 
     private func routedSystemPrompt(_ route: ModelRoute?) -> String? {
-        let parts = [defaultSystemPrompt, route?.systemPrompt]
+        let base = [defaultSystemPrompt, route?.systemPrompt]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+            .joined(separator: "\n\n")
+        return store.composedAssistantPrompt(base: base.isEmpty ? nil : base)
     }
 }

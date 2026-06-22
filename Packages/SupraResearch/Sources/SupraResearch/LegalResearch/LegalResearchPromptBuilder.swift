@@ -1,6 +1,15 @@
 import Foundation
 
 public enum LegalResearchPromptBuilder {
+    /// Most authorities (highest-ranked first) to put in a source packet. Bounds the
+    /// prompt so a large CourtListener result set can't overflow the context window
+    /// and silently evict the binding authorities — or the "answer only from the
+    /// packet" instructions — while the model still emits a confident answer.
+    public static let maxPacketAuthorities = 12
+    /// Per-authority text budget (characters). Caps any single long opinion so it
+    /// can't crowd the other authorities out of the window.
+    public static let maxAuthorityTextChars = 3000
+
     public static func buildAnswerPrompt(
         question: String,
         classification: LegalQueryClassification,
@@ -62,8 +71,15 @@ public enum LegalResearchPromptBuilder {
             return "No CourtListener authorities were retrieved."
         }
 
-        return authorities.enumerated().map { index, authority in
+        // Authorities arrive highest-ranked first; keep the top N so the binding
+        // authorities stay in-window, and note any that were dropped.
+        let included = Array(authorities.prefix(maxPacketAuthorities))
+        var blocks = included.enumerated().map { index, authority in
             let label = "A\(index + 1)"
+            let body = authority.text ?? authority.snippet ?? "No text returned."
+            let trimmedBody = body.count > maxAuthorityTextChars
+                ? String(body.prefix(maxAuthorityTextChars)) + "\n…[text truncated to fit the context window]"
+                : body
             return """
             [\(label)] \(authority.caseName ?? "Untitled authority")
             - Authority ID: \(authority.id)
@@ -76,9 +92,14 @@ public enum LegalResearchPromptBuilder {
             - Docket number: \(authority.docketNumber ?? "Unknown")
             - CourtListener URL: \(authority.url ?? "Unavailable")
             - Snippet/Text:
-            \(authority.text ?? authority.snippet ?? "No text returned.")
+            \(trimmedBody)
             """
         }
-        .joined(separator: "\n\n")
+
+        let omitted = authorities.count - included.count
+        if omitted > 0 {
+            blocks.append("[Note] \(omitted) lower-ranked authorit\(omitted == 1 ? "y was" : "ies were") omitted to keep the highest-ranked sources within the context window.")
+        }
+        return blocks.joined(separator: "\n\n")
     }
 }

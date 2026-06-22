@@ -273,7 +273,12 @@ public final class GlobalChatController: ObservableObject {
         // launching two concurrent generations on the same chat.
         isGenerating = true
 
-        let effectiveSystemPrompt = systemPrompt ?? route?.systemPrompt ?? storedSystemPrompt() ?? defaultSystemPrompt
+        // Layer the user's soul document OVER the route's task prompt (not instead of
+        // it): the route prompt stays the lead instruction and the profile (citation
+        // style, jurisdiction, voice) applies on top — so even an authoritative legal
+        // route is personalized. Falls back to the route/default prompt when no
+        // profile is configured.
+        let effectiveSystemPrompt = systemPrompt ?? store.composedAssistantPrompt(base: route?.systemPrompt ?? defaultSystemPrompt)
         let effectiveOptions = options ?? route?.options ?? storedDefaultOptions()
         Task {
             await self.performSend(
@@ -318,12 +323,6 @@ public final class GlobalChatController: ObservableObject {
 
     private func storedDefaultOptions() -> GenerationOptions {
         (try? store.appSettings.getSetting(SettingsController.generationDefaultsKey, as: GenerationOptions.self)) ?? GenerationOptions()
-    }
-
-    /// The user's composed "soul document" (system prompt), if set, so profile
-    /// edits in Settings shape every chat without a relaunch.
-    private func storedSystemPrompt() -> String? {
-        store.composedAssistantPrompt()
     }
 
     /// Requests cancellation of the active generation. The runtime emits a

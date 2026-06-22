@@ -257,10 +257,12 @@ public final class MattersController: ObservableObject {
             return
         }
         // Matter chat reads the user's composed soul document fresh at send time
-        // (see `SupraStore.composedAssistantPrompt()`), so profile edits apply
-        // without reselecting the matter. The document/research workflows keep the
-        // base prompt — their output is machine-parsed/checked, so a free-form
-        // profile must not override the required structure.
+        // (see `SupraStore.composedAssistantPrompt(base:)`), layered OVER the route's
+        // task prompt, so profile edits apply without reselecting the matter. The
+        // structured-output and document-Q&A workflows layer it over their task base
+        // too (the task/grounding contract still leads). The research query-planner
+        // and fact chronology stay base-only — their output is machine-parsed into a
+        // required structure that a free-form profile must not perturb.
         let controller = GlobalChatController(
             store: store,
             runtimeClient: runtimeClient,

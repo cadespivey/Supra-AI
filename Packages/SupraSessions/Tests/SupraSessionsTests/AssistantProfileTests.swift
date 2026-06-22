@@ -1,9 +1,40 @@
+import Foundation
+import SupraStore
 import XCTest
 @testable import SupraSessions
 
 final class AssistantProfileTests: XCTestCase {
 
     private let base = "BASE PROMPT"
+
+    func testStoreComposesProfileOverGivenBase() throws {
+        let store = try makeStore()
+        var profile = AssistantProfile()
+        profile.citationStyle = "Bluebook"
+        profile.practiceAreas = "Bankruptcy"
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)
+
+        let composed = try XCTUnwrap(store.composedAssistantPrompt(base: "ROUTE TASK PROMPT"))
+        XCTAssertTrue(composed.hasPrefix("ROUTE TASK PROMPT"), "the task/route prompt must lead")
+        XCTAssertTrue(composed.contains("# User profile"))
+        XCTAssertTrue(composed.contains("Bluebook"), "the configured citation style must reach the prompt")
+    }
+
+    func testStoreReturnsBaseWhenNoProfileConfigured() throws {
+        let store = try makeStore()
+        // Nothing saved → base passes through unchanged.
+        XCTAssertEqual(store.composedAssistantPrompt(base: "ROUTE TASK PROMPT"), "ROUTE TASK PROMPT")
+        // An explicitly empty (unconfigured) profile also falls back to base.
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: AssistantProfile.empty)
+        XCTAssertEqual(store.composedAssistantPrompt(base: "ROUTE TASK PROMPT"), "ROUTE TASK PROMPT")
+    }
+
+    private func makeStore() throws -> SupraStore {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ProfileStore-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return try SupraStore(url: dir.appendingPathComponent("test.sqlite"))
+    }
 
     func testEmptyProfileComposesToBaseOnly() {
         let composed = AssistantProfile.empty.composedSystemPrompt(base: base)
