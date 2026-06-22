@@ -98,14 +98,39 @@ public enum StructuredOutputSections {
     }
 
     public static func analyze(markdown: String, requiredHeadings: [String]) -> Analysis {
-        let lines = Set(markdown.split(separator: "\n", omittingEmptySubsequences: false).map(normalize))
+        let rawLines = markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let normalizedLines = rawLines.map { normalize(Substring($0)) }
+        let requiredSet = Set(requiredHeadings.map { normalize(Substring($0)) })
         var present: [String] = []
         var missing: [String] = []
         for heading in requiredHeadings {
-            if lines.contains(normalize(Substring(heading))) {
-                present.append(heading)
-            } else {
+            guard let index = normalizedLines.firstIndex(of: normalize(Substring(heading))) else {
                 missing.append(heading)
+                continue
+            }
+            // Scan the section body (until the next required heading or EOF). A section
+            // filled only with the repair template's [NEEDS CONTENT] placeholder (and no
+            // real prose) is treated as still-missing, so a gutted repair can't read as
+            // complete. An empty body still counts as present (preserves prior behavior).
+            var hasRealContent = false
+            var hasPlaceholderOnly = false
+            var cursor = index + 1
+            while cursor < rawLines.count {
+                if requiredSet.contains(normalizedLines[cursor]) { break }
+                let trimmed = rawLines[cursor].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    if trimmed.uppercased().contains("[NEEDS CONTENT]") {
+                        hasPlaceholderOnly = true
+                    } else {
+                        hasRealContent = true
+                    }
+                }
+                cursor += 1
+            }
+            if hasPlaceholderOnly && !hasRealContent {
+                missing.append(heading)
+            } else {
+                present.append(heading)
             }
         }
         return Analysis(present: present, missing: missing)
