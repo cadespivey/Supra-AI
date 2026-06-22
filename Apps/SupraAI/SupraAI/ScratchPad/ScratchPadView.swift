@@ -1,5 +1,7 @@
+import SupraCore
 import SupraSessions
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The ScratchPad daily note (Milestone 4, Phase 2): a running list of
 /// timestamped entries plus a composer with inline `@matter` / `#tag` autocomplete.
@@ -9,6 +11,7 @@ struct ScratchPadView: View {
     @State private var composerText = ""
     /// Handle -> matterID for mentions picked from autocomplete (precise binding).
     @State private var pendingMentions: [String: String] = [:]
+    @State private var showingImporter = false
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -16,10 +19,29 @@ struct ScratchPadView: View {
             header
             Divider()
             entryList
+                .dropDestination(for: URL.self) { urls, _ in
+                    guard !controller.isCurrentDayLocked else { return false }
+                    for url in urls {
+                        Task { await controller.addAttachment(fileURL: url) }
+                    }
+                    return true
+                }
+            attachmentBar
+            errorBanner
             Divider()
             composer
         }
         .onAppear { if controller.currentDay == nil { controller.load() } }
+        .fileImporter(
+            isPresented: $showingImporter,
+            allowedContentTypes: Self.allowedContentTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            guard case let .success(urls) = result else { return }
+            for url in urls {
+                Task { await controller.addAttachment(fileURL: url) }
+            }
+        }
     }
 
     // MARK: - Header
@@ -103,6 +125,95 @@ struct ScratchPadView: View {
         }
     }
 
+    // MARK: - Attachments
+
+    @ViewBuilder
+    private var attachmentBar: some View {
+        if !controller.attachments.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(controller.attachments) { attachment in
+                        attachmentChip(attachment)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private func attachmentChip(_ attachment: ScratchPadAttachmentView) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: Self.icon(for: attachment.kind))
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(attachment.fileName)
+                    .font(.caption)
+                    .lineLimit(1)
+                Text(subtitle(for: attachment))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            if !controller.isCurrentDayLocked {
+                Button { controller.removeAttachment(id: attachment.id) } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .accessibilityLabel("Remove attachment")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.secondary.opacity(0.12)))
+        .frame(maxWidth: 300)
+    }
+
+    @ViewBuilder
+    private var errorBanner: some View {
+        if let error = controller.lastAttachmentError {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                Text(error)
+                    .font(.caption)
+                Spacer(minLength: 8)
+                Button { controller.lastAttachmentError = nil } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+            }
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func subtitle(for attachment: ScratchPadAttachmentView) -> String {
+        if let name = matterName(attachment.matterID) {
+            return "\(attachment.summary) · \(name)"
+        }
+        return attachment.summary
+    }
+
+    private func matterName(_ matterID: String?) -> String? {
+        guard let matterID else { return nil }
+        return controller.matterChips.first { $0.id == matterID }?.name
+    }
+
+    private static func icon(for kind: BillingEvidenceKind) -> String {
+        switch kind {
+        case .email: "envelope"
+        case .workProduct: "doc.text"
+        case .filing: "building.columns"
+        case .other: "paperclip"
+        }
+    }
+
+    private static let allowedContentTypes: [UTType] = [
+        "pdf", "txt", "md", "markdown", "rtf", "html", "htm", "xml", "doc", "docx", "dotx", "xls", "xlsx", "eml"
+    ].compactMap { UTType(filenameExtension: $0) }
+
     // MARK: - Composer
 
     @ViewBuilder
@@ -119,6 +230,13 @@ struct ScratchPadView: View {
             } else {
                 suggestionsBar
                 HStack(alignment: .bottom, spacing: 8) {
+                    Button { showingImporter = true } label: {
+                        Image(systemName: "paperclip")
+                            .font(.body)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Attach a file as evidence (work product, email, filing)")
                     TextField("Add a note — @matter, #tag…", text: $composerText, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...5)
