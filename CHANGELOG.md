@@ -61,7 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scale-robust ranking that rewards chunks strong in both lists. Each selected chunk
   is also expanded with its immediate same-part neighbors before grounding, so an
   answer that straddles a chunk boundary (a clause split mid-section) stays
-  citable instead of triggering a "sources do not support" refusal.
+  citable instead of triggering a "sources do not support" refusal. Each source
+  header now also carries the document's type (from the classifier) and date, so the
+  model can prefer the operative/executed document over a draft and weigh recency
+  when sources conflict.
 - **Matter Chat is now a real chat store.** The Chat tab inside a matter gets the
   same searchable history sidebar as Global Chats — start new chats and reopen old
   ones (rename / delete too), instead of the cramped inline strip. A blank matter

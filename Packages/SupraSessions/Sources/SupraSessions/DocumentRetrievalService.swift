@@ -37,6 +37,10 @@ public struct RetrievedSource: Sendable {
     public var ocrConfidence: Double?
     public var duplicateLocations: [String]
     public var rank: Int
+    /// Compact document context shown to the model (e.g. "Contracts & Agreements ·
+    /// 2023-05-01") so it can prefer the operative/executed document over a draft and
+    /// weigh recency when sources conflict. `nil` when no classification/date exists.
+    public var metadata: String?
 }
 
 /// Readiness of a scope for Q&A/chronology (plan §8.1). Generation is blocked
@@ -104,6 +108,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         let readiness = try scopeReadiness(matterID: matterID, scope: scope)
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
         let nameByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0.displayName) })
+        let metadataByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, Self.contextMetadata(for: $0)) })
 
         // FTS candidates (keyword). Fused with the semantic list by Reciprocal Rank
         // Fusion (RRF): each list contributes 1/(k + rank), summed per chunk. RRF is
@@ -190,7 +195,8 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 semanticBucket: semanticBucket[chunk.id],
                 ocrConfidence: chunk.ocrConfidence,
                 duplicateLocations: [],
-                rank: 0
+                rank: 0,
+                metadata: metadataByID[chunk.documentID] ?? nil
             ))
             if sources.count >= limit { break }
         }
@@ -226,6 +232,25 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             sources: sources, readiness: readiness, incompleteScopeWarning: warning,
             usedSemantic: usedSemantic, query: query, scopeDocumentIDs: scopeIDs
         )
+    }
+
+    /// A compact "type · date" descriptor for a document, drawn from the classifier's
+    /// primary category and the document's own content date. Surfaced to the model so
+    /// it can weigh document type and recency when sources conflict. `nil` when
+    /// neither is available.
+    static func contextMetadata(for document: MatterDocumentRecord) -> String? {
+        var parts: [String] = []
+        if let json = document.classificationMetadataJSON,
+           let data = json.data(using: .utf8),
+           let classification = try? JSONDecoder().decode(DocumentClassification.self, from: data) {
+            parts.append(classification.primaryCategory.displayName)
+        }
+        if let date = document.metadataModifiedAt ?? document.metadataCreatedAt {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withFullDate]
+            parts.append(formatter.string(from: date))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// Reciprocal Rank Fusion damping constant. 60 is the value from the original

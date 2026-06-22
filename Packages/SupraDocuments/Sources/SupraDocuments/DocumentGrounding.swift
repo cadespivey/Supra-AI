@@ -10,14 +10,18 @@ public struct GroundingSource: Sendable, Equatable {
     public var text: String
     public var excerpt: String
     public var lowConfidence: Bool
+    /// Compact document descriptor (type · date) shown in the source header so the
+    /// model can weigh document type and recency when sources conflict.
+    public var metadata: String?
 
-    public init(label: String, documentName: String, locatorDisplay: String, text: String, excerpt: String, lowConfidence: Bool = false) {
+    public init(label: String, documentName: String, locatorDisplay: String, text: String, excerpt: String, lowConfidence: Bool = false, metadata: String? = nil) {
         self.label = label
         self.documentName = documentName
         self.locatorDisplay = locatorDisplay
         self.text = text
         self.excerpt = excerpt
         self.lowConfidence = lowConfidence
+        self.metadata = metadata
     }
 }
 
@@ -48,7 +52,10 @@ public enum DocumentQAPromptBuilder {
         lines.append("")
         lines.append("SOURCES:")
         for source in sources {
-            lines.append("[\(source.label)] \(source.documentName) (\(source.locatorDisplay)):")
+            var header = "[\(source.label)] \(source.documentName) (\(source.locatorDisplay))"
+            if let metadata = source.metadata, !metadata.isEmpty { header += " — \(metadata)" }
+            header += ":"
+            lines.append(header)
             lines.append(source.text)
             lines.append("")
         }
