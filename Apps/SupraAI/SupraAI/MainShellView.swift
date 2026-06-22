@@ -79,7 +79,7 @@ struct MainShellView: View {
                 matters: environment.mattersController
             )
         case .scratchpad:
-            ScratchPadView(controller: environment.scratchPadController)
+            ScratchPadView(controller: environment.scratchPadController, billing: environment.billingDraftController)
         case .models:
             ModelsView(
                 library: environment.modelLibrary,

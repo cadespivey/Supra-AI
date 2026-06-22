@@ -27,6 +27,7 @@ final class AppEnvironment: ObservableObject {
     let mattersController: MattersController
     // Milestone 4: ScratchPad daily notes -> billing.
     let scratchPadController: ScratchPadController
+    let billingDraftController: BillingDraftController
     // Milestone 3: document intelligence setup.
     let documentSetupController: DocumentIntelligenceSetupController
     let embeddingDownloadController: EmbeddingModelDownloadController
@@ -59,6 +60,12 @@ final class AppEnvironment: ObservableObject {
         self.assistantProfileController = AssistantProfileController(store: store, basePrompt: systemPrompt)
         self.updateController = UpdateController(store: store, currentVersion: appVersion.marketingVersion)
         self.scratchPadController = ScratchPadController(store: store)
+        // Timekeeper defaults to a placeholder until configured in Settings (Phase 7).
+        self.billingDraftController = BillingDraftController(
+            store: store,
+            service: BillingDraftService.live(store: store, modelLibrary: modelLibrary, runtimeClient: runtimeClient),
+            timekeeper: BillingTimekeeper(id: "TK-001", name: "Timekeeper", classification: "", defaultRate: 0, lawFirmID: "")
+        )
 
         // Document intelligence controllers must exist before MattersController so
         // it can vend a per-matter Documents controller wired to the queue + gate.

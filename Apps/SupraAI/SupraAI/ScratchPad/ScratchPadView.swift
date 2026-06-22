@@ -7,7 +7,10 @@ import UniformTypeIdentifiers
 /// timestamped entries plus a composer with inline `@matter` / `#tag` autocomplete.
 struct ScratchPadView: View {
     @ObservedObject var controller: ScratchPadController
+    @ObservedObject var billing: BillingDraftController
 
+    enum Tab: Hashable { case note, draft }
+    @State private var tab: Tab = .note
     @State private var composerText = ""
     /// Handle -> matterID for mentions picked from autocomplete (precise binding).
     @State private var pendingMentions: [String: String] = [:]
@@ -18,18 +21,29 @@ struct ScratchPadView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            entryList
-                .dropDestination(for: URL.self) { urls, _ in
-                    guard !controller.isCurrentDayLocked else { return false }
-                    for url in urls {
-                        Task { await controller.addAttachment(fileURL: url) }
-                    }
-                    return true
+            HStack {
+                Spacer()
+                Picker("View", selection: $tab) {
+                    Text("Note").tag(Tab.note)
+                    Text("Billing draft").tag(Tab.draft)
                 }
-            attachmentBar
-            errorBanner
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                Spacer()
+            }
+            .padding(.vertical, 8)
             Divider()
-            composer
+            switch tab {
+            case .note:
+                noteContent
+            case .draft:
+                BillingDraftView(
+                    billing: billing,
+                    dayID: controller.currentDay?.id,
+                    isLocked: controller.isCurrentDayLocked
+                )
+            }
         }
         .onAppear { if controller.currentDay == nil { controller.load() } }
         .fileImporter(
@@ -42,6 +56,22 @@ struct ScratchPadView: View {
                 Task { await controller.addAttachment(fileURL: url) }
             }
         }
+    }
+
+    @ViewBuilder
+    private var noteContent: some View {
+        entryList
+            .dropDestination(for: URL.self) { urls, _ in
+                guard !controller.isCurrentDayLocked else { return false }
+                for url in urls {
+                    Task { await controller.addAttachment(fileURL: url) }
+                }
+                return true
+            }
+        attachmentBar
+        errorBanner
+        Divider()
+        composer
     }
 
     // MARK: - Header
