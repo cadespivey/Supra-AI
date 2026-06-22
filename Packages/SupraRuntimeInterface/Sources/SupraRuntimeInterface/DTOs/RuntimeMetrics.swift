@@ -16,11 +16,15 @@ public struct RuntimeMetrics: Codable, Sendable {
     /// then does a missing `</think>` imply a truncated reasoning trace — a plain
     /// model produces no think block regardless of the requested budget.
     public let reasoningActive: Bool?
-    /// True when the assembled prompt exceeded the model's context window and the
-    /// runtime had to drop the oldest conversation turns (or, if even the system
-    /// prompt + current question overflow, could not fully fit it). Lets callers warn
-    /// that earlier context was not in view rather than silently losing it.
+    /// True when the runtime dropped the oldest conversation turns to fit the prompt
+    /// into the context window. Benign for one-shot grounded flows (the system prompt,
+    /// question, and evidence are preserved); the chat surfaces it as a note.
     public let contextTrimmed: Bool?
+    /// True when, even after dropping all history, the system prompt + current prompt
+    /// (the grounding contract + evidence + question) still exceed the window — so the
+    /// front of the prompt is evicted mid-generation and cannot be recovered. Grounded
+    /// callers must refuse rather than return a confidently-ungrounded answer.
+    public let contextOverflowed: Bool?
 
     public init(
         loadTimeMs: Int? = nil,
@@ -31,7 +35,8 @@ public struct RuntimeMetrics: Codable, Sendable {
         generatedTokenCount: Int? = nil,
         truncated: Bool? = nil,
         reasoningActive: Bool? = nil,
-        contextTrimmed: Bool? = nil
+        contextTrimmed: Bool? = nil,
+        contextOverflowed: Bool? = nil
     ) {
         self.loadTimeMs = loadTimeMs
         self.firstTokenLatencyMs = firstTokenLatencyMs
@@ -42,5 +47,6 @@ public struct RuntimeMetrics: Codable, Sendable {
         self.truncated = truncated
         self.reasoningActive = reasoningActive
         self.contextTrimmed = contextTrimmed
+        self.contextOverflowed = contextOverflowed
     }
 }

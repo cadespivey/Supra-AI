@@ -15,6 +15,7 @@ enum GenerationStreamError: Error, LocalizedError, Equatable {
     case interrupted
     case cancelled
     case truncatedReasoning
+    case contextOverflowed
 
     var errorDescription: String? {
         switch self {
@@ -23,6 +24,8 @@ enum GenerationStreamError: Error, LocalizedError, Equatable {
         case .cancelled: "Generation was cancelled."
         case .truncatedReasoning:
             "The model ran out of its output budget before finishing its reasoning, so no answer was produced. Increase the output token budget or retry."
+        case .contextOverflowed:
+            "The sources plus the question are larger than the model's context window, so the answer could not be grounded reliably. Narrow the scope, select fewer/smaller documents, or use a model with a larger context window."
         }
     }
 }
@@ -41,6 +44,7 @@ extension RuntimeClientProtocol {
         var completed = false
         var truncated = false
         var reasoningActive = false
+        var contextOverflowed = false
         for try await event in try generate(request) {
             switch event.type {
             case .token:
@@ -49,6 +53,7 @@ extension RuntimeClientProtocol {
                 completed = true
                 truncated = event.metrics?.truncated ?? false
                 reasoningActive = event.metrics?.reasoningActive ?? false
+                contextOverflowed = event.metrics?.contextOverflowed ?? false
             case .generationFailed:
                 failureReason = event.error?.message ?? "Generation failed."
             case .generationCancelled:
@@ -62,6 +67,11 @@ extension RuntimeClientProtocol {
         if wasCancelled { throw GenerationStreamError.cancelled }
         if let failureReason { throw GenerationStreamError.failed(failureReason) }
         guard completed else { throw GenerationStreamError.interrupted }
+        // The grounding contract + top sources were evicted from the front of the
+        // prompt mid-generation (system + question alone overflow the window), so any
+        // "answer" is confidently ungrounded — refuse it for these one-shot grounded
+        // flows rather than return it as if it were source-grounded.
+        if contextOverflowed { throw GenerationStreamError.contextOverflowed }
         // If a run with reasoning ACTUALLY active (the loaded model emits think
         // blocks AND the preset enabled them) hit the output-token cap before
         // closing its reasoning, the text is a truncated chain-of-thought, not an

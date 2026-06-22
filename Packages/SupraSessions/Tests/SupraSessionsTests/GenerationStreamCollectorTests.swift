@@ -42,6 +42,35 @@ final class GenerationStreamCollectorTests: XCTestCase {
         }
     }
 
+    func testRefusesOnContextOverflow() async {
+        let stub = StubRuntimeClient(outcome: { r in
+            .events([
+                .event(r, 0, .token, token: "a confidently ungrounded answer"),
+                .event(r, 1, .generationCompleted, metrics: RuntimeMetrics(contextOverflowed: true)),
+            ])
+        })
+        do {
+            _ = try await stub.collectGeneratedText(request())
+            XCTFail("Expected collectGeneratedText to refuse on context overflow")
+        } catch let error as GenerationStreamError {
+            XCTAssertEqual(error, .contextOverflowed)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testHistoryTrimAloneDoesNotRefuse() async throws {
+        // contextTrimmed (benign history drop) must NOT cause a refusal — only overflow.
+        let stub = StubRuntimeClient(outcome: { r in
+            .events([
+                .event(r, 0, .token, token: "grounded answer"),
+                .event(r, 1, .generationCompleted, metrics: RuntimeMetrics(contextTrimmed: true)),
+            ])
+        })
+        let text = try await stub.collectGeneratedText(request())
+        XCTAssertEqual(text, "grounded answer")
+    }
+
     func testThrowsInterruptedWhenStreamEndsWithoutCompletion() async {
         let stub = StubRuntimeClient(outcome: { r in
             .events([.event(r, 0, .token, token: "partial")]) // no terminal completion
