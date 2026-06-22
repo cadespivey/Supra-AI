@@ -50,19 +50,19 @@ struct GlobalChatsView: View {
         .onAppear {
             inputFocused = true
             matters?.loadMatters()
-            if listStyle == .picker, suggestions.isEmpty { suggestions = ChatSuggestions.sample() }
+            if suggestions.isEmpty { suggestions = ChatSuggestions.sample() }
         }
         // Rotate the example prompts every time the chat window goes blank/empty
         // (new chat, deleted chat, or a moved chat) so they don't get stale.
         .onChange(of: controller.selectedChatID) { _, _ in
-            if listStyle == .picker { suggestions = ChatSuggestions.sample() }
+            suggestions = ChatSuggestions.sample()
         }
     }
 
+    // The conversation fills the pane; the sidebar owns chat selection and the New
+    // Chat action, so there's no separate header bar.
     private var chatColumn: some View {
         VStack(spacing: 0) {
-            chatBar
-            Divider()
             messageList
             if let errorMessage = controller.errorMessage {
                 errorBanner(errorMessage)
@@ -72,27 +72,6 @@ struct GlobalChatsView: View {
             Divider()
             chatStatusBar
         }
-    }
-
-    // MARK: - Chat selector
-
-    private var chatBar: some View {
-        HStack(spacing: 12) {
-            Text(selectedChatTitle ?? "New Chat")
-                .font(.headline)
-                .foregroundStyle(selectedChatTitle == nil ? .secondary : .primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer()
-            Button {
-                controller.startNewChat()
-                if listStyle == .picker { suggestions = ChatSuggestions.sample() }
-                inputFocused = true
-            } label: {
-                Label("New Chat", systemImage: "square.and.pencil")
-            }
-        }
-        .padding(12)
     }
 
     // MARK: - Chat history sidebar
@@ -286,10 +265,6 @@ struct GlobalChatsView: View {
         Binding(get: { pendingDeleteChat != nil }, set: { if !$0 { pendingDeleteChat = nil } })
     }
 
-    private var selectedChatTitle: String? {
-        controller.chats.first { $0.id == controller.selectedChatID }?.title
-    }
-
     // MARK: - Messages
 
     private var messageList: some View {
@@ -311,15 +286,7 @@ struct GlobalChatsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
             if controller.messages.isEmpty {
-                if listStyle == .picker {
-                    suggestionsEmptyState
-                } else {
-                    ContentUnavailableView(
-                        "Start a Conversation",
-                        systemImage: "bubble.left.and.bubble.right",
-                        description: Text("Ask a question to begin.")
-                    )
-                }
+                suggestionsEmptyState
             }
         }
     }
