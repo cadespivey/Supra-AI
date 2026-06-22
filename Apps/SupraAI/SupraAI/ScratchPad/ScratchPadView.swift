@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 struct ScratchPadView: View {
     @ObservedObject var controller: ScratchPadController
     @ObservedObject var billing: BillingDraftController
+    @ObservedObject var billingSettings: BillingSettingsController
 
     enum Tab: Hashable { case note, draft }
     @State private var tab: Tab = .note
@@ -15,6 +16,7 @@ struct ScratchPadView: View {
     /// Handle -> matterID for mentions picked from autocomplete (precise binding).
     @State private var pendingMentions: [String: String] = [:]
     @State private var showingImporter = false
+    @State private var showHistory = false
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -45,7 +47,13 @@ struct ScratchPadView: View {
                 )
             }
         }
-        .onAppear { if controller.currentDay == nil { controller.load() } }
+        .onAppear {
+            if controller.currentDay == nil { controller.load() }
+            billing.applySettings(billingSettings.settings)
+        }
+        .onChange(of: billingSettings.settings) { _, settings in
+            billing.applySettings(settings)
+        }
         .fileImporter(
             isPresented: $showingImporter,
             allowedContentTypes: Self.allowedContentTypes,
@@ -82,25 +90,49 @@ struct ScratchPadView: View {
                 Text("ScratchPad")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-                Text(Self.displayDate(controller.currentDay?.day))
+                Text(Self.displayDate(controller.displayedDate))
                     .font(.title3.weight(.semibold))
             }
             Spacer()
-            if !controller.recentDays.isEmpty {
-                Menu {
-                    ForEach(controller.recentDays) { day in
-                        Button(Self.displayDate(day.day)) { controller.selectDay(id: day.id) }
-                    }
-                } label: {
-                    Label("History", systemImage: "calendar")
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-            }
+            historyButton
             lockButton
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    /// History navigation: a calendar to jump to any day, defaulting to the day on
+    /// screen (which starts at today). Future dates are disabled — you can't bill
+    /// ahead of today.
+    private var historyButton: some View {
+        Button { showHistory.toggle() } label: {
+            Label("History", systemImage: "calendar")
+        }
+        .help("Jump to another day")
+        .popover(isPresented: $showHistory, arrowEdge: .bottom) {
+            DatePicker(
+                "Day",
+                selection: calendarSelection,
+                in: ...Date(),
+                displayedComponents: .date
+            )
+            .datePickerStyle(.graphical)
+            .labelsHidden()
+            .padding()
+            .frame(width: 320)
+        }
+    }
+
+    /// Binds the calendar to the displayed day. Picking a date jumps to it and
+    /// closes the popover; reading falls back to today when nothing is open yet.
+    private var calendarSelection: Binding<Date> {
+        Binding(
+            get: { Self.isoParser.date(from: controller.displayedDate) ?? Date() },
+            set: { newDate in
+                controller.selectDate(newDate)
+                showHistory = false
+            }
+        )
     }
 
     @ViewBuilder
@@ -140,6 +172,7 @@ struct ScratchPadView: View {
                             ScratchPadEntryRow(
                                 entry: entry,
                                 isLocked: controller.isCurrentDayLocked,
+                                showTimestamp: billingSettings.autoTimestamp,
                                 onDelete: { controller.deleteEntry(id: entry.id) }
                             )
                             .id(entry.id)
@@ -397,16 +430,21 @@ struct ScratchPadView: View {
 private struct ScratchPadEntryRow: View {
     let entry: ScratchPadEntryView
     let isLocked: Bool
+    var showTimestamp: Bool = true
     let onDelete: () -> Void
     @State private var hovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Text(ScratchPadFormatting.time(entry.timestamp))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.tertiary)
-                .frame(width: 56, alignment: .trailing)
-                .padding(.top, 2)
+            // The time gutter is hidden when auto-timestamp is off (the stamps are
+            // still recorded, just not surfaced or used as duration evidence).
+            if showTimestamp {
+                Text(ScratchPadFormatting.time(entry.timestamp))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 56, alignment: .trailing)
+                    .padding(.top, 2)
+            }
             Text(ScratchPadFormatting.highlighted(entry.text))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)

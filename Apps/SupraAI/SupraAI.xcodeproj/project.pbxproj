@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		096A3B8C77F46429416E8442 /* MatterBillingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F52F39531ED04359DF5332 /* MatterBillingView.swift */; };
 		29B269CAAD0AA32A038AF808 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 45DF0346474345DA98F88B95 /* Cocoa.framework */; };
 		58BC6CD3754B6B7C554C2FCF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A9C463ED2E226080392F154A /* Assets.xcassets */; };
 		5A0000000000000000000001 /* SupraAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000101 /* SupraAIApp.swift */; };
@@ -129,6 +130,7 @@
 		5A0000000000000000000201 /* SupraAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SupraAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A0000000000000000000202 /* SupraRuntimeService.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = SupraRuntimeService.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
 		8792ADFD107281343AFEEA5C /* ScratchPadView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScratchPadView.swift; sourceTree = "<group>"; };
+		A7F52F39531ED04359DF5332 /* MatterBillingView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MatterBillingView.swift; sourceTree = "<group>"; };
 		A9C463ED2E226080392F154A /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		BDDEEEEA83AAE455AE64D9F5 /* ResearchAuthoritiesUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ResearchAuthoritiesUITests.swift; sourceTree = "<group>"; };
 		D443FEB23479EC80411A4759 /* BillingDraftView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BillingDraftView.swift; sourceTree = "<group>"; };
@@ -253,6 +255,7 @@
 			children = (
 				5A0000000000000000000117 /* MatterWorkspaceView.swift */,
 				5A0000000000000000000118 /* MatterEditorSheet.swift */,
+				A7F52F39531ED04359DF5332 /* MatterBillingView.swift */,
 			);
 			path = Matters;
 			sourceTree = "<group>";
@@ -555,6 +558,7 @@
 				5A000000000000000000002F /* OutputDetailView.swift in Sources */,
 				C8914D48FD9E94ED7FA33488 /* ScratchPadView.swift in Sources */,
 				92040226CB4C642EDABCE796 /* BillingDraftView.swift in Sources */,
+				096A3B8C77F46429416E8442 /* MatterBillingView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -739,7 +743,7 @@
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = 2DP657YB3K;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Supra AI";
@@ -749,7 +753,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.4.1;
+				MARKETING_VERSION = 1.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.supra.SupraAI;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -764,7 +768,7 @@
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = 2DP657YB3K;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -775,7 +779,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.4.1;
+				MARKETING_VERSION = 1.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.supra.SupraAI;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -788,7 +792,7 @@
 				CODE_SIGN_ENTITLEMENTS = SupraRuntimeService/SupraRuntimeService.entitlements;
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = 2DP657YB3K;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = SupraRuntimeService/Info.plist;
@@ -799,7 +803,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.4.1;
+				MARKETING_VERSION = 1.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.supra.SupraAI.SupraRuntimeService;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -813,7 +817,7 @@
 				CODE_SIGN_ENTITLEMENTS = SupraRuntimeService/SupraRuntimeService.entitlements;
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = 2DP657YB3K;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -825,7 +829,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.4.1;
+				MARKETING_VERSION = 1.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.supra.SupraAI.SupraRuntimeService;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

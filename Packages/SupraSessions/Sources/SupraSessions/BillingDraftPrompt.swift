@@ -12,10 +12,17 @@ enum BillingDraftPrompt {
         var entries: [ScratchPadEntryRecord]
         var attachments: [ScratchPadAttachmentRecord]
         var matters: [MatterRecord]
-        var profiles: [String: MatterBillingProfileRecord]
+        /// The merged per-matter billing rules (override text + client-guideline
+        /// excerpts) the draft must honour. See `BillingInstructions`.
+        var matterRules: [MatterBillingRules]
         var sensitivity: Double
         var increment: Double
         var globalInstructions: String
+        /// When false, the model leaves UTBMS codes blank for manual assignment.
+        var autoCoding: Bool
+        /// When false, entry timestamps are not trusted as duration evidence — the
+        /// model degrades to written time cues + task-type defaults (spec §5.5).
+        var autoTimestamp: Bool
     }
 
     static func system() -> String {
@@ -39,15 +46,22 @@ enum BillingDraftPrompt {
         let bucket = BillingSensitivity(value: context.sensitivity)
         var sections: [String] = []
 
+        let timeEvidence = context.autoTimestamp
+            ? "estimate from timestamp gaps + attachment evidence"
+            : "estimate from written time cues + task-type defaults (timestamps are NOT reliable duration evidence here)"
         sections.append("""
         Today: \(context.dayDate). Time sensitivity: \(bucket.rawValue) (\(String(format: "%.2f", context.sensitivity))). Round to \(BillingExporter.hoursString(context.increment))h.
-        At low sensitivity bill only explicit/strong-evidence time; at high sensitivity you MAY infer implied workflow (e.g. research preceding substantive drafting, review before a conference) and estimate from timestamp gaps + attachment evidence.
+        At low sensitivity bill only explicit/strong-evidence time; at high sensitivity you MAY infer implied workflow (e.g. research preceding substantive drafting, review before a conference) and \(timeEvidence).
         """)
 
-        let instructions = context.globalInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
-        sections.append("Global billing instructions:\n\(instructions.isEmpty ? "(none)" : instructions)")
-
-        sections.append("Matters (copy the exact id into matterID, or null):\n" + mattersBlock(context))
+        // The instruction stack (global + per-matter override + client-guideline
+        // excerpts) is composed deterministically in SupraCore so the merge is the
+        // same here and in tests (the Phase-7 gate).
+        sections.append(BillingInstructions.composedStack(
+            global: context.globalInstructions,
+            rules: context.matterRules,
+            autoCoding: context.autoCoding
+        ))
 
         sections.append("Day notes (chronological; [HH:mm] is when each line was written):\n" + entriesBlock(context))
 
@@ -60,20 +74,6 @@ enum BillingDraftPrompt {
     }
 
     // MARK: - Blocks
-
-    private static func mattersBlock(_ context: Context) -> String {
-        guard !context.matters.isEmpty else { return "(no matters on file — use null and infer the client/matter in the narrative)" }
-        return context.matters.map { matter in
-            let codeSet = context.profiles[matter.id]?.billingCodeSet ?? BillingCodeSet.none.rawValue
-            var line = "- id=\(matter.id) | \(matter.name)"
-            if let client = matter.clientNames, !client.isEmpty { line += " | client=\(client)" }
-            line += " | codeSet=\(codeSet)"
-            if let override = context.profiles[matter.id]?.overrideInstructions, !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                line += " | override: \(override)"
-            }
-            return line
-        }.joined(separator: "\n")
-    }
 
     private static func entriesBlock(_ context: Context) -> String {
         let nameByID = Dictionary(uniqueKeysWithValues: context.matters.map { ($0.id, $0.name) })

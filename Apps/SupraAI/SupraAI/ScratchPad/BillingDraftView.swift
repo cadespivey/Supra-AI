@@ -13,6 +13,8 @@ struct BillingDraftView: View {
     let isLocked: Bool
 
     @State private var editing: BillingLineItemRecord?
+    @State private var exportBlockers: [BillingExportIssue] = []
+    @State private var showingExportBlock = false
 
     private let goldAccent = Color(red: 0.79, green: 0.64, blue: 0.29)
 
@@ -39,6 +41,21 @@ struct BillingDraftView: View {
                 editing = nil
             }
         }
+        .alert("Can't export to LEDES yet", isPresented: $showingExportBlock) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(exportBlockerMessage)
+        }
+    }
+
+    private var exportBlockerMessage: String {
+        let lines = exportBlockers.prefix(6).map { issue -> String in
+            if let narrative = issue.lineNarrative {
+                return "• \(issue.message) (\(narrative.prefix(40))…)"
+            }
+            return "• \(issue.message)"
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Toolbar
@@ -46,7 +63,7 @@ struct BillingDraftView: View {
     private var toolbar: some View {
         HStack(spacing: 10) {
             Button {
-                Task { await billing.generate(sensitivity: 0.6) }
+                Task { await billing.generate() }
             } label: {
                 if billing.isGenerating {
                     ProgressView().controlSize(.small)
@@ -219,6 +236,16 @@ struct BillingDraftView: View {
     // MARK: - Export
 
     private func export(_ format: BillingExportFormat) {
+        // LEDES is machine-ingested and strict — block it on missing required fields
+        // (spec §8). CSV/clipboard are review aids and export as-is.
+        if format == .ledes {
+            let issues = billing.exportIssues()
+            if !issues.isEmpty {
+                exportBlockers = issues
+                showingExportBlock = true
+                return
+            }
+        }
         let text = billing.exportString(format: format)
         if format == .clipboard {
             NSPasteboard.general.clearContents()

@@ -20,6 +20,9 @@ public struct BillingLine: Sendable, Equatable {
     public var activityCode: String?
     public var rate: Double?
     public var confidence: BillingConfidence
+    /// The matter's governing code set, used by the pre-export validator to decide
+    /// whether a blank task code is acceptable (`.none`) or a blocking gap.
+    public var codeSet: BillingCodeSet
 
     public init(
         clientID: String? = nil,
@@ -33,7 +36,8 @@ public struct BillingLine: Sendable, Equatable {
         taskCode: String? = nil,
         activityCode: String? = nil,
         rate: Double? = nil,
-        confidence: BillingConfidence = .medium
+        confidence: BillingConfidence = .medium,
+        codeSet: BillingCodeSet = .none
     ) {
         self.clientID = clientID
         self.lawFirmMatterID = lawFirmMatterID
@@ -47,6 +51,7 @@ public struct BillingLine: Sendable, Equatable {
         self.activityCode = activityCode
         self.rate = rate
         self.confidence = confidence
+        self.codeSet = codeSet
     }
 
     /// The effective rate for this line (line override, else the timekeeper default).

@@ -117,6 +117,7 @@ public final class MattersController: ObservableObject {
     @Published public private(set) var documentsController: MatterDocumentsController?
     @Published public private(set) var documentQAController: DocumentQAController?
     @Published public private(set) var documentChronologyController: DocumentChronologyController?
+    @Published public private(set) var billingProfileController: BillingProfileController?
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
@@ -254,6 +255,7 @@ public final class MattersController: ObservableObject {
             documentsController = nil
             documentQAController = nil
             documentChronologyController = nil
+            billingProfileController = nil
             return
         }
         // Matter chat reads the user's composed soul document fresh at send time
@@ -320,6 +322,12 @@ public final class MattersController: ObservableObject {
             store: store,
             runtimeClient: runtimeClient,
             defaultSystemPrompt: defaultSystemPrompt
+        )
+        billingProfileController = BillingProfileController(
+            matterID: matterID,
+            store: store,
+            queue: documentQueue,
+            isImportReady: isImportReady ?? { true }
         )
     }
 

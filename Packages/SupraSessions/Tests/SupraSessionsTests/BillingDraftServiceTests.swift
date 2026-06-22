@@ -52,7 +52,7 @@ final class BillingDraftServiceTests: XCTestCase {
         XCTAssertEqual(persisted[0].matterID, matterID)
         XCTAssertEqual(persisted[0].clientID, "VYSTAR")
         XCTAssertEqual(persisted[0].utbmsTaskCode, "L350")
-        XCTAssertEqual(try XCTUnwrap(persisted[0].rate), 450, accuracy: 0.001)
+        XCTAssertNil(persisted[0].rate, "lines inherit the configured timekeeper rate (stored nil); the $765 total confirms the effective $450")
         XCTAssertEqual(persisted[0].hours, 1.3, accuracy: 0.001)
 
         // Reconciliation is persisted on the draft.
@@ -108,6 +108,72 @@ final class BillingDraftServiceTests: XCTestCase {
         } catch BillingDraftError.unparseable {
             // expected
         }
+    }
+
+    /// Phase-7 gate: the per-matter override AND uploaded client-guideline text both
+    /// reach the model's prompt, layered on the global instructions (merged stack).
+    func testOverrideAndGuidelineReachThePrompt() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        // Per-matter override + code set.
+        try store.billing.upsertBillingProfile(
+            matterID: matterID,
+            overrideInstructions: "Do not bill intra-office conferences.",
+            billingCodeSet: .litigation
+        )
+        // A client billing-guideline document with extracted text, tagged.
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(sha256: "g", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/g.pdf")).blob
+        let guideline = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matterID, blobID: blob.id, displayName: "VyStar Guidelines.pdf",
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue
+        ))
+        try store.documentIndex.replaceParts(documentID: guideline.id, parts: [
+            DocumentPagePartRecord(documentID: guideline.id, partIndex: 0, sourceKind: DocumentSourceKind.text.rawValue,
+                                   normalizedText: "Travel time is billed at 50 percent.", charCount: 36)
+        ])
+        let tag = try store.documentLibrary.createTag(matterID: matterID, name: BillingInstructions.guidelineTagName)
+        try store.documentLibrary.assignTag(tagID: tag.id, documentID: guideline.id)
+
+        // Capture the user prompt the service hands to the model.
+        var capturedUserPrompt = ""
+        let service = BillingDraftService(store: store) { _, user in
+            capturedUserPrompt = user
+            return #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103","confidence":"high"}]}"#
+        }
+        _ = try await service.generateDraft(
+            dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper,
+            invoiceDate: "2026-06-22", globalInstructions: "Firm minimum increment 0.1h."
+        )
+
+        XCTAssertTrue(capturedUserPrompt.contains("Firm minimum increment 0.1h."), "global instructions reach the prompt")
+        XCTAssertTrue(capturedUserPrompt.contains("Do not bill intra-office conferences."), "per-matter override reaches the prompt")
+        XCTAssertTrue(capturedUserPrompt.contains("Travel time is billed at 50 percent."), "client guideline excerpt reaches the prompt")
+        XCTAssertTrue(capturedUserPrompt.contains("codeSet=litigation"))
+    }
+
+    func testAutoCodingOffDirectiveReachesThePrompt() async throws {
+        let (store, _, dayID) = try makeStoreWithMatterAndDay()
+        var capturedUserPrompt = ""
+        let service = BillingDraftService(store: store) { _, user in
+            capturedUserPrompt = user
+            return "{\"lineItems\":[]}"
+        }
+        _ = try? await service.generateDraft(
+            dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22", autoCoding: false
+        )
+        XCTAssertTrue(capturedUserPrompt.contains("UTBMS coding is OFF"))
+    }
+
+    func testAutoTimestampTogglesTimeEvidenceClauseInThePrompt() async throws {
+        let (store, _, dayID) = try makeStoreWithMatterAndDay()
+        var promptOff = ""
+        _ = try? await BillingDraftService(store: store, generate: { _, user in promptOff = user; return "{\"lineItems\":[]}" })
+            .generateDraft(dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22", autoTimestamp: false)
+        XCTAssertTrue(promptOff.contains("timestamps are NOT reliable duration evidence"), "auto-timestamp off → written-cue degradation reaches the prompt")
+
+        var promptOn = ""
+        _ = try? await BillingDraftService(store: store, generate: { _, user in promptOn = user; return "{\"lineItems\":[]}" })
+            .generateDraft(dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22", autoTimestamp: true)
+        XCTAssertTrue(promptOn.contains("estimate from timestamp gaps"), "auto-timestamp on → timestamp-gap evidence reaches the prompt")
     }
 
     func testResolveMatterByNameAndPureHelpers() throws {

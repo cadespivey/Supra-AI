@@ -84,6 +84,54 @@ final class BillingDraftControllerTests: XCTestCase {
         XCTAssertEqual(BillingDraftController.preservationMatch(for: noSourceEdit, in: [byMatter])?.id, byMatter.id)
     }
 
+    func testApplySettingsWiresTimekeeperAndGenerationInputs() async throws {
+        let (store, dayID) = try setUp()
+        let controller = BillingDraftController(
+            store: store,
+            service: BillingDraftService(store: store) { _, _ in self.json },
+            timekeeper: BillingTimekeeper(id: "", name: "", classification: "", defaultRate: 0, lawFirmID: "")
+        )
+        controller.applySettings(BillingSettings(
+            globalInstructions: "No block billing.",
+            sensitivity: 0.3,
+            roundingIncrement: 0.25,
+            utbmsAutoCoding: false,
+            timekeeper: timekeeper
+        ))
+        XCTAssertEqual(controller.timekeeper.id, "TK-1001")
+        XCTAssertEqual(controller.increment, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(controller.sensitivity, 0.3, accuracy: 0.0001)
+        XCTAssertFalse(controller.utbmsAutoCoding)
+
+        // generate() with no args uses the applied settings. Lines inherit the
+        // timekeeper rate (stored nil) and the 0.25h increment rounds 1.3→1.25 and
+        // 0.4→0.5, so the total reflects 1.75h × $450 = $787.50.
+        controller.bind(dayID: dayID)
+        await controller.generate()
+        XCTAssertNil(controller.lines.first?.rate, "lines inherit the applied timekeeper rate")
+        XCTAssertEqual(controller.reconciliation?.totalAmount ?? 0, 787.5, accuracy: 0.01)
+    }
+
+    func testExportIssuesBlockWhenTimekeeperUnconfigured() async throws {
+        let (store, dayID) = try setUp()
+        // Placeholder timekeeper (rate 0, no id/firm) — the app's default until Settings.
+        let controller = BillingDraftController(
+            store: store,
+            service: BillingDraftService(store: store) { _, _ in self.json },
+            timekeeper: BillingTimekeeper(id: "", name: "", classification: "", defaultRate: 0, lawFirmID: "")
+        )
+        controller.bind(dayID: dayID)
+        await controller.generate(sensitivity: 0.6)
+        let kinds = Set(controller.exportIssues().map(\.kind))
+        XCTAssertTrue(kinds.contains(.timekeeperRate))
+        XCTAssertTrue(kinds.contains(.timekeeperID))
+        XCTAssertTrue(kinds.contains(.firmID))
+
+        // Once configured, the litigation lines (with task+activity codes) are clean.
+        controller.applySettings(BillingSettings(timekeeper: timekeeper))
+        XCTAssertTrue(controller.exportIssues().isEmpty)
+    }
+
     func testExportProducesLEDESAndCSV() async throws {
         let (store, dayID) = try setUp()
         let controller = controller(store)
