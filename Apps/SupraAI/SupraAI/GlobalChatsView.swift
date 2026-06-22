@@ -62,14 +62,15 @@ struct GlobalChatsView: View {
     // The conversation fills the pane; the sidebar owns chat selection and the New
     // Chat action, so there's no separate header bar.
     private var chatColumn: some View {
+        // The composer + status row float directly over the conversation background
+        // (no bracketing dividers), like Claude's chat view — the rounded input box
+        // is its own visual separation.
         VStack(spacing: 0) {
             messageList
             if let errorMessage = controller.errorMessage {
                 errorBanner(errorMessage)
             }
-            Divider()
             composer
-            Divider()
             chatStatusBar
         }
     }
@@ -392,50 +393,70 @@ struct GlobalChatsView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 6) {
-            switch library.loadState {
-            case .loaded:
-                EmptyView()
-            case let .failed(message):
-                Text("Model failed to load: \(message)")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .textSelection(.enabled)
-            case .loading:
-                Text("Loading model…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            case .idle:
-                Text("Task models load on demand. Assign them in Models for model answers; verification can run without one.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if listStyle == .picker {
-                attachmentArea
-            }
-            HStack(alignment: .bottom, spacing: 8) {
-                if listStyle == .picker {
-                    attachButton
-                }
-                TextField("Message", text: $draft, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...6)
-                    .focused($inputFocused)
-                    .onSubmit(send)
+            modelLoadCaption
+            attachmentArea
+            inputBox
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+    }
 
-                if controller.isGenerating {
-                    Button(role: .cancel, action: controller.cancel) {
-                        Label("Stop", systemImage: "stop.circle")
-                    }
-                } else {
-                    Button(action: send) {
-                        Label("Send", systemImage: "paperplane.fill")
-                    }
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(!canSend)
+    /// A pill-styled entry matching the ScratchPad composer: a single rounded-border
+    /// box holding the (optional) attach affordance, the growing text field, and a
+    /// circular send/stop button — so every chat window shares the same input chrome.
+    private var inputBox: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            attachButton
+            TextField("Message", text: $draft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...6)
+                .focused($inputFocused)
+                .onSubmit(send)
+            if controller.isGenerating {
+                Button(role: .cancel, action: controller.cancel) {
+                    Image(systemName: "stop.circle.fill").font(.title2)
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Stop generating")
+            } else {
+                Button(action: send) {
+                    Image(systemName: "arrow.up.circle.fill").font(.title2)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(!canSend)
             }
         }
         .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.secondary.opacity(0.25))
+        )
+    }
+
+    /// Inline model-load feedback shown above the input (hidden once a model is
+    /// loaded). The persistent model identity lives in the status bar below.
+    @ViewBuilder
+    private var modelLoadCaption: some View {
+        switch library.loadState {
+        case .loaded:
+            EmptyView()
+        case let .failed(message):
+            Text("Model failed to load: \(message)")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .textSelection(.enabled)
+        case .loading:
+            Text("Loading model…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .idle:
+            Text("Task models load on demand. Assign them in Models for model answers; verification can run without one.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: - Attachments (global chat only)
@@ -450,10 +471,12 @@ struct GlobalChatsView: View {
             if isLoadingAttachment {
                 ProgressView().controlSize(.small)
             } else {
-                Image(systemName: "plus")
+                Image(systemName: "paperclip").font(.body)
             }
         }
-        .help("Attach files or images (up to \(Self.maxAttachments)). Open a matter for PDFs and Word/Excel documents.")
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Attach files or images for this chat only (up to \(Self.maxAttachments)). They're read into the conversation, not saved to the matter.")
         .disabled(controller.isGenerating || isLoadingAttachment || attachments.count >= Self.maxAttachments)
     }
 
