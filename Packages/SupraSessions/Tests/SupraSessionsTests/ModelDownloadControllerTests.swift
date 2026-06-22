@@ -164,11 +164,13 @@ final class ModelDownloadControllerTests: XCTestCase {
     func testHigherPrecisionRoleVariantsAreOffered() {
         let repos = Set(ModelCatalog.curated.map(\.repoID))
         // 6/8-bit variants of the legal-reasoning + critique role models.
+        // Exact, verified-on-HF repo IDs (the Thinking 6/8-bit MLX quants are published
+        // under lmstudio-community; DeepSeek 8-bit is the -MLX-8Bit repo).
         for repo in [
-            "mlx-community/Qwen3-30B-A3B-Thinking-2507-6bit",
-            "mlx-community/Qwen3-30B-A3B-Thinking-2507-8bit",
+            "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-6bit",
+            "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit",
             "mlx-community/DeepSeek-R1-Distill-Qwen-32B-6bit",
-            "mlx-community/DeepSeek-R1-Distill-Qwen-32B-8bit"
+            "mlx-community/DeepSeek-R1-Distill-Qwen-32B-MLX-8Bit"
         ] {
             XCTAssertTrue(repos.contains(repo), "ModelCatalog is missing higher-precision variant \(repo)")
         }
