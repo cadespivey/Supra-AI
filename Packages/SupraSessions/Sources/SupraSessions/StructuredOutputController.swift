@@ -274,11 +274,11 @@ public final class StructuredOutputController: ObservableObject {
         while !remaining.isEmpty, pass < Self.maxAutoRepairPasses {
             pass += 1
             // route: nil → performRepair uses the dedicated repair (critique) route.
-            guard let newMissing = await performRepair(
+            guard let result = await performRepair(
                 outputID: outputID, modelID: modelID, route: nil, commitOnlyIfImproved: true, previousMissingCount: remaining.count
-            ) else { break }
-            if newMissing.count >= remaining.count { break } // no progress → stop
-            remaining = newMissing
+            ), result.committed else { break }
+            if result.missing.count >= remaining.count { break } // no progress → stop
+            remaining = result.missing
         }
     }
 
@@ -292,10 +292,14 @@ public final class StructuredOutputController: ObservableObject {
     static func guardUnverifiedCitations(
         in markdown: String,
         type: StructuredOutputType,
-        status: StructuredOutputStatus
+        status: StructuredOutputStatus,
+        forceFlag: Bool = false
     ) -> (markdown: String, status: StructuredOutputStatus) {
         let citations = LegalCitationVerifier.extractCitationLikeStrings(from: markdown)
-        guard !citations.isEmpty || type.assertsLegalAuthority else { return (markdown, status) }
+        // `forceFlag` keeps the guard monotonic across repair passes: once an output
+        // was flagged for ungrounded citations, a later pass that merely restates the
+        // citation in a regex-missed form must not silently clear the banner.
+        guard forceFlag || !citations.isEmpty || type.assertsLegalAuthority else { return (markdown, status) }
         let detail = citations.isEmpty
             ? "Independently verify every legal authority cited in this output before use."
             : "Independently verify every citation before use: \(citations.prefix(8).joined(separator: "; "))."
@@ -370,11 +374,17 @@ public final class StructuredOutputController: ObservableObject {
         message = nil
         defer { isGenerating = false }
 
-        // Manual repair always commits a new version (the user explicitly asked).
-        return await performRepair(
+        // Manual repair is preserve-or-improve too: a worse/no-op sample must not
+        // replace the active version (and overwrite its status) just because the user
+        // clicked Repair. It still ran, so return true, but message on a no-op.
+        guard let result = await performRepair(
             outputID: outputID, modelID: modelID, route: effectiveRoute,
-            commitOnlyIfImproved: false, previousMissingCount: nil
-        ) != nil
+            commitOnlyIfImproved: true, previousMissingCount: nil
+        ) else { return false }
+        if !result.committed {
+            message = "Repair did not improve the structure — kept the previous version."
+        }
+        return true
     }
 
     /// Generates one structure-repair pass for an output's active version. Returns the
@@ -387,7 +397,7 @@ public final class StructuredOutputController: ObservableObject {
         route: ModelRoute?,
         commitOnlyIfImproved: Bool,
         previousMissingCount: Int?
-    ) async -> [String]? {
+    ) async -> (missing: [String], committed: Bool)? {
         guard let record = outputRecord(outputID),
               let type = StructuredOutputType(rawValue: record.outputType),
               let active = activeVersion(for: record),
@@ -404,11 +414,22 @@ public final class StructuredOutputController: ObservableObject {
             let analysis = StructuredOutputSections.analyze(
                 markdown: rawRepaired, requiredHeadings: contract.requiredHeadings
             )
-            if commitOnlyIfImproved, let previous = previousMissingCount, analysis.missing.count >= previous {
-                return analysis.missing // no improvement → discard this pass
+            // Preserve-or-improve: never replace the active version with one that has
+            // the same or more missing sections (a regression on a local model's bad
+            // sample, or an auto-repair no-op).
+            let priorMissingCount = previousMissingCount
+                ?? (try? JSONDecoder().decode([String].self, from: Data(active.missingSectionsJSON.utf8)))?.count
+                ?? .max
+            if commitOnlyIfImproved, analysis.missing.count >= priorMissingCount {
+                return (analysis.missing, committed: false)
             }
+            // Monotonic citation guard: if the prior version was flagged for ungrounded
+            // citations, keep it flagged even if this pass's citation evades the regex.
+            let priorWasCitationFlagged = active.contentMarkdown.contains("UNVERIFIED CITATIONS")
             let (repaired, status) = Self.guardUnverifiedCitations(
-                in: rawRepaired, type: type, status: analysis.missing.isEmpty ? .complete : .needsReview
+                in: rawRepaired, type: type,
+                status: analysis.missing.isEmpty ? .complete : .needsReview,
+                forceFlag: priorWasCitationFlagged
             )
             _ = try store.structuredOutputs.createVersion(
                 structuredOutputID: outputID, contentMarkdown: repaired,
@@ -422,7 +443,7 @@ public final class StructuredOutputController: ObservableObject {
                 summary: "Repaired \(record.title)", relatedTable: "structured_outputs", relatedID: outputID
             )
             loadOutputs()
-            return analysis.missing
+            return (analysis.missing, committed: true)
         } catch {
             message = "Structure repair failed: \(error.localizedDescription)"
             return nil

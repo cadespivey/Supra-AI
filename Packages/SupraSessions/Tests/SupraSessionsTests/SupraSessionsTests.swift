@@ -1952,6 +1952,58 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).count, 2, "initial + one repair version")
     }
 
+    func testRepairKeepsCitationBannerEvenWhenRepairEvadesRegex() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let contract = StructuredOutputContracts.contract(for: .draftingSkeleton)! // non-authority
+        // v1: missing the last heading, plus a detected reporter citation → flagged.
+        let partial = contract.requiredHeadings.dropLast().joined(separator: "\n\nThe rule is from Brown v. Board, 347 U.S. 483.\n\n")
+        // repair: all headings, but the citation is restated WITHOUT a reporter format.
+        let full = contract.requiredHeadings.joined(separator: "\n\nThe rule follows the Brown decision.\n\n")
+        let stub = StubRuntimeClient { request in
+            let token = request.prompt.contains("repairing the structure") ? full : partial
+            return .events([.event(request, 1, .token, token: token), .event(request, 2, .generationCompleted)])
+        }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+
+        _ = await controller.createOutput(type: .draftingSkeleton, context: "x", modelID: ModelID())
+        // Auto-repair fills the heading, but the once-raised citation banner must persist.
+        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.needsReview.rawValue)
+        let output = try XCTUnwrap(try store.structuredOutputs.fetchOutputs(matterID: matter.id).first)
+        let active = try XCTUnwrap(
+            try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).max(by: { $0.versionIndex < $1.versionIndex })
+        )
+        XCTAssertTrue(active.contentMarkdown.contains("UNVERIFIED CITATIONS"), "the citation banner must not be silently cleared by a repair pass")
+    }
+
+    func testManualRepairDiscardsWorseResultAndKeepsPriorVersion() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let contract = StructuredOutputContracts.contract(for: .draftingSkeleton)!
+        let full = contract.requiredHeadings.joined(separator: "\n\nbody\n\n")
+        let worse = contract.requiredHeadings.dropLast(2).joined(separator: "\n\nbody\n\n")
+        final class CallBox: @unchecked Sendable { var n = 0 }
+        let box = CallBox()
+        let stub = StubRuntimeClient { request in
+            box.n += 1
+            let token = box.n == 1 ? full : worse // initial complete; manual repair regresses
+            return .events([.event(request, 1, .token, token: token), .event(request, 2, .generationCompleted)])
+        }
+        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
+
+        _ = await controller.createOutput(type: .draftingSkeleton, context: "x", modelID: ModelID())
+        let outputID = controller.outputs[0].id
+        let beforeCount = try store.structuredOutputs.fetchVersions(structuredOutputID: outputID).count
+
+        let ran = await controller.repairOutput(outputID, modelID: ModelID())
+        XCTAssertTrue(ran, "the repair ran")
+        XCTAssertEqual(
+            try store.structuredOutputs.fetchVersions(structuredOutputID: outputID).count, beforeCount,
+            "a worse repair must not replace the active version"
+        )
+        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.complete.rawValue, "the prior complete version/status is preserved")
+    }
+
     func testStructuredOutputUsesTaskRouteOptionsAndSystemPrompt() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
