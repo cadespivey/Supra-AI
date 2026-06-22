@@ -139,6 +139,16 @@ public final class BillingRepository: @unchecked Sendable {
         }
     }
 
+    /// Replaces the draft's reconciliation (recomputed after a manual edit).
+    public func updateReconciliation(draftID: String, reconciliationJSON: String?) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE billing_drafts SET reconciliation_json = ?, updated_at = ? WHERE id = ?",
+                arguments: [reconciliationJSON, Date(), draftID]
+            )
+        }
+    }
+
     // MARK: - Line items
 
     public func lineItems(draftID: String) throws -> [BillingLineItemRecord] {

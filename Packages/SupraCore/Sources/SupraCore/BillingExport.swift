@@ -54,7 +54,7 @@ public struct BillingLine: Sendable, Equatable {
 }
 
 /// The configured timekeeper + firm identity used to populate fee lines.
-public struct BillingTimekeeper: Sendable, Equatable {
+public struct BillingTimekeeper: Codable, Sendable, Equatable {
     public var id: String
     public var name: String
     public var classification: String
