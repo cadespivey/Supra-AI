@@ -83,6 +83,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outputs, document Q&A, general chat) gains the same uncertainty-calibration and
   good-law/citator discipline. The legal-answer prompt now includes a short worked
   exemplar so local models follow the citation + hedging form reliably.
+- **LLM reranking for document Q&A.** Auto-source retrieval now pulls a wider
+  candidate pool (30) and asks the loaded model to rank it, packing the most relevant
+  ~10 passages (re-labeled in the new order) into the answer. Best-effort: if the
+  model errors or returns too few labels, it falls back to the retrieval order, so a
+  rerank failure never blocks an answer. Hand-picked (guided) sources are left in the
+  user's order.
 - **Sharper document retrieval.** Hybrid search now fuses keyword (FTS) and semantic
   candidates with Reciprocal Rank Fusion instead of a length-sensitive linear blend —
   scale-robust ranking that rewards chunks strong in both lists. Each selected chunk
