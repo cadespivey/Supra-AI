@@ -278,7 +278,12 @@ public final class GlobalChatController: ObservableObject {
         // style, jurisdiction, voice) applies on top — so even an authoritative legal
         // route is personalized. Falls back to the route/default prompt when no
         // profile is configured.
-        let effectiveSystemPrompt = systemPrompt ?? store.composedAssistantPrompt(base: route?.systemPrompt ?? defaultSystemPrompt)
+        // Writing-style excerpts are for emulating voice when drafting; in QA/research
+        // routes they'd be mined as facts, so include them only for the drafting route.
+        let effectiveSystemPrompt = systemPrompt ?? store.composedAssistantPrompt(
+            base: route?.systemPrompt ?? defaultSystemPrompt,
+            includeWritingSamples: route?.mode == .drafting
+        )
         let effectiveOptions = Self.effectiveOptions(userOptions: options, route: route, fallback: storedDefaultOptions())
         Task {
             await self.performSend(

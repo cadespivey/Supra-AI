@@ -94,7 +94,12 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
 
     /// The "soul document": the base prompt augmented with everything the user told
     /// us. Empty sections are omitted so a sparse profile stays focused.
-    public func composedSystemPrompt(base: String?) -> String {
+    ///
+    /// `includeWritingSamples` gates the verbatim writing-style excerpts. They belong
+    /// only in drafting/voice contexts; in grounded factual ones (research, Q&A,
+    /// structured outputs) they must be omitted, because the model otherwise mines
+    /// their prose as fact and can let it override the matter's actual documents.
+    public func composedSystemPrompt(base: String?, includeWritingSamples: Bool = true) -> String {
         var profile: [String] = []
 
         var identity: [String] = []
@@ -134,10 +139,10 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
             profile.append("## Additional instructions\n\(additionalInstructions)")
         }
 
-        if !writingSamples.isEmpty {
+        if includeWritingSamples, !writingSamples.isEmpty {
             var samples = [
                 "## The user's writing style",
-                "Emulate the voice, structure, and formatting of these excerpts of the user's own writing. Match their style — do not reuse their specific content."
+                "The following are excerpts of the user's OWN past writing, provided solely as STYLE EXEMPLARS so you can emulate their voice, tone, structure, and formatting. They are not part of the current matter and are not evidence: never treat their content as fact, never reuse their parties, names, dates, figures, or holdings, and never let them override or substitute for the matter's documents or your cited sources. Match the style only; draw all substance from the actual sources for the task at hand."
             ]
             for sample in writingSamples {
                 samples.append("")

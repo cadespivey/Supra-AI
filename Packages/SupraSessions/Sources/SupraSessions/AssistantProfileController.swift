@@ -99,12 +99,17 @@ extension SupraStore {
     /// Reading the profile fresh means Settings edits apply at the next generation
     /// without reselecting a matter or relaunching. Returns `base` unchanged when no
     /// profile is configured, so callers cleanly fall back to their task prompt.
-    func composedAssistantPrompt(base: String?) -> String? {
+    ///
+    /// `includeWritingSamples` is false for grounded factual tasks (research, Q&A,
+    /// structured outputs): the user's verbatim writing-style excerpts are voice
+    /// exemplars only and must never enter a context where the model could treat
+    /// them as facts or let them displace the matter's own documents.
+    func composedAssistantPrompt(base: String?, includeWritingSamples: Bool = true) -> String? {
         guard
             let profile = try? appSettings.getSetting(AssistantProfile.profileKey, as: AssistantProfile.self),
             profile.isConfigured
         else { return base }
-        let composed = profile.composedSystemPrompt(base: base)
+        let composed = profile.composedSystemPrompt(base: base, includeWritingSamples: includeWritingSamples)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return composed.isEmpty ? base : composed
     }
