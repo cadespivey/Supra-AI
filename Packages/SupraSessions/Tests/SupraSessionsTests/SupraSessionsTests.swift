@@ -76,6 +76,30 @@ private final class SequencedCourtListenerClient: CourtListenerClientProtocol, @
     }
 }
 
+/// Search stub that also serves a full opinion body from `fetchOpinion`, so the
+/// top-authority hydration path can be exercised.
+private final class HydratingCourtListenerClient: CourtListenerClientProtocol, @unchecked Sendable {
+    private let response: CourtListenerSearchResponse
+    private let opinionBody: String
+    private let lock = NSLock()
+    private var _fetchedOpinionIDs: [Int] = []
+    var fetchedOpinionIDs: [Int] { lock.withLock { _fetchedOpinionIDs } }
+
+    init(response: CourtListenerSearchResponse, opinionBody: String) {
+        self.response = response
+        self.opinionBody = opinionBody
+    }
+
+    func searchOpinions(_ request: CourtListenerSearchRequest, relatedResearchSessionID: String?) async throws -> CourtListenerSearchResponse {
+        response
+    }
+
+    func fetchOpinion(id: Int) async throws -> CourtListenerOpinionDetailDTO {
+        lock.withLock { _fetchedOpinionIDs.append(id) }
+        return CourtListenerOpinionDetailDTO(plainText: opinionBody)
+    }
+}
+
 @MainActor
 final class SupraSessionsTests: XCTestCase {
 
@@ -590,6 +614,54 @@ final class SupraSessionsTests: XCTestCase {
         let metadata = try XCTUnwrap(audits.last?.metadataJSON)
         XCTAssertTrue(metadata.contains("courtListenerQueryFingerprints"))
         XCTAssertFalse(metadata.contains("Research California contract unenforceability"))
+    }
+
+    func testLegalResearchHydratesTopAuthorityWithFullOpinionText() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
+        let researchRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let fullBody = "FULL OPINION BODY — the indemnification clause was held unenforceable as against public policy."
+        let court = HydratingCourtListenerClient(
+            response: CourtListenerSearchResponse(
+                count: 1,
+                results: [
+                    CourtListenerSearchResultDTO(
+                        absoluteURL: "/opinion/1/foo-v-bar/",
+                        caseName: "Foo v. Bar",
+                        citation: ["123 Cal. App. 5th 456"],
+                        clusterID: 1,
+                        court: "California Court of Appeal",
+                        courtID: "calctapp",
+                        dateFiled: "2024-02-03",
+                        opinions: [CourtListenerOpinionDTO(id: 99, snippet: "short search snippet")],
+                        status: "Published"
+                    )
+                ]
+            ),
+            opinionBody: fullBody
+        )
+        final class PromptBox: @unchecked Sendable { var prompt = "" }
+        let box = PromptBox()
+        let stub = StubRuntimeClient { request in
+            box.prompt = request.prompt
+            return .events([
+                .event(request, 1, .token, token: "The clause is unenforceable [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(
+            store: store, runtimeClient: stub, scope: .matter(id: matter.id), courtListenerClient: court
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Research California contract unenforceability.",
+            modelID: ModelID(), systemPrompt: researchRoute.systemPrompt,
+            options: researchRoute.options, route: researchRoute
+        )
+
+        XCTAssertEqual(court.fetchedOpinionIDs, [99], "the top authority's opinion should be fetched")
+        XCTAssertTrue(box.prompt.contains("FULL OPINION BODY"), "the packet should carry the hydrated full opinion text, not just the snippet")
     }
 
     func testMatterVerifyAfterReopenUsesChatBoundPacketNotNewestMatterResearchSession() async throws {

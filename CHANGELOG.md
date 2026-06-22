@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry the BGE/mxbai instruction prefix these models were trained with (passages are
   embedded raw, matching the existing index — no re-indexing needed). Models without
   an asymmetric prompt are unchanged.
+- **Full opinion text for the top authorities.** CourtListener search returns only a
+  short snippet, so the model previously reasoned and quoted from a sentence or two.
+  The top 4 ranked authorities are now hydrated with their full opinion body (best-
+  effort — a fetch failure keeps the snippet and never blocks the answer), so the
+  model gets real opinion prose and the citation verifier checks quotes against the
+  full text instead of false-flagging a genuine quote absent from the snippet.
 - **Specialized legal prompts.** `/legal` (direct IRAC answer, bottom-line-first) and
   `/research` (exhaustive memo) no longer share one prompt. Both now carry a
   jurisdiction-binding directive (only controlling authority for the stated
