@@ -102,7 +102,7 @@ actor MLXModelController: ChatModelController {
 
         cancellationRequested = false
 
-        let (stream, contextTrimmed) = try await generationStream(
+        let (stream, contextTrimmed, contextOverflowed) = try await generationStream(
             container: container,
             prompt: prompt,
             systemPrompt: systemPrompt,
@@ -153,7 +153,8 @@ actor MLXModelController: ChatModelController {
             generatedTokenCount: generatedTokenCount,
             truncated: truncated,
             reasoningActive: reasoningActive,
-            contextTrimmed: contextTrimmed
+            contextTrimmed: contextTrimmed,
+            contextOverflowed: contextOverflowed
         )
     }
 
@@ -194,7 +195,7 @@ private func generationStream(
     history: [GenerateRequest.Turn],
     options: GenerationOptions,
     templateSupportsThinkingToggle: Bool
-) async throws -> (stream: AsyncStream<Generation>, contextTrimmed: Bool) {
+) async throws -> (stream: AsyncStream<Generation>, contextTrimmed: Bool, contextOverflowed: Bool) {
     // `enable_thinking` is read by Qwen3-style chat templates. Drafting and
     // ordinary chat keep it off; legal reasoning/research presets can opt in.
     let additionalContext: [String: any Sendable]? = templateSupportsThinkingToggle
@@ -226,9 +227,10 @@ private func generationStream(
         contextTrimmed = true
         input = try await prepared(keptHistory)
     }
-    // Even with no history left the system prompt + question can exceed the window;
-    // surface that too (the controller can warn) — we still generate from what fits.
-    if input.text.tokens.size > budget { contextTrimmed = true }
+    // If the system prompt + current prompt STILL overflow with no history left, the
+    // front of the prompt (grounding contract + top evidence) is evicted mid-
+    // generation and cannot be recovered — distinct from the benign history-drop case.
+    let contextOverflowed = input.text.tokens.size > budget
 
     let stream = try await container.generate(
         input: input,
@@ -242,7 +244,7 @@ private func generationStream(
             repetitionContextSize: 256
         )
     )
-    return (stream, contextTrimmed)
+    return (stream, contextTrimmed, contextOverflowed)
 }
 
 private func chatMessages(
