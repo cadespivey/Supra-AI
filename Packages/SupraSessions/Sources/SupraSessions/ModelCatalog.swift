@@ -41,6 +41,35 @@ public enum ModelCatalog {
             approxSizeGB: 18,
             notes: "Critique route (/critique second-pass review). Needs ~24 GB+ free RAM."
         ),
+        // Higher-precision variants of the legal-reasoning and critique role models.
+        // 4-bit quantization disproportionately degrades the long-tail factual recall
+        // that citations, holdings, and dates depend on; 6/8-bit cut those errors for
+        // users with RAM headroom. They do NOT auto-assign to a role (the quant differs
+        // from the default) — assign them to the matching role in the Models tab.
+        CatalogModel(
+            repoID: "mlx-community/Qwen3-30B-A3B-Thinking-2507-6bit",
+            displayName: "Qwen3 30B A3B Thinking 2507 (6-bit)",
+            approxSizeGB: 24,
+            notes: "Higher-precision legal-reasoning option (assign to the legal reasoning role). Fewer 4-bit recall errors on citations/holdings; needs ~40 GB+ free RAM."
+        ),
+        CatalogModel(
+            repoID: "mlx-community/Qwen3-30B-A3B-Thinking-2507-8bit",
+            displayName: "Qwen3 30B A3B Thinking 2507 (8-bit)",
+            approxSizeGB: 32,
+            notes: "Highest-precision legal-reasoning option (assign to the legal reasoning role). Best factual/citation recall; needs ~48 GB+ free RAM."
+        ),
+        CatalogModel(
+            repoID: "mlx-community/DeepSeek-R1-Distill-Qwen-32B-6bit",
+            displayName: "DeepSeek-R1 Distill Qwen 32B (6-bit)",
+            approxSizeGB: 26,
+            notes: "Higher-precision critique/high-quality-reasoning option (assign to the critique role). Needs ~40 GB+ free RAM."
+        ),
+        CatalogModel(
+            repoID: "mlx-community/DeepSeek-R1-Distill-Qwen-32B-8bit",
+            displayName: "DeepSeek-R1 Distill Qwen 32B (8-bit)",
+            approxSizeGB: 35,
+            notes: "Highest-precision critique/high-quality-reasoning option (assign to the critique role). Needs ~48 GB+ free RAM."
+        ),
         CatalogModel(
             repoID: "mlx-community/Qwen2.5-32B-Instruct-4bit",
             displayName: "Qwen2.5 32B Instruct (4-bit)",

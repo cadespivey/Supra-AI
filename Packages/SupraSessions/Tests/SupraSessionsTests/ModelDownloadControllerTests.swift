@@ -161,6 +161,19 @@ final class ModelDownloadControllerTests: XCTestCase {
         XCTAssertFalse(ManagedModelStorage.isManaged(path: "/tmp/somewhere-else"))
     }
 
+    func testHigherPrecisionRoleVariantsAreOffered() {
+        let repos = Set(ModelCatalog.curated.map(\.repoID))
+        // 6/8-bit variants of the legal-reasoning + critique role models.
+        for repo in [
+            "mlx-community/Qwen3-30B-A3B-Thinking-2507-6bit",
+            "mlx-community/Qwen3-30B-A3B-Thinking-2507-8bit",
+            "mlx-community/DeepSeek-R1-Distill-Qwen-32B-6bit",
+            "mlx-community/DeepSeek-R1-Distill-Qwen-32B-8bit"
+        ] {
+            XCTAssertTrue(repos.contains(repo), "ModelCatalog is missing higher-precision variant \(repo)")
+        }
+    }
+
     @MainActor
     func testPlanRoleModelsAreInCatalogAndAutoResolveToTheirRoles() throws {
         // The three downloadable role models from the local-legal-model-setup plan.
