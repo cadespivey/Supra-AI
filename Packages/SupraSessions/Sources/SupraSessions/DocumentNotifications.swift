@@ -1,5 +1,8 @@
 import Foundation
 import UserNotifications
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Notification permission + delivery for long-running document import/indexing
 /// notices (plan §5.6). Abstracted behind a protocol so setup logic can be unit
@@ -40,8 +43,35 @@ public struct SystemDocumentNotifier: DocumentNotifying {
         content.title = title
         content.body = body
         content.sound = .default
+        // Attach the running app's own icon so the notification visibly carries the
+        // Supra logo (a local notification otherwise shows only the system-resolved
+        // bundle icon, which can be wrong/generic). Sourcing it from the live app
+        // icon keeps it correct without bundling a separate image.
+        if let attachment = await Self.appIconAttachment() {
+            content.attachments = [attachment]
+        }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    /// Renders the app's icon to a temp PNG and wraps it as a notification
+    /// attachment. Returns nil on platforms without AppKit or if rendering fails.
+    private static func appIconAttachment() async -> UNNotificationAttachment? {
+        #if canImport(AppKit)
+        let pngData: Data? = await MainActor.run {
+            let icon: NSImage? = NSApplication.shared.applicationIconImage
+            guard let tiff = icon?.tiffRepresentation,
+                  let rep = NSBitmapImageRep(data: tiff) else { return nil }
+            return rep.representation(using: .png, properties: [:])
+        }
+        guard let pngData else { return nil }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("supra-notification-icon-\(UUID().uuidString).png")
+        guard (try? pngData.write(to: url)) != nil else { return nil }
+        return try? UNNotificationAttachment(identifier: "appIcon", url: url, options: nil)
+        #else
+        return nil
+        #endif
     }
 
     private static func map(_ status: UNAuthorizationStatus) -> DocumentNotificationAuthorizationStatus {

@@ -240,6 +240,28 @@ struct MatterDocumentsView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            if doc.parentDocumentID == nil {
+                Menu {
+                    Button { controller.moveDocument(id: doc.id, toFolderID: nil) } label: {
+                        Label("All Documents", systemImage: doc.folderID == nil ? "checkmark" : "tray")
+                    }
+                    if controller.folders.isEmpty {
+                        Text("Add a folder from the sidebar to organize documents")
+                    } else {
+                        Divider()
+                        ForEach(controller.folders) { folder in
+                            Button { controller.moveDocument(id: doc.id, toFolderID: folder.id) } label: {
+                                Label(folder.name, systemImage: doc.folderID == folder.id ? "checkmark" : "folder")
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "folder")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Move to folder")
+            }
             Button(role: .destructive) { controller.softDelete(documentID: doc.id) } label: {
                 Image(systemName: "trash")
             }

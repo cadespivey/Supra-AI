@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Documents: move a document between folders** — each document row has a folder
+  menu to move it into any folder, between folders, or back to All Documents
+  (the data layer already supported this; it just wasn't surfaced).
 - **Models: delete a registered model** (swipe / context menu in the Models tab,
   with confirmation). App-downloaded models have their files removed from disk to
   reclaim space; user-registered folders are only unregistered (the folder is left
@@ -49,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Document completion notifications now carry the app's logo (the app icon is
+  attached to the local notification).
 - "Download HTML…" on the opinion viewer now works (it used an app-modal save panel
   that never appeared from within a sheet; now uses `.fileExporter`).
 
