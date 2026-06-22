@@ -2,6 +2,7 @@ import Foundation
 
 enum AppRoute: String, CaseIterable, Identifiable {
     case globalChats
+    case scratchpad
     case models
     case diagnostics
     case settings
@@ -12,6 +13,8 @@ enum AppRoute: String, CaseIterable, Identifiable {
         switch self {
         case .globalChats:
             "Global Chats"
+        case .scratchpad:
+            "ScratchPad"
         case .models:
             "Models"
         case .diagnostics:
@@ -25,6 +28,8 @@ enum AppRoute: String, CaseIterable, Identifiable {
         switch self {
         case .globalChats:
             "bubble.left.and.bubble.right"
+        case .scratchpad:
+            "note.text"
         case .models:
             "cpu"
         case .diagnostics:
