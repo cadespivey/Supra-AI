@@ -82,6 +82,10 @@ public final class CourtListenerClient: CourtListenerClientProtocol, @unchecked 
                 throw CourtListenerError.missingToken
             case .invalidResponse:
                 throw CourtListenerError.invalidResponse
+            case .tokenHostNotAllowed:
+                // An authenticated request was aimed at a non-API host — a programming
+                // error, surfaced as a network-policy block rather than leaking a token.
+                throw CourtListenerError.blockedByNetworkPolicy
             }
         } catch {
             throw CourtListenerError.transportFailed(error.localizedDescription)
@@ -126,6 +130,10 @@ public final class CourtListenerClient: CourtListenerClientProtocol, @unchecked 
                 throw CourtListenerError.missingToken
             case .invalidResponse:
                 throw CourtListenerError.invalidResponse
+            case .tokenHostNotAllowed:
+                // An authenticated request was aimed at a non-API host — a programming
+                // error, surfaced as a network-policy block rather than leaking a token.
+                throw CourtListenerError.blockedByNetworkPolicy
             }
         } catch {
             throw CourtListenerError.transportFailed(error.localizedDescription)

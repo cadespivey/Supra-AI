@@ -9,9 +9,17 @@ final class PromptBudgetTests: XCTestCase {
         )
     }
 
-    func testFloorsAtSmallPositiveValueWhenOutputExceedsContext() {
-        // A degenerate config (output budget larger than the window) still yields a
-        // small positive budget rather than a negative one.
-        XCTAssertEqual(PromptBudget.promptTokenBudget(maxContextTokens: 100, maxOutputTokens: 4096), 512)
+    func testNeverExceedsTheContextWindow() {
+        // A degenerate config (output budget larger than a tiny window) must yield a
+        // budget that does not exceed the window, so the overflow check still fires.
+        XCTAssertEqual(PromptBudget.promptTokenBudget(maxContextTokens: 100, maxOutputTokens: 4096), 100)
+        for ctx in [1, 100, 4096, 32_768, 65_536, 262_144] {
+            for out in [1, 1024, 6000, 16_384] {
+                XCTAssertLessThanOrEqual(
+                    PromptBudget.promptTokenBudget(maxContextTokens: ctx, maxOutputTokens: out), ctx,
+                    "budget must never exceed the window (ctx=\(ctx), out=\(out))"
+                )
+            }
+        }
     }
 }

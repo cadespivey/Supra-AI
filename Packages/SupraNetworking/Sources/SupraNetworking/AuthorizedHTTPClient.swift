@@ -19,6 +19,11 @@ public extension AuthorizedHTTPClientProtocol {
 public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecked Sendable {
     public typealias HTTPTransport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
+    /// Hosts the CourtListener API token may be sent to. The network allow-list also
+    /// permits the token-free storage CDN (storage.courtlistener.com) for opinion PDFs,
+    /// so the token is gated to the API hosts only — it must never reach the CDN.
+    static let tokenAllowedHosts: Set<String> = ["www.courtlistener.com", "courtlistener.com"]
+
     private let keyStore: any APIKeyStoreProtocol
     private let policy: any NetworkPolicyServiceProtocol
     private let logger: NetworkRequestLogger
@@ -101,6 +106,14 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
 
         var outgoing = request
         if authenticated {
+            // Defense-in-depth for the "token never reaches the CDN" invariant: the
+            // allow-list also permits the token-free storage CDN, so gate token
+            // injection on the host here rather than relying only on caller discipline
+            // (sendUnauthenticated). An authenticated request to any non-API host fails
+            // loudly instead of leaking the Authorization header.
+            guard Self.tokenAllowedHosts.contains(url.host?.lowercased() ?? "") else {
+                throw AuthorizedHTTPClientError.tokenHostNotAllowed
+            }
             guard let token = try keyStore.loadCourtListenerToken()?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !token.isEmpty else {
                 throw AuthorizedHTTPClientError.missingToken
@@ -183,4 +196,7 @@ private struct NetworkRequestAuditMetadata: Encodable {
 public enum AuthorizedHTTPClientError: Error, Equatable, Sendable {
     case missingToken
     case invalidResponse
+    /// An authenticated request targeted a host that is not a CourtListener API host
+    /// (e.g. the public storage CDN). The API token must never leave the API hosts.
+    case tokenHostNotAllowed
 }

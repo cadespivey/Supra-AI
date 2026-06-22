@@ -90,6 +90,29 @@ final class SupraNetworkingTests: XCTestCase {
         XCTAssertFalse(record.requestMetadataJSON?.localizedCaseInsensitiveContains("authorization") ?? true)
     }
 
+    func testAuthenticatedSendToStorageCDNRefusesRatherThanLeakToken() async throws {
+        let store = try makeStore()
+        let spy = TransportSpy()
+        let client = AuthorizedHTTPClient(
+            keyStore: InMemoryKeyStore(token: "secret-token"),
+            policy: NetworkPolicyService(),
+            logger: NetworkRequestLogger(repository: store.networkRequests),
+            rateLimitTracker: RateLimitTracker(),
+            transport: { request in await spy.respond(to: request, statusCode: 200) }
+        )
+        // The CDN host is on the allow-list (for token-free PDF downloads), but the
+        // token must never be sent there. An authenticated send must refuse.
+        let cdn = try XCTUnwrap(URL(string: "https://storage.courtlistener.com/pdf/2009/04/foo.pdf"))
+        do {
+            _ = try await client.send(URLRequest(url: cdn), relatedResearchSessionID: nil)
+            XCTFail("an authenticated send to the storage CDN must refuse, not attach the token")
+        } catch let error as AuthorizedHTTPClientError {
+            XCTAssertEqual(error, .tokenHostNotAllowed)
+        }
+        let sent = await spy.lastRequest()
+        XCTAssertNil(sent, "no request (and therefore no token) should reach the CDN")
+    }
+
     func testAuthorizedHTTPClientRedactsPrivilegedQueryTermsFromLogByDefault() async throws {
         let store = try makeStore()
         let spy = TransportSpy()
