@@ -169,7 +169,13 @@ public final class StructuredOutputController: ObservableObject {
             message = "Document Q&A and chronologies are generated from the Documents tab."
             return false
         }
-        let effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: type)
+        var effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: type)
+        // Multi-section contracts (8–11 headings) need output room; raise the budget so
+        // a long memo isn't truncated mid-structure (which previously read as "missing
+        // sections" — a length problem misclassified as a structure problem).
+        if let current = effectiveRoute?.options.maxOutputTokens {
+            effectiveRoute?.options.maxOutputTokens = max(current, Self.structuredOutputMinOutputTokens)
+        }
         guard let modelID else {
             message = if let effectiveRoute {
                 "Assign a \(effectiveRoute.role.displayName) model in the Models tab to generate \(contract.title)."
@@ -244,10 +250,35 @@ public final class StructuredOutputController: ObservableObject {
                 relatedTable: "structured_outputs", relatedID: output.id
             )
             loadOutputs()
+            // Auto-repair missing required sections (up to N passes) so a complete,
+            // fully-structured output is the common case rather than a manual step. A
+            // pass that doesn't reduce the missing set is discarded and stops the loop.
+            await autoRepairIfNeeded(outputID: output.id, missing: analysis.missing, modelID: modelID)
             return true
         } catch {
             message = "Output generation failed: \(error.localizedDescription)"
             return false
+        }
+    }
+
+    /// Output-token budget floor for multi-section structured outputs, so a long memo
+    /// isn't truncated mid-structure.
+    static let structuredOutputMinOutputTokens = 8000
+    /// Automatic structure-repair passes after generation before leaving an output as
+    /// needs-review.
+    static let maxAutoRepairPasses = 2
+
+    private func autoRepairIfNeeded(outputID: String, missing: [String], modelID: ModelID) async {
+        var remaining = missing
+        var pass = 0
+        while !remaining.isEmpty, pass < Self.maxAutoRepairPasses {
+            pass += 1
+            // route: nil → performRepair uses the dedicated repair (critique) route.
+            guard let newMissing = await performRepair(
+                outputID: outputID, modelID: modelID, route: nil, commitOnlyIfImproved: true, previousMissingCount: remaining.count
+            ) else { break }
+            if newMissing.count >= remaining.count { break } // no progress → stop
+            remaining = newMissing
         }
     }
 
@@ -316,9 +347,12 @@ public final class StructuredOutputController: ObservableObject {
     public func repairOutput(_ outputID: String, modelID: ModelID?, route: ModelRoute? = nil) async -> Bool {
         guard let record = outputRecord(outputID),
               let type = StructuredOutputType(rawValue: record.outputType),
-              let active = activeVersion(for: record) else { return false }
-        guard let contract = StructuredOutputContracts.contract(for: type) else { return false }
-        let effectiveRoute = route ?? ModelRouter().repairRoute(forStructuredOutput: type)
+              activeVersion(for: record) != nil,
+              StructuredOutputContracts.contract(for: type) != nil else { return false }
+        var effectiveRoute = route ?? ModelRouter().repairRoute(forStructuredOutput: type)
+        if let current = effectiveRoute?.options.maxOutputTokens {
+            effectiveRoute?.options.maxOutputTokens = max(current, Self.structuredOutputMinOutputTokens)
+        }
         guard let modelID else {
             message = if let effectiveRoute {
                 "Assign a \(effectiveRoute.role.displayName) model in the Models tab to repair \(record.title)."
@@ -336,18 +370,45 @@ public final class StructuredOutputController: ObservableObject {
         message = nil
         defer { isGenerating = false }
 
+        // Manual repair always commits a new version (the user explicitly asked).
+        return await performRepair(
+            outputID: outputID, modelID: modelID, route: effectiveRoute,
+            commitOnlyIfImproved: false, previousMissingCount: nil
+        ) != nil
+    }
+
+    /// Generates one structure-repair pass for an output's active version. Returns the
+    /// repaired version's missing sections, or nil on failure. When
+    /// `commitOnlyIfImproved` is set and the pass does not reduce the missing set, no
+    /// version is saved (the no-op is discarded) and the prior missing set is returned.
+    private func performRepair(
+        outputID: String,
+        modelID: ModelID,
+        route: ModelRoute?,
+        commitOnlyIfImproved: Bool,
+        previousMissingCount: Int?
+    ) async -> [String]? {
+        guard let record = outputRecord(outputID),
+              let type = StructuredOutputType(rawValue: record.outputType),
+              let active = activeVersion(for: record),
+              let contract = StructuredOutputContracts.contract(for: type) else { return nil }
         do {
             let prompt = try StructuredOutputPromptBuilder.buildRepairPrompt(
                 originalOutput: active.contentMarkdown, requiredHeadings: contract.requiredHeadings
             )
-            let rawRepaired = ReasoningContent.answer(from: try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute))
+            var resolvedRoute = route ?? ModelRouter().repairRoute(forStructuredOutput: type)
+            if let current = resolvedRoute?.options.maxOutputTokens {
+                resolvedRoute?.options.maxOutputTokens = max(current, Self.structuredOutputMinOutputTokens)
+            }
+            let rawRepaired = ReasoningContent.answer(from: try await collect(prompt: prompt, modelID: modelID, route: resolvedRoute))
             let analysis = StructuredOutputSections.analyze(
                 markdown: rawRepaired, requiredHeadings: contract.requiredHeadings
             )
+            if commitOnlyIfImproved, let previous = previousMissingCount, analysis.missing.count >= previous {
+                return analysis.missing // no improvement → discard this pass
+            }
             let (repaired, status) = Self.guardUnverifiedCitations(
-                in: rawRepaired,
-                type: type,
-                status: analysis.missing.isEmpty ? .complete : .needsReview
+                in: rawRepaired, type: type, status: analysis.missing.isEmpty ? .complete : .needsReview
             )
             _ = try store.structuredOutputs.createVersion(
                 structuredOutputID: outputID, contentMarkdown: repaired,
@@ -361,10 +422,10 @@ public final class StructuredOutputController: ObservableObject {
                 summary: "Repaired \(record.title)", relatedTable: "structured_outputs", relatedID: outputID
             )
             loadOutputs()
-            return true
+            return analysis.missing
         } catch {
             message = "Structure repair failed: \(error.localizedDescription)"
-            return false
+            return nil
         }
     }
 
