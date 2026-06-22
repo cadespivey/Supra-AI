@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
-## [Unreleased]
+## [1.4.0] - 2026-06-22
+
+A legal-quality and safety-hardening release: the local models are tuned and scaffolded
+for legal research, document analysis, and drafting, and an adversarial audit of every
+model-call path hardened the citation/grounding guarantees.
 
 ### Changed
 
@@ -135,16 +139,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The chat generation controls now affect routed sends.** The Precise/temperature/
   max-output picker was silently ignored for `/legal`, `/research`, and `/draft` (they
-  used the route preset and dropped the user's selection). The user's temperature now
-  applies on top of the route's tuning — except a deterministic route (verification at
-  temperature 0) is never loosened — and the output budget is extend-only so the
-  general default can't truncate a research memo's tuned budget.
+  used the route preset and dropped the user's selection). Non-legal routes (drafting,
+  general chat) now honor the user's temperature; the legal authority routes keep their
+  tuned conservative temperature so a looser global default can't loosen a
+  citation-bound answer. The output budget is extend-only so the general default can't
+  truncate a research memo's tuned budget.
 - **Launch splash no longer lets the window behind it show through.** The shell's
   `NavigationSplitView` sidebar is backed by an AppKit vibrancy view that ignores
   SwiftUI layer opacity, so the old "overlay the shell at opacity 0" approach let
   the sidebar/chrome bleed through the splash. The shell is now swapped in only
   after the splash dismisses (the cross-fade is preserved), so there's no vibrancy
   to leak; the launch window size is pinned so the swap doesn't resize the window.
+
+### Security
+
+- **Citation verification hardened against fabricated cites (adversarial audit).** The
+  verifier now validates `[A#]` labels against *exactly* the source packet the model was
+  shown (not the larger retrieved/reconstructed set), so a label pointing at an authority
+  the model never saw is flagged; and a labeled proposition is content-grounded against
+  the cited opinion's full text, so a fabricated paraphrased holding under a valid label
+  is caught — neither can read as verified law. Structured-output repair is monotonic
+  (a repair can't strip the unverified-citation banner) and preserve-or-improve (a worse
+  pass can't replace a good version).
+- **Grounded answers refuse instead of silently ungrounding.** When the sources + the
+  question exceed the model's context window, document Q&A / research / chronology /
+  structured-output flows now refuse (asking you to narrow scope or use a larger-context
+  model) rather than return a confident answer whose "answer only from the sources"
+  contract was evicted from the context.
+- **The CourtListener API token is gated to the API hosts in code** (never the public
+  storage CDN used for opinion PDFs) — defense-in-depth for the existing token-handling
+  invariant, with the request failing loudly if ever misdirected.
 
 ## [1.3.4] - 2026-06-21
 
@@ -345,7 +369,8 @@ acceptance criteria and a validation suite.
   default.
 - No telemetry. See [SECURITY.md](SECURITY.md) for the full model.
 
-[Unreleased]: https://github.com/cadespivey/Supra-AI/compare/v1.3.4...HEAD
+[Unreleased]: https://github.com/cadespivey/Supra-AI/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/cadespivey/Supra-AI/compare/v1.3.4...v1.4.0
 [1.3.4]: https://github.com/cadespivey/Supra-AI/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/cadespivey/Supra-AI/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/cadespivey/Supra-AI/compare/v1.3.1...v1.3.2
