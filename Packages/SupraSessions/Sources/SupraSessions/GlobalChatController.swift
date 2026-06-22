@@ -794,13 +794,40 @@ public final class GlobalChatController: ObservableObject {
             options: options
         )
         var output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
-        let verification = legalConfiguration.verifyCitations
+        var verification = legalConfiguration.verifyCitations
             ? LegalCitationVerifier.verify(
                 answer: output,
                 authorities: authorities,
                 expectedJurisdiction: classification.jurisdiction
             )
             : nil
+
+        // Auto-repair on a hard verification failure: re-prompt the same model once
+        // with the specific issues and a packet-only-citation rule, then re-verify.
+        // Runs only on a hard failure, so a clean answer keeps its single round-trip;
+        // the revision is kept only if it is at least as clean as the original.
+        if let failed = verification, !failed.passed,
+           Self.hasHardVerificationFailure(failed, route: route)
+            || (route.requiresCitations && !Self.hasSupportedCitation(failed)) {
+            let revisionPrompt = LegalResearchPromptBuilder.buildRevisionPrompt(
+                question: prompt, classification: classification, rankedAuthorities: ranked,
+                priorAnswer: output, issues: failed.issues
+            )
+            let revisionRequest = GenerateRequest(
+                generationID: generationID, modelID: modelID, prompt: revisionPrompt,
+                systemPrompt: systemPrompt, history: history, options: options
+            )
+            if let revisedRaw = try? await runtimeClient.collectGeneratedText(revisionRequest) {
+                let revised = ReasoningContent.answer(from: revisedRaw)
+                let revisedVerification = LegalCitationVerifier.verify(
+                    answer: revised, authorities: authorities, expectedJurisdiction: classification.jurisdiction
+                )
+                if revisedVerification.issues.count <= failed.issues.count {
+                    output = revised
+                    verification = revisedVerification
+                }
+            }
+        }
 
         if let verification, !verification.passed {
             // Gate on severity: a fabricated/unsupported citation or quote (and a

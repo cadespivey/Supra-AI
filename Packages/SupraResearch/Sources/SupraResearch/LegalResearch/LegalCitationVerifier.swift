@@ -131,11 +131,17 @@ public enum LegalCitationVerifier {
             }
         }
 
+        // Packet labels count as cited strings too, so a label-only answer (the [A#]
+        // contract's expected form) is recognized as having a supported citation. An
+        // out-of-range label is also flagged unsupportedCitation above with the same
+        // "[A#]" excerpt, so it is correctly treated as unsupported, not support.
+        let labelStrings = Set(packetLabelIndices(in: answer)).map { "[A\($0)]" }
+
         return LegalVerificationReport(
             passed: issues.isEmpty,
             issues: issues,
             retrievedAuthorityIDs: authorities.map(\.id),
-            citedStrings: extracted
+            citedStrings: extracted + labelStrings
         )
     }
 

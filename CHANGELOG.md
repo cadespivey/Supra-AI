@@ -60,6 +60,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the prior turns (token-budgeted; the runtime's context guard trims them if the
   packet + question leave no room). (Document Q&A remains single-shot by design — it
   has no conversation thread.)
+- **Legal answers self-repair before quarantine.** When automated citation
+  verification finds a hard failure (a fabricated/unsupported citation or quote, or a
+  jurisdiction mismatch), the model now gets one corrective pass — re-prompted with the
+  specific issues and a packet-only-citation rule — and the answer is re-verified
+  before falling back to the UNVERIFIED-DRAFT banner. Only runs on failure, so clean
+  answers keep their single round-trip; the revision is kept only if it's at least as
+  clean. The verifier also now counts a valid `[A#]` packet label as a supported
+  citation, so a correctly label-cited answer is no longer over-flagged.
 - **Full opinion text for the top authorities.** CourtListener search returns only a
   short snippet, so the model previously reasoned and quoted from a sentence or two.
   The top 4 ranked authorities are now hydrated with their full opinion body (best-
