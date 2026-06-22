@@ -44,8 +44,18 @@ public enum LegalResearchPromptBuilder {
         - End every sentence that states a legal proposition with the bracketed label of its supporting source, e.g. [A1]. Use only labels that appear in the packet (\(labelRange)); never invent a label.
         - If the packet does not support a proposition, write [NEEDS AUTHORITY] instead of citing it, and say what is missing.
         - Do not invent citations, quotes, dates, holdings, docket numbers, procedural posture, or subsequent history. Quote source text only when it appears verbatim in the packet.
+
+        \(answerExemplar)
         """
     }
+
+    /// A short worked example of the expected citation + hedging form. Quantized
+    /// local models follow [A#] placement and uncertainty handling far more reliably
+    /// from an example than from instructions alone.
+    static let answerExemplar = """
+    EXAMPLE OF THE EXPECTED FORM (illustrative only — do not reuse its facts or labels):
+    The claim is governed by a two-year statute of limitations [A1]. That period runs from the date of injury rather than discovery, absent tolling [A2]. Because suit was filed more than two years after the injury and no tolling applies on these facts, the claim is time-barred [A1][A2]. Whether the continuing-violation doctrine could revive it is [NEEDS AUTHORITY] on this packet.
+    """
 
     public static func buildCritiquePrompt(draft: String, authorities: [LegalAuthority]) -> String {
         """
