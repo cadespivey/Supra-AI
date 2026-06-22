@@ -22,6 +22,9 @@ public final class SupraStore: @unchecked Sendable {
     public let documentIndex: DocumentIndexRepository
     public let documentJobs: DocumentJobRepository
     public let documentSources: DocumentSourceRepository
+    // Milestone 4: ScratchPad daily notes + billing.
+    public let scratchPad: ScratchPadRepository
+    public let billing: BillingRepository
 
     public init(database: SupraDatabase) {
         self.database = database
@@ -43,6 +46,8 @@ public final class SupraStore: @unchecked Sendable {
         self.documentIndex = DocumentIndexRepository(writer: database.writer)
         self.documentJobs = DocumentJobRepository(writer: database.writer)
         self.documentSources = DocumentSourceRepository(writer: database.writer)
+        self.scratchPad = ScratchPadRepository(writer: database.writer)
+        self.billing = BillingRepository(writer: database.writer)
     }
 
     public convenience init(url: URL) throws {

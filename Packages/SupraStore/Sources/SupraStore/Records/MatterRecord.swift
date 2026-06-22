@@ -15,6 +15,10 @@ public struct MatterRecord: Codable, FetchableRecord, PersistableRecord, Sendabl
     public var clientNames: String?
     public var matterDescription: String?
     public var internalMatterID: String?
+    /// LEDES `CLIENT_ID` — the client's identifier for e-billing (Milestone 4).
+    public var clientID: String?
+    /// LEDES `CLIENT_MATTER_ID` — the client's matter identifier for e-billing (Milestone 4).
+    public var clientMatterID: String?
     public var notes: String?
     public var createdAt: Date
     public var updatedAt: Date
@@ -32,6 +36,8 @@ public struct MatterRecord: Codable, FetchableRecord, PersistableRecord, Sendabl
         clientNames: String? = nil,
         matterDescription: String? = nil,
         internalMatterID: String? = nil,
+        clientID: String? = nil,
+        clientMatterID: String? = nil,
         notes: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -48,6 +54,8 @@ public struct MatterRecord: Codable, FetchableRecord, PersistableRecord, Sendabl
         self.clientNames = clientNames
         self.matterDescription = matterDescription
         self.internalMatterID = internalMatterID
+        self.clientID = clientID
+        self.clientMatterID = clientMatterID
         self.notes = notes
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -66,6 +74,8 @@ public struct MatterRecord: Codable, FetchableRecord, PersistableRecord, Sendabl
         case clientNames = "client_names"
         case matterDescription = "matter_description"
         case internalMatterID = "internal_matter_id"
+        case clientID = "client_id"
+        case clientMatterID = "client_matter_id"
         case notes
         case createdAt = "created_at"
         case updatedAt = "updated_at"

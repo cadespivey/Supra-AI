@@ -767,12 +767,119 @@ public enum SupraMigrator {
             }
         }
 
+        // Milestone 4: ScratchPad daily notes -> billing. See Docs/ScratchPad-SPEC.md §2.
+        migrator.registerMigration("v041_create_scratch_pad_days") { db in
+            try db.create(table: "scratch_pad_days", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("day", .text).notNull()
+                table.column("locked_at", .datetime)
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.create(index: "idx_scratch_pad_days_day", on: "scratch_pad_days", columns: ["day"], unique: true, ifNotExists: true)
+        }
+
+        migrator.registerMigration("v042_create_scratch_pad_entries") { db in
+            try db.create(table: "scratch_pad_entries", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("day_id", .text).notNull().references("scratch_pad_days", onDelete: .cascade)
+                table.column("seq", .integer).notNull()
+                table.column("text", .text).notNull()
+                table.column("mentions_json", .text)
+                table.column("tags_json", .text)
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.create(index: "idx_scratch_pad_entries_day", on: "scratch_pad_entries", columns: ["day_id", "seq"], ifNotExists: true)
+        }
+
+        migrator.registerMigration("v043_create_scratch_pad_attachments") { db in
+            try db.create(table: "scratch_pad_attachments", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("day_id", .text).notNull().references("scratch_pad_days", onDelete: .cascade)
+                table.column("entry_id", .text).references("scratch_pad_entries", onDelete: .setNull)
+                table.column("matter_document_id", .text).references("matter_documents", onDelete: .setNull)
+                table.column("matter_id", .text).references("matters", onDelete: .setNull)
+                table.column("evidence_kind", .text).notNull()
+                table.column("evidence_signals_json", .text)
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.create(index: "idx_scratch_pad_attachments_day", on: "scratch_pad_attachments", columns: ["day_id"], ifNotExists: true)
+        }
+
+        migrator.registerMigration("v044_create_billing_drafts") { db in
+            try db.create(table: "billing_drafts", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("day_id", .text).notNull().references("scratch_pad_days", onDelete: .cascade)
+                table.column("version", .integer).notNull()
+                table.column("model_id", .text)
+                table.column("sensitivity", .double).notNull().defaults(to: 0.5)
+                table.column("status", .text).notNull()
+                table.column("reconciliation_json", .text)
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.create(index: "idx_billing_drafts_day", on: "billing_drafts", columns: ["day_id", "version"], ifNotExists: true)
+        }
+
+        migrator.registerMigration("v045_create_billing_line_items") { db in
+            try db.create(table: "billing_line_items", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("draft_id", .text).notNull().references("billing_drafts", onDelete: .cascade)
+                table.column("seq", .integer).notNull()
+                table.column("client_id", .text)
+                table.column("matter_id", .text)
+                table.column("narrative", .text).notNull()
+                table.column("hours", .double).notNull()
+                table.column("work_date", .text).notNull()
+                table.column("utbms_task_code", .text)
+                table.column("utbms_activity_code", .text)
+                table.column("timekeeper_id", .text)
+                table.column("rate", .double)
+                table.column("confidence", .text).notNull()
+                table.column("evidence_json", .text)
+                table.column("code_note", .text)
+                table.column("user_edited", .boolean).notNull().defaults(to: false)
+                table.column("source_entry_ids_json", .text)
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.create(index: "idx_billing_line_items_draft", on: "billing_line_items", columns: ["draft_id", "seq"], ifNotExists: true)
+        }
+
+        migrator.registerMigration("v046_create_matter_billing_profiles") { db in
+            try db.create(table: "matter_billing_profiles", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("matter_id", .text).notNull().references("matters", onDelete: .cascade)
+                table.column("override_instructions", .text)
+                table.column("billing_code_set", .text).notNull()
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.create(index: "idx_matter_billing_profiles_matter", on: "matter_billing_profiles", columns: ["matter_id"], unique: true, ifNotExists: true)
+        }
+
+        migrator.registerMigration("v047_add_matter_ledes_fields") { db in
+            try db.alter(table: "matters") { table in
+                table.add(column: "client_id", .text)
+                table.add(column: "client_matter_id", .text)
+            }
+        }
+
         return migrator
     }
 
     #if DEBUG
     public static func deleteAllTables(_ db: Database) throws {
         for table in [
+            // Milestone 4 ScratchPad / billing tables: drop children before parents.
+            "billing_line_items",
+            "billing_drafts",
+            "scratch_pad_attachments",
+            "scratch_pad_entries",
+            "scratch_pad_days",
+            "matter_billing_profiles",
             // Milestone 3 document intelligence tables: drop children before parents.
             "document_exports",
             "document_output_sources",
