@@ -117,9 +117,9 @@ struct MatterAuthoritiesView: View {
         panel.prompt = "Import"
         panel.message = "Choose research files (PDF, Word, RTF, or text) to index for this matter"
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        documentsController.importItems(panel.urls)
+        documentsController.importResearchDocuments(panel.urls)
         let count = panel.urls.count
-        importBanner = "Importing \(count) research file\(count == 1 ? "" : "s") — track progress and ask questions in the Documents tab."
+        importBanner = "Importing \(count) research file\(count == 1 ? "" : "s") into the “Research” folder — track progress and ask questions in the Documents tab."
     }
 
     private static let researchContentTypes: [UTType] = {
