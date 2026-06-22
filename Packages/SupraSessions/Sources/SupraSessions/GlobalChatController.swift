@@ -279,7 +279,7 @@ public final class GlobalChatController: ObservableObject {
         // route is personalized. Falls back to the route/default prompt when no
         // profile is configured.
         let effectiveSystemPrompt = systemPrompt ?? store.composedAssistantPrompt(base: route?.systemPrompt ?? defaultSystemPrompt)
-        let effectiveOptions = options ?? route?.options ?? storedDefaultOptions()
+        let effectiveOptions = Self.effectiveOptions(userOptions: options, route: route, fallback: storedDefaultOptions())
         Task {
             await self.performSend(
                 prompt: trimmed,
@@ -323,6 +323,27 @@ public final class GlobalChatController: ObservableObject {
 
     private func storedDefaultOptions() -> GenerationOptions {
         (try? store.appSettings.getSetting(SettingsController.generationDefaultsKey, as: GenerationOptions.self)) ?? GenerationOptions()
+    }
+
+    /// Resolves the options for a send, honoring the user's visible generation
+    /// controls on routed sends instead of silently ignoring them. The route's
+    /// specialized tuning is the base; the user's temperature applies on top — except
+    /// the route is never *loosened* if it is intentionally greedy (temperature 0,
+    /// e.g. verification). `maxOutputTokens` is extend-only (the larger of the two) so
+    /// the user can lengthen an answer but never truncate a route's tuned budget
+    /// (e.g. a research memo's). Routes keep their topK / thinking / context / penalty.
+    nonisolated static func effectiveOptions(
+        userOptions: GenerationOptions?,
+        route: ModelRoute?,
+        fallback: GenerationOptions
+    ) -> GenerationOptions {
+        guard let route else { return userOptions ?? fallback }
+        var merged = route.options
+        if let userOptions {
+            if route.options.temperature > 0 { merged.temperature = userOptions.temperature }
+            merged.maxOutputTokens = max(route.options.maxOutputTokens, userOptions.maxOutputTokens)
+        }
+        return merged
     }
 
     /// Requests cancellation of the active generation. The runtime emits a

@@ -100,6 +100,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The chat generation controls now affect routed sends.** The Precise/temperature/
+  max-output picker was silently ignored for `/legal`, `/research`, and `/draft` (they
+  used the route preset and dropped the user's selection). The user's temperature now
+  applies on top of the route's tuning — except a deterministic route (verification at
+  temperature 0) is never loosened — and the output budget is extend-only so the
+  general default can't truncate a research memo's tuned budget.
 - **Launch splash no longer lets the window behind it show through.** The shell's
   `NavigationSplitView` sidebar is backed by an AppKit vibrancy view that ignores
   SwiftUI layer opacity, so the old "overlay the shell at opacity 0" approach let
