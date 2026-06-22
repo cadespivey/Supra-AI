@@ -199,7 +199,7 @@ public enum BillingExporter {
     static func money(_ value: Double) -> String { String(format: "%.2f", value) }
 
     /// Human-friendly hours (trailing zeros trimmed): 0.60 -> "0.6", 1.00 -> "1", 0.25 -> "0.25".
-    static func hoursString(_ value: Double) -> String {
+    public static func hoursString(_ value: Double) -> String {
         var string = String(format: "%.2f", value)
         if string.contains(".") {
             while string.hasSuffix("0") { string.removeLast() }
