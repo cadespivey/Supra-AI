@@ -722,7 +722,7 @@ public final class GlobalChatController: ObservableObject {
         }
 
         let retrieval = try await retrieveAuthorities(for: classification, matterID: scopedMatterID)
-        let ranked = LegalAuthorityRanker.rank(retrieval.authorities, for: classification)
+        let ranked = await hydrateTopAuthorities(LegalAuthorityRanker.rank(retrieval.authorities, for: classification))
         let authorities = ranked.map(\.authority)
         let packet = LegalSourcePacket(
             queryTerms: retrieval.queryTerms,
@@ -824,6 +824,31 @@ public final class GlobalChatController: ObservableObject {
         guard !report.citedStrings.isEmpty else { return false }
         let unsupported = Set(report.issues.filter { $0.kind == .unsupportedCitation }.compactMap { $0.excerpt })
         return report.citedStrings.contains { !unsupported.contains($0) }
+    }
+
+    /// Most authorities to enrich with full opinion text. CourtListener search returns
+    /// only a short snippet/syllabus, so for the top-ranked authorities we fetch the
+    /// full opinion body. This gives the model real opinion prose to reason over and
+    /// quote, and lets the citation verifier check quotes against the full text rather
+    /// than false-flagging a genuine quote that was merely absent from the snippet.
+    static let maxHydratedAuthorities = 4
+
+    /// Best-effort: replaces the top-N ranked authorities' text with the full opinion
+    /// body fetched from CourtListener. Any fetch failure (network, rate limit, no
+    /// opinion id, empty body) leaves that authority's existing snippet untouched, so
+    /// hydration never blocks or fails the research answer.
+    private func hydrateTopAuthorities(_ ranked: [RankedLegalAuthority]) async -> [RankedLegalAuthority] {
+        var result = ranked
+        for index in result.indices.prefix(Self.maxHydratedAuthorities) {
+            guard let opinionID = result[index].authority.opinionId.flatMap(Int.init) else { continue }
+            guard
+                let detail = try? await courtListenerClient.fetchOpinion(id: opinionID),
+                let body = detail.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !body.isEmpty
+            else { continue }
+            result[index].authority.text = body
+        }
+        return result
     }
 
     private func retrieveAuthorities(
