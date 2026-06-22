@@ -39,23 +39,18 @@ struct GlobalChatsView: View {
     private static let maxAttachments = 10
 
     var body: some View {
-        Group {
-            if listStyle == .picker {
-                HStack(spacing: 0) {
-                    chatHistorySidebar
-                    Divider()
-                    chatColumn
-                }
-            } else {
-                chatColumn
-            }
+        // The searchable history sidebar is shown in both the global Chats screen
+        // and a matter's Chat tab, so matter chats are a real store: start new ones
+        // and reopen old ones (not just the cramped inline strip).
+        HStack(spacing: 0) {
+            chatHistorySidebar
+            Divider()
+            chatColumn
         }
         .onAppear {
             inputFocused = true
-            if listStyle == .picker {
-                matters?.loadMatters()
-                if suggestions.isEmpty { suggestions = ChatSuggestions.sample() }
-            }
+            matters?.loadMatters()
+            if listStyle == .picker, suggestions.isEmpty { suggestions = ChatSuggestions.sample() }
         }
         // Rotate the example prompts every time the chat window goes blank/empty
         // (new chat, deleted chat, or a moved chat) so they don't get stale.
@@ -83,20 +78,11 @@ struct GlobalChatsView: View {
 
     private var chatBar: some View {
         HStack(spacing: 12) {
-            switch listStyle {
-            case .picker:
-                Text(selectedChatTitle ?? "New Chat")
-                    .font(.headline)
-                    .foregroundStyle(selectedChatTitle == nil ? .secondary : .primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            case .inline:
-                if controller.chats.isEmpty {
-                    Text("No chats yet").foregroundStyle(.secondary)
-                } else {
-                    inlineChatList
-                }
-            }
+            Text(selectedChatTitle ?? "New Chat")
+                .font(.headline)
+                .foregroundStyle(selectedChatTitle == nil ? .secondary : .primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
             Spacer()
             Button {
                 controller.startNewChat()
@@ -109,10 +95,11 @@ struct GlobalChatsView: View {
         .padding(12)
     }
 
-    // MARK: - Chat history sidebar (global chat)
+    // MARK: - Chat history sidebar
 
-    /// An interior sidebar (within the global Chats detail) listing every chat,
-    /// searchable by title, with per-chat rename / move-to-matter / delete actions.
+    /// An interior sidebar listing every chat in scope (the global Chats screen or a
+    /// matter's Chat tab), searchable by title, with per-chat rename / delete and —
+    /// in the global scope only — a move-to-matter action.
     private var chatHistorySidebar: some View {
         VStack(spacing: 0) {
             HStack {
@@ -301,33 +288,6 @@ struct GlobalChatsView: View {
 
     private var selectedChatTitle: String? {
         controller.chats.first { $0.id == controller.selectedChatID }?.title
-    }
-
-    /// A horizontal, always-visible list of this matter's chats (replaces the
-    /// dropdown so the user sees every chat for the matter at a glance).
-    private var inlineChatList: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(controller.chats) { chat in
-                    let selected = controller.selectedChatID == chat.id
-                    Button {
-                        controller.select(chatID: chat.id)
-                    } label: {
-                        Text(chat.title)
-                            .lineLimit(1)
-                            .font(.callout.weight(selected ? .semibold : .regular))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(
-                                selected ? Color.accentColor.opacity(0.15) : Color.clear,
-                                in: Capsule()
-                            )
-                            .foregroundStyle(selected ? Color.accentColor : Color.primary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
     }
 
     // MARK: - Messages
