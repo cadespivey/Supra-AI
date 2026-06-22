@@ -22,6 +22,7 @@ public enum TextEmbedderError: Error, LocalizedError {
 /// first use and embeds in batches (plan §1.4, §7.3).
 public actor RuntimeTextEmbedder: TextEmbedder {
     public nonisolated let modelID: String
+    public nonisolated let modelRepoID: String
     public nonisolated let modelDisplayName: String
     public nonisolated let modelRevision: String?
     public nonisolated let dimension: Int
@@ -35,6 +36,7 @@ public actor RuntimeTextEmbedder: TextEmbedder {
     public init?(model: DocumentEmbeddingModelRecord, runtimeClient: any RuntimeClientProtocol, batchSize: Int = 32) {
         guard let path = model.localPath, !path.isEmpty else { return nil }
         self.modelID = model.id
+        self.modelRepoID = model.repoID
         self.modelDisplayName = model.displayName
         self.modelRevision = model.revision
         self.dimension = model.dimension

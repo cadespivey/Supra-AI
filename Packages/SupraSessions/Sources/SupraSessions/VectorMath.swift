@@ -44,7 +44,11 @@ public enum VectorMath {
 /// Produces embeddings for text. Abstracted so indexing/retrieval can be tested
 /// without the runtime model.
 public protocol TextEmbedder: Sendable {
+    /// Stable instance id (the registered model record id — a UUID).
     var modelID: String { get }
+    /// The Hugging Face repo id (e.g. "BAAI/bge-base-en-v1.5"), used to resolve the
+    /// catalog entry (and its query-instruction prefix). Distinct from `modelID`.
+    var modelRepoID: String { get }
     var modelDisplayName: String { get }
     var modelRevision: String? { get }
     var dimension: Int { get }

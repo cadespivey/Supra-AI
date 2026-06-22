@@ -340,7 +340,13 @@ public final class GlobalChatController: ObservableObject {
         guard let route else { return userOptions ?? fallback }
         var merged = route.options
         if let userOptions {
-            if route.options.temperature > 0 { merged.temperature = userOptions.temperature }
+            // Legal authority routes keep their tuned conservative temperature — the
+            // user's global default (e.g. Balanced 0.5) must not silently loosen a
+            // citation-bound /legal or /research answer toward fabrication. Non-legal
+            // routes (drafting, general chat) honor the user's temperature.
+            if !route.usesOneShotLegalWorkflow {
+                merged.temperature = userOptions.temperature
+            }
             merged.maxOutputTokens = max(route.options.maxOutputTokens, userOptions.maxOutputTokens)
         }
         return merged
