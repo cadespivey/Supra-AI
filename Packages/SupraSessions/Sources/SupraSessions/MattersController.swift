@@ -278,6 +278,12 @@ public final class MattersController: ObservableObject {
             billingProfileController = nil
             return
         }
+        // Built once and shared by every controller that retrieves over the matter's
+        // documents (chat grounding, outputs, document Q&A), so a single embedding
+        // model selection drives them all.
+        let embedder = (try? store.documentSettings.fetchSelectedEmbeddingModel())
+            .flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+
         // Matter chat reads the user's composed soul document fresh at send time
         // (see `SupraStore.composedAssistantPrompt(base:)`), layered OVER the route's
         // task prompt, so profile edits apply without reselecting the matter. The
@@ -285,11 +291,14 @@ public final class MattersController: ObservableObject {
         // too (the task/grounding contract still leads). The research query-planner
         // and fact chronology stay base-only — their output is machine-parsed into a
         // required structure that a free-form profile must not perturb.
+        // The embedder lets matter chat ground answers in the matter's own documents
+        // (folder inventories + retrieval) instead of fabricating them.
         let controller = GlobalChatController(
             store: store,
             runtimeClient: runtimeClient,
             defaultSystemPrompt: defaultSystemPrompt,
-            scope: .matter(id: matterID)
+            scope: .matter(id: matterID),
+            embedder: embedder
         )
         controller.loadChats()
         chatController = controller
@@ -307,8 +316,6 @@ public final class MattersController: ObservableObject {
         authorities.load()
         authoritiesController = authorities
 
-        let embedder = (try? store.documentSettings.fetchSelectedEmbeddingModel())
-            .flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
         let outputs = StructuredOutputController(
             store: store,
             runtimeClient: runtimeClient,
