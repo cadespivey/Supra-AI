@@ -178,11 +178,11 @@ public enum BillingExporter {
                 hoursString(line.hours),
                 money(rate),
                 money(amount)
-            ].map(csvEscape)
+            ].map(csvCell)
             rows.append(columns.joined(separator: ","))
         }
         let totalRow = ["", "", "", "", "", "", "TOTAL", hoursString(totalHours), "", money(totalAmount)]
-        rows.append(totalRow.map(csvEscape).joined(separator: ","))
+        rows.append(totalRow.map(csvCell).joined(separator: ","))
         return rows.joined(separator: "\n") + "\n"
     }
 
@@ -192,7 +192,7 @@ public enum BillingExporter {
         for line in lines {
             let matter = [line.clientDisplay ?? line.clientID, line.matterDisplay ?? line.lawFirmMatterID]
                 .compactMap { $0 }.joined(separator: " / ")
-            let columns = [line.workDate, matter, hoursString(line.hours), line.narrative].map { tabSanitize($0) }
+            let columns = [line.workDate, matter, hoursString(line.hours), line.narrative].map { tabSanitize(formulaHardened($0)) }
             rows.append(columns.joined(separator: "\t"))
         }
         return rows.joined(separator: "\n") + "\n"
@@ -231,5 +231,16 @@ public enum BillingExporter {
             return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         }
         return value
+    }
+
+    /// A CSV cell: formula-injection-hardened, then delimiter-escaped.
+    static func csvCell(_ value: String) -> String { csvEscape(formulaHardened(value)) }
+
+    /// Neutralizes spreadsheet formula injection: a cell beginning with `= + - @`
+    /// (or a tab/CR control char) is prefixed with an apostrophe so spreadsheets
+    /// import it as literal text rather than evaluating it as a formula.
+    static func formulaHardened(_ value: String) -> String {
+        guard let first = value.first, "=+-@\t\r".contains(first) else { return value }
+        return "'" + value
     }
 }

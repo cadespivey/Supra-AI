@@ -177,6 +177,15 @@ Drop a file on the day (or an entry) → `ScratchPadAttachmentService`:
    matter's library too — no separate silo (§0.2c).
 ```
 
+> **Implementation note (1.5.0 — drift-control §14).** ScratchPad attachments are captured as **day-level
+> evidence** (`scratch_pad_attachments` + `evidence_signals_json`): local extraction runs, and the
+> extracted **text excerpt now reaches the billing-draft prompt** so the attachment corroborates the
+> narrative + duration. **Deferred:** steps 2–3/5 above — running `DocumentClassificationService` and
+> importing the file as a `MatterDocumentRecord` in the matter's library (so `matter_document_id` stays
+> null and the classifier's privilege/confidentiality flags do not yet surface on ScratchPad attachments,
+> cf. §11). The billing outcome (evidence informs the draft) is served; the library-reuse convenience and
+> privilege-flag surfacing are the planned follow-up.
+
 ---
 
 ## 5. Billing-generation engine — `BillingDraftService` (decomposed)
@@ -251,6 +260,17 @@ Each call is small, cacheable, retryable, and independently checkable.
   exclude apparent non-billable gaps; prefer abstention (leave blank + flag low-confidence) over a
   guess. Rounding increment default 0.1h, overridable by the instructions.
 ```
+
+> **Implementation note (1.5.0 — drift-control §14).** The engine ships as a **single constrained
+> generation** with deterministic per-field validation — NOT yet the §5.1 multi-call decomposition.
+> Deterministic guards now in force: UTBMS codes validated against `UTBMSCodes` (litigation L-set +
+> universal A-set; out-of-set/invalid codes dropped to nil so the validator flags them); work dates
+> validated as real calendar dates clamped to ≤ the log day; hours rounded to the increment; matter
+> resolved to one of the day's matters or null; rate inherits the configured timekeeper. The model is
+> also given each note's `id=` so it can cite real `sourceEntryIDs` for edit-preservation. **Deferred to
+> the decomposition (fidelity-gated):** per-segment hour caps against timestamp gaps, a model repair-retry
+> pass, and grammar-constrained sampling. The §6.1 golden-fixture gate against the real local model is the
+> trigger to decompose if single-call fidelity falls short; it has not yet been measured.
 
 ---
 

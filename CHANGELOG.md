@@ -31,7 +31,12 @@ time entries, entirely on-device. Plus chat-input refinements across the app.
   auto-coding toggle, and the timekeeper + firm identity that populate fee lines.
 - **Per-matter Billing tab.** A matter-specific override and UTBMS code set, plus
   client billing-guideline document uploads — all layered on top of the global
-  instructions when a draft is generated.
+  instructions when a draft is generated. The matter's LEDES e-billing identifiers
+  (Client ID, Client matter ID, Firm matter ID) are now editable in the matter
+  details and shown here, so LEDES export can actually be unblocked.
+- **Reviewable, fixable billing lines.** Each draft line can be edited, **reassigned
+  to a different matter**, or **deleted**, and task/activity codes are chosen from a
+  real **UTBMS code picker** — so every validator blocker has a fix in the UI.
 - **Calendar history in ScratchPad.** Jump to any past day from a calendar
   (defaulting to today); browsing never creates empty days.
 - **Attachments in matter chats.** The chat composer's attach button now works in a
@@ -50,6 +55,20 @@ time entries, entirely on-device. Plus chat-input refinements across the app.
 - ScratchPad and billing run fully on-device: extraction, classification, and
   generation are local (no network egress in any ScratchPad path); attachment and
   note content never leave the machine.
+- **CSV/clipboard exports are hardened against spreadsheet formula injection** —
+  a cell beginning with `= + - @` is neutralized so it imports as literal text.
+- **Locked days are enforced at the data layer**, not just the UI: a finalized day
+  rejects entry/attachment edits and new billing drafts even via a stale view.
+
+### Fixed
+
+- **UTBMS codes and work dates are validated** before a draft is saved: an
+  out-of-set task/activity code is dropped (and flagged for a manual pick) and an
+  impossible or future work date falls back to the day's date — so a malformed code
+  or date can't reach a LEDES file.
+- **Billing audit trail**: draft generation and export are recorded in the relevant
+  matters' audit logs, day lock/reopen is audited, and an exported draft is marked
+  exported.
 
 ## [1.4.1] - 2026-06-22
 

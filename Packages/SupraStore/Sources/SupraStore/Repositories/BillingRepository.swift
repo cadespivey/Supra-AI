@@ -181,6 +181,24 @@ public final class BillingRepository: @unchecked Sendable {
         }
     }
 
+    /// Reassigns a line to a different matter (or to none), denormalizing the
+    /// client id, and marks it `user_edited` so regeneration preserves the choice.
+    public func reassignLineItemMatter(id: String, matterID: String?, clientID: String?) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE billing_line_items SET matter_id = ?, client_id = ?, user_edited = 1, updated_at = ? WHERE id = ?",
+                arguments: [matterID, clientID, Date(), id]
+            )
+        }
+    }
+
+    /// Removes a line from a draft (review-table delete).
+    public func deleteLineItem(id: String) throws {
+        try writer.write { db in
+            try db.execute(sql: "DELETE FROM billing_line_items WHERE id = ?", arguments: [id])
+        }
+    }
+
     // MARK: - Matter billing profiles
 
     public func billingProfile(matterID: String) throws -> MatterBillingProfileRecord? {

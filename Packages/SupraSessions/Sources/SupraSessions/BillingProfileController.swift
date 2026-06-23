@@ -22,6 +22,14 @@ public final class BillingProfileController: ObservableObject {
     @Published public var message: String?
     /// True after edits that haven't been saved yet (drives the Save button state).
     @Published public private(set) var hasUnsavedChanges = false
+    /// The matter's LEDES identifiers (read-only here; edited in the matter's
+    /// details), surfaced so the Billing tab shows whether export is unblocked.
+    @Published public private(set) var clientID: String = ""
+    @Published public private(set) var clientMatterID: String = ""
+    @Published public private(set) var firmMatterID: String = ""
+
+    /// True when the matter carries the LEDES IDs the exporter requires.
+    public var ledesIdentifiersComplete: Bool { !clientID.isEmpty && !firmMatterID.isEmpty }
 
     public let matterID: String
     private let store: SupraStore
@@ -63,6 +71,10 @@ public final class BillingProfileController: ObservableObject {
         overrideInstructions = loadedOverride
         codeSet = loadedCodeSet
         hasUnsavedChanges = false
+        let matter = try? store.matters.fetchMatter(id: matterID)
+        clientID = matter?.clientID ?? ""
+        clientMatterID = matter?.clientMatterID ?? ""
+        firmMatterID = matter?.internalMatterID ?? ""
         reloadGuidelineDocuments()
     }
 

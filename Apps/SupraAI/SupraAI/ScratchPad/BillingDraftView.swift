@@ -36,7 +36,7 @@ struct BillingDraftView: View {
         .onAppear { billing.bind(dayID: dayID) }
         .onChange(of: dayID) { _, newID in billing.bind(dayID: newID) }
         .sheet(item: $editing) { line in
-            EditLineSheet(line: line) { narrative, hours, task, activity in
+            EditLineSheet(line: line, codeSet: billing.codeSet(forLine: line)) { narrative, hours, task, activity in
                 billing.editLine(id: line.id, narrative: narrative, hours: hours, taskCode: task, activityCode: activity)
                 editing = nil
             }
@@ -185,13 +185,34 @@ struct BillingDraftView: View {
             Text("\(BillingExporter.hoursString(line.hours)) h")
                 .font(.callout.monospacedDigit())
                 .frame(width: 56, alignment: .trailing)
-            Button { editing = line } label: { Image(systemName: "pencil") }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .disabled(isLocked)
-                .accessibilityLabel("Edit line")
+            rowMenu(line)
         }
         .padding(.vertical, 8)
+    }
+
+    /// Per-line actions that let the user resolve every validator blocker: edit
+    /// (narrative/hours/codes), reassign the matter, or delete the line.
+    private func rowMenu(_ line: BillingLineItemRecord) -> some View {
+        Menu {
+            Button { editing = line } label: { Label("Edit…", systemImage: "pencil") }
+            Menu("Reassign matter") {
+                Button("Unassigned") { billing.reassignMatter(lineID: line.id, to: nil) }
+                Divider()
+                ForEach(billing.availableMatters()) { option in
+                    Button(option.name) { billing.reassignMatter(lineID: line.id, to: option.id) }
+                }
+            }
+            Divider()
+            Button(role: .destructive) { billing.deleteLine(id: line.id) } label: {
+                Label("Delete line", systemImage: "trash")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(isLocked)
+        .accessibilityLabel("Line actions")
     }
 
     private func codeChip(_ code: String?, fallback: String) -> some View {
@@ -251,20 +272,30 @@ struct BillingDraftView: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             billing.statusMessage = "Copied \(billing.lines.count) line(s) to the clipboard."
+            billing.markExported(format: format)
             return
         }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "billing-draft.\(format.fileExtension)"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            try? text.write(to: url, atomically: true, encoding: .utf8)
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+                Task { @MainActor in billing.markExported(format: format) }
+            } catch {
+                Task { @MainActor in billing.statusMessage = "Couldn't write the file: \(error.localizedDescription)" }
+            }
         }
     }
 }
 
-/// A small editor for one billing line (narrative, hours, UTBMS codes).
+/// A small editor for one billing line (narrative, hours, UTBMS codes). Task and
+/// activity codes use real UTBMS pickers filtered by the matter's code set, so an
+/// invalid code can't be entered; firm-specific (transactional/advisory) task codes
+/// fall back to free text since they aren't a built-in list.
 private struct EditLineSheet: View {
     let line: BillingLineItemRecord
+    let codeSet: BillingCodeSet
     let onSave: (_ narrative: String, _ hours: Double, _ taskCode: String?, _ activityCode: String?) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -273,8 +304,9 @@ private struct EditLineSheet: View {
     @State private var taskCode: String
     @State private var activityCode: String
 
-    init(line: BillingLineItemRecord, onSave: @escaping (String, Double, String?, String?) -> Void) {
+    init(line: BillingLineItemRecord, codeSet: BillingCodeSet, onSave: @escaping (String, Double, String?, String?) -> Void) {
         self.line = line
+        self.codeSet = codeSet
         self.onSave = onSave
         _narrative = State(initialValue: line.narrative)
         _hoursText = State(initialValue: BillingExporter.hoursString(line.hours))
@@ -289,10 +321,10 @@ private struct EditLineSheet: View {
                 Text("Narrative").font(.caption).foregroundStyle(.secondary)
                 TextField("Narrative", text: $narrative, axis: .vertical).lineLimit(2...5).textFieldStyle(.roundedBorder)
             }
-            HStack(spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
                 field("Hours", text: $hoursText, width: 80)
-                field("Task code", text: $taskCode, width: 100)
-                field("Activity", text: $activityCode, width: 100)
+                taskCodeField
+                activityCodeField
             }
             HStack {
                 Spacer()
@@ -310,7 +342,47 @@ private struct EditLineSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 460)
+        .frame(width: 520)
+    }
+
+    @ViewBuilder
+    private var taskCodeField: some View {
+        let options = UTBMSCodes.taskCodes(for: codeSet)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Task code").font(.caption).foregroundStyle(.secondary)
+            if options.isEmpty {
+                // .none → no task code; transactional/advisory → firm-specific free text.
+                if codeSet == .none {
+                    Text("—").foregroundStyle(.tertiary).frame(width: 150, alignment: .leading)
+                } else {
+                    TextField("Firm code", text: $taskCode).textFieldStyle(.roundedBorder).frame(width: 150)
+                }
+            } else {
+                codePicker(selection: $taskCode, options: options)
+            }
+        }
+    }
+
+    private var activityCodeField: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Activity").font(.caption).foregroundStyle(.secondary)
+            codePicker(selection: $activityCode, options: UTBMSCodes.activity)
+        }
+    }
+
+    private func codePicker(selection: Binding<String>, options: [UTBMSCode]) -> some View {
+        Picker("", selection: selection) {
+            Text("None").tag("")
+            ForEach(options) { code in
+                Text("\(code.code) — \(code.title)").tag(code.code)
+            }
+            // Preserve a pre-existing non-standard value so editing doesn't drop it.
+            if !selection.wrappedValue.isEmpty, !options.contains(where: { $0.code == selection.wrappedValue }) {
+                Text(selection.wrappedValue).tag(selection.wrappedValue)
+            }
+        }
+        .labelsHidden()
+        .frame(width: 180)
     }
 
     private func field(_ label: String, text: Binding<String>, width: CGFloat) -> some View {

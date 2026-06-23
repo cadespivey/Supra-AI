@@ -263,6 +263,7 @@ struct MatterWorkspaceView: View {
         case "document_intelligence_setup_invalidated": "Document Intelligence Setup Invalidated"
         case "m3_validation_completed": "Milestone 3 Validation Completed"
         case "export_completed": "Export Completed"
+        case "billing_draft_generated": "Billing Draft Generated"
         case "legal_model_route": "Model Route Used"
         default:
             eventType

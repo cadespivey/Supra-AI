@@ -69,13 +69,22 @@ struct MatterEditorSheet: View {
                         .lineLimit(1...3)
                     TextField("Matter description", text: $draft.matterDescription, axis: .vertical)
                         .lineLimit(2...6)
-                    TextField("Internal matter ID", text: $draft.internalMatterID)
                     TextField("Court", text: $draft.court)
                     TextField("Judge", text: $draft.judge)
                     TextField("Case number", text: $draft.docketNumber)
                     TextField("Practice area", text: $draft.practiceArea)
                     TextField("Notes", text: $draft.notes, axis: .vertical)
                         .lineLimit(2...5)
+                }
+
+                Section {
+                    TextField("Firm matter ID (LAW_FIRM_MATTER_ID)", text: $draft.internalMatterID)
+                    TextField("Client ID (CLIENT_ID)", text: $draft.clientID)
+                    TextField("Client matter ID (CLIENT_MATTER_ID)", text: $draft.clientMatterID)
+                } header: {
+                    Text("E-billing (LEDES)")
+                } footer: {
+                    Text("Required to export this matter's ScratchPad billing to LEDES 1998B. Your firm's billing department or the client's e-billing portal supplies these IDs.")
                 }
             }
             .formStyle(.grouped)

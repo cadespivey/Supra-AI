@@ -122,9 +122,8 @@ public final class ScratchPadController: ObservableObject {
         } else {
             displayedDate = dayString
             currentDay = nil
-            entries = []
-            attachments = []
-            knownTags = []
+            reloadEntries()       // entries empty, but #tag suggestions stay all-time
+            reloadAttachments()
         }
     }
 
@@ -206,12 +205,14 @@ public final class ScratchPadController: ObservableObject {
     public func lockCurrentDay() {
         guard let day = currentDay else { return }
         try? store.scratchPad.lockDay(id: day.id)
+        _ = try? store.auditEvents.recordEvent(eventType: "scratchpad_day_locked", actor: "user", summary: "Locked ScratchPad day \(day.day)")
         refreshCurrentDay(id: day.id)
     }
 
     public func reopenCurrentDay() {
         guard let day = currentDay else { return }
         try? store.scratchPad.reopenDay(id: day.id)
+        _ = try? store.auditEvents.recordEvent(eventType: "scratchpad_day_reopened", actor: "user", summary: "Reopened ScratchPad day \(day.day)")
         refreshCurrentDay(id: day.id)
     }
 
@@ -249,17 +250,10 @@ public final class ScratchPadController: ObservableObject {
     }
 
     private func reloadEntries() {
-        guard let day = currentDay else { entries = []; knownTags = []; return }
-        let records = (try? store.scratchPad.entries(dayID: day.id)) ?? []
+        let records = currentDay.flatMap { try? store.scratchPad.entries(dayID: $0.id) } ?? []
         entries = records.map(ScratchPadEntryView.init)
-        var seen = Set<String>()
-        var tags: [String] = []
-        for entry in entries {
-            for tag in entry.tags where seen.insert(tag.lowercased()).inserted {
-                tags.append(tag)
-            }
-        }
-        knownTags = tags
+        // Suggest #tags from every day, not just the one on screen (spec §3).
+        knownTags = (try? store.scratchPad.distinctTags()) ?? []
     }
 
     private func reloadRecentDays() {

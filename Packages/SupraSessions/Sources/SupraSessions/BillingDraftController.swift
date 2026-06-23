@@ -27,6 +27,20 @@ public enum BillingExportFormat: String, CaseIterable, Sendable, Identifiable {
     }
 }
 
+/// A matter the review table can reassign a line to, with its code set so the
+/// task-code picker can be filtered to the right UTBMS shortlist.
+public struct MatterOption: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let name: String
+    public let codeSet: BillingCodeSet
+
+    public init(id: String, name: String, codeSet: BillingCodeSet) {
+        self.id = id
+        self.name = name
+        self.codeSet = codeSet
+    }
+}
+
 /// Drives the billing-draft review surface for the current day (Milestone 4
 /// Phase 5): generation, the editable line table, recomputed reconciliation,
 /// regeneration that preserves manual edits, and export. UI-agnostic.
@@ -114,8 +128,11 @@ public final class BillingDraftController: ObservableObject {
             draftID = result.draftID
             loadLatest()
             recomputeReconciliation()
+            recordDraftAudit(eventType: "billing_draft_generated", summary: "Generated billing draft v\(result.version)")
         } catch BillingDraftError.emptyDay {
             statusMessage = "Add some notes to this day first."
+        } catch BillingDraftError.dayLocked {
+            statusMessage = "This day is locked. Reopen it to regenerate the draft."
         } catch BillingDraftError.noModelAvailable {
             statusMessage = "Load a model (Models tab) to generate a billing draft."
         } catch BillingDraftError.unparseable {
@@ -135,6 +152,62 @@ public final class BillingDraftController: ObservableObject {
         )
         loadLatest()
         recomputeReconciliation()
+    }
+
+    /// Removes a line from the draft (review-table delete) and recomputes totals.
+    public func deleteLine(id: String) {
+        try? store.billing.deleteLineItem(id: id)
+        loadLatest()
+        recomputeReconciliation()
+    }
+
+    /// Reassigns a line to a different matter (or none), denormalizing its client id,
+    /// then recomputes. Fixes the "unassigned line" validator/reconciliation flag.
+    public func reassignMatter(lineID: String, to matterID: String?) {
+        var clientID: String?
+        if let matterID { clientID = (try? store.matters.fetchMatter(id: matterID))?.clientID }
+        try? store.billing.reassignLineItemMatter(id: lineID, matterID: matterID, clientID: clientID)
+        loadLatest()
+        recomputeReconciliation()
+    }
+
+    /// Matters available to reassign a line to, each with its code set (to filter the
+    /// task-code picker).
+    public func availableMatters() -> [MatterOption] {
+        ((try? store.matters.fetchMatters()) ?? []).map { matter in
+            MatterOption(id: matter.id, name: matter.name, codeSet: codeSet(forMatterID: matter.id))
+        }
+    }
+
+    /// The governing UTBMS code set for an existing line (drives the task-code picker).
+    public func codeSet(forLine line: BillingLineItemRecord) -> BillingCodeSet {
+        line.matterID.map(codeSet(forMatterID:)) ?? .none
+    }
+
+    private func codeSet(forMatterID matterID: String) -> BillingCodeSet {
+        (try? store.billing.billingProfile(matterID: matterID))
+            .flatMap { BillingCodeSet(rawValue: $0.billingCodeSet) } ?? .none
+    }
+
+    /// Marks the current draft exported and records the audit trail. Call after a
+    /// successful LEDES/CSV write or clipboard copy (spec §11).
+    public func markExported(format: BillingExportFormat) {
+        guard let draftID else { return }
+        try? store.billing.setDraftStatus(id: draftID, status: .exported)
+        recordDraftAudit(eventType: "export_completed", summary: "Exported billing draft (\(format.label))")
+    }
+
+    /// Records a billing audit event against each matter the draft touches (so it
+    /// surfaces in those matters' audit logs); day-level if the draft has no matters.
+    private func recordDraftAudit(eventType: String, summary: String) {
+        let matterIDs = Set(lines.compactMap { $0.matterID })
+        if matterIDs.isEmpty {
+            _ = try? store.auditEvents.recordEvent(eventType: eventType, actor: "user", summary: summary)
+        } else {
+            for matterID in matterIDs {
+                _ = try? store.auditEvents.recordEvent(matterID: matterID, eventType: eventType, actor: "user", summary: summary)
+            }
+        }
     }
 
     public func exportString(format: BillingExportFormat) -> String {

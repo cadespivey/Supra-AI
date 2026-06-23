@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import SupraCore
 import SupraStore
 @testable import SupraSessions
@@ -92,6 +93,19 @@ final class ScratchPadControllerTests: XCTestCase {
         XCTAssertEqual(controller.currentDay?.day, "2026-06-18")
         XCTAssertEqual(controller.entries.count, 1)
         XCTAssertEqual(controller.displayedDate, "2026-06-18")
+    }
+
+    func testLockAndReopenRecordAuditEvents() throws {
+        let store = try makeStore()
+        let controller = ScratchPadController(store: store, now: fixedNow)
+        controller.load()
+        controller.lockCurrentDay()
+        controller.reopenCurrentDay()
+        let types = try store.database.writer.read { db in
+            try String.fetchAll(db, sql: "SELECT event_type FROM audit_events")
+        }
+        XCTAssertTrue(types.contains("scratchpad_day_locked"))
+        XCTAssertTrue(types.contains("scratchpad_day_reopened"))
     }
 
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
