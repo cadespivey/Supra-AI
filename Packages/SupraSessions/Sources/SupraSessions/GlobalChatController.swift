@@ -25,6 +25,9 @@ public final class GlobalChatController: ObservableObject {
     private let runtimeClient: any RuntimeClientProtocol
     private let defaultSystemPrompt: String?
     private let scope: ChatScope
+    /// Grounds matter chats in the matter's own documents (folder inventories +
+    /// retrieval). nil for global chats, which have no document collection.
+    private let documentGrounding: MatterChatDocumentGrounding?
     private let router: ModelRouter
     private let legalConfiguration: LegalModelConfiguration
     private let courtListenerClient: any CourtListenerClientProtocol
@@ -73,6 +76,7 @@ public final class GlobalChatController: ObservableObject {
         runtimeClient: any RuntimeClientProtocol,
         defaultSystemPrompt: String? = nil,
         scope: ChatScope = .global,
+        embedder: (any TextEmbedder)? = nil,
         legalConfiguration: LegalModelConfiguration = .fromEnvironment(),
         tokenStore: (any APIKeyStoreProtocol)? = nil,
         courtListenerClient: (any CourtListenerClientProtocol)? = nil
@@ -81,6 +85,13 @@ public final class GlobalChatController: ObservableObject {
         self.runtimeClient = runtimeClient
         self.defaultSystemPrompt = defaultSystemPrompt
         self.scope = scope
+        if case let .matter(id) = scope {
+            self.documentGrounding = MatterChatDocumentGrounding(
+                store: store, embedder: embedder, matterID: id, defaultSystemPrompt: defaultSystemPrompt
+            )
+        } else {
+            self.documentGrounding = nil
+        }
         self.legalConfiguration = legalConfiguration
         self.router = ModelRouter(configuration: legalConfiguration)
         let resolvedTokenStore = tokenStore ?? EnvironmentBackedTokenStore(primary: KeychainTokenStore())
@@ -357,6 +368,18 @@ public final class GlobalChatController: ObservableObject {
         return merged
     }
 
+    /// Greedy decoding for document-grounded answers: faithful, reproducible
+    /// extraction from the supplied sources rather than creative sampling. Mirrors the
+    /// Documents-tab Q&A route; keeps the caller's context/output budget.
+    nonisolated static func groundedOptions(_ base: GenerationOptions) -> GenerationOptions {
+        var options = base
+        options.temperature = 0
+        options.topP = 1
+        options.topK = nil
+        options.repetitionPenalty = nil
+        return options
+    }
+
     /// Requests cancellation of the active generation. The runtime emits a
     /// `generationCancelled` event which the stream loop persists.
     public func cancel() {
@@ -394,7 +417,20 @@ public final class GlobalChatController: ObservableObject {
             : displayBase + "\n\nAttached: " + attachments.map(\.name).joined(separator: ", ")
 
         do {
-            if let route, route.usesOneShotLegalWorkflow {
+            // In a matter chat, a question about the matter's OWN documents ("list the
+            // cases in the Research folder", "what do my documents say about X") is
+            // answered from real data — a deterministic inventory or retrieved passages
+            // — instead of the model's memory, which otherwise fabricates. This takes
+            // precedence over the CourtListener legal routes: "in my documents" must
+            // never become an external case-law search. Skipped when the user attached
+            // files inline (those are the grounding) or for non-document questions.
+            // Gated on a loaded model so a no-model send doesn't pay for retrieval it
+            // will discard at the guard below.
+            let grounded: GroundedChatContext? = (attachments.isEmpty && modelID != nil)
+                ? await documentGrounding?.groundedContext(forQuestion: prompt)
+                : nil
+
+            if grounded == nil, let route, route.usesOneShotLegalWorkflow {
                 try await performLegalOneShotSend(
                     prompt: prompt,
                     modelPrompt: modelPrompt,
@@ -407,6 +443,14 @@ public final class GlobalChatController: ObservableObject {
                 return
             }
 
+            // Grounded answers must stay faithful to the supplied sources, so decode
+            // greedily (mirroring the Documents-tab Q&A route) rather than with the
+            // chat's creative sampling.
+            let effectiveModelPrompt = grounded?.modelPrompt ?? modelPrompt
+            let effectiveSystemPrompt = grounded.map { $0.systemPrompt } ?? systemPrompt
+            let effectiveOptions = grounded == nil ? options : Self.groundedOptions(options)
+            let groundingTrailer = grounded?.trailer
+
             guard let modelID else {
                 errorMessage = "Load or register a local MLX model in the Models tab."
                 return
@@ -417,11 +461,16 @@ public final class GlobalChatController: ObservableObject {
             let chatID = try ensureSelectedChat(titleHint: prompt).id
 
             // Replay prior turns so the model can answer follow-ups in context.
-            // Captured before appending the new user message.
-            let history = Self.conversationHistory(
-                from: (try? store.chats.fetchMessages(chatID: chatID))?.map(ChatMessage.init) ?? [],
-                budget: Self.historyCharBudget
-            )
+            // Captured before appending the new user message. A grounded turn is
+            // self-contained (its prompt carries the authoritative inventory/sources
+            // and the "use ONLY these" contract), so it skips history — prior, possibly
+            // ungrounded turns must not dilute the grounding, matching the Q&A path.
+            let history = grounded == nil
+                ? Self.conversationHistory(
+                    from: (try? store.chats.fetchMessages(chatID: chatID))?.map(ChatMessage.init) ?? [],
+                    budget: Self.historyCharBudget
+                )
+                : []
 
             _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
             let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
@@ -430,9 +479,9 @@ public final class GlobalChatController: ObservableObject {
                 chatID: chatID,
                 messageID: assistant.id,
                 modelID: modelID.rawValue.uuidString,
-                prompt: modelPrompt,
-                systemPrompt: systemPrompt,
-                options: options
+                prompt: effectiveModelPrompt,
+                systemPrompt: effectiveSystemPrompt,
+                options: effectiveOptions
             )
             let variant = try store.chats.createVariant(messageID: assistant.id, generationSessionID: session.id)
             try store.generation.linkVariant(generationID: session.id, variantID: variant.id)
@@ -445,10 +494,10 @@ public final class GlobalChatController: ObservableObject {
             let request = GenerateRequest(
                 generationID: generationID,
                 modelID: modelID,
-                prompt: modelPrompt,
-                systemPrompt: systemPrompt,
+                prompt: effectiveModelPrompt,
+                systemPrompt: effectiveSystemPrompt,
                 history: history,
-                options: options
+                options: effectiveOptions
             )
 
             var streamedContent = ""
@@ -479,6 +528,12 @@ public final class GlobalChatController: ObservableObject {
                     if finalMetrics?.contextTrimmed == true {
                         try? store.chats.appendToken(to: variant.id, token: Self.contextTrimmedNotice)
                         streamedContent += Self.contextTrimmedNotice
+                    }
+                    // Append the grounded answer's source key so inline [S#] citations
+                    // resolve to document names for the reader. Only on success.
+                    if let groundingTrailer, !groundingTrailer.isEmpty {
+                        try? store.chats.appendToken(to: variant.id, token: groundingTrailer)
+                        streamedContent += groundingTrailer
                     }
                     try store.chats.completeVariant(variant.id)
                     try store.generation.completeGeneration(
