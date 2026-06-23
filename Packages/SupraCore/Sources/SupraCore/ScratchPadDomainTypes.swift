@@ -80,6 +80,28 @@ public enum BillingSensitivity: String, Codable, CaseIterable, Hashable, Sendabl
     }
 }
 
+/// How a billing narrative's terminal punctuation is normalized at export time.
+/// Many timekeeping styles want narratives with no trailing period (so they paste
+/// cleanly into time-entry software); some clients want a trailing semicolon.
+public enum BillingNarrativeTerminal: String, Codable, Sendable, Equatable, CaseIterable, Identifiable {
+    /// Leave the narrative exactly as the model wrote it (default — backward-compatible).
+    case asWritten
+    /// Strip any trailing period or semicolon — punctuation-free narratives.
+    case noPeriod
+    /// End every narrative with a semicolon (e.g. a client's house rule).
+    case semicolon
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .asWritten: "As written"
+        case .noPeriod: "No terminal period"
+        case .semicolon: "End with semicolon"
+        }
+    }
+}
+
 /// The firm-wide ScratchPad billing configuration (spec §9): the global instruction
 /// text, the time/rounding behaviour, the auto-coding toggle, and the single
 /// configured timekeeper + firm identity. Persisted as one JSON blob under the
@@ -100,18 +122,48 @@ public struct BillingSettings: Codable, Sendable, Equatable {
     public var utbmsAutoCoding: Bool
     /// The single configured timekeeper + firm identity used to populate fee lines.
     public var timekeeper: BillingTimekeeper
+    /// Firm-wide narrative terminal-punctuation style, applied at export unless a
+    /// matter overrides it. Defaults to `.asWritten` so existing drafts are unchanged.
+    public var narrativeTerminal: BillingNarrativeTerminal
 
     public static let defaultRoundingIncrement: Double = 0.1
+
+    /// The starter global billing instructions a fresh install begins with: general
+    /// timekeeping hygiene (specific narrative voice, no vague phrases, task-type
+    /// splitting, conservative inference, exclusions) plus the scratch-pad shorthand
+    /// the billing engine should understand. Attorneys edit this in Settings.
+    public static let defaultGlobalInstructions = """
+    NARRATIVE VOICE — write each narrative in one of these constructions, choosing what fits the work, and ground every term in the notes/evidence (never invent theories, posture, strategy, participants, or topics):
+    - Communicate/confer with [client | litigation team | opposing counsel | local counsel | partner] re: [specific issue]
+    - Receive/review/analyze [filing | order | discovery | transcript | document] re: [specific issue or consequence]
+    - Draft [document] addressing [specific issue]
+    - Revise [document] regarding [specific issue]
+    - Research [jurisdiction / body of law] regarding [specific legal issue]
+    - Review/analyze [document set] for [specific purpose]
+    - Prepare for [hearing | trial | deposition | mediation | meeting] re: [specific issue]
+    Never use vague phrases: "attention to matter," "work on matter," "case review," "review file," "correspondence," "conference," "preparation," bare "legal research," or bare "analyze." Use "research" only with a named body of law and a specific issue.
+
+    ENTRY SPLITTING — separate entries by task type: research, drafting, revision, filing/order review, document review, client comms, opposing-counsel comms, internal conferences, hearings, mediations, depositions, trial prep. Consolidate same-day emails only when the matter, participant group, and subject all match; never merge email with drafting/research/review/conferences.
+
+    TIME — minimum billable entry 0.2; round to the configured increment; preserve recorded time already a valid increment ≥ 0.2; raise anything below 0.2 to 0.2.
+
+    SPLIT MATTERS — "[A x N]" means N separate allocations of A hours each across related matters; do not collapse into one row. A single total that must be split → divide across the implicated matters (equal unless evidence shows otherwise), one row per matter, and append "(split)" to the narrative.
+
+    NOTE SHORTHAND — "[1.8] <task>" = 1.8 recorded hours; "0.4 <task>" = 0.4 recorded hours; "[A x N] <task>" = N split allocations of A; "#IDENTIFIER" = a matter identifier to map to the matter on file.
+
+    EXCLUDE unless tied to dated attorney work: open to-dos, passive file presence, automatic downloads, routine docket notices, and purely administrative saving/filing/renaming/calendaring.
+    """
 
     public static let `default` = BillingSettings()
 
     public init(
-        globalInstructions: String = "",
+        globalInstructions: String = BillingSettings.defaultGlobalInstructions,
         autoTimestamp: Bool = true,
         sensitivity: Double = BillingSensitivity.defaultValue,
         roundingIncrement: Double = BillingSettings.defaultRoundingIncrement,
         utbmsAutoCoding: Bool = true,
-        timekeeper: BillingTimekeeper = BillingTimekeeper(id: "", name: "", classification: "", defaultRate: 0, lawFirmID: "")
+        timekeeper: BillingTimekeeper = BillingTimekeeper(id: "", name: "", classification: "", defaultRate: 0, lawFirmID: ""),
+        narrativeTerminal: BillingNarrativeTerminal = .asWritten
     ) {
         self.globalInstructions = globalInstructions
         self.autoTimestamp = autoTimestamp
@@ -119,22 +171,26 @@ public struct BillingSettings: Codable, Sendable, Equatable {
         self.roundingIncrement = roundingIncrement > 0 ? roundingIncrement : BillingSettings.defaultRoundingIncrement
         self.utbmsAutoCoding = utbmsAutoCoding
         self.timekeeper = timekeeper
+        self.narrativeTerminal = narrativeTerminal
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let fallback = BillingSettings.default
         self.init(
+            // A stored blob from before this field existed keeps its own (possibly
+            // empty) instructions; only a truly fresh install gets the default.
             globalInstructions: (try container.decodeIfPresent(String.self, forKey: .globalInstructions)) ?? fallback.globalInstructions,
             autoTimestamp: (try container.decodeIfPresent(Bool.self, forKey: .autoTimestamp)) ?? fallback.autoTimestamp,
             sensitivity: (try container.decodeIfPresent(Double.self, forKey: .sensitivity)) ?? fallback.sensitivity,
             roundingIncrement: (try container.decodeIfPresent(Double.self, forKey: .roundingIncrement)) ?? fallback.roundingIncrement,
             utbmsAutoCoding: (try container.decodeIfPresent(Bool.self, forKey: .utbmsAutoCoding)) ?? fallback.utbmsAutoCoding,
-            timekeeper: (try container.decodeIfPresent(BillingTimekeeper.self, forKey: .timekeeper)) ?? fallback.timekeeper
+            timekeeper: (try container.decodeIfPresent(BillingTimekeeper.self, forKey: .timekeeper)) ?? fallback.timekeeper,
+            narrativeTerminal: (try container.decodeIfPresent(BillingNarrativeTerminal.self, forKey: .narrativeTerminal)) ?? .asWritten
         )
     }
 
     private enum CodingKeys: String, CodingKey {
-        case globalInstructions, autoTimestamp, sensitivity, roundingIncrement, utbmsAutoCoding, timekeeper
+        case globalInstructions, autoTimestamp, sensitivity, roundingIncrement, utbmsAutoCoding, timekeeper, narrativeTerminal
     }
 }

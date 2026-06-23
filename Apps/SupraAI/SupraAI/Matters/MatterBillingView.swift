@@ -21,6 +21,7 @@ struct MatterBillingView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     ledesSection
                     codeSetSection
+                    narrativeTerminalSection
                     overrideSection
                     guidelinesSection
                     if let message = controller.message {
@@ -95,20 +96,42 @@ struct MatterBillingView: View {
         )
     }
 
+    // MARK: - Narrative punctuation
+
+    private var narrativeTerminalSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Narrative punctuation").font(.headline)
+            Picker("Narrative punctuation", selection: narrativeTerminalBinding) {
+                Text("Use firm default").tag(BillingNarrativeTerminal?.none)
+                ForEach(BillingNarrativeTerminal.allCases) { terminal in
+                    Text(terminal.label).tag(BillingNarrativeTerminal?.some(terminal))
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            Text("How this matter's billing narratives end at export — overrides the firm-wide setting (e.g. a client whose narratives must end with a semicolon).")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var narrativeTerminalBinding: Binding<BillingNarrativeTerminal?> {
+        Binding(
+            get: { controller.narrativeTerminal },
+            set: { controller.narrativeTerminal = $0; controller.markEdited() }
+        )
+    }
+
     // MARK: - Override
 
     private var overrideSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Override instructions").font(.headline)
-            TextField(
-                "Override instructions",
+            MultilineField(
+                placeholder: "e.g. Bill travel at 50%; no charge for filing/service tasks; this client requires task-level detail",
                 text: overrideBinding,
-                prompt: Text("e.g. Bill travel at 50%; no charge for filing/service tasks; this client requires task-level detail"),
-                axis: .vertical
+                minHeight: 96
             )
-            .lineLimit(3...8)
-            .labelsHidden()
-            .textFieldStyle(.roundedBorder)
             Text("Layered on top of the firm-wide billing instructions for this matter's lines.")
                 .font(.caption).foregroundStyle(.secondary)
         }

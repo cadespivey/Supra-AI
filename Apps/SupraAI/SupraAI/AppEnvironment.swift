@@ -134,15 +134,18 @@ final class AppEnvironment: ObservableObject {
         updateController.checkOnLaunchIfEnabled()
     }
 
-    /// Auto-loads the user's startup model into the runtime on launch for manual
-    /// runtime workflows. Routed chat tasks still load their assigned role model
-    /// before generation. Skipped when a model is already loaded or in UI tests.
+    /// Auto-loads the startup model into the runtime on launch for manual runtime
+    /// workflows. Prefers the best available reasoning model (see
+    /// `ModelLibrary.startupModelID`) so the app opens ready for complex reasoning
+    /// rather than the lighter drafting/instruct model. Routed chat tasks still load
+    /// their assigned role model before generation. Skipped when a model is already
+    /// loaded or in UI tests.
     private func autoLoadStartupModelIfNeeded() {
         guard !Self.isUITestMode,
               case .idle = modelLibrary.loadState,
-              let active = modelLibrary.activeModel else { return }
+              let startupModelID = modelLibrary.startupModelID() else { return }
         Task {
-            await modelLibrary.activateAndLoad(modelID: active.id)
+            await modelLibrary.activateAndLoad(modelID: startupModelID)
             // bootstrap()'s refreshAll() likely ran while the model was still
             // loading and cached chatModelLoaded = false. Re-query once the
             // background load settles so the Settings checklist reflects the

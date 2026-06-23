@@ -214,7 +214,8 @@ public final class BillingRepository: @unchecked Sendable {
     public func upsertBillingProfile(
         matterID: String,
         overrideInstructions: String?,
-        billingCodeSet: BillingCodeSet
+        billingCodeSet: BillingCodeSet,
+        narrativeTerminal: BillingNarrativeTerminal? = nil
     ) throws -> MatterBillingProfileRecord {
         try writer.write { db in
             if var existing = try MatterBillingProfileRecord.fetchOne(
@@ -222,6 +223,7 @@ public final class BillingRepository: @unchecked Sendable {
             ) {
                 existing.overrideInstructions = overrideInstructions
                 existing.billingCodeSet = billingCodeSet.rawValue
+                existing.narrativeTerminal = narrativeTerminal?.rawValue
                 existing.updatedAt = Date()
                 try existing.update(db)
                 return existing
@@ -229,7 +231,8 @@ public final class BillingRepository: @unchecked Sendable {
             let record = MatterBillingProfileRecord(
                 matterID: matterID,
                 overrideInstructions: overrideInstructions,
-                billingCodeSet: billingCodeSet
+                billingCodeSet: billingCodeSet,
+                narrativeTerminal: narrativeTerminal
             )
             try record.insert(db)
             return record

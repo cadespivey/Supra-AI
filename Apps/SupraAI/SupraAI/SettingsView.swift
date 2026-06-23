@@ -218,19 +218,21 @@ private struct ScratchPadBillingSection: View {
         Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Global billing instructions").font(.caption).foregroundStyle(.secondary)
-                TextField(
-                    "Global billing instructions",
+                MultilineField(
+                    placeholder: "e.g. No block billing; spell out abbreviations on first use; cap intra-office conferences",
                     text: $billing.globalInstructions,
-                    prompt: Text("e.g. No block billing; spell out abbreviations on first use; cap intra-office conferences"),
-                    axis: .vertical
+                    minHeight: 120
                 )
-                .lineLimit(2...6)
-                .labelsHidden()
+            }
+            Picker("Narrative punctuation", selection: $billing.narrativeTerminal) {
+                ForEach(BillingNarrativeTerminal.allCases) { terminal in
+                    Text(terminal.label).tag(terminal)
+                }
             }
         } header: {
             Text("ScratchPad & Billing")
         } footer: {
-            Text("Standing instructions applied to every billing draft. Per-matter rules (Matter → Billing) layer on top of these.")
+            Text("Standing instructions applied to every billing draft. Per-matter rules (Matter → Billing) layer on top of these. “Narrative punctuation” normalizes how every billing narrative ends at export — a matter can override it.")
         }
 
         Section {
@@ -333,14 +335,10 @@ private struct AssistantProfileSection: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("Style notes").font(.caption).foregroundStyle(.secondary)
-                TextField(
-                    "Style notes",
-                    text: $profile.profile.voiceNotes,
-                    prompt: Text("e.g. Lead with the bottom line, avoid legalese, use IRAC for analysis"),
-                    axis: .vertical
+                MultilineField(
+                    placeholder: "e.g. Lead with the bottom line, avoid legalese, use IRAC for analysis",
+                    text: $profile.profile.voiceNotes
                 )
-                .lineLimit(2...5)
-                .labelsHidden()
             }
         } header: {
             Text("Writing Style")
@@ -373,14 +371,10 @@ private struct AssistantProfileSection: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("Citation notes").font(.caption).foregroundStyle(.secondary)
-                TextField(
-                    "Citation notes",
-                    text: $profile.profile.citationNotes,
-                    prompt: Text("e.g. Always pin-cite; include parallel cites; short form after first reference"),
-                    axis: .vertical
+                MultilineField(
+                    placeholder: "e.g. Always pin-cite; include parallel cites; short form after first reference",
+                    text: $profile.profile.citationNotes
                 )
-                .lineLimit(2...5)
-                .labelsHidden()
             }
         } header: {
             Text("Citations")
@@ -389,14 +383,11 @@ private struct AssistantProfileSection: View {
         }
 
         Section {
-            TextField(
-                "Anything else",
+            MultilineField(
+                placeholder: "e.g. Flag missing facts; caveat firm conclusions; prefer primary sources",
                 text: $profile.profile.additionalInstructions,
-                prompt: Text("e.g. Flag missing facts; caveat firm conclusions; prefer primary sources"),
-                axis: .vertical
+                minHeight: 88
             )
-            .lineLimit(2...6)
-            .labelsHidden()
         } header: {
             Text("Other Instructions")
         } footer: {
@@ -450,18 +441,13 @@ private struct AssistantProfileSection: View {
         }
 
         Section {
-            HStack {
-                Button("Save Profile") { profile.save() }
-                    .buttonStyle(.borderedProminent)
-                Spacer()
-                if let message = profile.message {
-                    Text(message).font(.caption).foregroundStyle(.secondary)
-                }
+            if let message = profile.message {
+                Text(message).font(.caption).foregroundStyle(.secondary)
             }
             DisclosureGroup("Preview what the assistant receives", isExpanded: $showPreview) {
                 ScrollView {
                     Text(profile.composedSystemPrompt.isEmpty ? "Nothing configured yet." : profile.composedSystemPrompt)
-                        .font(.caption.monospaced())
+                        .font(.body.monospaced())
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 4)
@@ -469,9 +455,9 @@ private struct AssistantProfileSection: View {
                 .frame(maxHeight: 220)
             }
         } header: {
-            Text("Review & Save")
+            Text("Preview")
         } footer: {
-            Text("Everything above is combined into the instructions the assistant follows. Changes take effect once you save.")
+            Text("Everything above is combined into the instructions the assistant follows. Your changes save automatically as you type.")
         }
     }
 }
