@@ -48,6 +48,23 @@ public final class ModelLibrary: ObservableObject {
         models.first { $0.isActive }
     }
 
+    /// The model to auto-load on launch. Prefers the best available *reasoning* model
+    /// — the one the legal-reasoning routes use (high-quality tier first, then the
+    /// standard tier, honoring an explicit role assignment; otherwise the strongest
+    /// reasoning-trait model registered) — so the app opens ready for complex legal
+    /// reasoning rather than the lighter drafting/instruct model. Falls back to the
+    /// last-active model, then any registered model, when no reasoning model exists.
+    /// Routed tasks still load their own role model before generating; this only sets
+    /// the idle default the app loads at startup.
+    public func startupModelID(
+        configuration: LegalModelConfiguration = .fromEnvironment()
+    ) -> String? {
+        let reasoning = resolvedModel(for: .legalReasoningHighQuality, configuration: configuration)
+            ?? resolvedModel(for: .legalReasoning, configuration: configuration)
+            ?? recommendedModel(for: .legalReasoningHighQuality, configuration: configuration)
+        return (reasoning ?? activeModel ?? models.first)?.id
+    }
+
     /// The strongly typed id of the loaded model once `loadState` is `.loaded`.
     public var loadedModelID: ModelID? {
         guard case let .loaded(modelID) = loadState else { return nil }

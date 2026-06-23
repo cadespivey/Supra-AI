@@ -16,7 +16,10 @@ final class BillingSettingsControllerTests: XCTestCase {
 
     func testDefaultsWhenNothingStored() throws {
         let controller = BillingSettingsController(store: try makeStore())
-        XCTAssertEqual(controller.globalInstructions, "")
+        // A fresh install seeds the starter billing-narrative hygiene instructions.
+        XCTAssertEqual(controller.globalInstructions, BillingSettings.defaultGlobalInstructions)
+        XCTAssertFalse(controller.globalInstructions.isEmpty)
+        XCTAssertEqual(controller.narrativeTerminal, .asWritten)
         XCTAssertTrue(controller.autoTimestamp)
         XCTAssertTrue(controller.utbmsAutoCoding)
         XCTAssertEqual(controller.roundingIncrement, 0.1, accuracy: 0.0001)

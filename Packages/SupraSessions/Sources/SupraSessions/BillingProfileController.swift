@@ -17,6 +17,9 @@ public final class BillingProfileController: ObservableObject {
     @Published public var overrideInstructions: String = ""
     /// Which UTBMS code set governs the matter's task codes.
     @Published public var codeSet: BillingCodeSet = .none
+    /// The matter's narrative terminal-punctuation override, or nil to inherit the
+    /// firm-wide setting (e.g. a client whose narratives must end with a semicolon).
+    @Published public var narrativeTerminal: BillingNarrativeTerminal?
     /// Documents tagged "billing guideline" for this matter (the client's rules).
     @Published public private(set) var guidelineDocuments: [MatterDocumentRecord] = []
     @Published public var message: String?
@@ -38,6 +41,7 @@ public final class BillingProfileController: ObservableObject {
 
     private var loadedOverride: String = ""
     private var loadedCodeSet: BillingCodeSet = .none
+    private var loadedNarrativeTerminal: BillingNarrativeTerminal?
     /// In-flight guideline imports (jobID → importBatchID). Documents created by
     /// these batches are auto-tagged "billing guideline". Keying on the import's own
     /// batch makes tagging immune to any other import (even to the same matter)
@@ -68,8 +72,10 @@ public final class BillingProfileController: ObservableObject {
         let profile = try? store.billing.billingProfile(matterID: matterID)
         loadedOverride = profile?.overrideInstructions ?? ""
         loadedCodeSet = profile.flatMap { BillingCodeSet(rawValue: $0.billingCodeSet) } ?? .none
+        loadedNarrativeTerminal = profile?.narrativeTerminalValue
         overrideInstructions = loadedOverride
         codeSet = loadedCodeSet
+        narrativeTerminal = loadedNarrativeTerminal
         hasUnsavedChanges = false
         let matter = try? store.matters.fetchMatter(id: matterID)
         clientID = matter?.clientID ?? ""
@@ -80,20 +86,25 @@ public final class BillingProfileController: ObservableObject {
 
     /// Re-reads edited fields against what's persisted to flag unsaved changes.
     public func markEdited() {
-        hasUnsavedChanges = overrideInstructions != loadedOverride || codeSet != loadedCodeSet
+        hasUnsavedChanges = overrideInstructions != loadedOverride
+            || codeSet != loadedCodeSet
+            || narrativeTerminal != loadedNarrativeTerminal
     }
 
-    /// Persists the override text and code set to the matter's billing profile.
+    /// Persists the override text, code set, and narrative terminal to the matter's
+    /// billing profile.
     public func save() {
         let trimmed = overrideInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             try store.billing.upsertBillingProfile(
                 matterID: matterID,
                 overrideInstructions: trimmed.isEmpty ? nil : trimmed,
-                billingCodeSet: codeSet
+                billingCodeSet: codeSet,
+                narrativeTerminal: narrativeTerminal
             )
             loadedOverride = overrideInstructions
             loadedCodeSet = codeSet
+            loadedNarrativeTerminal = narrativeTerminal
             hasUnsavedChanges = false
             message = "Billing rules saved."
         } catch {

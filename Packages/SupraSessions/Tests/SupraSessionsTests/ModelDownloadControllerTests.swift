@@ -247,6 +247,30 @@ final class ModelDownloadControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testStartupModelPrefersBestReasoningModelOverDrafting() throws {
+        let store = try makeStore()
+        let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
+        _ = try library.addModel(displayName: "Qwen3 30B A3B Instruct 2507 (4-bit)", path: "/m/qwen-instruct", bookmarkData: nil)
+        let reasoning = try library.addModel(displayName: "DeepSeek-R1 Distill Qwen 32B (4-bit)", path: "/m/deepseek-r1", bookmarkData: nil)
+        library.refresh()
+        // The drafting/instruct model can never be picked over an available reasoning model.
+        XCTAssertEqual(library.startupModelID(), reasoning.id)
+    }
+
+    @MainActor
+    func testStartupModelFallsBackWhenNoReasoningModel() throws {
+        let store = try makeStore()
+        let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
+        let onlyModel = try library.addModel(displayName: "Qwen3 30B A3B Instruct 2507 (4-bit)", path: "/m/qwen-instruct", bookmarkData: nil)
+        library.refresh()
+        // No reasoning model registered → the best available model is still loaded.
+        XCTAssertEqual(library.startupModelID(), onlyModel.id)
+        // No models at all → nothing to load.
+        let empty = ModelLibrary(store: try makeStore(), runtimeClient: StubRuntimeClient())
+        XCTAssertNil(empty.startupModelID())
+    }
+
+    @MainActor
     func testRecommendedHighQualityReasoningIsDeterministicLargestModel() throws {
         let store = try makeStore()
         let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())

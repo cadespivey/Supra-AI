@@ -13,6 +13,7 @@ public final class BillingSettingsController: ObservableObject {
     public static let storageKey = "scratchpad.billing"
 
     @Published public var globalInstructions: String { didSet { persist() } }
+    @Published public var narrativeTerminal: BillingNarrativeTerminal { didSet { persist() } }
     @Published public var autoTimestamp: Bool { didSet { persist() } }
     @Published public var sensitivity: Double { didSet { persist() } }
     @Published public var roundingIncrement: Double { didSet { persist() } }
@@ -31,6 +32,7 @@ public final class BillingSettingsController: ObservableObject {
         self.store = store
         let stored = (try? store.appSettings.getSetting(Self.storageKey, as: BillingSettings.self)) ?? .default
         self.globalInstructions = stored.globalInstructions
+        self.narrativeTerminal = stored.narrativeTerminal
         self.autoTimestamp = stored.autoTimestamp
         self.sensitivity = stored.sensitivity
         self.roundingIncrement = stored.roundingIncrement
@@ -51,7 +53,8 @@ public final class BillingSettingsController: ObservableObject {
             sensitivity: sensitivity,
             roundingIncrement: roundingIncrement,
             utbmsAutoCoding: utbmsAutoCoding,
-            timekeeper: timekeeper
+            timekeeper: timekeeper,
+            narrativeTerminal: narrativeTerminal
         )
     }
 

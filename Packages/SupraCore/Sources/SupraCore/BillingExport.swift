@@ -23,6 +23,8 @@ public struct BillingLine: Sendable, Equatable {
     /// The matter's governing code set, used by the pre-export validator to decide
     /// whether a blank task code is acceptable (`.none`) or a blocking gap.
     public var codeSet: BillingCodeSet
+    /// How this line's narrative terminal punctuation is normalized at export.
+    public var narrativeTerminal: BillingNarrativeTerminal
 
     public init(
         clientID: String? = nil,
@@ -37,7 +39,8 @@ public struct BillingLine: Sendable, Equatable {
         activityCode: String? = nil,
         rate: Double? = nil,
         confidence: BillingConfidence = .medium,
-        codeSet: BillingCodeSet = .none
+        codeSet: BillingCodeSet = .none,
+        narrativeTerminal: BillingNarrativeTerminal = .asWritten
     ) {
         self.clientID = clientID
         self.lawFirmMatterID = lawFirmMatterID
@@ -52,6 +55,12 @@ public struct BillingLine: Sendable, Equatable {
         self.rate = rate
         self.confidence = confidence
         self.codeSet = codeSet
+        self.narrativeTerminal = narrativeTerminal
+    }
+
+    /// The narrative with its terminal punctuation normalized per `narrativeTerminal`.
+    public var formattedNarrative: String {
+        BillingExporter.formatNarrative(narrative, terminal: narrativeTerminal)
     }
 
     /// The effective rate for this line (line override, else the timekeeper default).
@@ -144,7 +153,7 @@ public enum BillingExporter {
                     "",
                     line.activityCode ?? "",
                     timekeeper.id,
-                    sanitize(line.narrative),
+                    sanitize(line.formattedNarrative),
                     timekeeper.lawFirmID,
                     money(rate),
                     sanitize(timekeeper.name),
@@ -174,7 +183,7 @@ public enum BillingExporter {
                 timekeeper.name,
                 line.taskCode ?? "",
                 line.activityCode ?? "",
-                line.narrative,
+                line.formattedNarrative,
                 hoursString(line.hours),
                 money(rate),
                 money(amount)
@@ -192,13 +201,74 @@ public enum BillingExporter {
         for line in lines {
             let matter = [line.clientDisplay ?? line.clientID, line.matterDisplay ?? line.lawFirmMatterID]
                 .compactMap { $0 }.joined(separator: " / ")
-            let columns = [line.workDate, matter, hoursString(line.hours), line.narrative].map { tabSanitize(formulaHardened($0)) }
+            let columns = [line.workDate, matter, hoursString(line.hours), line.formattedNarrative].map { tabSanitize(formulaHardened($0)) }
             rows.append(columns.joined(separator: "\t"))
         }
         return rows.joined(separator: "\n") + "\n"
     }
 
+    /// Renders fee lines as a copy/paste-ready Markdown table with the columns used by
+    /// the weekly-timekeeper workflow: `DATE | CLIENT / MATTER | MATTER NO. | NARRATIVE
+    /// | TIME`. Dates are `MM/DD/YYYY`; time is one decimal place.
+    public static func weeklyTable(lines: [BillingLine]) -> String {
+        var rows = [
+            "| DATE | CLIENT / MATTER | MATTER NO. | NARRATIVE | TIME |",
+            "|---|---|---|---|---:|"
+        ]
+        for line in lines {
+            let clientMatter = line.matterDisplay ?? line.clientDisplay ?? line.clientID ?? ""
+            let matterNo = line.lawFirmMatterID ?? line.clientMatterID ?? ""
+            let cells = [usDate(line.workDate), clientMatter, matterNo, line.formattedNarrative]
+                .map(mdCell)
+            rows.append("| " + cells.joined(separator: " | ") + " | " + oneDecimal(line.hours) + " |")
+        }
+        return rows.joined(separator: "\n") + "\n"
+    }
+
+    // MARK: - Narrative terminal punctuation
+
+    /// Normalizes a narrative's terminal punctuation for export. `.asWritten` returns
+    /// the narrative verbatim (no behavior change); `.noPeriod` strips a trailing
+    /// period/semicolon; `.semicolon` ensures a single trailing semicolon (so an entry
+    /// ending "(split)" becomes "(split);").
+    public static func formatNarrative(_ narrative: String, terminal: BillingNarrativeTerminal) -> String {
+        switch terminal {
+        case .asWritten:
+            return narrative
+        case .noPeriod:
+            return stripTerminalPunctuation(narrative)
+        case .semicolon:
+            return stripTerminalPunctuation(narrative) + ";"
+        }
+    }
+
+    /// Trims trailing whitespace and any trailing run of `.`/`;` characters.
+    static func stripTerminalPunctuation(_ value: String) -> String {
+        var result = value
+        while let last = result.last, last == "." || last == ";" || last == " " || last == "\t" {
+            result.removeLast()
+        }
+        return result
+    }
+
     // MARK: - Formatting helpers
+
+    /// `yyyy-MM-dd` → `MM/DD/YYYY`, string-only so there's no timezone ambiguity.
+    static func usDate(_ iso: String) -> String {
+        let parts = iso.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return iso }
+        return "\(parts[1])/\(parts[2])/\(parts[0])"
+    }
+
+    /// Hours to a fixed one decimal place (1.0 → "1.0", 0.5 → "0.5").
+    static func oneDecimal(_ value: Double) -> String { String(format: "%.1f", value) }
+
+    /// A Markdown table cell: escape pipes and collapse newlines so the row stays intact.
+    static func mdCell(_ value: String) -> String {
+        value.replacingOccurrences(of: "|", with: "\\|")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+    }
 
     static func compactDate(_ date: String) -> String { date.replacingOccurrences(of: "-", with: "") }
     static func money(_ value: Double) -> String { String(format: "%.2f", value) }
