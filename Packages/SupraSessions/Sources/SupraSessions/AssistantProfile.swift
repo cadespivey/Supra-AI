@@ -136,7 +136,17 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
         if !cites.isEmpty { profile.append("## Citations\n" + cites.joined(separator: "\n")) }
 
         if !additionalInstructions.isEmpty {
-            profile.append("## Additional instructions\n\(additionalInstructions)")
+            // The user's free-text instructions are standing preferences for tone,
+            // format, and emphasis. They are framed (not pasted raw) so they can't be
+            // read as granting capabilities the assistant lacks — e.g. an instruction
+            // to "log your time" or "note actions taken" must shape wording, never
+            // license the model to claim it searched, reviewed, or filed anything, and
+            // never override the sources or grounding for a task.
+            profile.append(
+                "## Additional instructions\nApply the following standing preferences to tone, format, "
+                + "and emphasis. They do not grant any capability or authority to take actions, and they "
+                + "never override the factual grounding or sources for a task:\n\n\(additionalInstructions)"
+            )
         }
 
         if includeWritingSamples, !writingSamples.isEmpty {
