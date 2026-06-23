@@ -14,6 +14,7 @@ public enum BillingDraftError: Error, Equatable, Sendable {
     case noModelAvailable
     case emptyDay
     case unparseable
+    case dayLocked
 }
 
 public struct BillingDraftResult: Sendable, Equatable {
@@ -80,6 +81,11 @@ public final class BillingDraftService {
         autoCoding: Bool = true,
         autoTimestamp: Bool = true
     ) async throws -> BillingDraftResult {
+        // A finalized day is read-only — never produce a new draft for it (defense
+        // in depth beyond the UI guard; spec §0.2d, §7).
+        if (try? store.scratchPad.fetchDay(id: dayID))?.lockedAt != nil {
+            throw BillingDraftError.dayLocked
+        }
         let entries = (try? store.scratchPad.entries(dayID: dayID)) ?? []
         guard !entries.isEmpty else { throw BillingDraftError.emptyDay }
         let attachments = (try? store.scratchPad.attachments(dayID: dayID)) ?? []
@@ -103,9 +109,11 @@ public final class BillingDraftService {
         let raw = try await generate(BillingDraftPrompt.system(), BillingDraftPrompt.user(context))
         guard let payload = Self.parse(raw) else { throw BillingDraftError.unparseable }
 
+        let codeSetByMatter = Dictionary(uniqueKeysWithValues: matterRules.map { ($0.matterID, $0.codeSet) })
         let inputs = Self.buildInputs(
             payload: payload,
             matters: matters,
+            codeSetByMatter: codeSetByMatter,
             timekeeper: timekeeper,
             dayDate: dayDate,
             increment: increment
@@ -177,6 +185,7 @@ public final class BillingDraftService {
     static func buildInputs(
         payload: BillingDraftPayload,
         matters: [MatterRecord],
+        codeSetByMatter: [String: BillingCodeSet],
         timekeeper: BillingTimekeeper,
         dayDate: String,
         increment: Double
@@ -185,6 +194,7 @@ public final class BillingDraftService {
             let narrative = dto.narrative.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !narrative.isEmpty else { return nil }
             let matter = resolveMatter(dto.matterID, in: matters)
+            let codeSet = matter.flatMap { codeSetByMatter[$0.id] } ?? .none
             let hours = roundToIncrement(max(0, dto.hours ?? 0), increment)
             let confidence = BillingConfidence(rawValue: (dto.confidence ?? "medium").lowercased()) ?? .medium
             return BillingLineItemInput(
@@ -192,9 +202,12 @@ public final class BillingDraftService {
                 matterID: matter?.id,
                 narrative: narrative,
                 hours: hours,
-                workDate: normalizedDate(dto.workDate) ?? dayDate,
-                utbmsTaskCode: trimmedOrNil(dto.taskCode),
-                utbmsActivityCode: trimmedOrNil(dto.activityCode),
+                workDate: workDate(dto.workDate, dayDate: dayDate),
+                // UTBMS codes are validated against the matter's code set; an invalid
+                // or out-of-set code is dropped (→ nil) so the validator flags it for
+                // a manual pick rather than letting a bad code reach LEDES.
+                utbmsTaskCode: UTBMSCodes.normalizedTaskCode(dto.taskCode, codeSet: codeSet),
+                utbmsActivityCode: UTBMSCodes.normalizedActivityCode(dto.activityCode),
                 timekeeperID: timekeeper.id,
                 // nil = inherit the configured timekeeper's rate at compute/export
                 // time (single-timekeeper scope), so reconfiguring the rate in
@@ -243,12 +256,34 @@ public final class BillingDraftService {
         return ((value / increment).rounded() * increment * 100).rounded() / 100
     }
 
-    /// Accepts `yyyy-MM-dd`; returns nil for anything else so the caller defaults it.
+    /// Accepts a real `yyyy-MM-dd` calendar date; returns nil for anything else
+    /// (including impossible dates like `2026-99-99` or `2026-02-30`) so the caller
+    /// defaults it. Shape AND calendar validity are checked.
     static func normalizedDate(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), value.count == 10 else { return nil }
         let parts = value.split(separator: "-")
-        guard parts.count == 3, parts[0].count == 4, parts.allSatisfy({ $0.allSatisfy(\.isNumber) }) else { return nil }
+        guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+              parts.allSatisfy({ $0.allSatisfy(\.isNumber) }),
+              let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]) else { return nil }
+        var components = DateComponents()
+        components.year = year; components.month = month; components.day = day
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
+        // Calendar normalizes overflow (e.g. month 99) — reject if it rolled over.
+        guard let date = calendar.date(from: components),
+              calendar.component(.year, from: date) == year,
+              calendar.component(.month, from: date) == month,
+              calendar.component(.day, from: date) == day else { return nil }
         return value
+    }
+
+    /// The work date for a fee line: the model's date only if it's a real calendar
+    /// date on or before the log day (string compare is chronological for ISO
+    /// dates); otherwise the work was logged on `dayDate`. Kills invalid and
+    /// impossible-future dates before they reach LEDES.
+    static func workDate(_ value: String?, dayDate: String) -> String {
+        guard let normalized = normalizedDate(value), normalized <= dayDate else { return dayDate }
+        return normalized
     }
 
     static func trimmedOrNil(_ value: String?) -> String? {

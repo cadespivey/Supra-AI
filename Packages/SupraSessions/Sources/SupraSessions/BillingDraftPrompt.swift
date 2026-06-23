@@ -37,6 +37,7 @@ enum BillingDraftPrompt {
         - matterID MUST be copied verbatim from the provided matter ids, or null if you cannot tell.
         - hours: your best decimal estimate; the app rounds to the increment. NEVER invent time with no basis — if you genuinely cannot tell, use 0 and confidence "low".
         - evidence: state exactly what justifies the duration (a timestamp gap, a file's page/word count, a written "~0.4h" cue, or the implied workflow you inferred).
+        - sourceEntryIDs: copy the exact id values (shown as `id=…` at the start of each day note) of the notes this line is drawn from. This lets the app preserve the lawyer's manual edits when the draft is regenerated, so it matters — do not omit or invent ids.
         - UTBMS coding: for LITIGATION matters assign a task code (L1xx/L2xx/L3xx/L4xx/L5xx) AND an activity code (A1xx). For TRANSACTIONAL/ADVISORY matters (codeSet not "litigation") set taskCode to null, add a codeNote naming the firm's code set, and still assign an A1xx activity code.
         - Exclude apparent non-billable time (lunch, personal, routine admin).
         """
@@ -63,7 +64,7 @@ enum BillingDraftPrompt {
             autoCoding: context.autoCoding
         ))
 
-        sections.append("Day notes (chronological; [HH:mm] is when each line was written):\n" + entriesBlock(context))
+        sections.append("Day notes (chronological; each line starts with `id=… [HH:mm]` — copy those ids into sourceEntryIDs):\n" + entriesBlock(context))
 
         if !context.attachments.isEmpty {
             sections.append("Attachments (evidence):\n" + attachmentsBlock(context))
@@ -78,7 +79,7 @@ enum BillingDraftPrompt {
     private static func entriesBlock(_ context: Context) -> String {
         let nameByID = Dictionary(uniqueKeysWithValues: context.matters.map { ($0.id, $0.name) })
         return context.entries.map { entry in
-            var line = "[\(timeFormatter.string(from: entry.createdAt))] \(entry.text)"
+            var line = "id=\(entry.id) [\(timeFormatter.string(from: entry.createdAt))] \(entry.text)"
             let mentionNames = entry.mentions.compactMap { nameByID[$0] }
             if !mentionNames.isEmpty { line += "  (matter: \(mentionNames.joined(separator: ", ")))" }
             return line
@@ -94,6 +95,11 @@ enum BillingDraftPrompt {
             if let matterID = attachment.matterID, let name = nameByID[matterID] { line += " | matter=\(name)" }
             if let summary = evidence?.displaySummary { line += " | \(summary)" }
             if let subject = evidence?.subject, !subject.isEmpty { line += " | subject: \(subject)" }
+            // Feed the locally-extracted text so the attachment actually corroborates
+            // the narrative + subject (not just its filename/metadata).
+            if let excerpt = evidence?.textExcerpt.trimmingCharacters(in: .whitespacesAndNewlines), !excerpt.isEmpty {
+                line += "\n  excerpt: \(excerpt)"
+            }
             return line
         }.joined(separator: "\n")
     }

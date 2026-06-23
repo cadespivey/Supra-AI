@@ -19,6 +19,7 @@ struct MatterBillingView: View {
         }) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    ledesSection
                     codeSetSection
                     overrideSection
                     guidelinesSection
@@ -30,6 +31,7 @@ struct MatterBillingView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .onAppear { controller.reload() }
         .fileImporter(
             isPresented: $importing,
             allowedContentTypes: controller.allowedContentTypes,
@@ -37,6 +39,35 @@ struct MatterBillingView: View {
         ) { result in
             if case let .success(urls) = result { controller.importGuidelines(urls) }
         }
+    }
+
+    // MARK: - E-billing identifiers
+
+    private var ledesSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("E-billing identifiers (LEDES)").font(.headline)
+            idRow("Client ID", controller.clientID)
+            idRow("Client matter ID", controller.clientMatterID)
+            idRow("Firm matter ID", controller.firmMatterID)
+            Text(controller.ledesIdentifiersComplete
+                 ? "These come from the matter's details (Edit) and are required for LEDES export."
+                 : "Client ID and Firm matter ID are required for LEDES export — set them in the matter's details (the Edit button at the top of the matter).")
+                .font(.caption)
+                .foregroundStyle(controller.ledesIdentifiersComplete ? Color.secondary : Color.orange)
+        }
+    }
+
+    private func idRow(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: value.isEmpty ? "circle" : "checkmark.circle.fill")
+                .foregroundStyle(value.isEmpty ? Color.secondary : .green)
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(value.isEmpty ? "Not set" : value)
+                .foregroundStyle(value.isEmpty ? .tertiary : .primary)
+                .textSelection(.enabled)
+        }
+        .font(.callout)
     }
 
     // MARK: - Code set

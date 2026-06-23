@@ -14,6 +14,10 @@ public struct MatterSummary: Identifiable, Sendable, Equatable {
     public var clientNames: String?
     public var matterDescription: String?
     public var internalMatterID: String?
+    /// LEDES `CLIENT_ID` (e-billing).
+    public var clientID: String?
+    /// LEDES `CLIENT_MATTER_ID` (e-billing).
+    public var clientMatterID: String?
     public var partyPerspective: PartyPerspective
     public var updatedAt: Date
 
@@ -25,6 +29,8 @@ public struct MatterSummary: Identifiable, Sendable, Equatable {
         self.clientNames = record.clientNames
         self.matterDescription = record.matterDescription
         self.internalMatterID = record.internalMatterID
+        self.clientID = record.clientID
+        self.clientMatterID = record.clientMatterID
         self.partyPerspective = PartyPerspective(rawValue: record.partyPerspective) ?? .neutral
         self.updatedAt = record.updatedAt
     }
@@ -43,6 +49,10 @@ public struct MatterDraft: Sendable, Equatable {
     public var clientNames: String
     public var matterDescription: String
     public var internalMatterID: String
+    /// LEDES `CLIENT_ID` — the client's e-billing identifier.
+    public var clientID: String
+    /// LEDES `CLIENT_MATTER_ID` — the client's matter identifier for e-billing.
+    public var clientMatterID: String
     public var notes: String
 
     public init(
@@ -56,6 +66,8 @@ public struct MatterDraft: Sendable, Equatable {
         clientNames: String = "",
         matterDescription: String = "",
         internalMatterID: String = "",
+        clientID: String = "",
+        clientMatterID: String = "",
         notes: String = ""
     ) {
         self.name = name
@@ -68,6 +80,8 @@ public struct MatterDraft: Sendable, Equatable {
         self.clientNames = clientNames
         self.matterDescription = matterDescription
         self.internalMatterID = internalMatterID
+        self.clientID = clientID
+        self.clientMatterID = clientMatterID
         self.notes = notes
     }
 
@@ -83,6 +97,8 @@ public struct MatterDraft: Sendable, Equatable {
             clientNames: record.clientNames ?? "",
             matterDescription: record.matterDescription ?? "",
             internalMatterID: record.internalMatterID ?? "",
+            clientID: record.clientID ?? "",
+            clientMatterID: record.clientMatterID ?? "",
             notes: record.notes ?? ""
         )
     }
@@ -172,6 +188,8 @@ public final class MattersController: ObservableObject {
             clientNames: draft.clientNames,
             matterDescription: draft.matterDescription,
             internalMatterID: draft.internalMatterID,
+            clientID: draft.clientID,
+            clientMatterID: draft.clientMatterID,
             notes: draft.notes,
             defaultChatTitle: "General — \(trimmedName)"
         )
@@ -212,6 +230,8 @@ public final class MattersController: ObservableObject {
             clientNames: draft.clientNames,
             matterDescription: draft.matterDescription,
             internalMatterID: draft.internalMatterID,
+            clientID: draft.clientID,
+            clientMatterID: draft.clientMatterID,
             notes: draft.notes
         )
         _ = try? store.auditEvents.recordEvent(

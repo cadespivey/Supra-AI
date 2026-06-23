@@ -76,7 +76,7 @@ public enum BillingExportValidator {
                 seenClientID = true
                 issues.append(BillingExportIssue(
                     kind: .clientID,
-                    message: "Add the client's CLIENT_ID on the matter (Matter → Billing) — required for LEDES.",
+                    message: "Set the client's CLIENT_ID in the matter's details (Edit) — required for LEDES.",
                     lineNarrative: line.narrative
                 ))
             }
@@ -84,7 +84,7 @@ public enum BillingExportValidator {
                 seenFirmMatterID = true
                 issues.append(BillingExportIssue(
                     kind: .firmMatterID,
-                    message: "Add the firm's internal matter ID (LAW_FIRM_MATTER_ID) on the matter — required for LEDES.",
+                    message: "Set the firm matter ID (LAW_FIRM_MATTER_ID) in the matter's details (Edit) — required for LEDES.",
                     lineNarrative: line.narrative
                 ))
             }

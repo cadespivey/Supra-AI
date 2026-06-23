@@ -21,6 +21,8 @@ final class BillingDraftServiceTests: XCTestCase {
                 clientID: "VYSTAR", clientMatterID: "VS-LIT-2026-031"
             ).insert(db)
         }
+        // Litigation matter → L-codes validate (UTBMS code-set validation).
+        try store.billing.upsertBillingProfile(matterID: matterID, overrideInstructions: nil, billingCodeSet: .litigation)
         let day = try store.scratchPad.fetchOrCreateDay("2026-06-22")
         try store.scratchPad.addEntry(dayID: day.id, text: "Drafting opposition for @VyStar", mentions: [matterID], tags: ["drafting"])
         return (store, matterID, day.id)
@@ -174,6 +176,63 @@ final class BillingDraftServiceTests: XCTestCase {
         _ = try? await BillingDraftService(store: store, generate: { _, user in promptOn = user; return "{\"lineItems\":[]}" })
             .generateDraft(dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22", autoTimestamp: true)
         XCTAssertTrue(promptOn.contains("estimate from timestamp gaps"), "auto-timestamp on → timestamp-gap evidence reaches the prompt")
+    }
+
+    func testValidatesUTBMSCodesAgainstTheCodeSet() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay() // litigation profile
+        let json = """
+        {"lineItems":[
+          {"matterID":"\(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103"},
+          {"matterID":"\(matterID)","narrative":"Reviewed file.","hours":0.5,"taskCode":"L999","activityCode":"ZZZ"}
+        ]}
+        """
+        let result = try await service(store, returning: json).generateDraft(
+            dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22"
+        )
+        let lines = try store.billing.lineItems(draftID: result.draftID)
+        XCTAssertEqual(lines[0].utbmsTaskCode, "L350")       // valid litigation code kept
+        XCTAssertEqual(lines[0].utbmsActivityCode, "A103")   // valid activity kept
+        XCTAssertNil(lines[1].utbmsTaskCode, "L999 is not a real L-code → dropped")
+        XCTAssertNil(lines[1].utbmsActivityCode, "ZZZ is not a real A-code → dropped")
+    }
+
+    func testWorkDateRejectsInvalidAndFutureDates() {
+        XCTAssertEqual(BillingDraftService.workDate("2026-06-21", dayDate: "2026-06-22"), "2026-06-21") // backdated ok
+        XCTAssertEqual(BillingDraftService.workDate("2026-06-23", dayDate: "2026-06-22"), "2026-06-22") // future → day
+        XCTAssertEqual(BillingDraftService.workDate("2026-99-99", dayDate: "2026-06-22"), "2026-06-22") // invalid → day
+        XCTAssertNil(BillingDraftService.normalizedDate("2026-02-30"), "Feb 30 is not a real calendar date")
+        XCTAssertNil(BillingDraftService.normalizedDate("2026-13-01"))
+        XCTAssertEqual(BillingDraftService.normalizedDate("2026-06-22"), "2026-06-22")
+    }
+
+    func testLockedDayBlocksGeneration() async throws {
+        let (store, _, dayID) = try makeStoreWithMatterAndDay()
+        try store.scratchPad.lockDay(id: dayID)
+        do {
+            _ = try await service(store, returning: "{\"lineItems\":[]}").generateDraft(
+                dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22"
+            )
+            XCTFail("expected dayLocked")
+        } catch BillingDraftError.dayLocked {
+            // expected
+        }
+    }
+
+    func testEntryIDsAndAttachmentExcerptReachThePrompt() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let entryID = try XCTUnwrap(store.scratchPad.entries(dayID: dayID).first?.id)
+        try store.scratchPad.addAttachment(
+            dayID: dayID, matterID: matterID, evidenceKind: .workProduct,
+            evidenceSignalsJSON: AttachmentEvidence.encode(AttachmentEvidence(
+                kind: "work_product", fileName: "opp.txt", byteSize: 10, wordCount: 5, partCount: 1, attachmentCount: 0,
+                extractionMethod: "text", needsOCR: false, subject: nil, metadataCreatedAt: nil, metadataModifiedAt: nil,
+                warnings: [], textExcerpt: "Opposition argues proportionality under Rule 26."))
+        )
+        var captured = ""
+        _ = try? await BillingDraftService(store: store, generate: { _, user in captured = user; return "{\"lineItems\":[]}" })
+            .generateDraft(dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22")
+        XCTAssertTrue(captured.contains("id=\(entryID)"), "entry ids must reach the prompt so sourceEntryIDs can be cited")
+        XCTAssertTrue(captured.contains("Opposition argues proportionality under Rule 26."), "attachment excerpt must reach the prompt")
     }
 
     func testResolveMatterByNameAndPureHelpers() throws {

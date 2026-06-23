@@ -132,6 +132,35 @@ final class BillingDraftControllerTests: XCTestCase {
         XCTAssertTrue(controller.exportIssues().isEmpty)
     }
 
+    func testDeleteReassignAndExportLifecycle() async throws {
+        let (store, dayID) = try setUp()
+        let controller = controller(store)
+        controller.bind(dayID: dayID)
+        await controller.generate(sensitivity: 0.6)
+        XCTAssertEqual(controller.lines.count, 2)
+
+        // Delete one line.
+        let first = try XCTUnwrap(controller.lines.first)
+        controller.deleteLine(id: first.id)
+        XCTAssertEqual(controller.lines.count, 1)
+
+        // Reassign the remaining line off and back onto the matter (with its client id).
+        let remaining = try XCTUnwrap(controller.lines.first)
+        controller.reassignMatter(lineID: remaining.id, to: nil)
+        XCTAssertNil(controller.lines.first?.matterID)
+        controller.reassignMatter(lineID: remaining.id, to: "m-vystar")
+        XCTAssertEqual(controller.lines.first?.matterID, "m-vystar")
+        XCTAssertEqual(controller.lines.first?.clientID, "VYSTAR")
+
+        // Export marks the draft exported and records an audit trail.
+        controller.markExported(format: .csv)
+        let draft = try XCTUnwrap(store.billing.latestDraft(dayID: dayID))
+        XCTAssertEqual(draft.status, BillingDraftStatus.exported.rawValue)
+        let events = try store.auditEvents.fetchEvents(matterID: "m-vystar")
+        XCTAssertTrue(events.contains { $0.eventType == "export_completed" })
+        XCTAssertTrue(events.contains { $0.eventType == "billing_draft_generated" })
+    }
+
     func testExportProducesLEDESAndCSV() async throws {
         let (store, dayID) = try setUp()
         let controller = controller(store)
