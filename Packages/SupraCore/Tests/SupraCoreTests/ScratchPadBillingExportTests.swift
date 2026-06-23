@@ -122,4 +122,44 @@ final class ScratchPadBillingExportTests: XCTestCase {
         XCTAssertEqual(rows.count, 4)
         XCTAssertTrue(rows[1].contains("\t1.3\t"))
     }
+
+    // MARK: - Narrative terminal punctuation
+
+    func testNarrativeTerminalFormatting() {
+        XCTAssertEqual(BillingExporter.formatNarrative("Drafted opposition.", terminal: .asWritten), "Drafted opposition.")
+        XCTAssertEqual(BillingExporter.formatNarrative("Drafted opposition.", terminal: .noPeriod), "Drafted opposition")
+        XCTAssertEqual(BillingExporter.formatNarrative("Drafted opposition.", terminal: .semicolon), "Drafted opposition;")
+        // A "(split)" suffix is preserved; the semicolon lands after it.
+        XCTAssertEqual(BillingExporter.formatNarrative("Review discovery (split)", terminal: .semicolon), "Review discovery (split);")
+        XCTAssertEqual(BillingExporter.formatNarrative("Review discovery (split).", terminal: .noPeriod), "Review discovery (split)")
+        // An existing semicolon is not doubled.
+        XCTAssertEqual(BillingExporter.formatNarrative("Confer with client;", terminal: .semicolon), "Confer with client;")
+    }
+
+    func testTerminalAppliesInCSVExport() {
+        let line = BillingLine(
+            clientID: "C", lawFirmMatterID: "F", matterDisplay: "M",
+            narrative: "Drafted opposition.", hours: 1.0, workDate: "2026-06-22",
+            narrativeTerminal: .semicolon
+        )
+        let csv = BillingExporter.csv(lines: [line], timekeeper: timekeeper)
+        XCTAssertTrue(csv.contains("Drafted opposition;"))
+        XCTAssertFalse(csv.contains("Drafted opposition."))
+    }
+
+    // MARK: - Weekly table
+
+    func testWeeklyTableExport() {
+        let line = BillingLine(
+            clientID: "VYSTAR", lawFirmMatterID: "12044-0007", clientMatterID: "VS-031",
+            clientDisplay: "VyStar Credit Union", matterDisplay: "VyStar - Celebration Point",
+            narrative: "Draft opposition to motion to compel.", hours: 1.0, workDate: "2026-06-22",
+            narrativeTerminal: .noPeriod
+        )
+        let rows = BillingExporter.weeklyTable(lines: [line]).split(separator: "\n").map(String.init)
+        XCTAssertEqual(rows[0], "| DATE | CLIENT / MATTER | MATTER NO. | NARRATIVE | TIME |")
+        XCTAssertEqual(rows[1], "|---|---|---|---|---:|")
+        // MM/DD/YYYY date, matter name, firm matter no., punctuation-free narrative, one-decimal time.
+        XCTAssertEqual(rows[2], "| 06/22/2026 | VyStar - Celebration Point | 12044-0007 | Draft opposition to motion to compel | 1.0 |")
+    }
 }

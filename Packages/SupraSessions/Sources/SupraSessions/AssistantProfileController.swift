@@ -8,7 +8,10 @@ import SupraStore
 /// that the chat and matter controllers read at send time.
 @MainActor
 public final class AssistantProfileController: ObservableObject {
-    @Published public var profile: AssistantProfile
+    /// Every edit autosaves immediately (didSet → persist), so the user can never
+    /// lose their guidance by forgetting to press a button. didSet does not fire for
+    /// the initial assignment in `init`, so loading the stored profile doesn't loop.
+    @Published public var profile: AssistantProfile { didSet { persist() } }
     @Published public private(set) var isAddingSample = false
     @Published public var message: String?
 
@@ -34,19 +37,15 @@ public final class AssistantProfileController: ObservableObject {
         profile.composedSystemPrompt(base: basePrompt)
     }
 
-    /// Persists the profile and recomposes the system prompt the model receives.
-    /// Returns whether the write succeeded, and reports failure to the user rather
-    /// than claiming success.
-    @discardableResult
-    public func save() -> Bool {
+    /// Autosaves the profile and recomposes the system prompt the model receives.
+    /// Silent on success (no per-keystroke status), but surfaces a message if the
+    /// write fails so the user is never silently losing their guidance.
+    private func persist() {
         do {
             try store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)
             try store.appSettings.setSetting(AssistantProfile.systemPromptKey, value: composedSystemPrompt)
-            message = "Profile saved."
-            return true
         } catch {
             message = "Couldn't save your profile. \(error.localizedDescription)"
-            return false
         }
     }
 
@@ -73,8 +72,11 @@ public final class AssistantProfileController: ObservableObject {
                 return
             }
             let excerpt = String(text.prefix(Self.sampleExcerptLimit))
+            message = nil
+            // The append autosaves via the profile's didSet; it sets an error message
+            // only if the write fails, so claim success only when none was reported.
             profile.writingSamples.append(AssistantProfile.WritingSample(name: url.lastPathComponent, excerpt: excerpt))
-            if save() {
+            if message == nil {
                 message = "Added “\(url.lastPathComponent)”."
             }
         } catch {
@@ -84,7 +86,6 @@ public final class AssistantProfileController: ObservableObject {
 
     public func removeWritingSample(id: String) {
         profile.writingSamples.removeAll { $0.id == id }
-        save()
     }
 }
 

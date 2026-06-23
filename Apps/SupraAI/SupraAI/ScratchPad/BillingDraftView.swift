@@ -268,7 +268,7 @@ struct BillingDraftView: View {
             }
         }
         let text = billing.exportString(format: format)
-        if format == .clipboard {
+        if format.isClipboard {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             billing.statusMessage = "Copied \(billing.lines.count) line(s) to the clipboard."

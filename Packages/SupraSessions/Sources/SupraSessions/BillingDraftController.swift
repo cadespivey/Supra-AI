@@ -7,6 +7,7 @@ public enum BillingExportFormat: String, CaseIterable, Sendable, Identifiable {
     case ledes
     case csv
     case clipboard
+    case weeklyTable
 
     public var id: String { rawValue }
 
@@ -15,6 +16,7 @@ public enum BillingExportFormat: String, CaseIterable, Sendable, Identifiable {
         case .ledes: "LEDES 1998B"
         case .csv: "CSV"
         case .clipboard: "Copy to clipboard"
+        case .weeklyTable: "Copy weekly table"
         }
     }
 
@@ -23,8 +25,12 @@ public enum BillingExportFormat: String, CaseIterable, Sendable, Identifiable {
         case .ledes: "txt"
         case .csv: "csv"
         case .clipboard: "txt"
+        case .weeklyTable: "md"
         }
     }
+
+    /// Formats that are placed on the clipboard rather than written to a file.
+    public var isClipboard: Bool { self == .clipboard || self == .weeklyTable }
 }
 
 /// A matter the review table can reassign a line to, with its code set so the
@@ -60,6 +66,8 @@ public final class BillingDraftController: ObservableObject {
     public var globalInstructions: String = ""
     public var utbmsAutoCoding: Bool = true
     public var autoTimestamp: Bool = true
+    /// Firm-wide narrative terminal-punctuation style; a matter may override it.
+    public var narrativeTerminal: BillingNarrativeTerminal = .asWritten
 
     private let store: SupraStore
     private let service: BillingDraftService
@@ -81,6 +89,7 @@ public final class BillingDraftController: ObservableObject {
         globalInstructions = settings.globalInstructions
         utbmsAutoCoding = settings.utbmsAutoCoding
         autoTimestamp = settings.autoTimestamp
+        narrativeTerminal = settings.narrativeTerminal
     }
 
     public var hasDraft: Bool { draftID != nil }
@@ -220,6 +229,8 @@ public final class BillingDraftController: ObservableObject {
             return BillingExporter.csv(lines: billingLines, timekeeper: timekeeper)
         case .clipboard:
             return BillingExporter.clipboardTSV(lines: billingLines, timekeeper: timekeeper)
+        case .weeklyTable:
+            return BillingExporter.weeklyTable(lines: billingLines)
         }
     }
 
@@ -234,9 +245,10 @@ public final class BillingDraftController: ObservableObject {
     private func billingLines() -> [BillingLine] {
         let matters = (try? store.matters.fetchMatters()) ?? []
         let byID = Dictionary(uniqueKeysWithValues: matters.map { ($0.id, $0) })
-        var codeSetCache: [String: BillingCodeSet] = [:]
+        var profileCache: [String: MatterBillingProfileRecord?] = [:]
         return lines.map { record in
             let matter = record.matterID.flatMap { byID[$0] }
+            let profile = record.matterID.map { profile(for: $0, cache: &profileCache) } ?? nil
             return BillingLine(
                 clientID: matter?.clientID,
                 lawFirmMatterID: matter?.internalMatterID,
@@ -250,17 +262,18 @@ public final class BillingDraftController: ObservableObject {
                 activityCode: record.utbmsActivityCode,
                 rate: record.rate,
                 confidence: BillingConfidence(rawValue: record.confidence) ?? .medium,
-                codeSet: record.matterID.map { codeSet(for: $0, cache: &codeSetCache) } ?? .none
+                codeSet: profile.flatMap { BillingCodeSet(rawValue: $0.billingCodeSet) } ?? .none,
+                // Matter override wins; otherwise the firm-wide setting.
+                narrativeTerminal: profile?.narrativeTerminalValue ?? narrativeTerminal
             )
         }
     }
 
-    /// The governing code set for a matter (cached per render), used by the
-    /// pre-export validator to decide whether a blank task code is a blocking gap.
-    private func codeSet(for matterID: String, cache: inout [String: BillingCodeSet]) -> BillingCodeSet {
+    /// The matter's billing profile (cached per render), source of its code set and
+    /// narrative terminal override.
+    private func profile(for matterID: String, cache: inout [String: MatterBillingProfileRecord?]) -> MatterBillingProfileRecord? {
         if let cached = cache[matterID] { return cached }
-        let resolved = (try? store.billing.billingProfile(matterID: matterID))
-            .flatMap { BillingCodeSet(rawValue: $0.billingCodeSet) } ?? .none
+        let resolved = try? store.billing.billingProfile(matterID: matterID)
         cache[matterID] = resolved
         return resolved
     }

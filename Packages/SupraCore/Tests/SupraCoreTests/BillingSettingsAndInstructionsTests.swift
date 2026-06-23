@@ -8,7 +8,10 @@ final class BillingSettingsAndInstructionsTests: XCTestCase {
 
     func testDefaultsMatchSpec() {
         let settings = BillingSettings.default
-        XCTAssertEqual(settings.globalInstructions, "")
+        // A fresh install seeds the starter billing-narrative hygiene instructions.
+        XCTAssertEqual(settings.globalInstructions, BillingSettings.defaultGlobalInstructions)
+        XCTAssertFalse(settings.globalInstructions.isEmpty)
+        XCTAssertEqual(settings.narrativeTerminal, .asWritten, "punctuation normalization is opt-in")
         XCTAssertTrue(settings.autoTimestamp, "auto-timestamp is on by default (locked decision 2)")
         XCTAssertEqual(settings.sensitivity, BillingSensitivity.defaultValue, accuracy: 0.0001)
         XCTAssertEqual(settings.roundingIncrement, 0.1, accuracy: 0.0001)

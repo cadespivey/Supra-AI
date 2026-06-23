@@ -867,6 +867,14 @@ public enum SupraMigrator {
             }
         }
 
+        // Per-matter narrative terminal-punctuation override (nil = inherit the
+        // firm-wide setting). Drives deterministic export punctuation.
+        migrator.registerMigration("v048_add_billing_narrative_terminal") { db in
+            try db.alter(table: "matter_billing_profiles") { table in
+                table.add(column: "narrative_terminal", .text)
+            }
+        }
+
         return migrator
     }
 
