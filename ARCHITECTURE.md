@@ -100,7 +100,7 @@ are recorded in [`Docs/Architecture/RuntimeFileAccess.md`](Docs/Architecture/Run
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list (`v001` … `v047` as of 1.5.0). Each feature area adds migrations and a
+migration list (`v001` … `v048` as of 1.5.1). Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
