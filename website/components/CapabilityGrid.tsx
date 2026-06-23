@@ -17,6 +17,10 @@ const capabilities = [
     title: "Matter workspace",
     body: "Organize research, drafts, documents, outputs, and review artifacts by matter.",
   },
+  {
+    title: "Timekeeping & billing",
+    body: "ScratchPad turns a day's notes and work product into reviewable, defensible time entries with UTBMS codes — exportable to LEDES 1998B, CSV, or the clipboard. Nothing bills automatically; every line cites its evidence.",
+  },
 ];
 
 export function CapabilityGrid() {

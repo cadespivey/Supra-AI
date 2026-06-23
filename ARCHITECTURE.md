@@ -58,7 +58,7 @@ Apps/SupraAI
 Packages/
 ├─ SupraCore               Domain types, IDs, model routing, generation options, reasoning split
 ├─ SupraStore              GRDB persistence: migrations, records, repositories
-├─ SupraSessions           App-facing controllers (chat, research, documents, Q&A, outputs, models, jobs)
+├─ SupraSessions           App-facing controllers (chat, research, documents, Q&A, outputs, models, jobs, ScratchPad/billing)
 ├─ SupraResearch           CourtListener client + DTOs + legal citation handling/ranking
 ├─ SupraDocuments          Extraction, OCR, chunking, retrieval, grounding, export
 ├─ SupraNetworking         Authorized HTTP client, default-deny network policy, rate limiting, Keychain
@@ -100,7 +100,7 @@ are recorded in [`Docs/Architecture/RuntimeFileAccess.md`](Docs/Architecture/Run
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list (`v001` … `v039` as of 1.3.3). Each feature area adds migrations and a
+migration list (`v001` … `v047` as of 1.5.0). Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -109,6 +109,9 @@ repository:
 - Milestone 3 added document intelligence settings, content blobs, folders, document
   instances, tags, pages/parts, chunks, an FTS5 virtual table, embedding models, chunk
   embeddings, import batches, processing jobs, source sets/output sources, and exports.
+- Milestone 4 (ScratchPad) added scratch-pad days/entries/attachments, billing drafts +
+  line items, and per-matter billing profiles, plus LEDES `client_id` / `client_matter_id`
+  columns on `matters`.
 
 Repositories are grouped by cohesion (e.g. `DocumentLibraryRepository`,
 `DocumentIndexRepository`, `DocumentJobRepository`) rather than one-per-table, matching the

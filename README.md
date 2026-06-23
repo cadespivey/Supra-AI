@@ -30,8 +30,13 @@ unverified authority as settled law.
 - **Document intelligence.** Import files and folders (PDF, DOCX, XLSX, RTF, EML, images), with OCR,
   chunking, on-device embeddings, hybrid retrieval, source-cited Q&A, fact chronologies, and
   exportable structured outputs — all scoped per matter.
-- **Matter workspace.** Organize chats, research sessions, authorities, documents, and outputs by
-  matter, with an audit trail.
+- **Matter workspace.** Organize chats, research sessions, authorities, documents, outputs, and
+  per-matter billing rules by matter, with an audit trail.
+- **Timekeeping → defensible billing (ScratchPad).** Keep one running daily note — `@matter` /
+  `#issue` tags, with work product, emails, and filings dropped in as evidence. On demand, a local
+  model turns the day into a reviewable, editable table of billing entries (Client · Matter ·
+  Narrative · Time, with UTBMS codes) and a day reconciliation, exportable to **LEDES 1998B**, CSV, or
+  the clipboard. Every suggested time cites its evidence; **nothing is ever billed automatically**.
 - **Global chat management.** Global Chat opens to a fresh set of legal prompt starters, keeps a
   searchable, title-based chat history in an interior sidebar, and lets you rename, delete, or move a
   chat into a matter when it turns out to be case-specific.

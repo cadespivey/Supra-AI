@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
-## [1.5.0] - Unreleased
+## [1.5.0] - 2026-06-22
 
 Milestone 4 — **ScratchPad**: turn a day's running notes into defensible, e-billable
 time entries, entirely on-device. Plus chat-input refinements across the app.
