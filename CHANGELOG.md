@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [1.5.1] - 2026-06-23
+
+Matter-chat grounding so the assistant answers from your actual documents,
+billing-narrative and export refinements, and Settings quality-of-life fixes.
+
+### Added
+
+- **Matter chat answers from your documents.** Asking a matter's Chat about its
+  own files — "list the cases in the Research folder," "what do my documents say
+  about indemnification" — now answers from the matter's actual document library:
+  a deterministic folder/document inventory for "what's in folder X" (including
+  sub-folders), and cited, retrieval-grounded answers for content questions.
+  General legal questions still use the existing research routes.
+- **Choose how billing narratives end.** A firm-wide narrative-punctuation setting
+  (as written / no terminal period / end with a semicolon), plus a per-matter
+  override on the matter's Billing tab, applied deterministically at export.
+- **Copy weekly billing table.** A new export that copies a ready-to-paste,
+  five-column table — Date · Client / Matter · Matter No. · Narrative · Time.
+- **Starter billing instructions.** Fresh installs begin with a sensible default
+  set of billing-narrative guidelines, editable in Settings.
+
+### Changed
+
+- **Opens on your best reasoning model.** The app now loads the strongest available
+  reasoning model on launch instead of the lighter drafting/instruct model.
+- **Settings autosave.** The Assistant Profile now saves as you type — the "Save
+  Profile" button is gone, so guidance can't be lost by forgetting to save.
+- **Multi-line Settings fields accept line breaks.** Style notes, citation notes,
+  additional instructions, and the global billing instructions now take the Return
+  key as a newline, and the profile preview is shown at a readable size.
+
+### Fixed
+
+- **No more invented document lists or fabricated actions.** Matter chat no longer
+  answers questions about your files from the model's memory (it reads the real
+  library), and the assistant won't claim to have searched, reviewed a folder, or
+  taken any other action it cannot actually perform.
+
 ## [1.5.0] - 2026-06-22
 
 Milestone 4 — **ScratchPad**: turn a day's running notes into defensible, e-billable
