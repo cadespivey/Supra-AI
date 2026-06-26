@@ -8,7 +8,7 @@ const steps = [
   },
   {
     title: "Start in global chat",
-    body: "Open to a fresh legal prompt set, search prior global chats by title, delete stale chats, or move a chat into a matter when it becomes case-specific.",
+    body: "Open to a fresh legal prompt set and type / to pull up the command palette — /legal, /research, /draft, /critique, /verify, /ask, each with a one-line description. Search runs across chat titles, message content, and ScratchPad notes, with a leading # for an exact tag match. Move a chat into a matter when it becomes case-specific.",
   },
   {
     title: "Open a matter",
@@ -24,7 +24,7 @@ const steps = [
   },
   {
     title: "Draft, critique, or export",
-    body: "Turn reviewed research and document context into attorney-edited drafts, critique passes, chronologies, and exportable work product.",
+    body: "Turn reviewed research and document context into attorney-edited drafts, critique passes, chronologies, and exportable work product. In a matter, the Draft button generates a downloadable Word document — a Florida Notice of Appearance today, with the signature block matched to the filing's court — to open, reveal in Finder, or save a copy of.",
   },
 ];
 
@@ -57,7 +57,7 @@ function StepMockBody({ index }: { index: number }) {
         <div className="grid grid-cols-[0.8fr_1.2fr] gap-3">
           <div className="space-y-2 rounded-lg border border-supra-border bg-supra-navyPanel p-2">
             <div className="rounded-md border border-supra-border bg-supra-navy px-2 py-1 text-[0.62rem] text-supra-muted">
-              Search chats
+              Search chats or #tags
             </div>
             {["Lease review", "Removal deadline", "Privilege memo"].map(
               (chat, i) => (

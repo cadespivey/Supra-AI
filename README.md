@@ -32,19 +32,30 @@ unverified authority as settled law.
   exportable structured outputs — all scoped per matter.
 - **Matter workspace.** Organize chats, research sessions, authorities, documents, outputs, and
   per-matter billing rules by matter, with an audit trail.
+- **In-matter drafting.** A **Draft** button in a matter's chat opens a guided input sheet
+  (caption parties, client represented, service recipients) and generates a downloadable `.docx`
+  Notice of Appearance. Required slots are validated before rendering, and the signature block prints
+  the bar admission whose jurisdiction matches the filing's court — configured as a multi-jurisdiction
+  bar-admissions list in **Settings**. (Notice of Appearance is currently Florida-only.)
 - **Timekeeping → defensible billing (ScratchPad).** Keep one running daily note — `@matter` /
-  `#issue` tags, with work product, emails, and filings dropped in as evidence. On demand, a local
-  model turns the day into a reviewable, editable table of billing entries (Client · Matter ·
-  Narrative · Time, with UTBMS codes) and a day reconciliation, exportable to **LEDES 1998B**, CSV, or
-  the clipboard. Every suggested time cites its evidence; **nothing is ever billed automatically**.
-- **Global chat management.** Global Chat opens to a fresh set of legal prompt starters, keeps a
-  searchable, title-based chat history in an interior sidebar, and lets you rename, delete, or move a
-  chat into a matter when it turns out to be case-specific.
+  `#issue` tags, with work product, emails, and filings attached inline to the note they support.
+  Tag an entry `#Note` to keep it out of billing entirely (the text and its attachments never reach
+  the billing model). On demand, a local model turns the day into a reviewable, editable table of
+  billing entries (Client · Matter · Narrative · Time, with UTBMS codes) and a day reconciliation,
+  exportable to **LEDES 1998B**, CSV, or the clipboard. Every suggested time cites its evidence;
+  **nothing is ever billed automatically**.
+- **Global chat management.** Global Chat opens to a fresh set of legal prompt starters and keeps a
+  chat history in an interior sidebar, searchable by title and message content — a leading `#`
+  matches a tag exactly and surfaces a cross-matter "Tag matches" section spanning chats and
+  ScratchPad notes. Rename, delete, or move a chat into a matter when it turns out to be case-specific.
 - **Privacy by default.** Privileged query terms are redacted (stored as stable fingerprints) in
   logs and diagnostics unless explicitly enabled; the CourtListener token lives in the Keychain,
   bound to the device.
 
 ## Slash commands
+
+Type `/` at the start of a chat message to open a command palette that lists every command with a
+one-line description and filters as you type; each route runs on the model assigned to that task.
 
 | Command | Mode |
 |---|---|
@@ -98,12 +109,14 @@ cp .env.example .env        # then fill in model names / CourtListener token
 open SupraAI.xcworkspace     # build & run the "SupraAI" scheme in Xcode
 ```
 
-1. **Download models.** Follow [`Docs/local-legal-model-setup.md`](Docs/local-legal-model-setup.md)
-   to fetch the MLX model weights, then register them in the app's **Models** tab.
+1. **Download models.** On first launch a skippable Welcome screen offers to download a reasoning,
+   drafting, and embedding model in the background. You can also follow
+   [`Docs/local-legal-model-setup.md`](Docs/local-legal-model-setup.md) to fetch the MLX weights
+   manually, then register and assign them in the app's **Models** tab.
 2. **Configure** `.env` (see below) — `.env` is gitignored and never committed.
 3. **Legal research (optional):** add your CourtListener token in **Settings**.
-4. **Document intelligence (optional):** complete the one-time embedding-model setup in **Settings**,
-   then import documents per matter.
+4. **Document intelligence (optional):** complete the one-time embedding-model setup in the
+   **Models** tab, then import documents per matter.
 
 ## Configuration
 
