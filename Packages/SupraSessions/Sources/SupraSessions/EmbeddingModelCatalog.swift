@@ -48,6 +48,11 @@ public enum EmbeddingModelCatalog {
     /// The retrieval query instruction shared by the BGE and mxbai families (both
     /// were trained with this s2p query prompt; passages stay raw).
     private static let bgeQueryInstruction = "Represent this sentence for searching relevant passages:"
+    /// Qwen3-Embedding's official query instruction format. The model is trained to
+    /// encode a *query* with an `Instruct: …\nQuery: ` preamble while passages are
+    /// embedded raw — the same asymmetric s2p scheme as BGE, so prepending it to
+    /// queries only (passages stay raw) is consistent with existing vectors.
+    private static let qwen3QueryInstruction = "Instruct: Given a legal search query, retrieve relevant passages that answer the query\nQuery:"
 
     public static let curated: [CatalogEmbeddingModel] = [
         CatalogEmbeddingModel(
@@ -70,6 +75,15 @@ public enum EmbeddingModelCatalog {
             queryInstruction: bgeQueryInstruction
         ),
         CatalogEmbeddingModel(
+            repoID: "BAAI/bge-m3",
+            displayName: "BGE-M3 (multilingual)",
+            dimension: 1024,
+            runtimeFamily: "xlm-roberta",
+            approxSizeMB: 2200,
+            notes: "Multilingual retrieval across 100+ languages with long-context (8K) support. Larger on disk.",
+            queryInstruction: bgeQueryInstruction
+        ),
+        CatalogEmbeddingModel(
             repoID: "mixedbread-ai/mxbai-embed-large-v1",
             displayName: "mxbai Embed Large v1",
             dimension: 1024,
@@ -77,6 +91,24 @@ public enum EmbeddingModelCatalog {
             approxSizeMB: 640,
             notes: "Top-tier retrieval quality.",
             queryInstruction: bgeQueryInstruction
+        ),
+        CatalogEmbeddingModel(
+            repoID: "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
+            displayName: "Qwen3-Embedding 0.6B",
+            dimension: 1024,
+            runtimeFamily: "qwen3",
+            approxSizeMB: 400,
+            notes: "Instruction-tuned, strong multilingual + code retrieval. 4-bit quantized for a small footprint.",
+            queryInstruction: qwen3QueryInstruction
+        ),
+        CatalogEmbeddingModel(
+            repoID: "mlx-community/Qwen3-Embedding-8B-4bit-DWQ",
+            displayName: "Qwen3-Embedding 8B",
+            dimension: 4096,
+            runtimeFamily: "qwen3",
+            approxSizeMB: 4600,
+            notes: "Highest-quality retrieval (MTEB-leading), instruction-tuned. Large: needs ample RAM and disk; slower to embed.",
+            queryInstruction: qwen3QueryInstruction
         ),
         CatalogEmbeddingModel(
             repoID: "nomic-ai/nomic-embed-text-v1.5",
