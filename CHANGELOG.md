@@ -9,6 +9,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [1.7.0] - 2026-06-26
+
+A broad app overhaul: draft a Notice of Appearance from within a matter's chat and
+download it as a Word document, discover chat commands from a slash palette, record
+bar admissions across multiple jurisdictions and have the right one printed to match
+the filing's court, attach documents inline to ScratchPad notes with `#Note`
+non-billable exclusion, search chats and notes by tag or content, and a redesigned
+Models tab with custom-repo and parallel/resumable downloads. First launch now offers
+a guided model-download flow, and Diagnostics keeps itself current.
+
+### Added
+
+- **Draft a Notice of Appearance from a matter's chat.** A new **Draft** button in a
+  matter's chat toolbar opens a sheet where you enter the caption parties, the client
+  you represent, and the service recipients (opposing counsel), then generates a
+  downloadable `.docx` Notice of Appearance with Reveal in Finder / Open / Save-a-copy
+  actions and any review-flag notes. Before anything renders, every required slot is
+  validated — a caption with two or more complete parties and a court header, the party
+  represented, a full firm signature block, and service recipients with valid e-mail
+  addresses — and missing items are reported as a specific list (e.g. "still needed:
+  service recipients, caption party 1 designation") so blanks never leak into a filing.
+- **Notice of Appearance drafting is refused outside Florida.** Generating one for a
+  non-Florida matter now fails with a clear message ("wired for Florida filings
+  only…") rather than producing a filing with the wrong service rules.
+- **A discoverable slash-command palette in the chat composer.** Typing `/` at the
+  start of a message pops up a menu of every available command — `/legal`, `/research`,
+  `/draft`, `/critique`, `/verify`, `/ask` — each with a one-line description; pick one
+  to fill the composer. The menu filters as you type the command token and dismisses on
+  a space. The placeholder now reads "Message — type / for commands".
+- **Record bar admissions across jurisdictions.** The firm profile replaces the single
+  "Florida Bar number" field with a **Bar admissions** list: add multiple jurisdiction +
+  bar-number rows (the 50 states plus D.C.), mark one as primary with a star, and remove
+  rows.
+- **The correct bar admission is printed to match the filing's court.** When you draft a
+  court filing, the app prints the admission whose jurisdiction matches the court (a
+  Texas court prints your Texas Bar No.), falling back to your primary admission, and
+  the signature-block label is now jurisdiction-specific ("Florida Bar No.", "D.C. Bar
+  No.", …) instead of always "Florida Bar No."
+- **`#Note` marks a ScratchPad entry non-billable.** Tagging an entry `#Note`
+  (case-insensitive) excludes it — and any files attached to it — from the billing/time
+  draft. The exclusion is deterministic: `#Note` entries are filtered out before the
+  prompt is built, so their text and attached filenames never reach the billing model
+  and the time math stays exact. A day of only `#Note` entries yields the same "nothing
+  to bill" result as a blank day.
+- **`#Note` is visible while you write and after.** Composing a `#Note` tag raises a
+  near-composer alert ("Tagged #Note — this won't be counted toward billing or time…");
+  saved entries carry a "Non-billable" badge, and the `#Note` tag is tinted orange (vs.
+  gold for ordinary `#tags`). The billing-draft review banner reports what was left out
+  ("1 note tagged #Note excluded; 1 attached file tied to excluded notes excluded from
+  billing.").
+- **Search chats and ScratchPad notes by tag or content.** The chat search box (now
+  "Search chats or #tags") matches chats by message body as well as title; a leading `#`
+  is an exact tag match (`#urgent` does not match `#urgentish`). A `#tag` query surfaces
+  a grouped **Tag matches** discovery section spanning ScratchPad notes and cross-matter
+  chats, with snippets centered on the match. In a matter scope, search is bounded to
+  that matter's chats and `@`-mentioning notes; globally it spans every matter for
+  cross-matter discovery. In-scope chats open in place; cross-matter chats and notes
+  appear as discovery-only.
+- **First-run onboarding for downloading models.** On a fresh launch with no models
+  installed, a skippable Welcome screen lets you pick and start downloading a reasoning
+  model, a drafting model, and an embedding model; downloads continue in the background
+  after you enter the app, and the screen never reappears once completed or skipped.
+- **Custom Hugging Face repo IDs.** Both task (text) and embedding model setup now
+  accept a pasted custom repo ID alongside the curated catalog. A custom embedding
+  model's dimension is discovered automatically when it verifies, so semantic search and
+  the dimension guard work on later loads.
+
+### Changed
+
+- **ScratchPad files are recorded inline with their note.** A file attached in the
+  composer is now saved with the note on submit and renders as a chip directly beneath
+  that entry, inheriting the note's own `@matter` instead of landing in a detached
+  day-level attachment bar. Dropping a file on a note attaches it there; dropping a file
+  on the timeline creates a minimal note that carries it (e.g. "Attached evidence.txt")
+  so a document is never orphaned. The old standalone attachment bar now shows only
+  legacy/unfiled attachments from older days.
+- **Settings consolidated.** The separate "Assistant Profile" and "Firm identity for
+  drafting" sections are now one **Profile & Firm Identity** section, so who-you-are
+  details and the signature-block/letterhead fields live together. Single-line fields
+  show a caption label above a clearly bordered, left-aligned box (instead of
+  right-aligned, value-like form rows), and multi-line prose fields (global billing
+  instructions, secondary e-mails, other instructions, writing style) start around three
+  lines and grow as you type.
+- **Legacy single bar numbers migrate automatically.** A saved profile with the old
+  single bar number becomes a structured admission on load (jurisdiction inferred from
+  your office state), so it appears in the new editor and resolves a proper signature
+  label; the hidden legacy field is then cleared.
+- **Document Intelligence moved to the Models tab.** Its setup/readiness panel no longer
+  lives in Settings; it now sits at the bottom of the Models tab, directly under the
+  model sections it depends on.
+- **The Models tab was redesigned.** It is now a scroll of whitespace-separated sections
+  with larger headers and body fonts and muted gray step numbers (instead of bold accent
+  badges). Per-model rows use a play icon to load and a hover-revealed trash icon to
+  delete (replacing swipe-to-delete and the bordered "Load" label). Task-model setup
+  folds load-and-verify into a single "Load Runtime Model" action that loads the
+  recommended startup model — assigned models load automatically when a task runs — and
+  embedding models now auto-verify on download and on selection (the manual "Test Load"
+  step is gone), showing verifying/ready/failed status inline.
+- **Downloads run in parallel and resume.** Model downloads now fetch a repo's files
+  concurrently (up to four at a time) and skip files already on disk, so multi-file
+  models land faster and an interrupted download resumes where it left off; cancelling or
+  failing no longer deletes partial progress. Progress now shows how many of a model's
+  files have finished downloading.
+- **Diagnostics refreshes itself.** The tab now updates runtime status automatically
+  every 10 seconds while open; the manual header and its Refresh button are gone.
+- **Stricter pre-file gate for court filings.** Filing is now blocked not just on missing
+  sections but on incomplete ones: a caption needs a court header, two or more complete
+  parties, and a case number; the signature block needs firm, attorney, attorneys, and a
+  primary e-mail; and the certificate of service needs at least one complete recipient
+  (name, role, e-mail).
+
+### Removed
+
+- **The `-hq` slash variants are gone.** `/legal-hq`, `/research-hq`, and their
+  `-high-quality` aliases are no longer recognized. Each route now always runs on the
+  model assigned to that task — there is no per-message quality tier to pick.
+- **The Models-tab download toolbar buttons are gone.** "Download Model" and "Add Local
+  Folder" no longer appear in the top bar; downloading is done inline within the
+  task-model and embedding sections (including the new custom-repo field).
+
+### Fixed
+
+- **Deleting a ScratchPad note removes its inline attachments.** The files attached to a
+  note are now deleted with it, instead of being detached and left behind as orphaned
+  attachment records.
+
 ## [1.6.0] - 2026-06-25
 
 Document drafting comes to chat, plus model-setup quality-of-life: a one-model
