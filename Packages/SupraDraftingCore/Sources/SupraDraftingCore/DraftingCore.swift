@@ -1,5 +1,12 @@
 import Foundation
 
+public enum DraftError: Error, Sendable, Equatable {
+    case styleFloorViolation(String)     // < 12pt or < 1" margin (2.520(a)) — StyleSheetCompiler
+    case renderFailure(String)
+    case missingRequiredSlot(String)     // a blocking slot the user must supply
+    case packagingFailure(String)        // Zip/OPC assembly
+}
+
 public enum DraftKindID: String, Codable, CaseIterable, Sendable, Equatable {
     case noticeAppearance
     case motionToDismiss
