@@ -19,11 +19,11 @@ const capabilities = [
   },
   {
     title: "Document drafting",
-    body: "Generate court filings and demand letters as Word documents, rendered locally to your firm's formatting. Every citation is verified or flagged, and every recited fact traces back to the matter — nothing is invented.",
+    body: "Draft directly inside a matter's chat: a Draft button opens a sheet for the caption parties, client, and service recipients, then renders a downloadable Word document — open it, reveal it in Finder, or save a copy. The signature block prints the bar admission that matches the filing's court. Every recited fact traces back to the matter, and unverified citations appear as visible placeholders to review before filing.",
   },
   {
     title: "Timekeeping & billing",
-    body: "ScratchPad turns a day's notes and work product into reviewable, defensible time entries with UTBMS codes — exportable to LEDES 1998B, CSV, or the clipboard. Nothing bills automatically; every line cites its evidence.",
+    body: "ScratchPad turns a day's notes and work product into reviewable, defensible time entries with UTBMS codes — exportable to LEDES 1998B, CSV, or the clipboard. Tag an entry #Note to keep it out of billing entirely; excluded notes and their attachments never reach the billing model, and the review banner reports exactly what was left out. Nothing bills automatically; every line cites its evidence.",
   },
 ];
 
