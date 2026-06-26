@@ -28,4 +28,13 @@
    <FileRef
       location = "group:Packages/SupraSessions">
    </FileRef>
+   <FileRef
+      location = "group:Packages/SupraDraftingCore">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/SupraDrafting">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/SupraExports">
+   </FileRef>
 </Workspace>
