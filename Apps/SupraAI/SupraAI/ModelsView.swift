@@ -468,7 +468,10 @@ private struct RuntimeModelSetupView: View {
 
     private func assignmentBinding(for role: ModelRole) -> Binding<String> {
         Binding(
-            get: { library.roleAssignments.modelID(for: role) ?? "" },
+            // Show the effective selection: an explicit assignment, or the lone model
+            // when only one is registered (so a single-model setup displays as selected
+            // for every role without the user touching each menu).
+            get: { library.effectiveAssignedModelID(for: role) ?? "" },
             set: { newValue in library.assignModel(newValue.isEmpty ? nil : newValue, to: role) }
         )
     }
