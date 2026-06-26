@@ -52,6 +52,19 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
     public var organization: String = ""
     public var jurisdictions: String = ""
     public var practiceAreas: String = ""
+    // Firm identity for document drafting (slot-only; never baked into a template).
+    // These populate the signature block / letterhead of generated filings & letters.
+    public var barNumber: String = ""
+    public var officeStreet: String = ""
+    public var officeSuite: String = ""
+    public var officeCity: String = ""
+    public var officeState: String = ""
+    public var officeZip: String = ""
+    public var officePhone: String = ""
+    public var officeFax: String = ""
+    public var primaryEmail: String = ""
+    /// Up to two secondary service e-mail designations (Fla. R. Jud. Admin. 2.516).
+    public var secondaryEmails: [String] = []
     // How to write
     public var formality: Formality = .balanced
     public var length: Length = .balanced
@@ -75,6 +88,30 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
             || formality != .balanced || length != .balanced
     }
 
+    /// Whether the profile carries enough firm identity to populate a court signature
+    /// block / letterhead without inventing anything (drafting slot readiness).
+    public var hasDraftingIdentity: Bool {
+        !fullName.isEmpty && !organization.isEmpty && !barNumber.isEmpty
+            && !officeStreet.isEmpty && !officeCity.isEmpty && !officeState.isEmpty
+            && !officeZip.isEmpty && !officePhone.isEmpty && !primaryEmail.isEmpty
+    }
+
+    /// The firm-identity fields that are still blank, for a precise "complete your
+    /// profile to draft" prompt (never guessed/auto-filled — design §8.6).
+    public var missingDraftingIdentityFields: [String] {
+        var missing: [String] = []
+        if fullName.isEmpty { missing.append("full name") }
+        if organization.isEmpty { missing.append("firm/organization") }
+        if barNumber.isEmpty { missing.append("bar number") }
+        if officeStreet.isEmpty { missing.append("office street") }
+        if officeCity.isEmpty { missing.append("office city") }
+        if officeState.isEmpty { missing.append("office state") }
+        if officeZip.isEmpty { missing.append("office ZIP") }
+        if officePhone.isEmpty { missing.append("office phone") }
+        if primaryEmail.isEmpty { missing.append("primary e-mail") }
+        return missing
+    }
+
     // Resilient decoding so adding fields later never drops a saved profile.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -83,6 +120,16 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
         organization = try c.decodeIfPresent(String.self, forKey: .organization) ?? ""
         jurisdictions = try c.decodeIfPresent(String.self, forKey: .jurisdictions) ?? ""
         practiceAreas = try c.decodeIfPresent(String.self, forKey: .practiceAreas) ?? ""
+        barNumber = try c.decodeIfPresent(String.self, forKey: .barNumber) ?? ""
+        officeStreet = try c.decodeIfPresent(String.self, forKey: .officeStreet) ?? ""
+        officeSuite = try c.decodeIfPresent(String.self, forKey: .officeSuite) ?? ""
+        officeCity = try c.decodeIfPresent(String.self, forKey: .officeCity) ?? ""
+        officeState = try c.decodeIfPresent(String.self, forKey: .officeState) ?? ""
+        officeZip = try c.decodeIfPresent(String.self, forKey: .officeZip) ?? ""
+        officePhone = try c.decodeIfPresent(String.self, forKey: .officePhone) ?? ""
+        officeFax = try c.decodeIfPresent(String.self, forKey: .officeFax) ?? ""
+        primaryEmail = try c.decodeIfPresent(String.self, forKey: .primaryEmail) ?? ""
+        secondaryEmails = try c.decodeIfPresent([String].self, forKey: .secondaryEmails) ?? []
         formality = try c.decodeIfPresent(Formality.self, forKey: .formality) ?? .balanced
         length = try c.decodeIfPresent(Length.self, forKey: .length) ?? .balanced
         voiceNotes = try c.decodeIfPresent(String.self, forKey: .voiceNotes) ?? ""
