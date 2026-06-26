@@ -208,6 +208,18 @@ public final class ModelLibrary: ObservableObject {
         roleAssignments = updated
         hasPersistedRoleAssignments = true
         persistRoleAssignments()
+        // Auto-load the just-assigned model so the user doesn't have to make a second
+        // trip to the Models tab to press "Load". We only auto-load when the runtime
+        // is idle or failed (never interrupt an in-flight load, and never silently
+        // swap a model out from under an active generation): the common case is a
+        // first-run user picking their model in Settings and expecting it to be ready.
+        guard let modelID, !modelID.isEmpty else { return }
+        switch loadState {
+        case .idle, .failed:
+            Task { await activateAndLoad(modelID: modelID) }
+        case .loading, .loaded:
+            break
+        }
     }
 
     /// Reloads the registered models from the store.
@@ -463,7 +475,26 @@ public final class ModelLibrary: ObservableObject {
         if let configured = matchingModel(forIdentifier: configuredIdentifier) {
             return (configured, nil)
         }
+        // Single-model convenience: when exactly one model is registered, it's the only
+        // thing that can serve any role, so resolve every unassigned role to it rather
+        // than failing as "unassigned". This keeps stored assignments clean (so adding
+        // more models later still lets name-matching fill roles), while making a
+        // one-model setup immediately usable for reasoning/drafting/critique.
+        if models.count == 1, let only = models.first {
+            return (only, nil)
+        }
         return (nil, .roleUnassigned(role: role, configuredIdentifier: configuredIdentifier))
+    }
+
+    /// The model id shown as selected for a role in Settings: an explicit assignment if
+    /// present, otherwise the lone registered model when only one exists (so a
+    /// single-model setup displays that model as the default for every role without
+    /// persisting a synthetic assignment). Returns nil when the role is genuinely
+    /// unset and more than one model is registered.
+    public func effectiveAssignedModelID(for role: ModelRole) -> String? {
+        if let assigned = roleAssignments.modelID(for: role) { return assigned }
+        if models.count == 1 { return models.first?.id }
+        return nil
     }
 
     private func bootstrapRoleAssignmentsIfNeeded(configuration: LegalModelConfiguration) {

@@ -2175,6 +2175,10 @@ final class SupraSessionsTests: XCTestCase {
         let library = ModelLibrary(store: store, runtimeClient: stub)
         let startup = try library.addModel(displayName: "Generic Startup", path: "/tmp/startup", bookmarkData: nil)
         try store.models.setActiveModel(id: startup.id)
+        // A second registered model so the single-model convenience fallback does not
+        // apply: with >1 model an unassigned role must fail rather than silently pick
+        // the active/startup model.
+        _ = try library.addModel(displayName: "Other", path: "/tmp/other", bookmarkData: nil)
         library.refresh()
 
         let result = await library.ensureLoadedRoutedModelID(
