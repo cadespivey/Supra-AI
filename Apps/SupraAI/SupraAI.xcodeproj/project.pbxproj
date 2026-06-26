@@ -47,6 +47,7 @@
 		5A0000000000000000000025 /* SupraNetworking in Frameworks */ = {isa = PBXBuildFile; productRef = 5A0000000000000000000410 /* SupraNetworking */; };
 		5A0000000000000000000026 /* SupraResearch in Frameworks */ = {isa = PBXBuildFile; productRef = 5A0000000000000000000411 /* SupraResearch */; };
 		5A0000000000000000000027 /* MatterWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000117 /* MatterWorkspaceView.swift */; };
+		5A0000000000000000000F02 /* MatterDraftingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000F03 /* MatterDraftingView.swift */; };
 		5A0000000000000000000028 /* MatterEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000118 /* MatterEditorSheet.swift */; };
 		5A0000000000000000000029 /* MatterResearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000119 /* MatterResearchView.swift */; };
 		5A000000000000000000002A /* ResearchPlannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011A /* ResearchPlannerView.swift */; };
@@ -118,6 +119,7 @@
 		5A0000000000000000000114 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000115 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000117 /* MatterWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterWorkspaceView.swift; sourceTree = "<group>"; };
+		5A0000000000000000000F03 /* MatterDraftingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterDraftingView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000118 /* MatterEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterEditorSheet.swift; sourceTree = "<group>"; };
 		5A0000000000000000000119 /* MatterResearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterResearchView.swift; sourceTree = "<group>"; };
 		5A000000000000000000011A /* ResearchPlannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchPlannerView.swift; sourceTree = "<group>"; };
@@ -258,6 +260,7 @@
 			children = (
 				5A0000000000000000000117 /* MatterWorkspaceView.swift */,
 				5A0000000000000000000118 /* MatterEditorSheet.swift */,
+				5A0000000000000000000F03 /* MatterDraftingView.swift */,
 				A7F52F39531ED04359DF5332 /* MatterBillingView.swift */,
 			);
 			path = Matters;
@@ -550,6 +553,7 @@
 				5A0000000000000000000022 /* DiagnosticsView.swift in Sources */,
 				5A0000000000000000000023 /* SettingsView.swift in Sources */,
 				5A0000000000000000000027 /* MatterWorkspaceView.swift in Sources */,
+				5A0000000000000000000F02 /* MatterDraftingView.swift in Sources */,
 				5A0000000000000000000028 /* MatterEditorSheet.swift in Sources */,
 				5A0000000000000000000029 /* MatterResearchView.swift in Sources */,
 				5A000000000000000000002A /* ResearchPlannerView.swift in Sources */,

@@ -134,6 +134,7 @@ public final class MattersController: ObservableObject {
     @Published public private(set) var documentQAController: DocumentQAController?
     @Published public private(set) var documentChronologyController: DocumentChronologyController?
     @Published public private(set) var billingProfileController: BillingProfileController?
+    @Published public private(set) var draftingController: MatterDraftingController?
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
@@ -276,6 +277,7 @@ public final class MattersController: ObservableObject {
             documentQAController = nil
             documentChronologyController = nil
             billingProfileController = nil
+            draftingController = nil
             return
         }
         // Built once and shared by every controller that retrieves over the matter's
@@ -356,6 +358,7 @@ public final class MattersController: ObservableObject {
             queue: documentQueue,
             isImportReady: isImportReady ?? { true }
         )
+        draftingController = MatterDraftingController(store: store)
     }
 
     private func reload() {
