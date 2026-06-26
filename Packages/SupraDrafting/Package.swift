@@ -11,7 +11,8 @@ let package = Package(
         .library(name: "SupraDrafting", targets: ["SupraDrafting"])
     ],
     dependencies: [
-        .package(path: "../SupraDraftingCore")
+        .package(path: "../SupraDraftingCore"),
+        .package(path: "../SupraExports")
     ],
     targets: [
         .target(
@@ -24,7 +25,8 @@ let package = Package(
             name: "SupraDraftingTests",
             dependencies: [
                 "SupraDrafting",
-                .product(name: "SupraDraftingCore", package: "SupraDraftingCore")
+                .product(name: "SupraDraftingCore", package: "SupraDraftingCore"),
+                .product(name: "SupraExports", package: "SupraExports")
             ]
         )
     ]
