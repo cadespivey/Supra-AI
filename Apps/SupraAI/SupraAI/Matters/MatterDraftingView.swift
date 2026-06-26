@@ -194,36 +194,38 @@ struct MatterDraftingView: View {
     }
 
     private var isReady: Bool {
-        !representedPartyName.trimmingCharacters(in: .whitespaces).isEmpty
-            && parties.contains { !$0.name.trimmingCharacters(in: .whitespaces).isEmpty }
+        !trimmed(partyRepresented).isEmpty
+            && !trimmed(representedPartyName).isEmpty
+            && parties.filter { !trimmed($0.name).isEmpty && !trimmed($0.designation).isEmpty }.count >= 2
+            && !completeRecipientDrafts.isEmpty
+            && partialRecipientDrafts.isEmpty
     }
 
     private func generate() async {
         errorText = nil
         result = nil
         let partyLines = parties
-            .filter { !$0.name.trimmingCharacters(in: .whitespaces).isEmpty }
-            .map { PartyLine(name: $0.name, designation: $0.designation) }
-        let serviceRecipients = recipients
-            .filter { !$0.name.trimmingCharacters(in: .whitespaces).isEmpty }
+            .filter { !trimmed($0.name).isEmpty || !trimmed($0.designation).isEmpty }
+            .map { PartyLine(name: trimmed($0.name), designation: trimmed($0.designation)) }
+        let serviceRecipients = completeRecipientDrafts
             .map { r in
                 ServiceRecipient(
-                    name: r.name,
-                    firm: r.firm,
+                    name: trimmed(r.name),
+                    firm: trimmed(r.firm),
                     address: OfficeBlock(
-                        street: r.street, suite: nil, city: r.city,
-                        state: r.state, zip: r.zip, phone: "", fax: nil
+                        street: trimmed(r.street), suite: nil, city: trimmed(r.city),
+                        state: trimmed(r.state), zip: trimmed(r.zip), phone: "", fax: nil
                     ),
-                    emails: r.emails.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
-                    role: r.role
+                    emails: splitEmails(r.emails),
+                    role: trimmed(r.role)
                 )
             }
 
         let outcome = await controller.draftNoticeOfAppearance(
             matterID: matterID,
             parties: partyLines,
-            partyRepresented: partyRepresented,
-            representedPartyName: representedPartyName,
+            partyRepresented: trimmed(partyRepresented),
+            representedPartyName: trimmed(representedPartyName),
             recipients: serviceRecipients
         )
         switch outcome {
@@ -232,5 +234,40 @@ struct MatterDraftingView: View {
         case let .failure(error):
             errorText = error.errorDescription ?? "The draft could not be generated."
         }
+    }
+
+    private var completeRecipientDrafts: [RecipientDraft] {
+        recipients.filter { recipientReady($0) }
+    }
+
+    private var partialRecipientDrafts: [RecipientDraft] {
+        recipients.filter { !recipientReady($0) && recipientHasAnyValue($0) }
+    }
+
+    private func recipientReady(_ recipient: RecipientDraft) -> Bool {
+        !trimmed(recipient.name).isEmpty
+            && !trimmed(recipient.street).isEmpty
+            && !trimmed(recipient.city).isEmpty
+            && !trimmed(recipient.state).isEmpty
+            && !trimmed(recipient.zip).isEmpty
+            && !splitEmails(recipient.emails).isEmpty
+            && !trimmed(recipient.role).isEmpty
+    }
+
+    private func recipientHasAnyValue(_ recipient: RecipientDraft) -> Bool {
+        [
+            recipient.name, recipient.firm, recipient.street, recipient.city,
+            recipient.state, recipient.zip, recipient.emails, recipient.role
+        ].contains { !trimmed($0).isEmpty }
+    }
+
+    private func splitEmails(_ value: String) -> [String] {
+        value.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func trimmed(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

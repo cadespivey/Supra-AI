@@ -120,6 +120,60 @@ public final class ChatRepository: @unchecked Sendable {
         }
     }
 
+    /// A chat matched by a content/tag search, with a sample matching-message snippet.
+    public struct ChatSearchHit: Sendable, Equatable {
+        public let chatID: String
+        public let title: String
+        public let scope: String
+        public let matterID: String?
+        /// The first matching message's content (nil when matched only by title).
+        public let snippet: String?
+        public let updatedAt: Date
+    }
+
+    /// Finds live chats whose title OR any message content contains `term`
+    /// (case-insensitive). When `matterID` is given, restricts to that matter's chats;
+    /// otherwise spans every scope (global + all matters). Powers tag/content search.
+    public func searchChats(term: String, matterID: String? = nil, limit: Int = 200) throws -> [ChatSearchHit] {
+        let like = "%\(Self.escapeLike(term))%"
+        return try writer.read { db in
+            var arguments: [DatabaseValueConvertible] = [like, like, like]
+            var matterClause = ""
+            if let matterID {
+                matterClause = "AND c.matter_id = ?"
+                arguments.append(matterID)
+            }
+            arguments.append(limit)
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT c.id AS id, c.title AS title, c.scope AS scope, c.matter_id AS matter_id, c.updated_at AS updated_at,
+                  (SELECT m2.content FROM messages m2
+                   WHERE m2.chat_id = c.id AND m2.deleted_at IS NULL AND m2.content LIKE ? ESCAPE '\\'
+                   ORDER BY m2.created_at ASC LIMIT 1) AS snippet
+                FROM chats c
+                WHERE c.deleted_at IS NULL
+                  AND (c.title LIKE ? ESCAPE '\\'
+                       OR EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = c.id AND m.deleted_at IS NULL AND m.content LIKE ? ESCAPE '\\'))
+                  \(matterClause)
+                ORDER BY c.updated_at DESC
+                LIMIT ?
+                """, arguments: StatementArguments(arguments))
+            return rows.map { row in
+                ChatSearchHit(
+                    chatID: row["id"], title: row["title"], scope: row["scope"],
+                    matterID: row["matter_id"], snippet: row["snippet"], updatedAt: row["updated_at"]
+                )
+            }
+        }
+    }
+
+    /// Escapes LIKE metacharacters so a literal `%`/`_`/`\` in a search term doesn't
+    /// act as a wildcard (used with `ESCAPE '\'`).
+    private static func escapeLike(_ term: String) -> String {
+        term.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
+
     public func fetchMessages(chatID: String) throws -> [MessageRecord] {
         try writer.read { db in
             try MessageRecord.fetchAll(

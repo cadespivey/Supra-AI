@@ -96,6 +96,63 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
         XCTAssertFalse(controller.embeddingTestPassed)
     }
 
+    func testCustomEmbeddingModelDimensionDiscoveredOnVerify() async throws {
+        let store = try makeStore()
+        // A custom (non-curated) model registered without a known dimension.
+        let model = DocumentEmbeddingModelRecord(
+            repoID: "acme/custom-embedder", localPath: "/tmp/custom",
+            displayName: "Custom", dimension: 0, runtimeFamily: ""
+        )
+        try store.documentSettings.upsertEmbeddingModel(model)
+        try store.documentSettings.selectEmbeddingModel(id: model.id)
+
+        let controller = DocumentIntelligenceSetupController(
+            store: store,
+            runtimeClient: SetupStubRuntimeClient(embeddingDimension: 1024),
+            notifier: FakeNotifier(status: .authorized),
+            storage: DocumentStorage(root: FileManager.default.temporaryDirectory.appendingPathComponent("SetupTests-\(UUID().uuidString)")),
+            capabilitiesProvider: { capableToolchain }
+        )
+
+        // Dimension 0 means "unknown": the expected-dimension assertion is skipped,
+        // the load succeeds, and the probed dimension is captured back onto the record.
+        await controller.testLoadEmbeddingModel()
+        XCTAssertTrue(controller.embeddingTestPassed)
+        XCTAssertEqual(controller.selectedEmbeddingModel?.dimension, 1024)
+        XCTAssertEqual(try store.documentSettings.fetchEmbeddingModel(id: model.id)?.dimension, 1024)
+    }
+
+    func testHandleEmbeddingModelDownloadedReloadsAndVerifies() async throws {
+        let store = try makeStore()
+        let controller = DocumentIntelligenceSetupController(
+            store: store,
+            runtimeClient: SetupStubRuntimeClient(embeddingDimension: 768),
+            notifier: FakeNotifier(status: .authorized),
+            storage: DocumentStorage(root: FileManager.default.temporaryDirectory.appendingPathComponent("SetupTests-\(UUID().uuidString)")),
+            capabilitiesProvider: { capableToolchain }
+        )
+
+        // Simulate a download that registered + selected a model directly in the store
+        // (as EmbeddingModelDownloadController does), bypassing the controller's cache.
+        let model = DocumentEmbeddingModelRecord(
+            repoID: "BAAI/bge-base-en-v1.5", localPath: "/tmp/bge",
+            displayName: "BGE Base", dimension: 768, runtimeFamily: "bert"
+        )
+        try store.documentSettings.upsertEmbeddingModel(model)
+        try store.documentSettings.selectEmbeddingModel(id: model.id)
+        XCTAssertFalse(controller.availableEmbeddingModels.contains { $0.id == model.id },
+                       "cache should be stale until the download callback fires")
+
+        controller.handleEmbeddingModelDownloaded()
+        // The list refresh is synchronous (nit #1).
+        XCTAssertTrue(controller.availableEmbeddingModels.contains { $0.id == model.id })
+        XCTAssertEqual(controller.selectedEmbeddingModel?.id, model.id)
+
+        // The auto-verify runs as a spawned main-actor task; let it complete.
+        for _ in 0..<100 where !controller.embeddingTestPassed { await Task.yield() }
+        XCTAssertTrue(controller.embeddingTestPassed)
+    }
+
     private func makeStore() throws -> SupraStore {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SetupTests-\(UUID().uuidString)", isDirectory: true)

@@ -20,19 +20,6 @@ struct ModelsView: View {
             Divider()
             footer
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                SupraToolbarIconButton("Download Model", systemImage: "arrow.down.circle") {
-                    showDownloadSheet = true
-                }
-                .help("Download an MLX model from Hugging Face")
-
-                SupraToolbarIconButton("Add Local Folder", systemImage: "folder.badge.plus") {
-                    addModelFolder()
-                }
-                .help("Register an MLX model folder already on disk")
-            }
-        }
         .sheet(isPresented: $showDownloadSheet) {
             ModelDownloadSheet(downloader: downloader)
                 // Clear a finished/failed banner on close (no-op mid-download).
@@ -87,48 +74,72 @@ struct ModelsView: View {
         }
     }
 
+    // Laid out as a plain ScrollView (not a List) so sections are separated by
+    // whitespace alone — macOS List separators can't be reliably hidden.
     private var modelList: some View {
-        List {
-            Section {
-                if library.models.isEmpty {
-                    noModelsRow
-                } else {
-                    ForEach(library.models) { model in
-                        ModelRow(model: model, isLoading: isLoading(model), isLoaded: isLoaded(model), loadDisabled: isAnyLoading) {
-                            Task { await library.activateAndLoad(modelID: model.id) }
-                        }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) { pendingDelete = model } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                        .contextMenu {
-                            Button(role: .destructive) { pendingDelete = model } label: {
-                                Label("Delete Model", systemImage: "trash")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 44) {
+                modelSection("Registered Models") {
+                    if library.models.isEmpty {
+                        noModelsRow
+                    } else {
+                        VStack(spacing: 6) {
+                            ForEach(library.models) { model in
+                                ModelRow(
+                                    model: model,
+                                    isLoading: isLoading(model),
+                                    isLoaded: isLoaded(model),
+                                    onLoad: { Task { await library.activateAndLoad(modelID: model.id) } },
+                                    onDelete: { pendingDelete = model }
+                                )
+                                .contextMenu {
+                                    Button(role: .destructive) { pendingDelete = model } label: {
+                                        Label("Delete Model", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            } header: {
-                Text("Registered Models")
-            }
 
-            Section {
-                RuntimeModelSetupView(library: library, downloader: downloader)
-            } header: {
-                Text("Task Models")
-            } footer: {
-                Text("Download a text model, assign it to each chat task, then load it. The runtime holds one model at a time.")
-            }
+                modelSection(
+                    "Task Models",
+                    footer: "Download a text model, assign it to each chat task, then load it. The runtime holds one model at a time."
+                ) {
+                    RuntimeModelSetupView(library: library, downloader: downloader)
+                }
 
-            Section {
-                EmbeddingModelSetupView(setup: documentSetup, downloader: embeddingDownloader)
-            } header: {
-                Text("Embedding Model")
-            } footer: {
-                Text("Embeddings power document semantic search. This is the same setup as Settings → Document Intelligence.")
+                modelSection(
+                    "Embedding Model",
+                    footer: "Embeddings power document semantic search. It feeds the Document Intelligence readiness check below."
+                ) {
+                    EmbeddingModelSetupView(setup: documentSetup, downloader: embeddingDownloader)
+                }
+
+                DocumentIntelligenceSection(setup: documentSetup)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// A titled section: a header, its content, and an optional footnote — separated
+    /// from its neighbours by whitespace rather than divider lines.
+    @ViewBuilder
+    private func modelSection(
+        _ title: String,
+        footer: String? = nil,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.title3.weight(.semibold))
+            content()
+            if let footer {
+                Text(footer).font(.caption).foregroundStyle(.secondary)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var noModelsRow: some View {
@@ -191,11 +202,6 @@ struct ModelsView: View {
         library.loadedModelID?.rawValue.uuidString == model.id
     }
 
-    private var isAnyLoading: Bool {
-        if case .loading = library.loadState { return true }
-        return false
-    }
-
     private func addModelFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -226,8 +232,9 @@ private struct ModelRow: View {
     let model: ModelSummary
     let isLoading: Bool
     let isLoaded: Bool
-    let loadDisabled: Bool
-    let onLoad: () -> Void
+    var onLoad: () -> Void = {}
+    var onDelete: () -> Void = {}
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -262,16 +269,26 @@ private struct ModelRow: View {
                     .foregroundStyle(.green)
                     .labelStyle(.titleAndIcon)
             } else {
-                // A "Load" action is always offered when the model isn't in the
-                // runtime — including the startup model after a relaunch (which used
-                // to show a static "Active" label with no way to load it).
                 Button(action: onLoad) {
-                    Label("Load", systemImage: "play.fill")
+                    Image(systemName: "play.fill")
                 }
-                    .disabled(loadDisabled)
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                .help("Load model")
+                .accessibilityLabel("Load model")
             }
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tertiary)
+            .opacity(hovering ? 1 : 0)
+            .help("Delete model")
+            .accessibilityLabel("Delete model")
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
     }
 }
 
@@ -291,7 +308,7 @@ private struct ModelRoleAssignmentRow: View {
                 Text(role.displayName)
                     .font(.callout.weight(.medium))
                 Text(statusText)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(resolvedModel == nil ? .orange : .secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -359,13 +376,13 @@ private struct RuntimeModelSetupView: View {
     @ObservedObject var library: ModelLibrary
     @ObservedObject var downloader: ModelDownloadController
     @State private var downloadSelection = ""
-    @State private var loadSelection = ""
+    @State private var customRepoID = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             step(number: 1, title: "Download a model") {
                 Picker("Model to download", selection: $downloadSelection) {
-                    Text("Choose a model…").tag("")
+                    Text("Choose a curated model…").tag("")
                     ForEach(ModelCatalog.curated) { model in
                         Text("\(model.displayName) · ~\(sizeText(model.approxSizeGB)) GB").tag(model.repoID)
                     }
@@ -377,16 +394,23 @@ private struct RuntimeModelSetupView: View {
                         downloader.downloadCatalogModel(model)
                     }
                 }
+                HStack {
+                    TextField("or a custom repo ID, e.g. mlx-community/Qwen2.5-32B-Instruct-4bit", text: $customRepoID)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Download") {
+                        downloader.download(repoID: customRepoID)
+                        customRepoID = ""
+                    }
+                    .disabled(downloader.isBusy || customRepoID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
                 downloadStatus
-                Text("For a model not listed (custom repo), use Download Model in the toolbar.")
-                    .font(.caption2).foregroundStyle(.secondary)
             }
 
             step(number: 2, title: "Assign to tasks", enabled: !library.models.isEmpty) {
                 if library.models.isEmpty {
-                    Text("Download a model first.").font(.caption).foregroundStyle(.secondary)
+                    Text("Download a model first.").font(.callout).foregroundStyle(.secondary)
                 } else {
-                    VStack(spacing: 6) {
+                    VStack(spacing: 10) {
                         ForEach(ModelRole.allCases, id: \.self) { role in
                             ModelRoleAssignmentRow(
                                 role: role,
@@ -397,70 +421,43 @@ private struct RuntimeModelSetupView: View {
                             )
                         }
                     }
+                    Text("Assigned models load automatically when a task runs; loading below verifies the files now.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
 
             step(number: 3, title: "Load & verify", enabled: !library.models.isEmpty) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Picker("Model to load", selection: $loadSelection) {
-                        Text("Choose a model…").tag("")
-                        ForEach(library.models) { model in
-                            Text(model.displayName).tag(model.id)
+                if library.models.isEmpty {
+                    Text("Download and assign a model first.").font(.callout).foregroundStyle(.secondary)
+                } else {
+                    HStack(spacing: 10) {
+                        runtimeStatus
+                        Spacer()
+                        Button {
+                            loadRecommendedRuntimeModel()
+                        } label: {
+                            Label("Load Runtime Model", systemImage: "play.fill")
                         }
-                        if !loadSelection.isEmpty, !library.models.contains(where: { $0.id == loadSelection }) {
-                            Text("Missing model").tag(loadSelection)
-                        }
-                    }
-                    .labelsHidden()
-                    HStack(spacing: 8) {
-                        Button("Load") {
-                            let id = loadSelection
-                            guard !id.isEmpty else { return }
-                            Task { await library.activateAndLoad(modelID: id) }
-                        }
-                        .disabled(loadSelection.isEmpty || isLoading)
-                        loadStatus
+                        .disabled(isRuntimeLoading || library.startupModelID() == nil)
                     }
                 }
             }
-        }
-    }
-
-    private var isLoading: Bool {
-        if case .loading = library.loadState { return true }
-        return false
-    }
-
-    @ViewBuilder private var loadStatus: some View {
-        switch library.loadState {
-        case .loaded:
-            Label(library.loadedModel.map { "Loaded: \($0.displayName)" } ?? "Loaded", systemImage: "checkmark.circle.fill")
-                .font(.caption).foregroundStyle(.green).lineLimit(1)
-        case .loading:
-            HStack(spacing: 4) {
-                ProgressView().controlSize(.small)
-                Text("Loading…").font(.caption).foregroundStyle(.secondary)
-            }
-        case let .failed(message):
-            Text(message).font(.caption).foregroundStyle(.orange).lineLimit(1).truncationMode(.middle)
-        case .idle:
-            Text("Not loaded.").font(.caption).foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder private var downloadStatus: some View {
         switch downloader.state {
         case let .preparing(repoID):
-            Text("Preparing \(repoID)…").font(.caption).foregroundStyle(.secondary)
+            Text("Preparing \(repoID)…").font(.callout).foregroundStyle(.secondary)
         case let .downloading(_, completed, total, file):
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 ProgressView(value: Double(completed), total: Double(max(total, 1)))
-                Text("\(completed)/\(total) — \(file)").font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text("\(completed)/\(total) files — \(file)").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
         case let .finished(_, displayName):
-            Text("Downloaded \(displayName). Assign it below.").font(.caption).foregroundStyle(.green)
+            Text("Downloaded \(displayName). Assign it below.").font(.callout).foregroundStyle(.green)
         case let .failed(message):
-            Text(message).font(.caption).foregroundStyle(.red)
+            Text(message).font(.callout).foregroundStyle(.red)
         case .idle:
             EmptyView()
         }
@@ -476,6 +473,36 @@ private struct RuntimeModelSetupView: View {
         )
     }
 
+    @ViewBuilder private var runtimeStatus: some View {
+        switch library.loadState {
+        case .idle:
+            Label("No runtime model loaded", systemImage: "circle")
+                .foregroundStyle(.secondary)
+        case .loading:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Loading model...")
+            }
+        case .loaded:
+            Label(library.loadedModel.map { "Loaded: \($0.displayName)" } ?? "Runtime model loaded", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case let .failed(message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .lineLimit(2)
+        }
+    }
+
+    private var isRuntimeLoading: Bool {
+        if case .loading = library.loadState { return true }
+        return false
+    }
+
+    private func loadRecommendedRuntimeModel() {
+        guard let modelID = library.startupModelID() else { return }
+        Task { await library.activateAndLoad(modelID: modelID) }
+    }
+
     private func sizeText(_ gb: Double) -> String {
         gb == gb.rounded() ? String(Int(gb)) : String(format: "%.1f", gb)
     }
@@ -487,19 +514,19 @@ private struct RuntimeModelSetupView: View {
         enabled: Bool = true,
         @ViewBuilder content: () -> some View
     ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
                 Text("\(number)")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 16, height: 16)
-                    .background(enabled ? Color.accentColor : Color.secondary, in: Circle())
-                Text(title)
                     .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+                    .background(Color.secondary.opacity(0.15), in: Circle())
+                Text(title)
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(enabled ? .primary : .secondary)
             }
             content()
-                .padding(.leading, 22)
+                .padding(.leading, 26)
         }
         .opacity(enabled ? 1 : 0.6)
     }
@@ -576,7 +603,7 @@ private struct ModelDownloadSheet: View {
         case let .downloading(repoID, completed, total, currentFile):
             VStack(alignment: .leading, spacing: 6) {
                 ProgressView(value: Double(completed), total: Double(max(total, 1)))
-                Text("\(repoID) — file \(completed + 1) of \(total): \(currentFile)")
+                Text(currentFile.isEmpty ? "\(repoID) — \(completed) of \(total) files" : "\(repoID) — \(completed) of \(total) files: \(currentFile)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -604,5 +631,104 @@ private struct ModelDownloadSheet: View {
 
     private func sizeText(_ gb: Double) -> String {
         gb == gb.rounded() ? String(Int(gb)) : String(format: "%.1f", gb)
+    }
+}
+
+/// Document Intelligence setup (Milestone 3 §2): chat-model readiness, embedding
+/// model selection/auto-verify, toolchain/OCR checks, storage init, and
+/// notifications. Import is blocked until this is complete. Lives in the Models tab
+/// (the models it depends on are configured in the sections above).
+private struct DocumentIntelligenceSection: View {
+    @ObservedObject var setup: DocumentIntelligenceSetupController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Document Intelligence")
+                .font(.title3.weight(.semibold))
+            HStack {
+                Image(systemName: setup.isComplete ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(setup.isComplete ? .green : .orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(setup.isComplete ? "Setup complete — document import is enabled." : "Setup required before importing documents.")
+                        .font(.callout.weight(.medium))
+                    if let reason = setup.settings.setupInvalidatedReason {
+                        Text("Needs review: \(reason)").font(.caption).foregroundStyle(.orange)
+                    }
+                }
+                Spacer()
+                if setup.isBusy { ProgressView().controlSize(.small) }
+            }
+
+            stepRow(
+                "Runtime text model loaded",
+                done: setup.chatModelReady,
+                detail: setup.chatModelReady ? "A runtime model has loaded successfully." : "Download and assign a task model above."
+            )
+            stepRow(
+                "Embedding model",
+                done: setup.selectedEmbeddingModel != nil && setup.embeddingTestPassed,
+                detail: setup.selectedEmbeddingModel.map { "\($0.displayName) — manage it above." } ?? "Download and select one above."
+            )
+            stepRow(
+                "Extraction / OCR toolchain",
+                done: setup.toolchain?.meetsMinimumForSetup ?? false,
+                detail: setup.toolchain.map { "OCR languages: \($0.ocrLanguages.count)" } ?? "Not checked yet."
+            )
+            stepRow("Document storage initialized", done: setup.storageInitialized, detail: "Creates app-managed storage.") {
+                if !setup.storageInitialized {
+                    Button("Initialize") { setup.initializeStorage() }
+                }
+            }
+            stepRow(
+                "Completion notifications",
+                done: setup.notificationStatus == .authorized,
+                detail: "Optional. Notifies when long imports finish."
+            ) {
+                if setup.notificationStatus != .authorized {
+                    Button("Allow") { Task { await setup.requestNotificationPermission() } }
+                }
+            }
+
+            Stepper(
+                "Auto-purge trash after \(setup.autoPurgeDays == 0 ? "never" : "\(setup.autoPurgeDays) days")",
+                value: Binding(get: { setup.autoPurgeDays }, set: { setup.updateAutoPurgeDays($0) }),
+                in: 0...365,
+                step: 5
+            )
+
+            HStack {
+                Button("Re-check") { Task { await setup.refreshAll() } }
+                Spacer()
+                Button("Mark Setup Complete") { _ = setup.completeSetup() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!setup.canCompleteSetup)
+            }
+            if let message = setup.message {
+                Text(message).font(.caption).foregroundStyle(.orange)
+            }
+            if !setup.outstandingSteps.isEmpty {
+                Text("Remaining: " + setup.outstandingSteps.joined(separator: " "))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func stepRow(
+        _ title: String,
+        done: Bool,
+        detail: String,
+        @ViewBuilder trailing: () -> some View = { EmptyView() }
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(done ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(detail).font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer()
+            trailing()
+        }
     }
 }

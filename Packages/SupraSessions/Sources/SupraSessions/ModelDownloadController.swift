@@ -71,8 +71,6 @@ public final class ModelDownloadController: ObservableObject {
         state = .preparing(repoID: repoID)
 
         do {
-            let files = try await fetcher.listModelFiles(repoID: repoID)
-
             // Reject incompatible architectures up front, before downloading
             // gigabytes of weights for a model the runtime can't load. Best-effort:
             // a failed config probe must not abort an otherwise-valid download.
@@ -82,28 +80,24 @@ public final class ModelDownloadController: ObservableObject {
                 return
             }
 
-            for (index, file) in files.enumerated() {
-                try Task.checkCancellation()
-                state = .downloading(
-                    repoID: repoID,
-                    completedFiles: index,
-                    totalFiles: files.count,
-                    currentFile: file
-                )
-                try await fetcher.downloadFile(
-                    repoID: repoID,
-                    file: file,
-                    to: destinationRoot.appendingPathComponent(file)
+            // Parallel + checkpointed: files transfer concurrently, and any already on
+            // disk (from a prior interrupted run) are skipped.
+            try await ManagedModelDownloader.downloadFiles(
+                repoID: repoID,
+                destinationRoot: destinationRoot,
+                fetcher: fetcher
+            ) { [weak self] completed, total, file in
+                self?.state = .downloading(
+                    repoID: repoID, completedFiles: completed, totalFiles: total, currentFile: file
                 )
             }
-            try Task.checkCancellation()
 
             registerIfNeeded(displayName: name, path: destinationRoot.path)
             state = .finished(repoID: repoID, displayName: name)
         } catch {
-            try? FileManager.default.removeItem(at: destinationRoot)
-            // A user cancel surfaces as CancellationError (between files) or
-            // URLError.cancelled (mid-download); both reset cleanly to idle.
+            // Keep completed files in place so a re-run resumes rather than restarts.
+            // A user cancel surfaces as CancellationError or URLError.cancelled; both
+            // reset cleanly to idle.
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
                 state = .idle
             } else {

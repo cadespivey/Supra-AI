@@ -46,6 +46,23 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
         }
     }
 
+    /// One bar admission: the jurisdiction (a `BarJurisdictionCatalog` id, or free text
+    /// for an unlisted bar) and the attorney's number in it. A user can hold several;
+    /// the one matching a filing's court prints on that filing's signature block.
+    public struct BarLicense: Codable, Equatable, Sendable, Identifiable {
+        public var id: String
+        /// `BarJurisdictionCatalog` id (USPS abbreviation, e.g. "fl"); may be a free-text
+        /// value for a jurisdiction not in the catalog.
+        public var jurisdictionID: String
+        public var barNumber: String
+
+        public init(id: String = UUID().uuidString, jurisdictionID: String, barNumber: String) {
+            self.id = id
+            self.jurisdictionID = jurisdictionID
+            self.barNumber = barNumber
+        }
+    }
+
     // Who you are
     public var fullName: String = ""
     public var role: String = ""
@@ -54,7 +71,15 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
     public var practiceAreas: String = ""
     // Firm identity for document drafting (slot-only; never baked into a template).
     // These populate the signature block / letterhead of generated filings & letters.
+    /// Legacy single bar number. Superseded by `barLicenses` (kept for back-compat and
+    /// as a fallback when no structured licenses exist). Decoding migrates a non-empty
+    /// value into `barLicenses`.
     public var barNumber: String = ""
+    /// The attorney's bar admissions. One is matched to a filing's court at draft time.
+    public var barLicenses: [BarLicense] = []
+    /// The `BarLicense.id` to print when no admission matches the filing's court.
+    /// Empty falls back to the first license.
+    public var primaryBarLicenseID: String = ""
     public var officeStreet: String = ""
     public var officeSuite: String = ""
     public var officeCity: String = ""
@@ -88,28 +113,77 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
             || formality != .balanced || length != .balanced
     }
 
+    /// True when the profile carries at least one usable bar number (a structured
+    /// license or the legacy single field).
+    public var hasAnyBarLicense: Bool {
+        !usableBarLicenses.isEmpty || (barLicenses.isEmpty && !trimmed(barNumber).isEmpty)
+    }
+
+    /// The license to print when no admission matches a filing's court: the explicitly
+    /// chosen primary, else the first license.
+    public var primaryBarLicense: BarLicense? {
+        usableBarLicenses.first { $0.id == primaryBarLicenseID } ?? usableBarLicenses.first
+    }
+
+    /// Resolves which bar admission prints on a filing in the given jurisdiction
+    /// (free text — a matter's `jurisdiction` or `court`). Prefers the license whose
+    /// jurisdiction matches the court, falls back to the primary license, and finally
+    /// synthesizes one from the legacy `barNumber` (jurisdiction inferred from the
+    /// office state) so existing single-bar profiles keep working. Returns nil only
+    /// when no bar information exists at all.
+    public func resolvedBarLicense(forJurisdiction jurisdiction: String) -> BarLicense? {
+        if !barLicenses.isEmpty {
+            if let matched = BarJurisdictionCatalog.match(jurisdiction),
+               let license = usableBarLicenses.first(where: { $0.jurisdictionID.lowercased() == matched.id }) {
+                return license
+            }
+            return primaryBarLicense
+        }
+        guard !trimmed(barNumber).isEmpty else { return nil }
+        let inferred = BarJurisdictionCatalog.match(jurisdiction)?.id
+            ?? BarJurisdictionCatalog.match(officeState)?.id
+            ?? ""
+        return BarLicense(jurisdictionID: inferred, barNumber: trimmed(barNumber))
+    }
+
     /// Whether the profile carries enough firm identity to populate a court signature
     /// block / letterhead without inventing anything (drafting slot readiness).
     public var hasDraftingIdentity: Bool {
-        !fullName.isEmpty && !organization.isEmpty && !barNumber.isEmpty
-            && !officeStreet.isEmpty && !officeCity.isEmpty && !officeState.isEmpty
-            && !officeZip.isEmpty && !officePhone.isEmpty && !primaryEmail.isEmpty
+        !trimmed(fullName).isEmpty && !trimmed(organization).isEmpty && hasAnyBarLicense
+            && !trimmed(officeStreet).isEmpty && !trimmed(officeCity).isEmpty && !trimmed(officeState).isEmpty
+            && !trimmed(officeZip).isEmpty && !trimmed(officePhone).isEmpty && !trimmed(primaryEmail).isEmpty
     }
 
     /// The firm-identity fields that are still blank, for a precise "complete your
     /// profile to draft" prompt (never guessed/auto-filled — design §8.6).
     public var missingDraftingIdentityFields: [String] {
         var missing: [String] = []
-        if fullName.isEmpty { missing.append("full name") }
-        if organization.isEmpty { missing.append("firm/organization") }
-        if barNumber.isEmpty { missing.append("bar number") }
-        if officeStreet.isEmpty { missing.append("office street") }
-        if officeCity.isEmpty { missing.append("office city") }
-        if officeState.isEmpty { missing.append("office state") }
-        if officeZip.isEmpty { missing.append("office ZIP") }
-        if officePhone.isEmpty { missing.append("office phone") }
-        if primaryEmail.isEmpty { missing.append("primary e-mail") }
+        if trimmed(fullName).isEmpty { missing.append("full name") }
+        if trimmed(organization).isEmpty { missing.append("firm/organization") }
+        if !hasAnyBarLicense { missing.append("bar number") }
+        if trimmed(officeStreet).isEmpty { missing.append("office street") }
+        if trimmed(officeCity).isEmpty { missing.append("office city") }
+        if trimmed(officeState).isEmpty { missing.append("office state") }
+        if trimmed(officeZip).isEmpty { missing.append("office ZIP") }
+        if trimmed(officePhone).isEmpty { missing.append("office phone") }
+        if trimmed(primaryEmail).isEmpty { missing.append("primary e-mail") }
         return missing
+    }
+
+    private var usableBarLicenses: [BarLicense] {
+        barLicenses.compactMap { license in
+            let number = trimmed(license.barNumber)
+            guard !number.isEmpty else { return nil }
+            return BarLicense(
+                id: license.id,
+                jurisdictionID: trimmed(license.jurisdictionID).lowercased(),
+                barNumber: number
+            )
+        }
+    }
+
+    private func trimmed(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // Resilient decoding so adding fields later never drops a saved profile.
@@ -137,6 +211,22 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
         citationNotes = try c.decodeIfPresent(String.self, forKey: .citationNotes) ?? ""
         additionalInstructions = try c.decodeIfPresent(String.self, forKey: .additionalInstructions) ?? ""
         writingSamples = try c.decodeIfPresent([WritingSample].self, forKey: .writingSamples) ?? []
+        barLicenses = try c.decodeIfPresent([BarLicense].self, forKey: .barLicenses) ?? []
+        primaryBarLicenseID = try c.decodeIfPresent(String.self, forKey: .primaryBarLicenseID) ?? ""
+        // Migrate a legacy single bar number into a structured license (jurisdiction
+        // inferred from the office state) so older saved profiles surface in the editor
+        // and resolve a proper bar label.
+        if barLicenses.isEmpty, !barNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let migrated = BarLicense(
+                jurisdictionID: BarJurisdictionCatalog.match(officeState)?.id ?? "",
+                barNumber: barNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            barLicenses = [migrated]
+            if primaryBarLicenseID.isEmpty { primaryBarLicenseID = migrated.id }
+            // Once surfaced as a structured row, the legacy hidden field must stop
+            // satisfying readiness or reappearing after the user edits admissions.
+            barNumber = ""
+        }
     }
 
     /// The "soul document": the base prompt augmented with everything the user told

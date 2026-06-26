@@ -86,9 +86,21 @@ public final class BillingDraftService {
         if (try? store.scratchPad.fetchDay(id: dayID))?.lockedAt != nil {
             throw BillingDraftError.dayLocked
         }
-        let entries = (try? store.scratchPad.entries(dayID: dayID)) ?? []
+        // Deterministically drop entries tagged #Note: they are deliberate
+        // notes-to-self and must never reach the billing model or the time math.
+        // Filtering here (not via a prompt instruction) guarantees no fee line can
+        // cite an excluded note (lines map back to entries by sourceEntryIDs).
+        let allEntries = (try? store.scratchPad.entries(dayID: dayID)) ?? []
+        let entries = allEntries.filter { !$0.isNonBillable }
+        let excludedCount = allEntries.count - entries.count
+        let includedEntryIDs = Set(entries.map(\.id))
         guard !entries.isEmpty else { throw BillingDraftError.emptyDay }
-        let attachments = (try? store.scratchPad.attachments(dayID: dayID)) ?? []
+        let allAttachments = (try? store.scratchPad.attachments(dayID: dayID)) ?? []
+        let attachments = allAttachments.filter { attachment in
+            guard let entryID = attachment.entryID else { return true }
+            return includedEntryIDs.contains(entryID)
+        }
+        let excludedAttachmentCount = allAttachments.count - attachments.count
         let matters = (try? store.matters.fetchMatters()) ?? []
         let matterRules = matters.map { rules(for: $0) }
         let dayDate = (try? store.scratchPad.fetchDay(id: dayID))?.day ?? invoiceDate
@@ -119,7 +131,18 @@ public final class BillingDraftService {
             increment: increment
         )
         let lines = Self.billingLines(inputs: inputs, matters: matters, timekeeper: timekeeper)
-        let reconciliation = BillingReconciliationEngine.reconcile(lines: lines, timekeeper: timekeeper, increment: increment)
+        var reconciliation = BillingReconciliationEngine.reconcile(lines: lines, timekeeper: timekeeper, increment: increment)
+        // Surface what #Note excluded so the review banner can show it.
+        if excludedCount > 0 || excludedAttachmentCount > 0 {
+            var parts: [String] = []
+            if excludedCount > 0 {
+                parts.append("\(excludedCount) note\(excludedCount == 1 ? "" : "s") tagged #Note excluded")
+            }
+            if excludedAttachmentCount > 0 {
+                parts.append("\(excludedAttachmentCount) attached file\(excludedAttachmentCount == 1 ? "" : "s") tied to excluded notes excluded")
+            }
+            reconciliation.nonBillableExcluded = parts.joined(separator: "; ") + " from billing."
+        }
 
         let draft = try store.billing.createDraft(
             dayID: dayID,

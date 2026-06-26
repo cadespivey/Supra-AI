@@ -1,5 +1,6 @@
 import SupraCore
 import SupraSessions
+import SupraStore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -15,6 +16,9 @@ struct ScratchPadView: View {
     @State private var composerText = ""
     /// Handle -> matterID for mentions picked from autocomplete (precise binding).
     @State private var pendingMentions: [String: String] = [:]
+    /// Files attached in the composer, saved together with the note on submit so a
+    /// document lives inline with its describing note.
+    @State private var stagedFiles: [URL] = []
     @State private var showingImporter = false
     @State private var showHistory = false
     @FocusState private var composerFocused: Bool
@@ -60,9 +64,7 @@ struct ScratchPadView: View {
             allowsMultipleSelection: true
         ) { result in
             guard case let .success(urls) = result else { return }
-            for url in urls {
-                Task { await controller.addAttachment(fileURL: url) }
-            }
+            stagedFiles.append(contentsOf: urls)
         }
     }
 
@@ -70,10 +72,10 @@ struct ScratchPadView: View {
     private var noteContent: some View {
         entryList
             .dropDestination(for: URL.self) { urls, _ in
-                guard !controller.isCurrentDayLocked else { return false }
-                for url in urls {
-                    Task { await controller.addAttachment(fileURL: url) }
-                }
+                // A file dropped on the timeline (not on a specific note) creates a
+                // minimal note carrying it, so it's never orphaned in a day-level tray.
+                guard !controller.isCurrentDayLocked, !urls.isEmpty else { return false }
+                Task { await controller.addEntry("", attachmentURLs: urls) }
                 return true
             }
         attachmentBar
@@ -171,10 +173,20 @@ struct ScratchPadView: View {
                         ForEach(controller.entries) { entry in
                             ScratchPadEntryRow(
                                 entry: entry,
+                                attachments: controller.attachments(forEntry: entry.id),
                                 isLocked: controller.isCurrentDayLocked,
                                 showTimestamp: billingSettings.autoTimestamp,
-                                onDelete: { controller.deleteEntry(id: entry.id) }
+                                onDelete: { controller.deleteEntry(id: entry.id) },
+                                onRemoveAttachment: { controller.removeAttachment(id: $0) }
                             )
+                            .dropDestination(for: URL.self) { urls, _ in
+                                // Dropping on a note attaches the file to that note.
+                                guard !controller.isCurrentDayLocked, !urls.isEmpty else { return false }
+                                for url in urls {
+                                    Task { await controller.addAttachment(fileURL: url, entryID: entry.id) }
+                                }
+                                return true
+                            }
                             .id(entry.id)
                             Divider()
                         }
@@ -190,12 +202,14 @@ struct ScratchPadView: View {
 
     // MARK: - Attachments
 
+    /// Legacy day-level attachments (older days, before files were tied to notes).
+    /// New uploads render inline under their note instead.
     @ViewBuilder
     private var attachmentBar: some View {
-        if !controller.attachments.isEmpty {
+        if !controller.unfiledAttachments.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(controller.attachments) { attachment in
+                    ForEach(controller.unfiledAttachments) { attachment in
                         attachmentChip(attachment)
                     }
                 }
@@ -291,27 +305,31 @@ struct ScratchPadView: View {
                 .foregroundStyle(.secondary)
                 .padding(16)
             } else {
+                if composerIsNonBillable { nonBillableComposerBanner }
                 suggestionsBar
-                HStack(alignment: .bottom, spacing: 8) {
-                    Button { showingImporter = true } label: {
-                        Image(systemName: "paperclip")
-                            .font(.body)
+                VStack(alignment: .leading, spacing: 8) {
+                    stagedFilesBar
+                    HStack(alignment: .bottom, spacing: 8) {
+                        Button { showingImporter = true } label: {
+                            Image(systemName: "paperclip")
+                                .font(.body)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Attach a file to this note (work product, email, filing)")
+                        TextField("Add a note — @matter, #tag…", text: $composerText, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .lineLimit(1...5)
+                            .focused($composerFocused)
+                            .onSubmit(submit)
+                        Button(action: submit) {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.title2)
+                        }
+                        .buttonStyle(.plain)
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .disabled(composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stagedFiles.isEmpty)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Attach a file as evidence (work product, email, filing)")
-                    TextField("Add a note — @matter, #tag…", text: $composerText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(1...5)
-                        .focused($composerFocused)
-                        .onSubmit(submit)
-                    Button(action: submit) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 .padding(12)
                 .background(
@@ -321,6 +339,49 @@ struct ScratchPadView: View {
                 .padding(16)
             }
         }
+    }
+
+    /// True when the in-progress note carries the reserved `#Note` tag — drives a
+    /// near-composer alert that it will be left out of billing.
+    private var composerIsNonBillable: Bool {
+        ScratchPadTokenParser.parse(composerText).tags
+            .contains { $0.caseInsensitiveCompare(ScratchPadEntryRecord.nonBillableTag) == .orderedSame }
+    }
+
+    /// Chips for files staged in the composer, saved with the note on submit.
+    @ViewBuilder
+    private var stagedFilesBar: some View {
+        if !stagedFiles.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(stagedFiles, id: \.self) { url in
+                        HStack(spacing: 6) {
+                            Image(systemName: "paperclip").font(.caption2).foregroundStyle(.secondary)
+                            Text(url.lastPathComponent).font(.caption).lineLimit(1).truncationMode(.middle)
+                            Button { stagedFiles.removeAll { $0 == url } } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain).foregroundStyle(.tertiary)
+                            .accessibilityLabel("Remove staged file")
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.secondary.opacity(0.12)))
+                    }
+                }
+            }
+        }
+    }
+
+    private var nonBillableComposerBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "nosign")
+            Text("Tagged #Note — this won't be counted toward billing or time. Remove #Note to include it.")
+                .font(.caption)
+            Spacer(minLength: 8)
+        }
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 4)
     }
 
     @ViewBuilder
@@ -390,9 +451,17 @@ struct ScratchPadView: View {
     }
 
     private func submit() {
-        guard controller.addEntry(composerText, explicitMentions: pendingMentions) else { return }
-        composerText = ""
-        pendingMentions = [:]
+        let text = composerText
+        let files = stagedFiles
+        let mentions = pendingMentions
+        guard !files.isEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        Task {
+            if await controller.addEntry(text, explicitMentions: mentions, attachmentURLs: files) {
+                composerText = ""
+                pendingMentions = [:]
+                stagedFiles = []
+            }
+        }
     }
 
     // MARK: - Formatting
@@ -429,9 +498,11 @@ struct ScratchPadView: View {
 /// outside the selectable text so it isn't shadowed by the system text menu.
 private struct ScratchPadEntryRow: View {
     let entry: ScratchPadEntryView
+    var attachments: [ScratchPadAttachmentView] = []
     let isLocked: Bool
     var showTimestamp: Bool = true
     let onDelete: () -> Void
+    var onRemoveAttachment: (String) -> Void = { _ in }
     @State private var hovering = false
 
     var body: some View {
@@ -445,9 +516,20 @@ private struct ScratchPadEntryRow: View {
                     .frame(width: 56, alignment: .trailing)
                     .padding(.top, 2)
             }
-            Text(ScratchPadFormatting.highlighted(entry.text))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(ScratchPadFormatting.highlighted(entry.text))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if entry.isNonBillable {
+                    Label("Non-billable", systemImage: "nosign")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.orange)
+                }
+                // Documents uploaded with this note render inline beneath it.
+                ForEach(attachments) { attachment in
+                    inlineAttachment(attachment)
+                }
+            }
             if !isLocked {
                 Button(action: onDelete) {
                     Image(systemName: "trash")
@@ -463,6 +545,35 @@ private struct ScratchPadEntryRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
     }
+
+    private func inlineAttachment(_ attachment: ScratchPadAttachmentView) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: scratchPadAttachmentIcon(attachment.kind))
+                .font(.caption2).foregroundStyle(.secondary)
+            Text(attachment.fileName).font(.caption).lineLimit(1).truncationMode(.middle)
+            Text(attachment.summary).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            if !isLocked {
+                Button { onRemoveAttachment(attachment.id) } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .accessibilityLabel("Remove attachment")
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.secondary.opacity(0.12)))
+    }
+}
+
+/// Shared SF Symbol for a ScratchPad attachment's evidence kind.
+private func scratchPadAttachmentIcon(_ kind: BillingEvidenceKind) -> String {
+    switch kind {
+    case .email: "envelope"
+    case .workProduct: "doc.text"
+    case .filing: "building.columns"
+    case .other: "paperclip"
+    }
 }
 
 /// Shared formatting for ScratchPad entry rows.
@@ -476,11 +587,21 @@ private enum ScratchPadFormatting {
         for token in text.split(whereSeparator: { $0.isWhitespace }) {
             guard let first = token.first, first == "@" || first == "#" else { continue }
             if let range = attributed.range(of: String(token)) {
-                attributed[range].foregroundColor = (first == "@") ? Color.accentColor : gold
+                // #Note (the non-billable marker) is tinted distinctly from ordinary
+                // #tags so an excluded note reads at a glance.
+                let isNoteTag = first == "#" && tagBody(token).caseInsensitiveCompare("note") == .orderedSame
+                attributed[range].foregroundColor = (first == "@") ? Color.accentColor : (isNoteTag ? .orange : gold)
                 attributed[range].font = .body.weight(.medium)
             }
         }
         return attributed
+    }
+
+    /// The tag body with the `#` sigil and any trailing punctuation removed.
+    private static func tagBody(_ token: Substring) -> String {
+        var body = String(token.dropFirst())
+        while let last = body.last, !(last.isLetter || last.isNumber) { body.removeLast() }
+        return body
     }
 
     private static let timeFormatter: DateFormatter = {

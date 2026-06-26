@@ -797,7 +797,7 @@ public enum SupraMigrator {
             try db.create(table: "scratch_pad_attachments", ifNotExists: true) { table in
                 table.column("id", .text).primaryKey()
                 table.column("day_id", .text).notNull().references("scratch_pad_days", onDelete: .cascade)
-                table.column("entry_id", .text).references("scratch_pad_entries", onDelete: .setNull)
+                table.column("entry_id", .text).references("scratch_pad_entries", onDelete: .cascade)
                 table.column("matter_document_id", .text).references("matter_documents", onDelete: .setNull)
                 table.column("matter_id", .text).references("matters", onDelete: .setNull)
                 table.column("evidence_kind", .text).notNull()

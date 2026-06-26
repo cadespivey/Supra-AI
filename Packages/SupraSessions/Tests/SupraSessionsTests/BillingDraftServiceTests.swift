@@ -100,6 +100,90 @@ final class BillingDraftServiceTests: XCTestCase {
         }
     }
 
+    func testNoteTaggedEntriesAreExcludedFromBilling() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        // A deliberate non-billable note-to-self alongside the billable entry.
+        try store.scratchPad.addEntry(
+            dayID: dayID, text: "Remember to call the printer about exhibits #Note",
+            mentions: [], tags: [ScratchPadEntryRecord.nonBillableTag]
+        )
+        var capturedUserPrompt = ""
+        let service = BillingDraftService(store: store) { _, user in
+            capturedUserPrompt = user
+            return #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103","confidence":"high"}]}"#
+        }
+        let result = try await service.generateDraft(
+            dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22"
+        )
+        // The #Note text never reaches the billing model.
+        XCTAssertFalse(capturedUserPrompt.contains("call the printer"), "#Note entry must be filtered before the prompt")
+        XCTAssertTrue(capturedUserPrompt.contains("Drafting opposition"), "the billable entry still reaches the prompt")
+        // The exclusion is surfaced on the reconciliation.
+        XCTAssertEqual(result.reconciliation.nonBillableExcluded, "1 note tagged #Note excluded from billing.")
+    }
+
+    func testNoteTaggedEntryAttachmentsAreExcludedFromBillingPrompt() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let note = try store.scratchPad.addEntry(
+            dayID: dayID,
+            text: "Do not bill this client-sensitive strategy reminder #Note",
+            mentions: [],
+            tags: [ScratchPadEntryRecord.nonBillableTag]
+        )
+        let evidence = AttachmentEvidence(
+            kind: BillingEvidenceKind.workProduct.rawValue,
+            fileName: "private-strategy.txt",
+            byteSize: 20,
+            wordCount: 3,
+            partCount: 1,
+            attachmentCount: 0,
+            extractionMethod: "txt",
+            needsOCR: false,
+            subject: nil,
+            metadataCreatedAt: nil,
+            metadataModifiedAt: nil,
+            warnings: [],
+            textExcerpt: "SECRET NONBILLABLE STRATEGY"
+        )
+        try store.scratchPad.addAttachment(
+            dayID: dayID,
+            entryID: note.id,
+            evidenceKind: .workProduct,
+            evidenceSignalsJSON: AttachmentEvidence.encode(evidence)
+        )
+
+        var capturedUserPrompt = ""
+        let service = BillingDraftService(store: store) { _, user in
+            capturedUserPrompt = user
+            return #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103","confidence":"high"}]}"#
+        }
+        let result = try await service.generateDraft(
+            dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22"
+        )
+
+        XCTAssertFalse(capturedUserPrompt.contains("client-sensitive strategy"), "#Note text must be filtered")
+        XCTAssertFalse(capturedUserPrompt.contains("SECRET NONBILLABLE STRATEGY"), "#Note attachment excerpt must be filtered")
+        XCTAssertFalse(capturedUserPrompt.contains("private-strategy.txt"), "#Note attachment metadata must be filtered")
+        XCTAssertEqual(
+            result.reconciliation.nonBillableExcluded,
+            "1 note tagged #Note excluded; 1 attached file tied to excluded notes excluded from billing."
+        )
+    }
+
+    func testAllNoteDayThrowsEmptyDay() async throws {
+        let store = try SupraStore.inMemory()
+        let day = try store.scratchPad.fetchOrCreateDay("2026-06-22")
+        try store.scratchPad.addEntry(dayID: day.id, text: "Personal errand #Note", mentions: [], tags: [ScratchPadEntryRecord.nonBillableTag])
+        do {
+            _ = try await service(store, returning: "{\"lineItems\":[]}").generateDraft(
+                dayID: day.id, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22"
+            )
+            XCTFail("expected emptyDay when every entry is #Note")
+        } catch BillingDraftError.emptyDay {
+            // expected — a day of only non-billable notes has nothing to bill
+        }
+    }
+
     func testUnparseableThrows() async throws {
         let (store, _, dayID) = try makeStoreWithMatterAndDay()
         do {

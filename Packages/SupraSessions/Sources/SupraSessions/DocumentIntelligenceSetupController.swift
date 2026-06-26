@@ -21,6 +21,10 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     @Published public private(set) var storageInitialized = false
     @Published public private(set) var notificationStatus: DocumentNotificationAuthorizationStatus = .unknown
     @Published public private(set) var embeddingTestPassed = false
+    /// True only while an embedding model is being auto-verified (loaded into the
+    /// runtime to confirm it works). Distinct from `isBusy` so the Models-tab verify
+    /// spinner doesn't couple to the broader Settings refresh state.
+    @Published public private(set) var embeddingVerifyInFlight = false
     @Published public private(set) var isBusy = false
     @Published public private(set) var message: String?
     /// Days before soft-deleted documents are auto-purged (0 disables). Plan §12.2.
@@ -87,7 +91,11 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
         var steps: [String] = []
         if !chatModelReady { steps.append("Load a runtime text model in the Models tab.") }
         if selectedEmbeddingModel == nil { steps.append("Download and select an embedding model.") }
-        else if !embeddingTestPassed { steps.append("Test-load the selected embedding model.") }
+        else if !embeddingTestPassed {
+            steps.append(embeddingVerifyInFlight
+                ? "Verifying the selected embedding model…"
+                : "The selected embedding model failed to verify — pick another.")
+        }
         if !(toolchain?.meetsMinimumForSetup ?? false) { steps.append("Confirm the local extraction/OCR toolchain.") }
         if !storageInitialized { steps.append("Initialize document storage.") }
         if notificationStatus == .notDetermined { steps.append("Allow completion notifications (optional).") }
@@ -171,6 +179,22 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
         reloadLocalState()
     }
 
+    /// Selects an embedding model and immediately verifies it loads. Used by the
+    /// "Select for use" dropdown so switching the active model re-verifies it
+    /// without a separate button.
+    public func selectAndVerifyEmbeddingModel(id: String) async {
+        selectEmbeddingModel(id: id)
+        await testLoadEmbeddingModel()
+    }
+
+    /// Called after a download registers + auto-selects a new embedding model:
+    /// refreshes the cached list (so it appears in "Select for use") and verifies
+    /// the freshly-selected model in the background.
+    public func handleEmbeddingModelDownloaded() {
+        reloadLocalState()
+        Task { await testLoadEmbeddingModel() }
+    }
+
     /// Loads the selected embedding model into the runtime to prove it can be
     /// initialized, checking the produced dimension (plan §2.1).
     public func testLoadEmbeddingModel() async {
@@ -183,7 +207,11 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             return
         }
         isBusy = true
-        defer { isBusy = false }
+        embeddingVerifyInFlight = true
+        defer {
+            isBusy = false
+            embeddingVerifyInFlight = false
+        }
 
         let bookmark = try? URL(fileURLWithPath: path, isDirectory: true).bookmarkData(options: [])
         let request = LoadEmbeddingModelRequest(
@@ -191,7 +219,9 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             modelPath: path,
             displayName: model.displayName,
             revision: model.revision,
-            expectedDimension: model.dimension,
+            // A non-positive stored dimension means "unknown" (e.g. a custom repo):
+            // skip the post-load assertion and discover the real value from the probe.
+            expectedDimension: model.dimension > 0 ? model.dimension : nil,
             modelBookmark: bookmark
         )
         do {
@@ -200,6 +230,15 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             case .loaded:
                 embeddingTestPassed = true
                 message = nil
+                // Capture the dimension the runtime actually produced for a model
+                // registered without one (custom repo), so indexing and the
+                // expected-dimension guard work on subsequent loads.
+                if model.dimension <= 0, let discovered = response.dimension, discovered > 0,
+                   var record = try? store.documentSettings.fetchEmbeddingModel(id: model.id) {
+                    record.dimension = discovered
+                    record.updatedAt = Date()
+                    try? store.documentSettings.upsertEmbeddingModel(record)
+                }
                 try? store.documentSettings.recordTestLoad(modelID: model.id, result: "passed")
                 settings = (try? store.documentSettings.updateSettings { $0.embeddingModelLastTestedAt = Date() }) ?? settings
                 _ = try? store.auditEvents.recordEvent(

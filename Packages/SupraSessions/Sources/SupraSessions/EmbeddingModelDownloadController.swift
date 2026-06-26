@@ -19,6 +19,11 @@ public final class EmbeddingModelDownloadController: ObservableObject {
 
     @Published public private(set) var state: State = .idle
 
+    /// Invoked on the main actor right after a download registers (and optionally
+    /// selects) its model in the store. Lets the setup controller refresh its cached
+    /// model list and auto-verify the new model without the user pressing anything.
+    public var onModelRegistered: (() -> Void)?
+
     private let store: SupraStore
     private let fetcher: ModelRepositoryFetching
     private let modelsDirectory: URL
@@ -95,22 +100,17 @@ public final class EmbeddingModelDownloadController: ObservableObject {
         state = .preparing(repoID: repoID)
 
         do {
-            let files = try await fetcher.listModelFiles(repoID: repoID)
-            for (index, file) in files.enumerated() {
-                try Task.checkCancellation()
-                state = .downloading(
-                    repoID: repoID,
-                    completedFiles: index,
-                    totalFiles: files.count,
-                    currentFile: file
-                )
-                try await fetcher.downloadFile(
-                    repoID: repoID,
-                    file: file,
-                    to: destinationRoot.appendingPathComponent(file)
+            // Parallel + checkpointed: files transfer concurrently, and any already on
+            // disk (from a prior interrupted run) are skipped.
+            try await ManagedModelDownloader.downloadFiles(
+                repoID: repoID,
+                destinationRoot: destinationRoot,
+                fetcher: fetcher
+            ) { [weak self] completed, total, file in
+                self?.state = .downloading(
+                    repoID: repoID, completedFiles: completed, totalFiles: total, currentFile: file
                 )
             }
-            try Task.checkCancellation()
 
             try registerModel(
                 repoID: repoID,
@@ -121,8 +121,12 @@ public final class EmbeddingModelDownloadController: ObservableObject {
                 select: selectAfterDownload
             )
             state = .finished(repoID: repoID, displayName: displayName)
+            // The model is now in the store; let the setup controller refresh its
+            // list and auto-verify it (so a fresh download appears in "Select for
+            // use" and turns green without any manual step).
+            onModelRegistered?()
         } catch {
-            try? FileManager.default.removeItem(at: destinationRoot)
+            // Keep completed files in place so a re-run resumes rather than restarts.
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
                 state = .idle
             } else {

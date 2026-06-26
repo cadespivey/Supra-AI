@@ -40,6 +40,8 @@ public final class MatterDraftingController: ObservableObject {
         case matterNotFound
         case incompleteFirmProfile(missing: [String])
         case missingCaptionField(String)
+        case missingRequiredSlots([String])
+        case unsupportedJurisdiction(String)
         case unsupportedKind(DraftKindID)
         case renderFailed(String)
 
@@ -51,6 +53,10 @@ public final class MatterDraftingController: ObservableObject {
                 return "Complete your firm profile in Settings before drafting — still needed: \(missing.joined(separator: ", "))."
             case let .missingCaptionField(field):
                 return "This matter is missing its \(field). Add it to the matter before drafting a court filing."
+            case let .missingRequiredSlots(slots):
+                return "Complete the Notice of Appearance fields before drafting — still needed: \(slots.joined(separator: ", "))."
+            case let .unsupportedJurisdiction(jurisdiction):
+                return "Notice of Appearance drafting is currently wired for Florida filings only. This matter looks like \(jurisdiction)."
             case let .unsupportedKind(kind):
                 return "Drafting for \(kind.rawValue) isn't wired into chat yet."
             case let .renderFailed(detail):
@@ -105,22 +111,34 @@ public final class MatterDraftingController: ObservableObject {
         guard profile.hasDraftingIdentity else {
             return .failure(.incompleteFirmProfile(missing: profile.missingDraftingIdentityFields))
         }
-        guard let caseNumber = matter.docketNumber, !caseNumber.isEmpty else {
+        guard let caseNumber = matter.docketNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !caseNumber.isEmpty else {
             return .failure(.missingCaptionField("case/docket number"))
         }
-        let courtHeader = (matter.court?.isEmpty == false) ? matter.court! : matter.jurisdiction
+        let courtHeader = Self.courtHeader(for: matter)
+        guard !courtHeader.isEmpty, courtHeader.caseInsensitiveCompare("Unspecified") != .orderedSame else {
+            return .failure(.missingCaptionField("court"))
+        }
+        guard Self.isSupportedNoticeJurisdiction(matter: matter, courtHeader: courtHeader) else {
+            return .failure(.unsupportedJurisdiction(courtHeader))
+        }
 
-        let firm = Self.firmProfile(from: profile)
+        // Match the bar admission to the filing's court (court text first, then the
+        // matter's jurisdiction); falls back to the primary license.
+        let firm = Self.firmProfile(from: profile, jurisdiction: matter.court ?? matter.jurisdiction)
         let inputs = NoticeAppearance.Inputs(
             courtHeader: courtHeader,
-            parties: parties,
-            partyRepresented: partyRepresented,
-            representedPartyName: representedPartyName,
+            parties: Self.normalizedParties(parties),
+            partyRepresented: partyRepresented.trimmingCharacters(in: .whitespacesAndNewlines),
+            representedPartyName: representedPartyName.trimmingCharacters(in: .whitespacesAndNewlines),
             caseNumber: caseNumber,
-            division: matter.judge,   // division/judge line; nil-safe
+            division: matter.judge?.trimmingCharacters(in: .whitespacesAndNewlines),   // division/judge line; nil-safe
             serviceDate: serviceDate,
-            recipients: recipients
+            recipients: Self.normalizedRecipients(recipients)
         )
+        let missingSlots = NoticeAppearanceInputValidator.validate(inputs: inputs, profile: firm)
+        guard missingSlots.isEmpty else {
+            return .failure(.missingRequiredSlots(missingSlots))
+        }
 
         let pipeline = pipelineFactory()
         let result: DraftResult
@@ -146,23 +164,80 @@ public final class MatterDraftingController: ObservableObject {
 
     /// Projects the user's `AssistantProfile` onto the drafting `FirmProfile`. Pure
     /// and `nonisolated` so it can be unit-tested without the MainActor controller.
-    nonisolated public static func firmProfile(from profile: AssistantProfile) -> FirmProfile {
-        FirmProfile(
-            firmName: profile.organization,
-            signingAttorney: profile.fullName,
-            barNumber: profile.barNumber,
+    /// `jurisdiction` (a filing's court/jurisdiction text) selects which bar admission
+    /// prints; an empty value falls back to the primary license.
+    nonisolated public static func firmProfile(
+        from profile: AssistantProfile,
+        jurisdiction: String = ""
+    ) -> FirmProfile {
+        let license = profile.resolvedBarLicense(forJurisdiction: jurisdiction)
+        let barLabel = BarJurisdictionCatalog.jurisdiction(id: license?.jurisdictionID)?.barLabel ?? "Bar No."
+        return FirmProfile(
+            firmName: profile.organization.trimmingCharacters(in: .whitespacesAndNewlines),
+            signingAttorney: profile.fullName.trimmingCharacters(in: .whitespacesAndNewlines),
+            barNumber: license?.barNumber.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            barLabel: barLabel,
             office: OfficeBlock(
-                street: profile.officeStreet,
-                suite: profile.officeSuite.isEmpty ? nil : profile.officeSuite,
-                city: profile.officeCity,
-                state: profile.officeState,
-                zip: profile.officeZip,
-                phone: profile.officePhone,
-                fax: profile.officeFax.isEmpty ? nil : profile.officeFax
+                street: profile.officeStreet.trimmingCharacters(in: .whitespacesAndNewlines),
+                suite: profile.officeSuite.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                city: profile.officeCity.trimmingCharacters(in: .whitespacesAndNewlines),
+                state: profile.officeState.trimmingCharacters(in: .whitespacesAndNewlines),
+                zip: profile.officeZip.trimmingCharacters(in: .whitespacesAndNewlines),
+                phone: profile.officePhone.trimmingCharacters(in: .whitespacesAndNewlines),
+                fax: profile.officeFax.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
             ),
-            primaryEmail: profile.primaryEmail,
+            primaryEmail: profile.primaryEmail.trimmingCharacters(in: .whitespacesAndNewlines),
             secondaryEmails: profile.secondaryEmails
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
         )
+    }
+
+    nonisolated private static func courtHeader(for matter: MatterRecord) -> String {
+        if let court = matter.court?.trimmingCharacters(in: .whitespacesAndNewlines), !court.isEmpty {
+            return court
+        }
+        return matter.jurisdiction.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func isSupportedNoticeJurisdiction(matter: MatterRecord, courtHeader: String) -> Bool {
+        [matter.court, matter.jurisdiction, courtHeader]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .contains { candidate in
+                BarJurisdictionCatalog.match(candidate)?.id == "fl"
+                    || candidate.localizedCaseInsensitiveContains("florida")
+            }
+    }
+
+    nonisolated private static func normalizedParties(_ parties: [PartyLine]) -> [PartyLine] {
+        parties.map {
+            PartyLine(
+                name: $0.name.trimmingCharacters(in: .whitespacesAndNewlines),
+                designation: $0.designation.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+    }
+
+    nonisolated private static func normalizedRecipients(_ recipients: [ServiceRecipient]) -> [ServiceRecipient] {
+        recipients.map { recipient in
+            ServiceRecipient(
+                name: recipient.name.trimmingCharacters(in: .whitespacesAndNewlines),
+                firm: recipient.firm.trimmingCharacters(in: .whitespacesAndNewlines),
+                address: OfficeBlock(
+                    street: recipient.address.street.trimmingCharacters(in: .whitespacesAndNewlines),
+                    suite: recipient.address.suite?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                    city: recipient.address.city.trimmingCharacters(in: .whitespacesAndNewlines),
+                    state: recipient.address.state.trimmingCharacters(in: .whitespacesAndNewlines),
+                    zip: recipient.address.zip.trimmingCharacters(in: .whitespacesAndNewlines),
+                    phone: recipient.address.phone.trimmingCharacters(in: .whitespacesAndNewlines),
+                    fax: recipient.address.fax?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ),
+                emails: recipient.emails
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty },
+                role: recipient.role.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
     }
 
     // MARK: - Persistence
@@ -200,6 +275,10 @@ public final class MatterDraftingController: ObservableObject {
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         return formatter.string(from: Date())
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 // MARK: - Convenience factory

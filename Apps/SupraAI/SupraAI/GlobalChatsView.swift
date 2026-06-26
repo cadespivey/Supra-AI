@@ -30,6 +30,9 @@ struct GlobalChatsView: View {
 
     // Chat-history sidebar state (global chat only).
     @State private var chatSearch = ""
+    /// Tag/content search results (chats + ScratchPad notes), recomputed as the query
+    /// changes. Drives both the content-matched chat list and the tag-matches section.
+    @State private var tagHits: [TagSearchHit] = []
     @State private var suggestions: [ChatSuggestion] = []
     @State private var renamingChat: ChatSummary?
     @State private var renameText = ""
@@ -56,6 +59,10 @@ struct GlobalChatsView: View {
         // (new chat, deleted chat, or a moved chat) so they don't get stale.
         .onChange(of: controller.selectedChatID) { _, _ in
             suggestions = ChatSuggestions.sample()
+        }
+        .onChange(of: chatSearch) { _, newValue in
+            let query = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            tagHits = query.count > 1 ? controller.tagSearch(term: query) : []
         }
     }
 
@@ -105,7 +112,7 @@ struct GlobalChatsView: View {
 
             Divider()
 
-            if filteredChats.isEmpty {
+            if filteredChats.isEmpty && discoveryGroups.isEmpty {
                 VStack(spacing: 6) {
                     Image(systemName: chatSearch.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
                         .font(.title2)
@@ -124,6 +131,9 @@ struct GlobalChatsView: View {
                         }
                     }
                     .padding(8)
+                    if isTagMode && !discoveryGroups.isEmpty {
+                        tagMatchesSection
+                    }
                 }
             }
         }
@@ -158,7 +168,7 @@ struct GlobalChatsView: View {
     private var chatSearchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
-            TextField("Search chats", text: $chatSearch)
+            TextField("Search chats or #tags", text: $chatSearch)
                 .textFieldStyle(.plain)
                 .font(.callout)
             if !chatSearch.isEmpty {
@@ -250,12 +260,79 @@ struct GlobalChatsView: View {
         }
     }
 
-    /// Chats whose title matches the search box (case-insensitive). Empty search
-    /// shows everything, newest first (the controller's ordering).
+    /// In-scope chats matched by title OR by message content (a `#tag` or any text).
+    /// Empty search shows everything, newest first (the controller's ordering).
     private var filteredChats: [ChatSummary] {
         let query = chatSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return controller.chats }
-        return controller.chats.filter { $0.title.lowercased().contains(query) }
+        // Content matches come from the search results (openable = in this scope).
+        let contentMatched = Set(tagHits.compactMap { $0.kind == .chat ? $0.openableChatID : nil })
+        return controller.chats.filter { $0.title.lowercased().contains(query) || contentMatched.contains($0.id) }
+    }
+
+    /// Tag mode: the query begins with `#`, so a discovery section of note + cross-
+    /// matter hits is shown beneath the in-scope chat list.
+    private var isTagMode: Bool {
+        chatSearch.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#")
+    }
+
+    private struct DiscoveryGroup: Identifiable {
+        let id: String          // matter name (the group label)
+        let hits: [TagSearchHit]
+    }
+
+    /// Hits surfaced for discovery (not openable in place): ScratchPad notes and
+    /// cross-matter chats, grouped by matter.
+    private var discoveryGroups: [DiscoveryGroup] {
+        let discovery = tagHits.filter { $0.kind == .note || ($0.kind == .chat && $0.openableChatID == nil) }
+        let grouped = Dictionary(grouping: discovery, by: \.group)
+        return grouped.keys.sorted().map { DiscoveryGroup(id: $0, hits: grouped[$0] ?? []) }
+    }
+
+    /// Discovery results for a #tag query — ScratchPad notes and cross-matter chats,
+    /// grouped by matter (informational; chats in other matters aren't opened here).
+    private var tagMatchesSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Divider().padding(.vertical, 4)
+            Text("Tag matches")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+            ForEach(discoveryGroups) { group in
+                Text(group.id)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 4)
+                ForEach(group.hits) { hit in
+                    tagHitRow(hit)
+                }
+            }
+        }
+        .padding(.bottom, 8)
+    }
+
+    private func tagHitRow(_ hit: TagSearchHit) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: hit.kind == .note ? "note.text" : "bubble.left")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(hit.title)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                if !hit.snippet.isEmpty {
+                    Text(hit.snippet)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
     }
 
     private var renameAlertBinding: Binding<Bool> {

@@ -243,6 +243,72 @@ public final class GlobalChatController: ObservableObject {
         }
     }
 
+    // MARK: - Tag / content search
+
+    /// Searches chats (by title + message content) and ScratchPad notes for `term`,
+    /// returning hits grouped by matter. A leading `#` is treated as an exact tag
+    /// match for notes. In a matter scope the search is bounded to that matter; in the
+    /// global scope it spans every matter (cross-matter discovery). Chat hits in the
+    /// current scope are openable; others are discovery-only. Runs synchronous LIKE
+    /// queries — fine at current scale (no FTS index yet).
+    public func tagSearch(term: String) -> [TagSearchHit] {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 1 else { return [] }
+        let exactTag = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : nil
+
+        let matters = (try? store.matters.fetchMatters()) ?? []
+        let nameByID = Dictionary(matters.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+
+        var hits: [TagSearchHit] = []
+
+        for hit in (try? store.chats.searchChats(term: trimmed, matterID: scopedMatterID)) ?? [] {
+            let group = hit.matterID.flatMap { nameByID[$0] } ?? "Global chats"
+            hits.append(TagSearchHit(
+                id: "chat-\(hit.chatID)", kind: .chat,
+                openableChatID: isOpenable(hit) ? hit.chatID : nil,
+                group: group, title: hit.title,
+                snippet: Self.searchSnippet(hit.snippet, around: trimmed), date: hit.updatedAt
+            ))
+        }
+
+        for entry in (try? store.scratchPad.searchEntries(term: trimmed)) ?? [] {
+            // For a #tag query, require the exact tag (so #urgent ≠ #urgentish).
+            if let exactTag, !entry.tags.contains(where: { $0.caseInsensitiveCompare(exactTag) == .orderedSame }) { continue }
+            // In a matter scope, only notes that @mention this matter.
+            if let scoped = scopedMatterID, !entry.mentions.contains(scoped) { continue }
+            let group = entry.mentions.first.flatMap { nameByID[$0] } ?? "Unassigned notes"
+            hits.append(TagSearchHit(
+                id: "note-\(entry.entryID)", kind: .note, openableChatID: nil,
+                group: group, title: "ScratchPad · \(entry.day)",
+                snippet: Self.searchSnippet(entry.text, around: trimmed), date: nil
+            ))
+        }
+        return hits
+    }
+
+    /// Whether a chat hit belongs to this controller's scope (so it can be opened in
+    /// place rather than only surfaced for discovery).
+    private func isOpenable(_ hit: ChatRepository.ChatSearchHit) -> Bool {
+        switch scope {
+        case .global: return hit.scope == "global"
+        case let .matter(id): return hit.matterID == id
+        }
+    }
+
+    /// A short snippet of `content` centered on the first match of `term`.
+    private static func searchSnippet(_ content: String?, around term: String, window: Int = 100) -> String {
+        guard let content, !content.isEmpty else { return "" }
+        guard let match = content.range(of: term, options: .caseInsensitive) else {
+            return String(content.prefix(window + 40)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let start = content.index(match.lowerBound, offsetBy: -40, limitedBy: content.startIndex) ?? content.startIndex
+        let end = content.index(match.upperBound, offsetBy: window, limitedBy: content.endIndex) ?? content.endIndex
+        var snippet = String(content[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if start != content.startIndex { snippet = "…" + snippet }
+        if end != content.endIndex { snippet += "…" }
+        return snippet
+    }
+
     /// A concise chat title derived from the first user message (first words, up to
     /// ~48 chars on a word boundary). Falls back to "New Chat" for empty input.
     static func derivedTitle(from prompt: String) -> String {

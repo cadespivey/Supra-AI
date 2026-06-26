@@ -129,8 +129,7 @@ struct MatterBillingView: View {
             Text("Override instructions").font(.headline)
             MultilineField(
                 placeholder: "e.g. Bill travel at 50%; no charge for filing/service tasks; this client requires task-level detail",
-                text: overrideBinding,
-                minHeight: 96
+                text: overrideBinding
             )
             Text("Layered on top of the firm-wide billing instructions for this matter's lines.")
                 .font(.caption).foregroundStyle(.secondary)

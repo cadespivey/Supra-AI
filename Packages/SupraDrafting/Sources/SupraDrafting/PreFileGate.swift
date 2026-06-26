@@ -12,15 +12,39 @@ public struct PreFileGate: Sendable {
         var failures: [GateFailure] = []
         var followUps: [FollowUp] = []
 
-        if model.caption.parties.isEmpty || model.caption.caseNumber.isEmpty {
+        let completeParties = model.caption.parties.filter {
+            !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !$0.designation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        if model.caption.courtHeader.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || completeParties.count < 2
+            || model.caption.caseNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             failures.append(GateFailure(gate: .contract, detail: "Caption incomplete.", repair: .regenerate(maxPasses: 1)))
             followUps.append(FollowUp(severity: .blocking, kind: .structure, message: "Caption must be complete before filing."))
         }
-        if model.signature == nil {
+        if let signature = model.signature {
+            if signature.firmName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || signature.signingAttorney.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || signature.attorneys.isEmpty
+                || signature.emails.primary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                failures.append(GateFailure(gate: .contract, detail: "Signature incomplete.", repair: .regenerate(maxPasses: 1)))
+                followUps.append(FollowUp(severity: .blocking, kind: .structure, message: "Signature block must be complete before filing."))
+            }
+        } else {
             failures.append(GateFailure(gate: .contract, detail: "Signature missing.", repair: .regenerate(maxPasses: 1)))
             followUps.append(FollowUp(severity: .blocking, kind: .structure, message: "Signature block required."))
         }
-        if model.certificate == nil {
+        if let certificate = model.certificate {
+            let completeRecipients = certificate.recipients.filter { recipient in
+                !recipient.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && !recipient.role.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && !recipient.emails.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.isEmpty
+            }
+            if completeRecipients.isEmpty {
+                failures.append(GateFailure(gate: .contract, detail: "Certificate recipients missing.", repair: .regenerate(maxPasses: 1)))
+                followUps.append(FollowUp(severity: .blocking, kind: .structure, message: "Certificate of service requires at least one complete recipient."))
+            }
+        } else {
             failures.append(GateFailure(gate: .contract, detail: "Certificate missing.", repair: .regenerate(maxPasses: 1)))
             followUps.append(FollowUp(severity: .blocking, kind: .structure, message: "Certificate of service required for a filed document."))
         }

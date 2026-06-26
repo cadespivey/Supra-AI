@@ -120,6 +120,11 @@ struct BillingDraftView: View {
                         .foregroundStyle(.orange)
                 }
             }
+            if let excluded = reconciliation.nonBillableExcluded {
+                Label(excluded, systemImage: "nosign")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

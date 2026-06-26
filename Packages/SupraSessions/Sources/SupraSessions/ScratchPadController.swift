@@ -25,6 +25,8 @@ public struct ScratchPadEntryView: Identifiable, Sendable, Equatable {
     public let timestamp: Date
     public let mentionMatterIDs: [String]
     public let tags: [String]
+    /// True when tagged `#Note` — excluded from the billing/time draft.
+    public let isNonBillable: Bool
 
     init(record: ScratchPadEntryRecord) {
         self.id = record.id
@@ -33,6 +35,7 @@ public struct ScratchPadEntryView: Identifiable, Sendable, Equatable {
         self.timestamp = record.createdAt
         self.mentionMatterIDs = record.mentions
         self.tags = record.tags
+        self.isNonBillable = record.isNonBillable
     }
 }
 
@@ -43,12 +46,15 @@ public struct ScratchPadAttachmentView: Identifiable, Sendable, Equatable {
     public let fileName: String
     public let matterID: String?
     public let summary: String
+    /// The entry this file was attached to, or nil for a legacy day-level attachment.
+    public let entryID: String?
 
     init(record: ScratchPadAttachmentRecord) {
         self.id = record.id
         let resolvedKind = BillingEvidenceKind(rawValue: record.evidenceKind) ?? .other
         self.kind = resolvedKind
         self.matterID = record.matterID
+        self.entryID = record.entryID
         let evidence = AttachmentEvidence.decode(record.evidenceSignalsJSON)
         self.fileName = evidence?.fileName ?? "Attachment"
         self.summary = evidence?.displaySummary ?? resolvedKind.displayLabel
@@ -146,6 +152,35 @@ public final class ScratchPadController: ObservableObject {
         }
     }
 
+    /// Adds a note AND attaches the given files to it inline, in one go — so an
+    /// uploaded document lives with its describing note rather than in a detached
+    /// day-level tray. A bare drop (no text) still creates a minimal note so a file is
+    /// always tied to a note. The attachment's matter is the note's own `@matter`
+    /// (falling back to the day's most-mentioned). Returns false if there is nothing
+    /// to add or the day is locked.
+    @discardableResult
+    public func addEntry(
+        _ text: String,
+        explicitMentions: [String: String] = [:],
+        attachmentURLs: [URL]
+    ) async -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !attachmentURLs.isEmpty else { return false }
+        guard let day = ensurePersistedDay(), !day.isLocked else { return false }
+        let entryText = trimmed.isEmpty ? Self.defaultText(forAttachments: attachmentURLs) : trimmed
+        let parsed = ScratchPadTokenParser.parse(entryText)
+        let mentions = ScratchPadTagResolver.resolveMentions(parsed.mentions, chips: matterChips, explicit: explicitMentions)
+        guard let entry = try? store.scratchPad.addEntry(
+            dayID: day.id, text: entryText, mentions: mentions, tags: parsed.tags, createdAt: now()
+        ) else { return false }
+        let entryMatter = mentions.first ?? suggestedMatterID
+        for url in attachmentURLs {
+            await addAttachment(fileURL: url, matterID: entryMatter, entryID: entry.id)
+        }
+        reloadEntries()
+        return true
+    }
+
     public func updateEntry(id: String, text: String, explicitMentions: [String: String] = [:]) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !(currentDay?.isLocked ?? true) else { return }
@@ -159,6 +194,7 @@ public final class ScratchPadController: ObservableObject {
         guard !(currentDay?.isLocked ?? true) else { return }
         try? store.scratchPad.deleteEntry(id: id)
         reloadEntries()
+        reloadAttachments()
     }
 
     // MARK: - Attachments
@@ -173,17 +209,36 @@ public final class ScratchPadController: ObservableObject {
         return counts.max { $0.value < $1.value }?.key
     }
 
-    /// Extracts a dropped/picked file locally, builds its evidence, and attaches it
-    /// to the day. Sets `lastAttachmentError` on failure (e.g. an unsupported `.msg`).
-    public func addAttachment(fileURL: URL, matterID: String? = nil, explicitKind: BillingEvidenceKind? = nil) async {
+    /// Attachments tied to a specific note entry (rendered inline under that note).
+    public func attachments(forEntry entryID: String) -> [ScratchPadAttachmentView] {
+        attachments.filter { $0.entryID == entryID }
+    }
+
+    /// Legacy day-level attachments not tied to any note (older days only).
+    public var unfiledAttachments: [ScratchPadAttachmentView] {
+        attachments.filter { $0.entryID == nil }
+    }
+
+    /// Extracts a dropped/picked file locally, builds its evidence, and attaches it.
+    /// When `entryID` is given the file is recorded inline with that note (and inherits
+    /// the note's matter when one isn't passed). Sets `lastAttachmentError` on failure
+    /// (e.g. an unsupported `.msg`).
+    public func addAttachment(
+        fileURL: URL,
+        matterID: String? = nil,
+        explicitKind: BillingEvidenceKind? = nil,
+        entryID: String? = nil
+    ) async {
         guard let day = ensurePersistedDay(), !day.isLocked else { return }
+        let resolvedMatter = matterID ?? entryMatterID(entryID) ?? suggestedMatterID
         let scoped = fileURL.startAccessingSecurityScopedResource()
         defer { if scoped { fileURL.stopAccessingSecurityScopedResource() } }
         do {
             let evidence = try await attachmentService.makeEvidence(fileURL: fileURL, explicitKind: explicitKind)
             try store.scratchPad.addAttachment(
                 dayID: day.id,
-                matterID: matterID ?? suggestedMatterID,
+                entryID: entryID,
+                matterID: resolvedMatter,
                 evidenceKind: evidence.billingKind,
                 evidenceSignalsJSON: AttachmentEvidence.encode(evidence)
             )
@@ -200,6 +255,19 @@ public final class ScratchPadController: ObservableObject {
         guard !(currentDay?.isLocked ?? true) else { return }
         try? store.scratchPad.deleteAttachment(id: id)
         reloadAttachments()
+    }
+
+    /// The matter mentioned by a given entry (for attributing a file dropped onto it).
+    private func entryMatterID(_ entryID: String?) -> String? {
+        guard let entryID else { return nil }
+        return entries.first { $0.id == entryID }?.mentionMatterIDs.first
+    }
+
+    /// A minimal note for a bare file drop (no typed text), so the file is still tied
+    /// to a note in the timeline.
+    private static func defaultText(forAttachments urls: [URL]) -> String {
+        if urls.count == 1 { return "Attached \(urls[0].lastPathComponent)" }
+        return "Attached \(urls.count) files"
     }
 
     public func lockCurrentDay() {

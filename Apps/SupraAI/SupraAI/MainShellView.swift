@@ -97,7 +97,6 @@ struct MainShellView: View {
             SettingsView(
                 settings: environment.settingsController,
                 profile: environment.assistantProfileController,
-                documentSetup: environment.documentSetupController,
                 update: environment.updateController,
                 billing: environment.billingSettingsController
             )

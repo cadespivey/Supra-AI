@@ -1,3 +1,5 @@
+import SupraCore
+import SupraSessions
 import SwiftUI
 
 struct RootView: View {
@@ -13,8 +15,19 @@ struct RootView: View {
             // Swapping (shell absent until the splash dismisses) removes the vibrancy
             // source entirely; the transitions still cross-fade the reveal.
             if !showSplash {
-                MainShellView()
+                if environment.shouldShowOnboarding {
+                    FirstRunOnboardingView(
+                        library: environment.modelLibrary,
+                        downloader: environment.modelDownloadController,
+                        embeddingDownloader: environment.embeddingDownloadController,
+                        documentSetup: environment.documentSetupController,
+                        onComplete: { environment.markOnboardingComplete() }
+                    )
                     .transition(.opacity)
+                } else {
+                    MainShellView()
+                        .transition(.opacity)
+                }
             }
 
             if showSplash {
@@ -60,5 +73,219 @@ struct SplashView: View {
                 }
             }
         }
+    }
+}
+
+/// First-run guided setup: prompts the user to download a reasoning, a drafting, and
+/// an embedding model. Skippable / non-blocking — downloads continue in the background
+/// after the user enters the app (the controllers live on AppEnvironment). Shown once;
+/// dismissing records completion so it never reappears.
+struct FirstRunOnboardingView: View {
+    @ObservedObject var library: ModelLibrary
+    @ObservedObject var downloader: ModelDownloadController
+    @ObservedObject var embeddingDownloader: EmbeddingModelDownloadController
+    @ObservedObject var documentSetup: DocumentIntelligenceSetupController
+    let onComplete: () -> Void
+
+    // Per-job download selections, defaulted to the curated recommendations.
+    @State private var reasoningRepo = ModelCatalog.curated[0].repoID
+    @State private var draftingRepo = ModelCatalog.curated[1].repoID
+    @State private var embeddingRepo = EmbeddingModelCatalog.defaultModel.repoID
+    // Models whose download was started here, by display name → the role to assign on
+    // registration (captured at click time so changing a picker later can't misroute).
+    @State private var pendingRoleByName: [String: ModelRole] = [:]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    Text("Supra AI runs entirely on your Mac. Pick a model for each job to get started — these are large (each reasoning/drafting model is ~17 GB), so you can start the downloads now and keep working while they finish, or set them up later.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    textModelStep(
+                        number: 1, title: "Reasoning model",
+                        blurb: "Powers legal research and analysis (the /legal and /research routes).",
+                        selection: $reasoningRepo, role: .legalReasoning
+                    )
+                    textModelStep(
+                        number: 2, title: "Drafting model",
+                        blurb: "Powers document drafting (the /draft route).",
+                        selection: $draftingRepo, role: .drafting
+                    )
+                    embeddingStep(number: 3)
+                    if let error = downloadError {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }
+                .padding(24)
+            }
+            Divider()
+            footer
+        }
+        .frame(minWidth: 680, minHeight: 600)
+        .onChange(of: library.models.map(\.id)) { _, _ in assignDownloadedRoles() }
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            Text("§").font(.system(size: 40, weight: .semibold, design: .serif))
+                .foregroundStyle(BrandColors.gold)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Welcome to Supra AI").font(.title2.weight(.semibold))
+                Text("Let's set up your local models.").font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(20)
+    }
+
+    private var footer: some View {
+        HStack {
+            Button("Set up later") { onComplete() }
+            Spacer()
+            Button("Enter Supra AI") { onComplete() }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+        }
+        .padding(20)
+    }
+
+    /// A best-effort surfaced download failure (text or embedding), shown once.
+    private var downloadError: String? {
+        if case let .failed(message) = downloader.state { return message }
+        if case let .failed(message) = embeddingDownloader.state { return message }
+        return nil
+    }
+
+    @ViewBuilder
+    private func textModelStep(
+        number: Int, title: String, blurb: String,
+        selection: Binding<String>, role: ModelRole
+    ) -> some View {
+        let catalog = ModelCatalog.curated.first { $0.repoID == selection.wrappedValue }
+        stepContainer(number: number, title: title) {
+            Text(blurb).font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Picker("Model", selection: selection) {
+                    ForEach(ModelCatalog.curated) { model in
+                        Text("\(model.displayName) · ~\(sizeText(model.approxSizeGB)) GB").tag(model.repoID)
+                    }
+                }
+                .labelsHidden()
+                Button("Download") {
+                    if let catalog { startTextDownload(catalog, role: role) }
+                }
+                .disabled(downloader.isBusy || isDownloaded(catalog))
+            }
+            textStatus(for: catalog)
+        }
+    }
+
+    @ViewBuilder
+    private func embeddingStep(number: Int) -> some View {
+        let catalog = EmbeddingModelCatalog.curated.first { $0.repoID == embeddingRepo }
+        stepContainer(number: number, title: "Embedding model") {
+            Text("Powers document semantic search across your matters.").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Picker("Embedding model", selection: $embeddingRepo) {
+                    ForEach(EmbeddingModelCatalog.curated) { model in
+                        Text("\(model.displayName) · ~\(model.approxSizeMB) MB").tag(model.repoID)
+                    }
+                }
+                .labelsHidden()
+                Button("Download") {
+                    if let catalog { embeddingDownloader.downloadCatalogModel(catalog) }
+                }
+                .disabled(embeddingDownloader.isBusy || documentSetup.embeddingTestPassed)
+            }
+            embeddingStatus
+        }
+    }
+
+    @ViewBuilder
+    private func textStatus(for catalog: CatalogModel?) -> some View {
+        if isDownloaded(catalog) {
+            Label("Downloaded", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green)
+        } else if isDownloading(catalog) {
+            if case let .downloading(_, completed, total, file) = downloader.state {
+                VStack(alignment: .leading, spacing: 2) {
+                    ProgressView(value: Double(completed), total: Double(max(total, 1)))
+                    Text("\(completed)/\(total) — \(file)").font(.caption2)
+                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
+            } else {
+                Text("Preparing…").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private var embeddingStatus: some View {
+        if documentSetup.embeddingVerifyInFlight {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Verifying…").font(.caption).foregroundStyle(.secondary)
+            }
+        } else if documentSetup.embeddingTestPassed, let model = documentSetup.selectedEmbeddingModel {
+            Label("Ready — \(model.displayName)", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green)
+        } else if case let .downloading(_, completed, total, _) = embeddingDownloader.state {
+            ProgressView(value: Double(completed), total: Double(max(total, 1)))
+        } else if case .preparing = embeddingDownloader.state {
+            Text("Preparing…").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func stepContainer(
+        number: Int, title: String, @ViewBuilder content: () -> some View
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text("\(number)")
+                .font(.headline).foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(Color.accentColor, in: Circle())
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(.headline)
+                content()
+            }
+            Spacer()
+        }
+    }
+
+    private func startTextDownload(_ catalog: CatalogModel, role: ModelRole) {
+        pendingRoleByName[catalog.displayName] = role
+        downloader.downloadCatalogModel(catalog)
+    }
+
+    /// Assigns each freshly-registered model to the role its download was started for.
+    private func assignDownloadedRoles() {
+        guard !pendingRoleByName.isEmpty else { return }
+        for model in library.models {
+            if let role = pendingRoleByName[model.displayName] {
+                library.assignModel(model.id, to: role)
+                pendingRoleByName[model.displayName] = nil
+            }
+        }
+    }
+
+    private func isDownloaded(_ catalog: CatalogModel?) -> Bool {
+        guard let catalog else { return false }
+        return library.models.contains { $0.displayName == catalog.displayName }
+    }
+
+    private func isDownloading(_ catalog: CatalogModel?) -> Bool {
+        guard let catalog else { return false }
+        switch downloader.state {
+        case let .preparing(repoID): return repoID == catalog.repoID
+        case let .downloading(repoID, _, _, _): return repoID == catalog.repoID
+        default: return false
+        }
+    }
+
+    private func sizeText(_ gb: Double) -> String {
+        gb == gb.rounded() ? String(Int(gb)) : String(format: "%.1f", gb)
     }
 }

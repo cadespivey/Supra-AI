@@ -2,74 +2,46 @@ import SupraCore
 import SupraRuntimeInterface
 import SwiftUI
 
-/// Runtime status for the local model service.
+/// Runtime status for the local model service. Refreshes automatically every 10
+/// seconds while the tab is open — no manual refresh needed.
 struct DiagnosticsView: View {
     @EnvironmentObject private var environment: AppEnvironment
-    @State private var isRefreshing = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Diagnostics")
-                        .font(.headline)
-                    Text(runtimeSummary)
-                        .font(.caption)
+        List {
+            Section {
+                LabeledContent("State", value: environment.runtimeServiceState.displayName)
+                LabeledContent("Message") {
+                    Text(environment.runtimeStatusMessage)
                         .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
-                Spacer()
-                Button {
-                    refresh()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .disabled(isRefreshing)
+                LabeledContent(
+                    "Loaded model",
+                    value: environment.modelLibrary.loadedModel?.displayName ?? "None"
+                )
+                LabeledContent(
+                    "Registered models",
+                    value: "\(environment.modelLibrary.models.count)"
+                )
+            } header: {
+                Text("Runtime").font(.title3.weight(.semibold)).textCase(nil).foregroundStyle(.primary)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 10)
 
-            Divider()
-
-            List {
-                Section("Runtime") {
-                    LabeledContent("State", value: environment.runtimeServiceState.displayName)
-                    LabeledContent("Message") {
-                        Text(environment.runtimeStatusMessage)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    LabeledContent(
-                        "Loaded model",
-                        value: environment.modelLibrary.loadedModel?.displayName ?? "None"
-                    )
-                    LabeledContent(
-                        "Registered models",
-                        value: "\(environment.modelLibrary.models.count)"
-                    )
-                }
-
-                Section("Next Step") {
-                    Text(nextStep)
-                        .foregroundStyle(.secondary)
-                }
+            Section {
+                Text(nextStep)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Next Step").font(.title3.weight(.semibold)).textCase(nil).foregroundStyle(.primary)
             }
         }
-    }
-
-    private var runtimeSummary: String {
-        switch environment.runtimeServiceState {
-        case .modelLoaded, .generating:
-            "Runtime is ready."
-        case .modelUnloaded, .connected:
-            "Runtime service is available; no model is loaded."
-        case .starting, .modelLoading, .restarting:
-            "Runtime is working."
-        case .cancelling:
-            "Generation is cancelling."
-        case .disconnected:
-            "Runtime service is unavailable."
-        case .failed:
-            "Runtime needs attention."
+        // Refresh on appear, then poll every 10 seconds while visible; the task is
+        // cancelled automatically when the tab goes away.
+        .task {
+            while !Task.isCancelled {
+                await environment.refreshRuntimeStatus()
+                try? await Task.sleep(for: .seconds(10))
+            }
         }
     }
 
@@ -78,19 +50,11 @@ struct DiagnosticsView: View {
         case .modelUnloaded, .connected:
             "Load or assign a model from the Models tab before running model-backed tasks."
         case .disconnected:
-            "Refresh runtime status or relaunch the app if the service does not reconnect."
+            "The runtime service is unavailable; relaunch the app if it does not reconnect."
         case .failed:
-            "Review the runtime message above, then refresh status after correcting the issue."
+            "Review the runtime message above and correct the issue — status updates automatically."
         default:
             "No action needed."
-        }
-    }
-
-    private func refresh() {
-        isRefreshing = true
-        Task {
-            await environment.refreshRuntimeStatus()
-            isRefreshing = false
         }
     }
 }

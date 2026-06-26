@@ -103,6 +103,57 @@ final class ScratchPadAttachmentTests: XCTestCase {
     }
 
     @MainActor
+    func testAddEntryWithAttachmentTiesFileToTheNote() async throws {
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: "Reardon v. VyStar")
+        let controller = ScratchPadController(store: store)
+        controller.load()
+        let url = try tempFile("opp.txt", "Opposition draft.")
+        let ok = await controller.addEntry("Drafted opposition for @VyStar", attachmentURLs: [url])
+        XCTAssertTrue(ok)
+        XCTAssertEqual(controller.entries.count, 1)
+        let entryID = try XCTUnwrap(controller.entries.first?.id)
+        // Recorded inline with the note (not as a day-level/unfiled attachment)…
+        XCTAssertEqual(controller.attachments(forEntry: entryID).count, 1)
+        XCTAssertTrue(controller.unfiledAttachments.isEmpty)
+        // …and inheriting the note's own @matter.
+        XCTAssertEqual(controller.attachments(forEntry: entryID).first?.matterID, matter.id)
+    }
+
+    @MainActor
+    func testBareFileDropCreatesAMinimalNote() async throws {
+        let store = try SupraStore.inMemory()
+        let controller = ScratchPadController(store: store)
+        controller.load()
+        let url = try tempFile("evidence.txt", "Some evidence.")
+        let ok = await controller.addEntry("", attachmentURLs: [url])
+        XCTAssertTrue(ok)
+        XCTAssertEqual(controller.entries.count, 1, "a bare drop still creates a note so the file is tied to one")
+        XCTAssertTrue(controller.entries.first?.text.contains("evidence.txt") ?? false)
+        let entryID = try XCTUnwrap(controller.entries.first?.id)
+        XCTAssertEqual(controller.attachments(forEntry: entryID).count, 1)
+    }
+
+    @MainActor
+    func testDeletingEntryDeletesInlineAttachments() async throws {
+        let store = try SupraStore.inMemory()
+        let controller = ScratchPadController(store: store)
+        controller.load()
+        let url = try tempFile("evidence.txt", "Some evidence.")
+        let ok = await controller.addEntry("Attached evidence for review", attachmentURLs: [url])
+        XCTAssertTrue(ok)
+        let entryID = try XCTUnwrap(controller.entries.first?.id)
+        XCTAssertEqual(controller.attachments(forEntry: entryID).count, 1)
+
+        controller.deleteEntry(id: entryID)
+
+        XCTAssertTrue(controller.entries.isEmpty)
+        XCTAssertTrue(controller.attachments.isEmpty)
+        let dayID = try XCTUnwrap(controller.currentDay?.id)
+        XCTAssertTrue(try store.scratchPad.attachments(dayID: dayID).isEmpty)
+    }
+
+    @MainActor
     func testControllerSurfacesMsgError() async throws {
         let store = try SupraStore.inMemory()
         let controller = ScratchPadController(store: store)

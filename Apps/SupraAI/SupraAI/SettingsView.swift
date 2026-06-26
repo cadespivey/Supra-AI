@@ -8,7 +8,6 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @ObservedObject var settings: SettingsController
     @ObservedObject var profile: AssistantProfileController
-    @ObservedObject var documentSetup: DocumentIntelligenceSetupController
     @ObservedObject var update: UpdateController
     @ObservedObject var billing: BillingSettingsController
     @State private var courtListenerToken = ""
@@ -16,8 +15,6 @@ struct SettingsView: View {
     var body: some View {
         Form {
             AssistantProfileSection(profile: profile)
-
-            DocumentIntelligenceSection(setup: documentSetup)
 
             ScratchPadBillingSection(billing: billing)
 
@@ -145,6 +142,14 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        // Larger, bolder section headers — consistent with the Models tab.
+        .headerProminence(.increased)
+        // A clearly-bordered box for every single-line field, so they're easy to
+        // identify (cascades to all TextField/SecureField descendants; MultilineField
+        // has its own border). Left-align the contents so text and spaces flow with
+        // typing instead of the grouped form's default right alignment.
+        .textFieldStyle(.roundedBorder)
+        .multilineTextAlignment(.leading)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -220,8 +225,7 @@ private struct ScratchPadBillingSection: View {
                 Text("Global billing instructions").font(.caption).foregroundStyle(.secondary)
                 MultilineField(
                     placeholder: "e.g. No block billing; spell out abbreviations on first use; cap intra-office conferences",
-                    text: $billing.globalInstructions,
-                    minHeight: 120
+                    text: $billing.globalInstructions
                 )
             }
             Picker("Narrative punctuation", selection: $billing.narrativeTerminal) {
@@ -271,9 +275,9 @@ private struct ScratchPadBillingSection: View {
         }
 
         Section {
-            TextField("Timekeeper ID", text: $billing.timekeeperID, prompt: Text("e.g. TK-1001"))
-            TextField("Timekeeper name", text: $billing.timekeeperName, prompt: Text("e.g. C. Spivey"))
-            TextField("Classification", text: $billing.timekeeperClassification, prompt: Text("e.g. PARTNER, ASSOCIATE, PARALEGAL"))
+            LabeledTextField(label: "Timekeeper ID", text: $billing.timekeeperID, prompt: "e.g. TK-1001")
+            LabeledTextField(label: "Timekeeper name", text: $billing.timekeeperName, prompt: "e.g. C. Spivey")
+            LabeledTextField(label: "Classification", text: $billing.timekeeperClassification, prompt: "e.g. PARTNER, ASSOCIATE, PARALEGAL")
             HStack {
                 Text("Default rate")
                 Spacer()
@@ -284,11 +288,145 @@ private struct ScratchPadBillingSection: View {
                     .textFieldStyle(.roundedBorder)
                 Text("/ hr").foregroundStyle(.secondary)
             }
-            TextField("Firm ID (LAW_FIRM_ID)", text: $billing.lawFirmID, prompt: Text("e.g. 98-7654321"))
+            LabeledTextField(label: "Firm ID (LAW_FIRM_ID)", text: $billing.lawFirmID, prompt: "e.g. 98-7654321")
         } header: {
             Text("Timekeeper & Firm")
         } footer: {
             Text("Populates the timekeeper and firm fields on every fee line. LEDES export is blocked until the rate, timekeeper ID, and firm ID are set.")
+        }
+    }
+}
+
+/// A captioned, full-width, left-aligned bordered single-line field — the unified
+/// style for Settings text entry. A bare `TextField` row in a grouped form is
+/// right-aligned and reads as an unlabeled value; this keeps the label visible (like
+/// the Writing Style / Citations fields) and the text flowing naturally from the left.
+private struct LabeledTextField: View {
+    let label: String
+    @Binding var text: String
+    var prompt: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            LeadingTextField(text: $text, placeholder: prompt ?? "")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(nsColor: .separatorColor)))
+        }
+    }
+}
+
+/// An AppKit-backed single-line text field that stays LEFT-aligned even inside a
+/// grouped `Form`, where SwiftUI's `TextField` is unavoidably forced to trailing
+/// alignment. Borderless/transparent so the SwiftUI wrapper draws the box.
+private struct LeadingTextField: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(string: text)
+        field.alignment = .left
+        field.placeholderString = placeholder
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .preferredFont(forTextStyle: .body)
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.usesSingleLineMode = true
+        field.delegate = context.coordinator
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        if nsView.stringValue != text { nsView.stringValue = text }
+        nsView.placeholderString = placeholder
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        private let text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            text.wrappedValue = field.stringValue
+        }
+    }
+}
+
+/// Editor for the attorney's bar admissions (multi-jurisdiction). Each row is a
+/// jurisdiction + bar number; one is marked primary (★). At draft time the admission
+/// matching a filing's court prints on its signature block, falling back to primary.
+private struct BarLicensesEditor: View {
+    @Binding var profile: AssistantProfile
+
+    private func isPrimary(_ license: AssistantProfile.BarLicense) -> Bool {
+        if !profile.primaryBarLicenseID.isEmpty {
+            return profile.primaryBarLicenseID == license.id
+        }
+        return profile.barLicenses.first?.id == license.id
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach($profile.barLicenses) { $license in
+                HStack(spacing: 8) {
+                    Picker("Jurisdiction", selection: $license.jurisdictionID) {
+                        Text("Select jurisdiction…").tag("")
+                        ForEach(BarJurisdictionCatalog.all) { jurisdiction in
+                            Text(jurisdiction.displayName).tag(jurisdiction.id)
+                        }
+                        // Preserve an unlisted/custom value so it isn't lost.
+                        if !license.jurisdictionID.isEmpty,
+                           BarJurisdictionCatalog.jurisdiction(id: license.jurisdictionID) == nil {
+                            Text(license.jurisdictionID).tag(license.jurisdictionID)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 210)
+                    LeadingTextField(text: $license.barNumber, placeholder: "Bar number")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(nsColor: .separatorColor)))
+                    Button {
+                        profile.primaryBarLicenseID = license.id
+                        profile.barNumber = ""
+                    } label: {
+                        Image(systemName: isPrimary(license) ? "star.fill" : "star")
+                            .foregroundStyle(isPrimary(license) ? Color.accentColor : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Mark as primary for supported drafting paths")
+                    Button {
+                        let removedPrimary = profile.primaryBarLicenseID == license.id
+                        profile.barLicenses.removeAll { $0.id == license.id }
+                        if removedPrimary || !profile.barLicenses.contains(where: { $0.id == profile.primaryBarLicenseID }) {
+                            profile.primaryBarLicenseID = profile.barLicenses.first?.id ?? ""
+                        }
+                        profile.barNumber = ""
+                    } label: {
+                        Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove this admission")
+                }
+            }
+            Button {
+                let license = AssistantProfile.BarLicense(jurisdictionID: "", barNumber: "")
+                profile.barLicenses.append(license)
+                if profile.primaryBarLicenseID.isEmpty { profile.primaryBarLicenseID = license.id }
+                profile.barNumber = ""
+            } label: {
+                Label("Add bar admission", systemImage: "plus")
+            }
+            .controlSize(.small)
         }
     }
 }
@@ -326,35 +464,30 @@ private struct AssistantProfileSection: View {
 
     var body: some View {
         Section {
-            Text("These details shape how the assistant writes for you. Everything is optional — fill in what's useful and update it anytime.")
+            Text("Who you are and your firm details. This shapes how the assistant writes for you and fills the signature block and letterhead of documents you draft. Everything is optional — blank drafting fields are asked for rather than guessed.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextField("Full name", text: $profile.profile.fullName)
-            TextField("Role or title", text: $profile.profile.role, prompt: Text("e.g. Partner, Associate, Paralegal"))
-            TextField("Firm or organization", text: $profile.profile.organization)
-            TextField("Jurisdictions", text: $profile.profile.jurisdictions, prompt: Text("e.g. California state and the Ninth Circuit"))
-            TextField("Practice areas", text: $profile.profile.practiceAreas, prompt: Text("e.g. Commercial litigation, employment"))
-        } header: {
-            Text("Assistant Profile")
-        } footer: {
-            Text("Tells the assistant who it's helping and the law you work in, so its answers fit your practice.")
-        }
+            LabeledTextField(label: "Full name", text: $profile.profile.fullName)
+            LabeledTextField(label: "Role or title", text: $profile.profile.role, prompt: "e.g. Partner, Associate, Paralegal")
+            LabeledTextField(label: "Firm or organization", text: $profile.profile.organization)
+            LabeledTextField(label: "Jurisdictions", text: $profile.profile.jurisdictions, prompt: "e.g. California state and the Ninth Circuit")
+            LabeledTextField(label: "Practice areas", text: $profile.profile.practiceAreas, prompt: "e.g. Commercial litigation, employment")
 
-        Section {
-            Text("Used only to fill the signature block and letterhead of documents you draft in chat. Nothing is invented — if these are blank, drafting asks you to complete them rather than guessing.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            TextField("Florida Bar number", text: $profile.profile.barNumber, prompt: Text("e.g. 100847"))
-            TextField("Office street", text: $profile.profile.officeStreet, prompt: Text("e.g. 200 West Forsyth Street"))
-            TextField("Suite / floor (optional)", text: $profile.profile.officeSuite, prompt: Text("e.g. Suite 1400"))
-            HStack {
-                TextField("City", text: $profile.profile.officeCity)
-                TextField("State", text: $profile.profile.officeState)
-                TextField("ZIP", text: $profile.profile.officeZip)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Bar admissions").font(.caption).foregroundStyle(.secondary)
+                BarLicensesEditor(profile: $profile.profile)
             }
-            TextField("Telephone", text: $profile.profile.officePhone, prompt: Text("e.g. (904) 555-0142"))
-            TextField("Facsimile (optional)", text: $profile.profile.officeFax)
-            TextField("Primary service e-mail", text: $profile.profile.primaryEmail, prompt: Text("e.g. you@firm.com"))
+
+            LabeledTextField(label: "Office street", text: $profile.profile.officeStreet, prompt: "e.g. 200 West Forsyth Street")
+            LabeledTextField(label: "Suite / floor (optional)", text: $profile.profile.officeSuite, prompt: "e.g. Suite 1400")
+            HStack(alignment: .bottom, spacing: 8) {
+                LabeledTextField(label: "City", text: $profile.profile.officeCity)
+                LabeledTextField(label: "State", text: $profile.profile.officeState).frame(width: 72)
+                LabeledTextField(label: "ZIP", text: $profile.profile.officeZip).frame(width: 96)
+            }
+            LabeledTextField(label: "Telephone", text: $profile.profile.officePhone, prompt: "e.g. (904) 555-0142")
+            LabeledTextField(label: "Facsimile (optional)", text: $profile.profile.officeFax)
+            LabeledTextField(label: "Primary service e-mail", text: $profile.profile.primaryEmail, prompt: "e.g. you@firm.com")
             VStack(alignment: .leading, spacing: 4) {
                 Text("Secondary service e-mails (one per line)").font(.caption).foregroundStyle(.secondary)
                 MultilineField(
@@ -363,9 +496,9 @@ private struct AssistantProfileSection: View {
                 )
             }
         } header: {
-            Text("Firm identity for drafting")
+            Text("Profile & Firm Identity")
         } footer: {
-            Text("Florida service designations (Fla. R. Jud. Admin. 2.516) and the signature block on court filings draw from these fields.")
+            Text("Shapes the assistant's writing and fills signature blocks and letterhead. Notice of Appearance drafting is currently Florida-only and uses Florida service designations (Fla. R. Jud. Admin. 2.516); when several admissions are saved, the Florida admission prints on that filing.")
         }
 
         Section {
@@ -427,8 +560,7 @@ private struct AssistantProfileSection: View {
         Section {
             MultilineField(
                 placeholder: "e.g. Flag missing facts; caveat firm conclusions; prefer primary sources",
-                text: $profile.profile.additionalInstructions,
-                minHeight: 88
+                text: $profile.profile.additionalInstructions
             )
         } header: {
             Text("Other Instructions")
@@ -504,115 +636,20 @@ private struct AssistantProfileSection: View {
     }
 }
 
-/// Document Intelligence setup (Milestone 3 §2): chat-model readiness, embedding
-/// model selection/test-load, toolchain/OCR checks, storage init, and
-/// notifications. Import is blocked until this is complete.
-private struct DocumentIntelligenceSection: View {
-    @ObservedObject var setup: DocumentIntelligenceSetupController
-
-    var body: some View {
-        Section {
-            HStack {
-                Image(systemName: setup.isComplete ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(setup.isComplete ? .green : .orange)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(setup.isComplete ? "Setup complete — document import is enabled." : "Setup required before importing documents.")
-                        .font(.callout.weight(.medium))
-                    if let reason = setup.settings.setupInvalidatedReason {
-                        Text("Needs review: \(reason)").font(.caption).foregroundStyle(.orange)
-                    }
-                }
-                Spacer()
-                if setup.isBusy { ProgressView().controlSize(.small) }
-            }
-
-            stepRow(
-                "Runtime text model loaded",
-                done: setup.chatModelReady,
-                detail: setup.chatModelReady ? "A runtime model has loaded successfully." : "Load a registered model in the Models tab."
-            )
-            stepRow(
-                "Embedding model",
-                done: setup.selectedEmbeddingModel != nil && setup.embeddingTestPassed,
-                detail: setup.selectedEmbeddingModel.map { "\($0.displayName) — manage it in the Models tab." } ?? "Download, select, and test-load one in the Models tab."
-            )
-            stepRow(
-                "Extraction / OCR toolchain",
-                done: setup.toolchain?.meetsMinimumForSetup ?? false,
-                detail: setup.toolchain.map { "OCR languages: \($0.ocrLanguages.count)" } ?? "Not checked yet."
-            )
-            stepRow("Document storage initialized", done: setup.storageInitialized, detail: "Creates app-managed storage.") {
-                if !setup.storageInitialized {
-                    Button("Initialize") { setup.initializeStorage() }
-                }
-            }
-            stepRow(
-                "Completion notifications",
-                done: setup.notificationStatus == .authorized,
-                detail: "Optional. Notifies when long imports finish."
-            ) {
-                if setup.notificationStatus != .authorized {
-                    Button("Allow") { Task { await setup.requestNotificationPermission() } }
-                }
-            }
-
-            Stepper(
-                "Auto-purge trash after \(setup.autoPurgeDays == 0 ? "never" : "\(setup.autoPurgeDays) days")",
-                value: Binding(get: { setup.autoPurgeDays }, set: { setup.updateAutoPurgeDays($0) }),
-                in: 0...365,
-                step: 5
-            )
-
-            HStack {
-                Button("Re-check") { Task { await setup.refreshAll() } }
-                Spacer()
-                Button("Mark Setup Complete") { _ = setup.completeSetup() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!setup.canCompleteSetup)
-            }
-            if let message = setup.message {
-                Text(message).font(.caption).foregroundStyle(.orange)
-            }
-        } header: {
-            Text("Document Intelligence")
-        } footer: {
-            if !setup.outstandingSteps.isEmpty {
-                Text("Remaining: " + setup.outstandingSteps.joined(separator: " "))
-            }
-        }
-    }
-
-    private func stepRow(
-        _ title: String,
-        done: Bool,
-        detail: String,
-        @ViewBuilder trailing: () -> some View = { EmptyView() }
-    ) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            Image(systemName: done ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(done ? .green : .secondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                Text(detail).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            trailing()
-        }
-    }
-}
-
-/// Guided embedding-model setup flow, presented as a linear sequence: 1) download
-/// a model, 2) select it for use, 3) test-load it. Shown in the Models tab.
+/// Guided embedding-model setup flow: 1) download a curated or custom model, then
+/// 2) select it for use. Selecting (or finishing a download) auto-verifies the
+/// model by loading it into the runtime — no manual test-load. Shown in the Models tab.
 struct EmbeddingModelSetupView: View {
     @ObservedObject var setup: DocumentIntelligenceSetupController
     @ObservedObject var downloader: EmbeddingModelDownloadController
     @State private var downloadSelection = ""
+    @State private var customRepoID = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             step(number: 1, title: "Download a model") {
                 Picker("Embedding model to download", selection: $downloadSelection) {
-                    Text("Choose a model…").tag("")
+                    Text("Choose a curated model…").tag("")
                     ForEach(EmbeddingModelCatalog.curated) { model in
                         Text("\(model.displayName) · \(model.dimension)d · ~\(model.approxSizeMB) MB").tag(model.repoID)
                     }
@@ -624,13 +661,19 @@ struct EmbeddingModelSetupView: View {
                         downloader.downloadCatalogModel(model)
                     }
                 }
+                HStack {
+                    TextField("or a custom repo ID, e.g. mlx-community/Qwen3-Embedding-4B-4bit-DWQ", text: $customRepoID)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Download") { downloadCustom() }
+                        .disabled(downloader.isBusy || customRepoID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
                 downloadStatus
             }
 
             step(number: 2, title: "Select for use", enabled: !setup.availableEmbeddingModels.isEmpty) {
                 if setup.availableEmbeddingModels.isEmpty {
                     Text("No embedding models downloaded yet.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.callout).foregroundStyle(.secondary)
                 } else {
                     Picker("Active embedding model", selection: activeSelection) {
                         ForEach(setup.availableEmbeddingModels) { model in
@@ -638,40 +681,57 @@ struct EmbeddingModelSetupView: View {
                         }
                     }
                     .labelsHidden()
-                }
-            }
-
-            step(number: 3, title: "Test load", enabled: setup.selectedEmbeddingModel != nil) {
-                if let selected = setup.selectedEmbeddingModel {
-                    HStack(alignment: .firstTextBaseline) {
-                        Image(systemName: setup.embeddingTestPassed ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(setup.embeddingTestPassed ? .green : .secondary)
-                        Text(setup.embeddingTestPassed
-                             ? "\(selected.displayName) loaded successfully."
-                             : "Test-load \(selected.displayName) to confirm it works.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Test Load") { Task { await setup.testLoadEmbeddingModel() } }
-                            .controlSize(.small)
-                            .disabled(setup.isBusy)
-                    }
-                } else {
-                    Text("Download and select a model first.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    verifyStatus
                 }
             }
 
             if let message = setup.message {
-                Text(message).font(.caption).foregroundStyle(.orange)
+                Text(message).font(.callout).foregroundStyle(.orange)
             }
+        }
+    }
+
+    /// Inline verification status for the selected model: verifying / ready (with the
+    /// confirmed dimension) / failed. Replaces the old manual "Test Load" step.
+    @ViewBuilder private var verifyStatus: some View {
+        if let selected = setup.selectedEmbeddingModel {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if setup.embeddingVerifyInFlight {
+                    ProgressView().controlSize(.small)
+                    Text("Verifying \(selected.displayName)…")
+                } else if setup.embeddingTestPassed {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text("Ready — \(selected.displayName) (\(selected.dimension)-d)")
+                } else {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text("\(selected.displayName) didn't load. Try another model.")
+                }
+            }
+            .font(.callout).foregroundStyle(.secondary)
         }
     }
 
     private var activeSelection: Binding<String> {
         Binding(
             get: { setup.selectedEmbeddingModel?.id ?? "" },
-            set: { setup.selectEmbeddingModel(id: $0) }
+            set: { newID in Task { await setup.selectAndVerifyEmbeddingModel(id: newID) } }
         )
+    }
+
+    /// Starts a custom Hugging Face embedding download. The dimension is unknown up
+    /// front (registered as 0) and discovered when the model auto-verifies.
+    private func downloadCustom() {
+        let trimmed = customRepoID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let name = String(trimmed.split(separator: "/").last ?? Substring(trimmed))
+        downloader.download(
+            repoID: trimmed,
+            displayName: name,
+            dimension: 0,
+            runtimeFamily: "",
+            selectAfterDownload: true
+        )
+        customRepoID = ""
     }
 
     @ViewBuilder
@@ -681,19 +741,19 @@ struct EmbeddingModelSetupView: View {
         enabled: Bool = true,
         @ViewBuilder content: () -> some View
     ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
                 Text("\(number)")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 16, height: 16)
-                    .background(enabled ? Color.accentColor : Color.secondary, in: Circle())
-                Text(title)
                     .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+                    .background(Color.secondary.opacity(0.15), in: Circle())
+                Text(title)
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(enabled ? .primary : .secondary)
             }
             content()
-                .padding(.leading, 22)
+                .padding(.leading, 26)
         }
         .opacity(enabled ? 1 : 0.6)
     }
@@ -701,16 +761,16 @@ struct EmbeddingModelSetupView: View {
     @ViewBuilder private var downloadStatus: some View {
         switch downloader.state {
         case .preparing(let repo):
-            Text("Preparing \(repo)…").font(.caption).foregroundStyle(.secondary)
+            Text("Preparing \(repo)…").font(.callout).foregroundStyle(.secondary)
         case let .downloading(_, completed, total, file):
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 ProgressView(value: Double(completed), total: Double(max(total, 1)))
-                Text("\(completed)/\(total) — \(file)").font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text("\(completed)/\(total) files — \(file)").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
         case let .finished(_, name):
-            Text("Downloaded \(name). Now select it and test-load.").font(.caption).foregroundStyle(.green)
+            Text("Downloaded \(name). Verifying it below…").font(.callout).foregroundStyle(.green)
         case let .failed(message):
-            Text(message).font(.caption).foregroundStyle(.red)
+            Text(message).font(.callout).foregroundStyle(.red)
         case .idle:
             EmptyView()
         }

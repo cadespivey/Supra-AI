@@ -44,6 +44,77 @@ final class ModelDownloadControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testResumeSkipsAlreadyDownloadedFiles() async throws {
+        let store = try makeStore()
+        let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
+        let modelsDir = tempDir()
+        let repo = "mlx-community/Test-4bit"
+        let modelDir = modelsDir.appendingPathComponent(ManagedModelStorage.folderName(forRepoID: repo), isDirectory: true)
+        // Simulate a prior interrupted run that already fetched one file.
+        try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+        try Data("done".utf8).write(to: modelDir.appendingPathComponent("config.json"))
+
+        let fetcher = TrackingFetcher(files: ["config.json", "model.safetensors", "tokenizer.json"])
+        let controller = ModelDownloadController(
+            store: store, modelLibrary: library, fetcher: fetcher, modelsDirectory: modelsDir
+        )
+        await controller.performDownload(repoID: repo, displayName: "Test")
+
+        guard case .finished = controller.state else { return XCTFail("expected finished, got \(controller.state)") }
+        // The already-present file is skipped; only the two missing files are fetched.
+        XCTAssertEqual(fetcher.downloadedFiles().sorted(), ["model.safetensors", "tokenizer.json"])
+        for file in ["config.json", "model.safetensors", "tokenizer.json"] {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: modelDir.appendingPathComponent(file).path), "missing \(file)")
+        }
+    }
+
+    @MainActor
+    func testResumeRedownloadsZeroByteCheckpointFiles() async throws {
+        let store = try makeStore()
+        let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
+        let modelsDir = tempDir()
+        let repo = "mlx-community/Test-4bit"
+        let modelDir = modelsDir.appendingPathComponent(ManagedModelStorage.folderName(forRepoID: repo), isDirectory: true)
+        try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+        try Data().write(to: modelDir.appendingPathComponent("config.json"))
+
+        let fetcher = TrackingFetcher(files: ["config.json", "model.safetensors"])
+        let controller = ModelDownloadController(
+            store: store, modelLibrary: library, fetcher: fetcher, modelsDirectory: modelsDir
+        )
+        await controller.performDownload(repoID: repo, displayName: "Test")
+
+        guard case .finished = controller.state else { return XCTFail("expected finished, got \(controller.state)") }
+        XCTAssertTrue(fetcher.downloadedFiles().contains("config.json"), "zero-byte checkpoint should not be trusted")
+        XCTAssertGreaterThan(
+            (try FileManager.default.attributesOfItem(atPath: modelDir.appendingPathComponent("config.json").path)[.size] as? NSNumber)?.intValue ?? 0,
+            0
+        )
+    }
+
+    @MainActor
+    func testParallelDownloadWritesAllFiles() async throws {
+        let store = try makeStore()
+        let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
+        let modelsDir = tempDir()
+        let repo = "mlx-community/Multi-4bit"
+        // More files than the concurrency cap, to exercise the bounded task group.
+        let files = (0..<12).map { "shard-\($0).safetensors" } + ["config.json", "tokenizer.json"]
+        let fetcher = TrackingFetcher(files: files)
+        let controller = ModelDownloadController(
+            store: store, modelLibrary: library, fetcher: fetcher, modelsDirectory: modelsDir
+        )
+        await controller.performDownload(repoID: repo, displayName: "Multi")
+
+        guard case .finished = controller.state else { return XCTFail("expected finished, got \(controller.state)") }
+        XCTAssertEqual(Set(fetcher.downloadedFiles()), Set(files), "every file should be downloaded exactly once")
+        let modelDir = modelsDir.appendingPathComponent(ManagedModelStorage.folderName(forRepoID: repo))
+        for file in files {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: modelDir.appendingPathComponent(file).path), "missing \(file)")
+        }
+    }
+
+    @MainActor
     func testListFailureSurfacesErrorAndRegistersNothing() async throws {
         let store = try makeStore()
         let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
@@ -327,5 +398,31 @@ private final class StubFetcher: ModelRepositoryFetching, @unchecked Sendable {
 
     func fetchConfigJSON(repoID: String) async throws -> Data? {
         configJSON
+    }
+}
+
+/// Like `StubFetcher` but records which files it was asked to download (thread-safe,
+/// since downloads now run concurrently), to assert checkpoint/resume + parallelism.
+private final class TrackingFetcher: ModelRepositoryFetching, @unchecked Sendable {
+    private let files: [String]
+    private let lock = NSLock()
+    private var downloaded: [String] = []
+
+    init(files: [String]) { self.files = files }
+
+    func listModelFiles(repoID: String) async throws -> [String] { files }
+
+    func downloadFile(repoID: String, file: String, to destination: URL) async throws {
+        lock.withLock { downloaded.append(file) }
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("stub-\(file)".utf8).write(to: destination)
+    }
+
+    func fetchConfigJSON(repoID: String) async throws -> Data? { nil }
+
+    func downloadedFiles() -> [String] {
+        lock.withLock { downloaded }
     }
 }

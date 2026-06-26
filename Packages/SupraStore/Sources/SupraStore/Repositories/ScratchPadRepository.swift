@@ -118,6 +118,42 @@ public final class ScratchPadRepository: @unchecked Sendable {
         }
     }
 
+    /// A ScratchPad entry matched by a content/tag search, carrying its day's date.
+    public struct EntryHit: Sendable, Equatable {
+        public let entryID: String
+        public let day: String
+        public let text: String
+        public let mentions: [String]
+        public let tags: [String]
+    }
+
+    /// Entries whose text contains `term` (case-insensitive), newest day first, joined
+    /// to their day date. Powers tag/content search; for an exact `#tag` the caller
+    /// post-filters on `tags`.
+    public func searchEntries(term: String, limit: Int = 200) throws -> [EntryHit] {
+        let escaped = term.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+        let like = "%\(escaped)%"
+        return try writer.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT e.id AS id, d.day AS day, e.text AS text, e.mentions_json AS mentions_json, e.tags_json AS tags_json
+                FROM scratch_pad_entries e
+                JOIN scratch_pad_days d ON d.id = e.day_id
+                WHERE e.text LIKE ? ESCAPE '\\'
+                ORDER BY d.day DESC, e.seq ASC
+                LIMIT ?
+                """, arguments: [like, limit])
+            return rows.map { row in
+                EntryHit(
+                    entryID: row["id"], day: row["day"], text: row["text"],
+                    mentions: ScratchPadJSON.decodeStrings(row["mentions_json"]),
+                    tags: ScratchPadJSON.decodeStrings(row["tags_json"])
+                )
+            }
+        }
+    }
+
     /// Distinct `#tags` across every day (first-seen casing preserved), for the
     /// `#` autocomplete — so tags from earlier days are suggested too, not just
     /// today's (spec §3).
@@ -180,6 +216,7 @@ public final class ScratchPadRepository: @unchecked Sendable {
     public func deleteEntry(id: String) throws {
         try writer.write { db in
             try Self.requireUnlocked(db, forEntryID: id)
+            try db.execute(sql: "DELETE FROM scratch_pad_attachments WHERE entry_id = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM scratch_pad_entries WHERE id = ?", arguments: [id])
         }
     }
