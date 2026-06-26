@@ -138,4 +138,26 @@ final class ModelRoutingTests: XCTestCase {
         XCTAssertEqual(router.routePrompt("Draft a friendly contract renewal email").route.mode, .generalQA)
         XCTAssertEqual(router.routePrompt("What is the rule under California contract law?").route.mode, .legalQA)
     }
+
+    func testSlashCommandCatalogIsRecognizedByRouter() {
+        let router = ModelRouter()
+        // Every command surfaced in the composer must actually parse as a command
+        // (so the menu never offers something the router would treat as plain text).
+        for entry in SlashCommandCatalog.all {
+            let routed = router.routePrompt("\(entry.command) some question")
+            XCTAssertEqual(routed.command, entry.command, "\(entry.command) should route as a command")
+            XCTAssertEqual(routed.prompt, "some question", "\(entry.command) should strip the command")
+        }
+        // The -hq variants escalate to the high-quality reasoning model.
+        XCTAssertEqual(router.routePrompt("/research-hq x").route.role, .legalReasoningHighQuality)
+    }
+
+    func testSlashCommandSuggestionsFilterByTypedPrefix() {
+        XCTAssertEqual(SlashCommandCatalog.suggestions(for: "/").count, SlashCommandCatalog.all.count)
+        let research = SlashCommandCatalog.suggestions(for: "/res").map(\.command)
+        XCTAssertEqual(research, ["/research", "/research-hq"])
+        // No suggestions once a space starts the prompt, or when not a slash command.
+        XCTAssertTrue(SlashCommandCatalog.suggestions(for: "/research foo").isEmpty)
+        XCTAssertTrue(SlashCommandCatalog.suggestions(for: "hello").isEmpty)
+    }
 }

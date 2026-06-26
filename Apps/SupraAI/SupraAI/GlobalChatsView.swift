@@ -472,11 +472,54 @@ struct GlobalChatsView: View {
         VStack(alignment: .leading, spacing: 6) {
             modelLoadCaption
             attachmentArea
+            slashCommandMenu
             inputBox
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 12)
+    }
+
+    /// A `/`-triggered command palette: when the message starts with a `/` token, list
+    /// the matching slash commands so they're discoverable. Picking one fills the
+    /// composer; the routing itself is handled by `ModelRouter` on send.
+    @ViewBuilder
+    private var slashCommandMenu: some View {
+        let matches = SlashCommandCatalog.suggestions(for: draft)
+        if !matches.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(matches) { command in
+                    Button { applySlashCommand(command) } label: {
+                        HStack(spacing: 10) {
+                            Text(command.command)
+                                .font(.callout.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                                .frame(minWidth: 104, alignment: .leading)
+                            Text(command.summary)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if command.id != matches.last?.id {
+                        Divider().opacity(0.35)
+                    }
+                }
+            }
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.2)))
+            .frame(maxWidth: 460, alignment: .leading)
+        }
+    }
+
+    private func applySlashCommand(_ command: SlashCommand) {
+        draft = command.command + " "
+        inputFocused = true
     }
 
     /// A pill-styled entry matching the ScratchPad composer: a single rounded-border
@@ -485,7 +528,7 @@ struct GlobalChatsView: View {
     private var inputBox: some View {
         HStack(alignment: .bottom, spacing: 8) {
             attachButton
-            TextField("Message", text: $draft, axis: .vertical)
+            TextField("Message — type / for commands", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
                 .focused($inputFocused)
