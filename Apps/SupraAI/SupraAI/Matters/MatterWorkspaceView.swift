@@ -14,6 +14,7 @@ struct MatterWorkspaceView: View {
     @State private var tab: MatterTab = .chat
     @State private var showEditor = false
     @State private var confirmingDelete = false
+    @State private var showDraftSheet = false
 
     enum MatterTab: String, CaseIterable, Identifiable {
         case chat = "Chat"
@@ -45,6 +46,11 @@ struct MatterWorkspaceView: View {
                 try? controller.updateMatter(id: matter.id, draft: draft)
             }
         }
+        .sheet(isPresented: $showDraftSheet) {
+            if let drafting = controller.draftingController {
+                MatterDraftingView(controller: drafting, matterID: matter.id, matterName: matter.name)
+            }
+        }
         .confirmationDialog(
             "Delete “\(matter.name)”?",
             isPresented: $confirmingDelete,
@@ -71,6 +77,9 @@ struct MatterWorkspaceView: View {
                 }
             }
             Spacer()
+            if controller.draftingController != nil {
+                Button { showDraftSheet = true } label: { Label("Draft", systemImage: "doc.badge.plus") }
+            }
             Button { showEditor = true } label: { Label("Edit", systemImage: "pencil") }
             Button(role: .destructive) { confirmingDelete = true } label: {
                 Label("Delete", systemImage: "trash")
