@@ -59,6 +59,9 @@ Packages/
 ├─ SupraCore               Domain types, IDs, model routing, generation options, reasoning split
 ├─ SupraStore              GRDB persistence: migrations, records, repositories
 ├─ SupraSessions           App-facing controllers (chat, research, documents, Q&A, outputs, models, jobs, ScratchPad/billing)
+├─ SupraDraftingCore       Shared drafting types (kinds, slots, house style sheet, document model, gates)
+├─ SupraDrafting           Drafting pipeline: slot resolution, generation/authority firewall, verification, pre-file gate
+├─ SupraExports            Local OOXML renderer: court (courtFL) + letterhead shells → .docx (no Office dependency)
 ├─ SupraResearch           CourtListener client + DTOs + legal citation handling/ranking
 ├─ SupraDocuments          Extraction, OCR, chunking, retrieval, grounding, export
 ├─ SupraNetworking         Authorized HTTP client, default-deny network policy, rate limiting, Keychain
