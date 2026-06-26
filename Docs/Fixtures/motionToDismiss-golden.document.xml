@@ -1,0 +1,758 @@
+<?xml version="1.0" ?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:w16cex="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid" xmlns:w16="http://schemas.microsoft.com/office/word/2018/wordml" xmlns:w16sdtdh="http://schemas.microsoft.com/office/word/2020/wordml/sdtdatahash" xmlns:w16sdtfl="http://schemas.microsoft.com/office/word/2024/wordml/sdtformatlock" xmlns:w16se="http://schemas.microsoft.com/office/word/2015/wordml/symex" xmlns:w16du="http://schemas.microsoft.com/office/word/2023/wordml/word16du" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" mc:Ignorable="w14 w15 w16se w16cid w16 w16cex w16sdtdh w16sdtfl w16du wp14">
+  <w:body>
+    <w:p>
+      <w:pPr>
+        <w:jc w:val="center"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:jc w:val="center"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>IN AND FOR DUVAL COUNTY, FLORIDA</w:t>
+      </w:r>
+    </w:p>
+    <w:p/>
+    <w:tbl>
+      <w:tblPr>
+        <w:tblW w:w="9360" w:type="dxa"/>
+        <w:tblInd w:w="10" w:type="dxa"/>
+        <w:tblBorders>
+          <w:top w:val="nil"/>
+          <w:left w:val="nil"/>
+          <w:bottom w:val="nil"/>
+          <w:right w:val="nil"/>
+          <w:insideH w:val="nil"/>
+          <w:insideV w:val="nil"/>
+        </w:tblBorders>
+        <w:tblLayout w:type="fixed"/>
+        <w:tblCellMar>
+          <w:left w:w="10" w:type="dxa"/>
+          <w:right w:w="10" w:type="dxa"/>
+        </w:tblCellMar>
+        <w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="0" w:noVBand="0"/>
+      </w:tblPr>
+      <w:tblGrid>
+        <w:gridCol w:w="4680"/>
+        <w:gridCol w:w="4680"/>
+      </w:tblGrid>
+      <w:tr>
+        <w:tblPrEx>
+          <w:tblCellMar>
+            <w:top w:w="0" w:type="dxa"/>
+            <w:bottom w:w="0" w:type="dxa"/>
+          </w:tblCellMar>
+        </w:tblPrEx>
+        <w:trPr>
+          <w:trHeight w:val="3042"/>
+        </w:trPr>
+        <w:tc>
+          <w:tcPr>
+            <w:tcW w:w="4680" w:type="dxa"/>
+            <w:tcBorders>
+              <w:top w:val="nil"/>
+              <w:left w:val="nil"/>
+              <w:bottom w:val="nil"/>
+              <w:right w:val="nil"/>
+            </w:tcBorders>
+          </w:tcPr>
+          <w:p>
+            <w:r>
+              <w:t>MERIDIAN CAPITAL PARTNERS, LLC,</w:t>
+            </w:r>
+          </w:p>
+          <w:p/>
+          <w:p>
+            <w:pPr>
+              <w:ind w:left="720"/>
+            </w:pPr>
+            <w:r>
+              <w:t>Plaintiff,</w:t>
+            </w:r>
+          </w:p>
+          <w:p/>
+          <w:p>
+            <w:r>
+              <w:t>v.</w:t>
+            </w:r>
+          </w:p>
+          <w:p/>
+          <w:p>
+            <w:r>
+              <w:t>ATLANTIC RIDGE HOLDINGS, INC.,</w:t>
+            </w:r>
+          </w:p>
+          <w:p/>
+          <w:p>
+            <w:pPr>
+              <w:ind w:left="720"/>
+            </w:pPr>
+            <w:r>
+              <w:t>Defendant.</w:t>
+            </w:r>
+          </w:p>
+          <w:p/>
+          <w:p>
+            <w:r>
+              <w:t>______________________________________/</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+        <w:tc>
+          <w:tcPr>
+            <w:tcW w:w="4680" w:type="dxa"/>
+            <w:tcBorders>
+              <w:top w:val="nil"/>
+              <w:left w:val="nil"/>
+              <w:bottom w:val="nil"/>
+              <w:right w:val="nil"/>
+            </w:tcBorders>
+          </w:tcPr>
+          <w:p>
+            <w:r>
+              <w:t>CASE NO.: 2026-CA-001847</w:t>
+            </w:r>
+          </w:p>
+          <w:p>
+            <w:r>
+              <w:t>DIVISION: CV-G</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:p/>
+    <w:p>
+      <w:pPr>
+        <w:jc w:val="center"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+          <w:caps/>
+          <w:u w:val="single"/>
+        </w:rPr>
+        <w:t>DEFENDANT ATLANTIC RIDGE HOLDINGS, INC.'S MOTION TO DISMISS PLAINTIFF'S COMPLAINT</w:t>
+      </w:r>
+    </w:p>
+    <w:p/>
+    <w:p>
+      <w:pPr>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:ind w:firstLine="720"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t>Defendant, Atlantic Ridge Holdings, Inc. (</w:t>
+      </w:r>
+      <w:r>
+        <w:t>“</w:t>
+      </w:r>
+      <w:r>
+        <w:t>Atlantic Ridge</w:t>
+      </w:r>
+      <w:r>
+        <w:t>”</w:t>
+      </w:r>
+      <w:r>
+        <w:t>), by and through undersigned counsel and pursuant to Florida Rule of Civil Procedure 1.140(b), moves to dismiss the Complaint filed by Plaintiff, Meridian Capital Partners, LLC (</w:t>
+      </w:r>
+      <w:r>
+        <w:t>“</w:t>
+      </w:r>
+      <w:r>
+        <w:t>Meridian</w:t>
+      </w:r>
+      <w:r>
+        <w:t>”</w:t>
+      </w:r>
+      <w:r>
+        <w:t>), and in support states as follows:</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:jc w:val="center"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>STATEMENT OF FACTS</w:t>
+      </w:r>
+    </w:p>
+    <w:p/>
+    <w:p>
+      <w:pPr>
+        <w:tabs>
+          <w:tab w:val="left" w:pos="720"/>
+        </w:tabs>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t>1.</w:t>
+      </w:r>
+      <w:r>
+        <w:tab/>
+        <w:t xml:space="preserve">On or about March 14, 2024, Meridian and Atlantic Ridge are alleged to have entered into a written agreement concerning the development of certain commercial real property located in Duval County, Florida (the </w:t>
+      </w:r>
+      <w:r>
+        <w:t>“</w:t>
+      </w:r>
+      <w:r>
+        <w:t>Agreement</w:t>
+      </w:r>
+      <w:r>
+        <w:t>”</w:t>
+      </w:r>
+      <w:r>
+        <w:t>).</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:tabs>
+          <w:tab w:val="left" w:pos="720"/>
+        </w:tabs>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t>2.</w:t>
+      </w:r>
+      <w:r>
+        <w:tab/>
+        <w:t>The Complaint does not attach a copy of the Agreement, nor does it identify the specific provision of the Agreement that Atlantic Ridge purportedly breached.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:tabs>
+          <w:tab w:val="left" w:pos="720"/>
+        </w:tabs>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t>3.</w:t>
+      </w:r>
+      <w:r>
+        <w:tab/>
+        <w:t>The Complaint alleges, in conclusory fashion, that Atlantic Ridge &quot;failed to perform its obligations&quot; under the Agreement.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:tabs>
+          <w:tab w:val="left" w:pos="720"/>
+        </w:tabs>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t>4.</w:t>
+      </w:r>
+      <w:r>
+        <w:tab/>
+        <w:t>Meridian filed its single-count Complaint on May 2, 2026, asserting a claim for breach of contract.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:tabs>
+          <w:tab w:val="left" w:pos="720"/>
+        </w:tabs>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t>5.</w:t>
+      </w:r>
+      <w:r>
+        <w:tab/>
+        <w:t>The Complaint incorporates by reference all preceding allegations into its sole count.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:jc w:val="center"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:lastRenderedPageBreak/>
+        <w:t>MEMORANDUM OF LAW</w:t>
+      </w:r>
+    </w:p>
+    <w:p/>
+    <w:p>
+      <w:pPr>
+        <w:tabs>
+          <w:tab w:val="left" w:pos="720"/>
+        </w:tabs>
+        <w:spacing w:after="240"/>
+        <w:ind w:left="720" w:hanging="720"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>I.</w:t>
+      </w:r>
+      <w:r>
+        <w:tab/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+          <w:caps/>
+        </w:rPr>
+        <w:t>THE COMPLAINT FAILS TO STATE A CAUSE OF ACTION FOR BREACH OF CONTRACT.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:ind w:firstLine="720"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t>To state a cause of action for breach of contract under Florida law, a plaintiff must allege (1) the existence of a valid contract, (2) a material breach, and (3) resulting damages. The Complaint satisfies none of these elements with the specificity Florida's pleading standard requires. See Fla. R. Civ. P. 1.110(b).</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:tabs>
+          <w:tab w:val="left" w:pos="1440"/>
+        </w:tabs>
+        <w:spacing w:after="240"/>
+        <w:ind w:left="1440" w:hanging="720"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>A.</w:t>
+      </w:r>
+      <w:r>
+        <w:tab/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>Meridian Fails to Allege the Essential Terms of a Valid Contract.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:ind w:firstLine="720"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t>A claim premised on a written instrument must set forth the contract's essential terms or attach the instrument itself. Fla. R. Civ. P. 1.130(a). The Complaint does neither, leaving Atlantic Ridge unable to frame a response.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:tabs>
+          <w:tab w:val="left" w:pos="2160"/>
+        </w:tabs>
+        <w:spacing w:after="240"/>
+        <w:ind w:left="2160" w:hanging="720"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>1.</w:t>
+      </w:r>
+      <w:r>
+        <w:tab/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>The Failure to Attach the Agreement Is Independently Fatal.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:ind w:firstLine="720"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t xml:space="preserve">Where a claim is based upon a written document, the pleader must attach it, and the omission alone warrants dismissal. </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:i/>
+          <w:iCs/>
+        </w:rPr>
+        <w:t>Calloway v. Tidewater Props., LLC</w:t>
+      </w:r>
+      <w:r>
+        <w:t>, 301 So. 3d 880, 883 (Fla. 1st DCA 2021).</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:tabs>
+          <w:tab w:val="left" w:pos="1440"/>
+        </w:tabs>
+        <w:spacing w:after="240"/>
+        <w:ind w:left="1440" w:hanging="720"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>B.</w:t>
+      </w:r>
+      <w:r>
+        <w:tab/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>Meridian Fails to Allege Any Breach by Atlantic Ridge.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:ind w:firstLine="720"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t>The Complaint’s bare assertion that Atlantic Ridge &quot;failed to perform&quot; is a legal conclusion unsupported by any well-pleaded fact identifying what obligation was breached or how.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:tabs>
+          <w:tab w:val="left" w:pos="720"/>
+        </w:tabs>
+        <w:spacing w:after="240"/>
+        <w:ind w:left="720" w:hanging="720"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>II.</w:t>
+      </w:r>
+      <w:r>
+        <w:tab/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+          <w:caps/>
+        </w:rPr>
+        <w:t>THE COMPLAINT IS AN IMPERMISSIBLE SHOTGUN PLEADING.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:ind w:firstLine="720"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t>By incorporating every preceding allegation into its sole count, the Complaint commingles factual recitations with legal conclusions and deprives Atlantic Ridge of fair notice of the claim against it.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:tabs>
+          <w:tab w:val="left" w:pos="720"/>
+        </w:tabs>
+        <w:spacing w:after="240"/>
+        <w:ind w:left="720" w:hanging="720"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t>III.</w:t>
+      </w:r>
+      <w:r>
+        <w:tab/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+          <w:caps/>
+        </w:rPr>
+        <w:t>CONCLUSION</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:spacing w:line="480" w:lineRule="auto"/>
+        <w:ind w:firstLine="720"/>
+        <w:jc w:val="both"/>
+      </w:pPr>
+      <w:r>
+        <w:t>WHEREFORE, Defendant, Atlantic Ridge Holdings, Inc., respectfully requests that this Court enter an order dismissing Plaintiff's Complaint, and granting such other and further relief as the Court deems just and proper.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:firstLine="720"/>
+      </w:pPr>
+      <w:r>
+        <w:t>Respectfully submitted: June 25, 2026</w:t>
+      </w:r>
+    </w:p>
+    <w:p/>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+          <w:caps/>
+        </w:rPr>
+        <w:t>HARWELL &amp; BRANCH, P.A.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:t xml:space="preserve">By: </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:i/>
+          <w:u w:val="single"/>
+        </w:rPr>
+        <w:t>/s/ Jordan A. Reyes</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:i/>
+          <w:u w:val="single"/>
+        </w:rPr>
+        <w:tab/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:i/>
+          <w:u w:val="single"/>
+        </w:rPr>
+        <w:tab/>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:t>Jordan A. Reyes</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:t>Florida Bar No. 100847</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:t>Harwell &amp; Branch, P.A.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:t>200 West Forsyth Street, Suite 1400</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:t>Jacksonville, Florida 32202</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:t>Telephone: (904) 555-0142</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:t>Facsimile: (904) 555-0143</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t xml:space="preserve">Primary and Secondary E-Mail: </w:t>
+      </w:r>
+      <w:proofErr w:type="spellStart"/>
+      <w:r>
+        <w:t>jreyes@harwellbranch.example</w:t>
+      </w:r>
+      <w:proofErr w:type="spellEnd"/>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:proofErr w:type="spellStart"/>
+      <w:r>
+        <w:t>litdocket@harwellbranch.example</w:t>
+      </w:r>
+      <w:proofErr w:type="spellEnd"/>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:i/>
+        </w:rPr>
+        <w:t>Attorneys for Defendant</w:t>
+      </w:r>
+    </w:p>
+    <w:p/>
+    <w:p>
+      <w:pPr>
+        <w:jc w:val="center"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+          <w:caps/>
+          <w:u w:val="single"/>
+        </w:rPr>
+        <w:t>CERTIFICATE OF SERVICE</w:t>
+      </w:r>
+    </w:p>
+    <w:p/>
+    <w:p>
+      <w:pPr>
+        <w:ind w:firstLine="720"/>
+      </w:pPr>
+      <w:r>
+        <w:t>I HEREBY CERTIFY that on June 25, 2026, I electronically filed the foregoing with the Clerk of Court using the Florida Courts E-Filing Portal, which will send a Notice of Electronic Filing to the following:</w:t>
+      </w:r>
+    </w:p>
+    <w:p/>
+    <w:p>
+      <w:r>
+        <w:t>Marcus T. Whitfield, Esq.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t>Caldwell &amp; Pierce, LLP</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t>1 Independent Drive, Suite 2400</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t>Jacksonville, Florida 32202</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:proofErr w:type="spellStart"/>
+      <w:r>
+        <w:t>mwhitfield@caldwellpierce.example</w:t>
+      </w:r>
+      <w:proofErr w:type="spellEnd"/>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:rPr>
+          <w:i/>
+        </w:rPr>
+        <w:t>Counsel for Plaintiff</w:t>
+      </w:r>
+    </w:p>
+    <w:p/>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:i/>
+          <w:u w:val="single"/>
+        </w:rPr>
+        <w:t>/s/ Jordan A. Reyes</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:i/>
+          <w:u w:val="single"/>
+        </w:rPr>
+        <w:tab/>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:ind w:left="4680"/>
+      </w:pPr>
+      <w:r>
+        <w:t>Jordan A. Reyes</w:t>
+      </w:r>
+    </w:p>
+    <w:sectPr>
+      <w:footerReference w:type="default" r:id="rId6"/>
+      <w:footerReference w:type="first" r:id="rId7"/>
+      <w:pgSz w:w="12240" w:h="15840"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
+      <w:pgNumType w:start="1"/>
+      <w:cols w:space="720"/>
+      <w:titlePg/>
+    </w:sectPr>
+  </w:body>
+</w:document>
