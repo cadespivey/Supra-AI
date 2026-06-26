@@ -310,6 +310,20 @@ private struct AssistantProfileSection: View {
         return types
     }()
 
+    /// Bridges the `[String]` secondary-email list to a newline-delimited text editor:
+    /// each non-empty line becomes one designation (≤2 kept, per 2.516).
+    private var secondaryEmailsBinding: Binding<String> {
+        Binding(
+            get: { profile.profile.secondaryEmails.joined(separator: "\n") },
+            set: { newValue in
+                profile.profile.secondaryEmails = newValue
+                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+            }
+        )
+    }
+
     var body: some View {
         Section {
             Text("These details shape how the assistant writes for you. Everything is optional — fill in what's useful and update it anytime.")
@@ -324,6 +338,34 @@ private struct AssistantProfileSection: View {
             Text("Assistant Profile")
         } footer: {
             Text("Tells the assistant who it's helping and the law you work in, so its answers fit your practice.")
+        }
+
+        Section {
+            Text("Used only to fill the signature block and letterhead of documents you draft in chat. Nothing is invented — if these are blank, drafting asks you to complete them rather than guessing.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("Florida Bar number", text: $profile.profile.barNumber, prompt: Text("e.g. 100847"))
+            TextField("Office street", text: $profile.profile.officeStreet, prompt: Text("e.g. 200 West Forsyth Street"))
+            TextField("Suite / floor (optional)", text: $profile.profile.officeSuite, prompt: Text("e.g. Suite 1400"))
+            HStack {
+                TextField("City", text: $profile.profile.officeCity)
+                TextField("State", text: $profile.profile.officeState)
+                TextField("ZIP", text: $profile.profile.officeZip)
+            }
+            TextField("Telephone", text: $profile.profile.officePhone, prompt: Text("e.g. (904) 555-0142"))
+            TextField("Facsimile (optional)", text: $profile.profile.officeFax)
+            TextField("Primary service e-mail", text: $profile.profile.primaryEmail, prompt: Text("e.g. you@firm.com"))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Secondary service e-mails (one per line)").font(.caption).foregroundStyle(.secondary)
+                MultilineField(
+                    placeholder: "e.g. litdocket@firm.com",
+                    text: secondaryEmailsBinding
+                )
+            }
+        } header: {
+            Text("Firm identity for drafting")
+        } footer: {
+            Text("Florida service designations (Fla. R. Jud. Admin. 2.516) and the signature block on court filings draw from these fields.")
         }
 
         Section {
