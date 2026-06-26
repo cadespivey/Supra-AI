@@ -298,13 +298,8 @@ public struct ModelRouter: Sendable {
     public func routePrompt(_ rawPrompt: String) -> RoutedPrompt {
         let trimmed = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if let parsed = parseSlashCommand(trimmed) {
-            var route = route(for: parsed.mode)
-            if parsed.highQuality {
-                route.role = .legalReasoningHighQuality
-                route.modelIdentifier = configuration.modelIdentifier(for: .legalReasoningHighQuality)
-            }
             return RoutedPrompt(
-                route: route,
+                route: route(for: parsed.mode),
                 prompt: parsed.remainingPrompt,
                 command: parsed.command
             )
@@ -314,7 +309,7 @@ public struct ModelRouter: Sendable {
         return RoutedPrompt(route: route(for: inferredMode), prompt: trimmed, command: nil)
     }
 
-    private func parseSlashCommand(_ prompt: String) -> (mode: ModelRouteMode, command: String, remainingPrompt: String, highQuality: Bool)? {
+    private func parseSlashCommand(_ prompt: String) -> (mode: ModelRouteMode, command: String, remainingPrompt: String)? {
         guard prompt.hasPrefix("/") else { return nil }
         let parts = prompt.split(maxSplits: 1, whereSeparator: { $0.isWhitespace || $0.isNewline })
         guard let first = parts.first else { return nil }
@@ -323,21 +318,17 @@ public struct ModelRouter: Sendable {
 
         switch command {
         case "/draft":
-            return (.drafting, command, remaining, false)
+            return (.drafting, command, remaining)
         case "/ask", "/general":
-            return (.generalQA, command, remaining, false)
+            return (.generalQA, command, remaining)
         case "/legal":
-            return (.legalQA, command, remaining, false)
-        case "/legal-hq", "/legal-high-quality":
-            return (.legalQA, command, remaining, true)
+            return (.legalQA, command, remaining)
         case "/research":
-            return (.legalResearch, command, remaining, false)
-        case "/research-hq", "/research-high-quality":
-            return (.legalResearch, command, remaining, true)
+            return (.legalResearch, command, remaining)
         case "/critique", "/redteam", "/red-team", "/secondpass", "/second-pass":
-            return (.legalCritique, command, remaining, false)
+            return (.legalCritique, command, remaining)
         case "/verify":
-            return (.legalVerify, command, remaining, false)
+            return (.legalVerify, command, remaining)
         default:
             return nil
         }

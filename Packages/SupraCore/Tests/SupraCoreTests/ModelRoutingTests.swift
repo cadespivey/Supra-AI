@@ -52,18 +52,6 @@ final class ModelRoutingTests: XCTestCase {
         XCTAssertEqual(critique.route.modelIdentifier, "Critic")
     }
 
-    func testHighQualityResearchCommandUsesSixBitRole() {
-        let config = LegalModelConfiguration(
-            legalReasoningModel: "Reasoner-4bit",
-            legalReasoningHighQualityModel: "Reasoner-6bit"
-        )
-        let routed = ModelRouter(configuration: config).routePrompt("/research-hq California contract issue")
-
-        XCTAssertEqual(routed.route.mode, .legalResearch)
-        XCTAssertEqual(routed.route.role, .legalReasoningHighQuality)
-        XCTAssertEqual(routed.route.modelIdentifier, "Reasoner-6bit")
-    }
-
     func testStructuredOutputRoutesUseTaskSpecificRoles() throws {
         let config = LegalModelConfiguration(
             legalReasoningModel: "Reasoner",
@@ -148,14 +136,12 @@ final class ModelRoutingTests: XCTestCase {
             XCTAssertEqual(routed.command, entry.command, "\(entry.command) should route as a command")
             XCTAssertEqual(routed.prompt, "some question", "\(entry.command) should strip the command")
         }
-        // The -hq variants escalate to the high-quality reasoning model.
-        XCTAssertEqual(router.routePrompt("/research-hq x").route.role, .legalReasoningHighQuality)
     }
 
     func testSlashCommandSuggestionsFilterByTypedPrefix() {
         XCTAssertEqual(SlashCommandCatalog.suggestions(for: "/").count, SlashCommandCatalog.all.count)
         let research = SlashCommandCatalog.suggestions(for: "/res").map(\.command)
-        XCTAssertEqual(research, ["/research", "/research-hq"])
+        XCTAssertEqual(research, ["/research"])
         // No suggestions once a space starts the prompt, or when not a slash command.
         XCTAssertTrue(SlashCommandCatalog.suggestions(for: "/research foo").isEmpty)
         XCTAssertTrue(SlashCommandCatalog.suggestions(for: "hello").isEmpty)

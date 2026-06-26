@@ -51,7 +51,7 @@ unverified authority as settled law.
 | `/draft` | Attorney-editable drafting (flags where research is needed) |
 | `/ask`, `/general` | General assistant |
 | `/legal` | Source-grounded legal Q&A |
-| `/research`, `/research-hq` | Full source-grounded legal research (HQ = higher-quality model) |
+| `/research` | Full source-grounded legal research |
 | `/critique`, `/redteam` | Red-team a draft for defects and unsupported propositions |
 | `/verify` | Verify an analysis against the retrieved source packet |
 
