@@ -10,16 +10,21 @@ public struct FirmProfile: DraftingProfile, Sendable {
     public var firmName: String
     public var signingAttorney: String
     public var barNumber: String
+    /// Signature-block prefix for the bar number, derived from the matched
+    /// jurisdiction (e.g. "Florida Bar No.", "D.C. Bar No.").
+    public var barLabel: String
     public var office: OfficeBlock
     public var primaryEmail: String
     public var secondaryEmails: [String]
     public var tagline: String
 
-    public init(firmName: String, signingAttorney: String, barNumber: String, office: OfficeBlock,
+    public init(firmName: String, signingAttorney: String, barNumber: String,
+                barLabel: String = "Bar No.", office: OfficeBlock,
                 primaryEmail: String, secondaryEmails: [String] = [], tagline: String = "Attorneys at Law") {
         self.firmName = firmName
         self.signingAttorney = signingAttorney
         self.barNumber = barNumber
+        self.barLabel = barLabel
         self.office = office
         self.primaryEmail = primaryEmail
         self.secondaryEmails = secondaryEmails
@@ -31,6 +36,7 @@ public struct FirmProfile: DraftingProfile, Sendable {
             "firm": firmName,
             "signingAttorney": signingAttorney,
             "barNumber": barNumber,
+            "barLabel": barLabel,
             "primaryEmail": primaryEmail,
             "tagline": tagline
         ]

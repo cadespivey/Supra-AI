@@ -56,7 +56,7 @@ public enum NoticeAppearance {
             respectfullySubmitted: nil,                  // notices carry no "Respectfully submitted:"
             firmName: profile.firmName,
             signingAttorney: profile.signingAttorney,
-            attorneys: [AttorneyLine(name: profile.signingAttorney, barNumber: "Florida Bar No. \(profile.barNumber)")],
+            attorneys: [AttorneyLine(name: profile.signingAttorney, barNumber: "\(profile.barLabel) \(profile.barNumber)")],
             office: profile.office,
             partyRepresented: inputs.partyRepresented,
             emails: EmailDesignation(primary: profile.primaryEmail, secondary: profile.secondaryEmails)

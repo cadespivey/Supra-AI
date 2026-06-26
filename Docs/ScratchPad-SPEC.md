@@ -158,6 +158,14 @@ only — no rich text, no mention autocomplete).
   stamping) is acceptable for an early Phase-2 cut; the comprehensive target is the custom editor.
 ```
 
+> **Implementation note (1.7.0 — drift-control §14).** The reserved tag **`#Note`** marks an entry as a
+> deliberate **non-billable note-to-self**. Such entries are **deterministically excluded** from the billing
+> draft — `BillingDraftService` filters them out *before* the prompt (so the model never sees them and the
+> reconciliation math is exact; a day of only `#Note` entries yields the same "nothing to bill" as an empty
+> day), and the excluded count is surfaced on the reconciliation banner. The editor shows a near-composer
+> alert and a "Non-billable" badge on the entry. This replaces the prior behavior where exclusion was left
+> entirely to the model's judgment (§5.5) for these explicitly-tagged notes.
+
 ---
 
 ## 4. Attachments & evidence
@@ -185,6 +193,13 @@ Drop a file on the day (or an entry) → `ScratchPadAttachmentService`:
 > null and the classifier's privilege/confidentiality flags do not yet surface on ScratchPad attachments,
 > cf. §11). The billing outcome (evidence informs the draft) is served; the library-reuse convenience and
 > privilege-flag surfacing are the planned follow-up.
+
+> **Implementation note (1.7.0 — drift-control §14).** Uploaded documents are now recorded **inline with
+> their note**: a file attached in the composer is saved together with the entry (`scratch_pad_attachments.entry_id`
+> set), renders as a chip beneath that entry, and inherits the note's own `@matter` (not the day-wide
+> most-mentioned default). Dropping a file on an existing entry attaches it there; a bare drop creates a
+> minimal note so a file is never orphaned. The former standalone day-level attachment bar now shows only
+> legacy/unfiled attachments. (Library import / `matter_document_id` linkage remains deferred per above.)
 
 ---
 

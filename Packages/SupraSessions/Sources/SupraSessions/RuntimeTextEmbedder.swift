@@ -74,7 +74,10 @@ public actor RuntimeTextEmbedder: TextEmbedder {
                 modelPath: modelPath,
                 displayName: modelDisplayName,
                 revision: modelRevision,
-                expectedDimension: dimension,
+                // A non-positive dimension means "unknown" (custom model not yet
+                // verified): skip the assertion rather than fail the load. Auto-verify
+                // normally persists the real dimension before any indexing runs.
+                expectedDimension: dimension > 0 ? dimension : nil,
                 modelBookmark: bookmark
             )
         )

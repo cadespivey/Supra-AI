@@ -16,6 +16,13 @@ final class AppEnvironment: ObservableObject {
     /// throwaway temporary database — surfaced as a warning so the user knows their
     /// data is not being persisted.
     @Published private(set) var usingFallbackStore = false
+    /// True on a fresh first launch (no models yet, onboarding never completed) — gates
+    /// the first-run model-download flow. Set in `bootstrap()`; cleared once the user
+    /// finishes or skips onboarding. Always false under UI tests.
+    @Published private(set) var shouldShowOnboarding = false
+
+    /// App-settings key recording when first-run onboarding was completed/skipped.
+    private static let onboardingCompletedKey = "onboarding.completedAt"
 
     let store: SupraStore
     let modelLibrary: ModelLibrary
@@ -81,6 +88,12 @@ final class AppEnvironment: ObservableObject {
             store: store,
             fetcher: HuggingFaceClient()
         )
+        // A finished embedding download refreshes the setup controller's model list
+        // and auto-verifies the new model, so it appears in "Select for use" and
+        // turns green without a manual Re-check or Test Load.
+        self.embeddingDownloadController.onModelRegistered = { [weak documentSetup] in
+            documentSetup?.handleEmbeddingModelDownloaded()
+        }
         let queue = DocumentProcessingQueue(
             store: store,
             importService: DocumentImportService(store: store),
@@ -113,6 +126,10 @@ final class AppEnvironment: ObservableObject {
         // surfaces as cancelled rather than lingering as in-progress.
         try? store.validation.markUnfinishedRunsCancelled()
         modelLibrary.refresh()
+        // First-run onboarding: a truly fresh launch (no models yet, never completed)
+        // shows the guided model-download flow. UI tests skip it entirely.
+        let onboarded = (try? store.appSettings.getSetting(Self.onboardingCompletedKey, as: Date.self)) != nil
+        shouldShowOnboarding = !Self.isUITestMode && !onboarded && modelLibrary.models.isEmpty
         chatController.loadChats()
         // Each launch opens the global chat fresh — a blank new chat with example
         // prompts — rather than reopening the last conversation. The prior chats
@@ -132,6 +149,14 @@ final class AppEnvironment: ObservableObject {
         DocumentMaintenance(store: store).purgeExpired()
         // Opt-in only: reaches GitHub solely when the user enabled update checks.
         updateController.checkOnLaunchIfEnabled()
+    }
+
+    /// Records that first-run onboarding was completed or skipped and dismisses it.
+    /// Persisted so it never reappears; downloads started during onboarding continue
+    /// because the download controllers live here, not on the dismissed view.
+    func markOnboardingComplete() {
+        try? store.appSettings.setSetting(Self.onboardingCompletedKey, value: Date())
+        shouldShowOnboarding = false
     }
 
     /// Auto-loads the startup model into the runtime on launch for manual runtime

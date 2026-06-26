@@ -42,6 +42,16 @@ public struct ScratchPadEntryRecord: Codable, FetchableRecord, PersistableRecord
     /// Decoded `#tags` (empty if none/unparseable).
     public var tags: [String] { ScratchPadJSON.decodeStrings(tagsJSON) }
 
+    /// The reserved tag (sigil-stripped, lowercased) marking an entry as a
+    /// non-billable note: `#Note` excludes the entry from the billing draft.
+    public static let nonBillableTag = "note"
+
+    /// True when this entry is tagged `#Note` (case-insensitive) — a deliberate
+    /// note-to-self that must be excluded from the billing/time draft.
+    public var isNonBillable: Bool {
+        tags.contains { $0.caseInsensitiveCompare(Self.nonBillableTag) == .orderedSame }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id
         case dayID = "day_id"

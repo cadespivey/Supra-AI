@@ -172,6 +172,115 @@ final class MatterDraftingControllerTests: XCTestCase {
         guard case .missingCaptionField = error else { return XCTFail("expected missingCaptionField, got \(error)") }
     }
 
+    @MainActor
+    func testEmptyServiceRecipientsBlockBeforeRendering() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(
+            name: "Meridian v. Atlantic Ridge",
+            court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+            docketNumber: "2026-CA-001847"
+        )
+        let controller = MatterDraftingController(store: store, storage: makeStorage())
+
+        let result = await controller.draftNoticeOfAppearance(
+            matterID: matter.id,
+            parties: sampleParties(),
+            partyRepresented: "Defendant",
+            representedPartyName: "Atlantic Ridge Holdings, Inc.",
+            recipients: []
+        )
+
+        guard case let .failure(error) = result else { return XCTFail("expected failure") }
+        guard case let .missingRequiredSlots(missing) = error else {
+            return XCTFail("expected missingRequiredSlots, got \(error)")
+        }
+        XCTAssertTrue(missing.contains("service recipients"))
+        let events = try store.auditEvents.fetchEvents(matterID: matter.id)
+        XCTAssertFalse(events.contains { $0.eventType == "draft_generated" })
+    }
+
+    @MainActor
+    func testIncompleteCaptionBlocksBeforeRendering() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(
+            name: "Meridian v. Atlantic Ridge",
+            court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+            docketNumber: "2026-CA-001847"
+        )
+        let controller = MatterDraftingController(store: store, storage: makeStorage())
+
+        let result = await controller.draftNoticeOfAppearance(
+            matterID: matter.id,
+            parties: [PartyLine(name: "MERIDIAN CAPITAL PARTNERS, LLC,", designation: "")],
+            partyRepresented: "Defendant",
+            representedPartyName: "Atlantic Ridge Holdings, Inc.",
+            recipients: sampleRecipients()
+        )
+
+        guard case let .failure(error) = result else { return XCTFail("expected failure") }
+        guard case let .missingRequiredSlots(missing) = error else {
+            return XCTFail("expected missingRequiredSlots, got \(error)")
+        }
+        XCTAssertTrue(missing.contains("complete caption parties"))
+        XCTAssertTrue(missing.contains("caption party 1 designation"))
+    }
+
+    @MainActor
+    func testInvalidRecipientEmailBlocksBeforeRendering() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(
+            name: "Meridian v. Atlantic Ridge",
+            court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+            docketNumber: "2026-CA-001847"
+        )
+        var recipients = sampleRecipients()
+        recipients[0].emails = ["not-an-email"]
+        let controller = MatterDraftingController(store: store, storage: makeStorage())
+
+        let result = await controller.draftNoticeOfAppearance(
+            matterID: matter.id,
+            parties: sampleParties(),
+            partyRepresented: "Defendant",
+            representedPartyName: "Atlantic Ridge Holdings, Inc.",
+            recipients: recipients
+        )
+
+        guard case let .failure(error) = result else { return XCTFail("expected failure") }
+        guard case let .missingRequiredSlots(missing) = error else {
+            return XCTFail("expected missingRequiredSlots, got \(error)")
+        }
+        XCTAssertTrue(missing.contains("valid service recipient 1 service e-mail"))
+    }
+
+    @MainActor
+    func testNonFloridaNoticeDraftingIsBlocked() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(
+            name: "Texas Matter",
+            jurisdiction: "Texas",
+            court: "IN THE DISTRICT COURT OF TRAVIS COUNTY, TEXAS",
+            docketNumber: "2026-CI-001847"
+        )
+        let controller = MatterDraftingController(store: store, storage: makeStorage())
+
+        let result = await controller.draftNoticeOfAppearance(
+            matterID: matter.id,
+            parties: sampleParties(),
+            partyRepresented: "Defendant",
+            representedPartyName: "Atlantic Ridge Holdings, Inc.",
+            recipients: sampleRecipients()
+        )
+
+        guard case let .failure(error) = result else { return XCTFail("expected failure") }
+        guard case .unsupportedJurisdiction = error else {
+            return XCTFail("expected unsupportedJurisdiction, got \(error)")
+        }
+    }
+
     // MARK: - Intent parser
 
     func testParserRecognizesExplicitSlashCommand() {

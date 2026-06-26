@@ -118,4 +118,94 @@ final class AssistantProfileTests: XCTestCase {
         identityOnly.role = "Partner"
         XCTAssertTrue(identityOnly.isConfigured)
     }
+
+    // MARK: - Multi-jurisdiction bar (F4)
+
+    func testBarJurisdictionCatalogMatch() {
+        XCTAssertEqual(BarJurisdictionCatalog.match("Florida")?.id, "fl")
+        XCTAssertEqual(BarJurisdictionCatalog.match("FL")?.id, "fl")
+        XCTAssertEqual(BarJurisdictionCatalog.match("fl")?.id, "fl")
+        XCTAssertEqual(BarJurisdictionCatalog.match("California state and the Ninth Circuit")?.id, "ca")
+        XCTAssertEqual(BarJurisdictionCatalog.match("District of Columbia")?.id, "dc")
+        XCTAssertEqual(BarJurisdictionCatalog.match("D.C.")?.id, "dc")
+        XCTAssertEqual(BarJurisdictionCatalog.match("D.C. Superior Court")?.id, "dc")
+        XCTAssertNil(BarJurisdictionCatalog.match("Unspecified"))
+        XCTAssertNil(BarJurisdictionCatalog.match(""))
+        XCTAssertEqual(BarJurisdictionCatalog.jurisdiction(id: "fl")?.barLabel, "Florida Bar No.")
+        XCTAssertEqual(BarJurisdictionCatalog.jurisdiction(id: "dc")?.barLabel, "D.C. Bar No.")
+    }
+
+    func testLegacyBarNumberMigratesToBarLicenseOnDecode() throws {
+        var profile = AssistantProfile()
+        profile.barNumber = "100847"
+        profile.officeState = "Florida"
+        // Round-trip through Codable to trigger init(from:) migration.
+        let data = try JSONEncoder().encode(profile)
+        let decoded = try JSONDecoder().decode(AssistantProfile.self, from: data)
+        XCTAssertEqual(decoded.barLicenses.count, 1)
+        XCTAssertEqual(decoded.barLicenses.first?.jurisdictionID, "fl")
+        XCTAssertEqual(decoded.barLicenses.first?.barNumber, "100847")
+        XCTAssertEqual(decoded.primaryBarLicenseID, decoded.barLicenses.first?.id)
+        XCTAssertEqual(decoded.barNumber, "", "legacy hidden field should be cleared after migration")
+        XCTAssertTrue(decoded.hasAnyBarLicense)
+    }
+
+    func testHiddenLegacyBarNumberDoesNotSatisfyReadinessAfterStructuredRowsExist() {
+        var profile = AssistantProfile()
+        profile.fullName = "Pat Vance"
+        profile.organization = "Vance LLP"
+        profile.barNumber = "100847"
+        profile.barLicenses = [.init(jurisdictionID: "fl", barNumber: "")]
+        profile.officeStreet = "1 Main"
+        profile.officeCity = "Jacksonville"
+        profile.officeState = "Florida"
+        profile.officeZip = "32202"
+        profile.officePhone = "904-555-0100"
+        profile.primaryEmail = "pat@example.com"
+
+        XCTAssertFalse(profile.hasAnyBarLicense)
+        XCTAssertFalse(profile.hasDraftingIdentity)
+        XCTAssertNil(profile.resolvedBarLicense(forJurisdiction: "Florida"))
+    }
+
+    func testStructuredBarLicenseDeletionDoesNotFallBackToHiddenLegacyValue() {
+        var profile = AssistantProfile()
+        profile.barNumber = "100847"
+        profile.barLicenses = []
+        XCTAssertNotNil(profile.resolvedBarLicense(forJurisdiction: "Florida"), "pure legacy in-memory profiles still work")
+
+        profile.barLicenses = [.init(jurisdictionID: "fl", barNumber: "")]
+        XCTAssertNil(profile.resolvedBarLicense(forJurisdiction: "Florida"), "once structured rows exist, empty rows must not use hidden legacy data")
+    }
+
+    func testFirmProfileMatchesBarLicenseToCourtJurisdiction() {
+        var profile = AssistantProfile()
+        profile.fullName = "Pat Vance"
+        profile.organization = "Vance LLP"
+        profile.barLicenses = [
+            .init(jurisdictionID: "fl", barNumber: "100847"),
+            .init(jurisdictionID: "tx", barNumber: "24011223")
+        ]
+        profile.primaryBarLicenseID = profile.barLicenses[0].id
+
+        // A Texas court → Texas admission prints.
+        let tx = MatterDraftingController.firmProfile(from: profile, jurisdiction: "Texas")
+        XCTAssertEqual(tx.barNumber, "24011223")
+        XCTAssertEqual(tx.barLabel, "Texas Bar No.")
+
+        // No matching admission → primary (Florida) prints.
+        let other = MatterDraftingController.firmProfile(from: profile, jurisdiction: "Georgia")
+        XCTAssertEqual(other.barNumber, "100847")
+        XCTAssertEqual(other.barLabel, "Florida Bar No.")
+    }
+
+    func testFirmProfileFallsBackToLegacyBarNumber() {
+        var profile = AssistantProfile()
+        profile.barNumber = "100847"
+        profile.officeState = "Florida"
+        // No structured licenses (in-memory profile, no decode) → synthesize from legacy.
+        let firm = MatterDraftingController.firmProfile(from: profile)
+        XCTAssertEqual(firm.barNumber, "100847")
+        XCTAssertEqual(firm.barLabel, "Florida Bar No.")
+    }
 }
