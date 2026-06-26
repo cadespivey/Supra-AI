@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [1.6.0] - 2026-06-25
+
+Document drafting comes to chat, plus model-setup quality-of-life: a one-model
+install is ready to use immediately, picking a model loads it, and the embedding
+model catalog gains stronger multilingual and instruction-tuned options.
+
+### Added
+
+- **Generate court filings and demand letters from a matter.** The on-device
+  drafting engine (shipped in 1.5.2) is now wired into the app: it resolves a
+  matter's caption and your firm identity into a Word document — a Notice of
+  Appearance, Motion to Dismiss, or Demand Letter — rendered locally to the
+  firm's formatting, with no cloud and no Word/Office dependency. Every citation
+  is verified or left as a visible `[cite]` placeholder, and every recited fact
+  traces back to the matter; the draft never invents authority or identity.
+- **Firm identity for drafting in Settings.** A new Assistant Profile section
+  collects the signature-block and letterhead fields (bar number, office
+  address, service e-mails) used to populate filings. If they're blank, drafting
+  asks you to complete them rather than guessing.
+- **More embedding models.** Document Intelligence now offers Qwen3-Embedding
+  0.6B and 8B (instruction-tuned, strong multilingual + code retrieval) and
+  BGE-M3 (multilingual, long-context) alongside the existing BGE and Nomic
+  options.
+
+### Changed
+
+- **One model is ready to use immediately.** When exactly one model is
+  installed, it's automatically the default for every role — legal reasoning,
+  high-quality reasoning, drafting, and critique — so a single-model setup works
+  without assigning each role by hand.
+- **Selecting a model loads it.** Choosing a model for a role in Settings now
+  loads it into the runtime automatically, so there's no separate trip to the
+  Models tab to press Load (an already-loaded model is never swapped out
+  mid-use).
+
 ## [1.5.2] - 2026-06-25
 
 Foundational document-drafting engine — the local, fidelity-locked layer that
