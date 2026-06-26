@@ -18,6 +18,10 @@ const capabilities = [
     body: "Organize research, drafts, documents, outputs, and review artifacts by matter.",
   },
   {
+    title: "Document drafting",
+    body: "Generate court filings and demand letters as Word documents, rendered locally to your firm's formatting. Every citation is verified or flagged, and every recited fact traces back to the matter — nothing is invented.",
+  },
+  {
     title: "Timekeeping & billing",
     body: "ScratchPad turns a day's notes and work product into reviewable, defensible time entries with UTBMS codes — exportable to LEDES 1998B, CSV, or the clipboard. Nothing bills automatically; every line cites its evidence.",
   },
