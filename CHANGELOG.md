@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [1.5.2] - 2026-06-25
+
+Foundational document-drafting engine — the local, fidelity-locked layer that
+generates court filings and demand letters as Word documents. No user-facing UI
+yet; this release lands and verifies the engine the drafting features build on.
+
+### Added
+
+- **On-device document drafting engine.** Three new packages — `SupraDraftingCore`
+  (shared drafting types), `SupraExports` (the Word/OOXML renderer), and
+  `SupraDrafting` (the slot/generation/verification pipeline) — implement the first
+  drafting vertical slice end to end: resolve a matter's facts and the firm's
+  identity into a document, verify it, and render a `.docx`. Everything runs
+  locally — no cloud, no Word/Office dependency.
+- **Three drafting kinds.** A Notice of Appearance (deterministic slot-fill, no
+  model needed), a Motion to Dismiss (section-by-section argument with the Florida
+  house motion structure), and a Demand Letter (firm-letterhead business letter).
+- **Court-fidelity Word output.** The renderer reproduces the firm's locked
+  formatting — the two-column caption, hanging-indent point headings, the `/s/`
+  signature block, the certificate of service, and page-1 number suppression —
+  validated against round-tripped Word goldens.
+
+### Security
+
+- **Authority firewall — the model never invents a citation.** Every citation in a
+  generated draft is either backed by a real retrieved authority (CourtListener) or
+  is left as a visible `[cite]` placeholder; an unverified citation is stripped, not
+  guessed.
+- **Fact firewall — every recited fact traces to the matter.** Asserted facts must
+  carry matter provenance; an untraced fact is replaced with a visible `[fact?]`
+  flag rather than passed through. Firm-identity (name, bar number, address, e-mail)
+  is slot-only and never baked into a template, so one firm's details can't leak
+  into another's draft.
+- **Court formatting floor enforced.** Sub-12-point fonts or sub-1-inch margins are
+  rejected before render (Fla. R. Jud. Admin. 2.520(a)).
+
 ## [1.5.1] - 2026-06-23
 
 Matter-chat grounding so the assistant answers from your actual documents,
