@@ -20,8 +20,8 @@ public struct SlashCommand: Identifiable, Sendable, Equatable {
 }
 
 public enum SlashCommandCatalog {
-    /// The canonical commands surfaced in the composer (most common first). `-hq`
-    /// variants run the same route on the higher-quality reasoning model.
+    /// The canonical commands surfaced in the composer (most common first). Each task
+    /// runs on the model assigned to its route — there is no manual quality tier.
     public static let all: [SlashCommand] = [
         SlashCommand(command: "/legal", title: "Legal Q&A",
                      summary: "Source-grounded legal answer with citations"),
@@ -35,10 +35,6 @@ public enum SlashCommandCatalog {
                      summary: "Check an analysis against its retrieved sources"),
         SlashCommand(command: "/ask", title: "General",
                      summary: "General assistant — no legal grounding"),
-        SlashCommand(command: "/legal-hq", title: "Legal Q&A (HQ)",
-                     summary: "Legal Q&A on the higher-quality model"),
-        SlashCommand(command: "/research-hq", title: "Research (HQ)",
-                     summary: "Research on the higher-quality model"),
     ]
 
     /// Commands matching the text typed so far — used to drive the composer menu.

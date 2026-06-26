@@ -4,7 +4,7 @@ import { PageShell } from "@/components/PageShell";
 const steps = [
   {
     title: "Configure local models",
-    body: "Assign separate local MLX models for legal reasoning, high-quality research, drafting, and critique, then load the runtime on device.",
+    body: "Assign separate local MLX models for legal reasoning, drafting, and critique, then load the runtime on device — each task runs on the model best suited to it.",
   },
   {
     title: "Start in global chat",
@@ -37,8 +37,8 @@ function StepMockBody({ index }: { index: number }) {
         <div className="space-y-2">
           {[
             ["Legal reasoning", "Qwen3 30B"],
-            ["High-quality research", "DeepSeek-R1"],
             ["Drafting", "Qwen3 Instruct"],
+            ["Critique", "DeepSeek-R1"],
           ].map(([role, model]) => (
             <div
               key={role}
