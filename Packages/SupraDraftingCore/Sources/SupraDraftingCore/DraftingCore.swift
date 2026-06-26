@@ -126,6 +126,12 @@ public struct DateOnly: Codable, Sendable, Equatable {
         self.month = month
         self.day = day
     }
+
+    /// Today's date in the current calendar, as a DateOnly (for service/sign-off dates).
+    public static var today: DateOnly {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        return DateOnly(year: components.year ?? 2026, month: components.month ?? 1, day: components.day ?? 1)
+    }
 }
 
 public enum DateStyle: String, Codable, Sendable, Equatable {
