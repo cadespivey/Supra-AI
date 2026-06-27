@@ -13,7 +13,8 @@ public enum LegalResearchPromptBuilder {
     public static func buildAnswerPrompt(
         question: String,
         classification: LegalQueryClassification,
-        rankedAuthorities: [RankedLegalAuthority]
+        rankedAuthorities: [RankedLegalAuthority],
+        authorityPriority: [LegalAuthorityPriorityStep] = []
     ) -> String {
         let packetCount = min(rankedAuthorities.count, maxPacketAuthorities)
         let labelRange = packetCount <= 1 ? "[A1]" : "[A1]–[A\(packetCount)]"
@@ -36,14 +37,19 @@ public enum LegalResearchPromptBuilder {
         - Structured jurisdiction context:
         \(classification.jurisdictionContext ?? "No structured jurisdiction context supplied.")
 
+        AUTHORITY PRIORITY:
+        \(authorityPrioritySection(authorityPriority))
+
         SOURCE PACKET:
         \(sourcePacket(rankedAuthorities.map(\.authority)))
 
         INSTRUCTIONS:
         Answer only from the SOURCE PACKET above.
+        - Apply the AUTHORITY PRIORITY order when sources conflict. A lower-priority source cannot override higher-priority primary law or controlling appellate authority.
         - End every sentence that states a legal proposition with the bracketed label of its supporting source, e.g. [A1]. Use only labels that appear in the packet (\(labelRange)); never invent a label.
         - If the packet does not support a proposition, write [NEEDS AUTHORITY] instead of citing it, and say what is missing.
         - Do not invent citations, quotes, dates, holdings, docket numbers, procedural posture, or subsequent history. Quote source text only when it appears verbatim in the packet.
+        - A source whose block shows "⚠️ Currency: no verified effective date" is statutory text whose current validity is unconfirmed. If you rely on it, state plainly that its currency is unverified and must be confirmed against the official code; never present it as settled current law.
 
         \(answerExemplar)
         """
@@ -54,7 +60,7 @@ public enum LegalResearchPromptBuilder {
     /// from an example than from instructions alone.
     static let answerExemplar = """
     EXAMPLE OF THE EXPECTED FORM (illustrative only — do not reuse its facts or labels):
-    The claim is governed by a two-year statute of limitations [A1]. That period runs from the date of injury rather than discovery, absent tolling [A2]. Because suit was filed more than two years after the injury and no tolling applies on these facts, the claim is time-barred [A1][A2]. Whether the continuing-violation doctrine could revive it is [NEEDS AUTHORITY] on this packet.
+    The governing text supplies the operative rule [A1]. A controlling interpretation may narrow or clarify that rule only to the extent the cited authority actually says so [A2]. Any timing trigger, exception, or tolling rule not found in the packet is [NEEDS AUTHORITY].
     """
 
     /// A corrective re-prompt used when the first answer fails citation verification:
@@ -64,6 +70,7 @@ public enum LegalResearchPromptBuilder {
         question: String,
         classification: LegalQueryClassification,
         rankedAuthorities: [RankedLegalAuthority],
+        authorityPriority: [LegalAuthorityPriorityStep] = [],
         priorAnswer: String,
         issues: [LegalVerificationIssue]
     ) -> String {
@@ -78,7 +85,7 @@ public enum LegalResearchPromptBuilder {
 
         Rules for the correction: cite every legal proposition to a packet label [A#] that actually supports it; remove or replace any citation, quote, holding, or date not supported by the packet; write [NEEDS AUTHORITY] where the packet does not support a proposition; never introduce an authority that is not in the packet.
 
-        \(buildAnswerPrompt(question: question, classification: classification, rankedAuthorities: rankedAuthorities))
+        \(buildAnswerPrompt(question: question, classification: classification, rankedAuthorities: rankedAuthorities, authorityPriority: authorityPriority))
         """
     }
 
@@ -120,6 +127,27 @@ public enum LegalResearchPromptBuilder {
             let trimmedBody = body.count > maxAuthorityTextChars
                 ? String(body.prefix(maxAuthorityTextChars)) + "\n…[text truncated to fit the context window]"
                 : body
+            if authority.authorityType == .statute {
+                // A statutory / regulatory provision (any source). Framed as primary law to confirm —
+                // not binding precedent. The currency line is the firewall: a verified effective date
+                // (e.g. eCFR) reads as official; its absence (e.g. Open Legal Codes) flags "confirm it".
+                let currencyLine: String
+                if let effective = authority.dateFiled, !effective.isEmpty {
+                    currencyLine = "- Effective date: \(effective) (official source)"
+                } else {
+                    currencyLine = "- ⚠️ Currency: no verified effective date — treat as a lead to confirm against the official code, not as settled current law."
+                }
+                return """
+                [\(label)] \(authority.caseName ?? authority.citation ?? "Statutory provision")
+                - Authority type: Statute/Regulation (\(authority.precedentialStatus ?? "statutory"))
+                - Citation: \(authority.citation ?? "No section supplied")
+                - Jurisdiction: \(authority.jurisdiction ?? "Unknown")
+                - Source URL: \(authority.url ?? "Unavailable")
+                \(currencyLine)
+                - Statutory text:
+                \(trimmedBody)
+                """
+            }
             return """
             [\(label)] \(authority.caseName ?? "Untitled authority")
             - Authority ID: \(authority.id)
@@ -141,5 +169,15 @@ public enum LegalResearchPromptBuilder {
             blocks.append("[Note] \(omitted) lower-ranked authorit\(omitted == 1 ? "y was" : "ies were") omitted to keep the highest-ranked sources within the context window.")
         }
         return blocks.joined(separator: "\n\n")
+    }
+
+    private static func authorityPrioritySection(_ steps: [LegalAuthorityPriorityStep]) -> String {
+        guard !steps.isEmpty else {
+            return "No explicit authority hierarchy supplied. Prefer primary law and controlling appellate authority when present in the packet."
+        }
+        return steps
+            .sorted { $0.rank < $1.rank }
+            .map { "\($0.rank). \($0.label): \($0.guidance)" }
+            .joined(separator: "\n")
     }
 }

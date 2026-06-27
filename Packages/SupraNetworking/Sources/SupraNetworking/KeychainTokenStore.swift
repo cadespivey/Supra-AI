@@ -87,7 +87,68 @@ public final class KeychainTokenStore: APIKeyStoreProtocol, @unchecked Sendable 
         }
     }
 
+    // MARK: - Generic keyed API (additional services)
+
+    public func saveAPIKey(_ key: String, for service: APIKeyService) throws {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw KeychainTokenStoreError.emptyToken }
+        let query = query(forAccount: service.keychainAccount)
+        SecItemDelete(query as CFDictionary)
+
+        var attributes = query
+        attributes[kSecValueData as String] = Data(trimmed.utf8)
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let status = SecItemAdd(attributes as CFDictionary, nil)
+        guard status == errSecSuccess else { throw KeychainTokenStoreError.unhandledStatus(status) }
+    }
+
+    public func loadAPIKey(for service: APIKeyService) throws -> String? {
+        var query = query(forAccount: service.keychainAccount)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw KeychainTokenStoreError.unhandledStatus(status) }
+        guard let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    public func deleteAPIKey(for service: APIKeyService) throws {
+        let status = SecItemDelete(query(forAccount: service.keychainAccount) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainTokenStoreError.unhandledStatus(status)
+        }
+    }
+
+    public func hasAPIKey(for service: APIKeyService) throws -> Bool {
+        var query = query(forAccount: service.keychainAccount)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        query[kSecUseAuthenticationContext as String] = context
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            return true
+        case errSecItemNotFound:
+            return false
+        case errSecInteractionNotAllowed, errSecAuthFailed:
+            return true
+        default:
+            throw KeychainTokenStoreError.unhandledStatus(status)
+        }
+    }
+
     private func baseQuery() -> [String: Any] {
+        query(forAccount: account)
+    }
+
+    private func query(forAccount account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

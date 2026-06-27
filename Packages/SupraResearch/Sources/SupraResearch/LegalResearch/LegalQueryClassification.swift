@@ -60,7 +60,9 @@ public enum LegalQueryClassifier {
         let desiredType: LegalAuthorityType
         if lower.contains("docket") {
             desiredType = .docket
-        } else if lower.contains("statute") || lower.contains("code section") || lower.contains("§") {
+        } else if lower.contains("statute") || lower.contains("code section") || lower.contains("§")
+            || lower.contains("u.s.c") || lower.contains("c.f.r") || lower.contains("limitations period")
+            || lower.contains("statute of limitations") || lower.contains("deadline") {
             desiredType = .statute
         } else {
             desiredType = .case
@@ -84,6 +86,8 @@ public enum LegalQueryClassifier {
 
     public static func firstCitation(in text: String) -> String? {
         let patterns = [
+            #"(?i)\b\d{1,4}\s+U\.?\s?S\.?\s?C\.?(?:A\.?)?\s*§+\s*[\w().-]+"#,
+            #"(?i)\b\d{1,4}\s+C\.?\s?F\.?\s?R\.?\s*§+\s*[\w().-]+"#,
             #"(?i)\b\d{1,4}\s+U\.S\.\s+\d{1,5}\b"#,
             #"(?i)\b\d{1,4}\s+S\.?\s?Ct\.?\s+\d{1,5}\b"#,
             #"(?i)\b\d{1,4}\s+F\.?\s?(?:2d|3d|4th|Supp\.?\s?2d|Supp\.?\s?3d)?\s+\d{1,5}\b"#,
