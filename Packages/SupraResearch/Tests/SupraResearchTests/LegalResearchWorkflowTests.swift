@@ -210,6 +210,14 @@ final class LegalResearchWorkflowTests: XCTestCase {
             "123 Cal. App. 5th 456"
         )
         XCTAssertEqual(
+            LegalQueryClassifier.firstCitation(in: "Research 33 U.S.C. § 913 for DBA claim filing."),
+            "33 U.S.C. § 913"
+        )
+        XCTAssertEqual(
+            LegalQueryClassifier.firstCitation(in: "What does 20 C.F.R. § 702.221 require?"),
+            "20 C.F.R. § 702.221"
+        )
+        XCTAssertEqual(
             LegalQueryClassifier.firstCitation(in: "Research Cal. Civ. Code § 16600 and non-competes."),
             "Cal. Civ. Code § 16600"
         )
@@ -406,5 +414,88 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertEqual(ranked.first?.authority.id, published.id)
         XCTAssertTrue(ranked.first?.reasons.contains("precedential") ?? false)
         XCTAssertTrue(ranked.last?.reasons.contains("non_precedential") ?? false)
+    }
+
+    // MARK: - Source planning
+
+    func testDBALimitationsPlansFederalPrimaryLawWithoutUserJurisdiction() {
+        let classification = LegalQueryClassifier.classify(
+            "When does the statute of limitations run for claims made by claimants under the Defense Base Act?"
+        )
+        let target = LegalSourceTarget(kind: .global)
+        let plan = LegalResearchSourcePlanner.plan(classification: classification, target: target)
+
+        XCTAssertTrue(plan.requiresPrimaryLaw)
+        XCTAssertTrue(plan.satisfiesJurisdictionRequirement, "inherently federal statutory schemes should not ask for a state/circuit first")
+        XCTAssertEqual(plan.effectiveClassification.jurisdiction, "Federal")
+        XCTAssertTrue(plan.primaryLawCitationQuery?.contains("42 U.S.C. § 1651") ?? false)
+        XCTAssertTrue(plan.primaryLawCitationQuery?.contains("33 U.S.C. § 913") ?? false)
+    }
+
+    func testStateLimitationsQuestionRequiresPrimaryLaw() {
+        let classification = LegalQueryClassifier.classify(
+            "What is the statute of limitations for a written contract claim in Florida?"
+        )
+        let target = LegalSourceTarget(kind: .global, jurisdiction: "Florida")
+        let plan = LegalResearchSourcePlanner.plan(classification: classification, target: target)
+
+        XCTAssertTrue(plan.requiresPrimaryLaw)
+        XCTAssertTrue(plan.shouldRetrievePrimaryLaw)
+        XCTAssertEqual(plan.effectiveClassification.jurisdiction, "Florida")
+    }
+
+    func testGenericWhenDoesQuestionDoesNotRequirePrimaryLaw() {
+        let classification = LegalQueryClassifier.classify(
+            "When does res judicata bar relitigation under New York law?"
+        )
+        let plan = LegalResearchSourcePlanner.plan(
+            classification: classification,
+            target: LegalSourceTarget(kind: .global, jurisdiction: "New York")
+        )
+
+        XCTAssertFalse(plan.requiresPrimaryLaw)
+        XCTAssertFalse(plan.shouldRetrievePrimaryLaw)
+    }
+
+    func testDevelopmentsAreNotRetrievedForOrdinaryStatutoryQuestion() {
+        let ordinary = LegalQueryClassifier.classify("What is the deadline to file a DBA claim?")
+        XCTAssertFalse(LegalResearchSourcePlanner.plan(classification: ordinary, target: LegalSourceTarget(kind: .global)).shouldRetrieveDevelopments)
+
+        let current = LegalQueryClassifier.classify("What are the latest proposed rules affecting DBA claims?")
+        XCTAssertTrue(LegalResearchSourcePlanner.plan(classification: current, target: LegalSourceTarget(kind: .global)).shouldRetrieveDevelopments)
+    }
+
+    func testAuthorityPriorityUsesFederalHierarchyForFederalIssues() {
+        let classification = LegalQueryClassifier.classify(
+            "Find binding 9th Cir. authority on FLSA overtime exemptions."
+        )
+        let plan = LegalResearchSourcePlanner.plan(classification: classification, target: LegalSourceTarget(kind: .global))
+        let labels = plan.authorityPriority.map(\.label)
+
+        XCTAssertEqual(labels.first, "Governing federal text")
+        XCTAssertTrue(labels.contains("U.S. Supreme Court"))
+        XCTAssertTrue(labels.contains("Governing federal circuit"))
+    }
+
+    func testAuthorityPriorityKeepsCaliforniaStateHierarchy() {
+        let classification = LegalQueryClassifier.classify(
+            "Find California authority on non-compete agreements."
+        )
+        let plan = LegalResearchSourcePlanner.plan(classification: classification, target: LegalSourceTarget(kind: .global))
+        let labels = plan.authorityPriority.map(\.label)
+
+        XCTAssertEqual(labels.first, "Governing state text")
+        XCTAssertTrue(labels.contains("State court of last resort"))
+        XCTAssertFalse(labels.contains("Governing federal circuit"))
+    }
+
+    func testAnswerExemplarDoesNotInjectSpecificLimitationsPeriod() {
+        let prompt = LegalResearchPromptBuilder.buildAnswerPrompt(
+            question: "When does a limitations period run?",
+            classification: LegalQueryClassification(jurisdiction: "Federal", legalIssue: "limitations"),
+            rankedAuthorities: []
+        )
+        XCTAssertFalse(prompt.localizedCaseInsensitiveContains("two-year statute of limitations"))
+        XCTAssertFalse(prompt.localizedCaseInsensitiveContains("date of injury rather than discovery"))
     }
 }

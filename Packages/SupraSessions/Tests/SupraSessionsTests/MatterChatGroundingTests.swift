@@ -57,6 +57,41 @@ final class MatterChatGroundingTests: XCTestCase {
         XCTAssertEqual(intent, .content(folderHint: "Contracts"))
     }
 
+    func testPartyQuestionGroundsInMatterDocuments() {
+        // The exact first-screenshot failure: a bare "who are the parties" must ground in
+        // the matter's files (content path), not fall through to the model's memory.
+        let intent = MatterChatDocumentIntent.classify(
+            "Who are the parties in this action?", folderNames: ["Research"]
+        )
+        XCTAssertEqual(intent, .content(folderHint: nil))
+    }
+
+    func testCounselQuestionGroundsInMatterDocuments() {
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify("Who is counsel for McKernon Motors?", folderNames: []),
+            .content(folderHint: nil)
+        )
+    }
+
+    func testAttorneyContactQuestionGroundsInMatterDocuments() {
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify(
+                "Name each of the attorneys, their email addresses, and phone numbers.",
+                folderNames: []
+            ),
+            .content(folderHint: nil)
+        )
+    }
+
+    func testOrdinaryEmailRequestIsNotGrounded() {
+        // "rewrite this email" mentions email but is not a contact question — must NOT be
+        // pulled into document retrieval.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify("rewrite this email to be more formal", folderNames: []),
+            MatterChatDocumentIntent.none
+        )
+    }
+
     func testGeneralLegalQuestionIsNotGrounded() {
         // Must NOT hijack legal research — this should flow to the normal/legal route.
         let intent = MatterChatDocumentIntent.classify(
@@ -107,7 +142,7 @@ final class MatterChatGroundingTests: XCTestCase {
 
     func testMatterChatGroundsFolderInventoryInsteadOfFabricating() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "VyStar")
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
         let research = try store.documentLibrary.createFolder(matterID: matter.id, name: "Research")
         _ = try insertDocument(store, matter.id, folderID: research.id, name: "Avatar Props. v. Gundel.pdf")
         _ = try insertDocument(store, matter.id, folderID: research.id, name: "Hernandez v. Crespo.pdf")
@@ -144,7 +179,7 @@ final class MatterChatGroundingTests: XCTestCase {
 
     func testFolderInventoryIncludesSubfolderDocuments() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "VyStar")
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
         let research = try store.documentLibrary.createFolder(matterID: matter.id, name: "Research")
         let depositions = try store.documentLibrary.createFolder(
             matterID: matter.id, name: "Depositions", parentFolderID: research.id
@@ -178,7 +213,7 @@ final class MatterChatGroundingTests: XCTestCase {
         // The reported scenario: the user's documents are at the matter root, the
         // Research folder is actually empty. The chat must say so, not invent a list.
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "VyStar")
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
         _ = try store.documentLibrary.createFolder(matterID: matter.id, name: "Research")
         _ = try insertDocument(store, matter.id, folderID: nil, name: "Avatar Props. v. Gundel.pdf")
 
@@ -206,7 +241,7 @@ final class MatterChatGroundingTests: XCTestCase {
 
     func testGeneralQuestionInMatterChatIsNotGrounded() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "VyStar")
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
         _ = try store.documentLibrary.createFolder(matterID: matter.id, name: "Research")
 
         let capture = RequestCapture()

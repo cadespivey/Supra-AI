@@ -31,6 +31,16 @@ public final class GlobalChatController: ObservableObject {
     private let router: ModelRouter
     private let legalConfiguration: LegalModelConfiguration
     private let courtListenerClient: any CourtListenerClientProtocol
+    /// Pluggable statutory-source orchestration (Open Legal Codes today; govinfo / Openlaws /
+    /// MCP-backed sources later). Best-effort and lowest-weight — it supplements case law for
+    /// statutory questions and never blocks the answer if a source is unavailable.
+    private let statutoryOrchestrator: StatutorySourceOrchestrator
+    /// Provisions to request from the statutory tier per query.
+    private static let maxStatutoryProvisions = 4
+    /// Pluggable legal-developments tracking (Federal Register today; OpenStates / LegiScan /
+    /// Regulations.gov next). NON-citable — surfaced as a separate "Developments" section.
+    private let developmentsOrchestrator: LegalDevelopmentOrchestrator
+    private static let maxDevelopments = 5
     private var lastLegalPacketsByChatID: [String: LegalSourcePacket] = [:]
     private var activeGenerationID: GenerationID?
 
@@ -79,7 +89,9 @@ public final class GlobalChatController: ObservableObject {
         embedder: (any TextEmbedder)? = nil,
         legalConfiguration: LegalModelConfiguration = .fromEnvironment(),
         tokenStore: (any APIKeyStoreProtocol)? = nil,
-        courtListenerClient: (any CourtListenerClientProtocol)? = nil
+        courtListenerClient: (any CourtListenerClientProtocol)? = nil,
+        statutoryOrchestrator: StatutorySourceOrchestrator? = nil,
+        developmentsOrchestrator: LegalDevelopmentOrchestrator? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
@@ -104,6 +116,28 @@ public final class GlobalChatController: ObservableObject {
             ),
             baseURLOverride: legalConfiguration.courtListenerBaseURL
         )
+        // Default statutory tier: eCFR (official federal regs, currency-verifiable) + Open Legal
+        // Codes (free state/USC convenience). Both are key-less and token-free; their shared
+        // AuthorizedHTTPClient keeps the statutory rate budget separate from CourtListener's.
+        let statutoryHTTPClient = AuthorizedHTTPClient(
+            keyStore: resolvedTokenStore,
+            policy: NetworkPolicyService(),
+            logger: NetworkRequestLogger(repository: store.networkRequests),
+            redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
+        )
+        self.statutoryOrchestrator = statutoryOrchestrator ?? StatutorySourceOrchestrator(sources: [
+            GovInfoStatutorySource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore),
+            ECFRStatutorySource(client: ECFRClient(httpClient: statutoryHTTPClient)),
+            OpenLegalCodesStatutorySource(client: OpenLegalCodesClient(httpClient: statutoryHTTPClient))
+        ])
+        // Legal-developments tracking. Federal Register is key-less; the others read their API key
+        // from the token store and contribute nothing (a note) until the key is set in Settings.
+        self.developmentsOrchestrator = developmentsOrchestrator ?? LegalDevelopmentOrchestrator(sources: [
+            FederalRegisterSource(client: FederalRegisterClient(httpClient: statutoryHTTPClient)),
+            OpenStatesSource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore),
+            LegiScanSource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore),
+            RegulationsGovSource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore)
+        ])
         self.topLevelJurisdictions = Self.makeTopLevelJurisdictions()
         self.federalCircuits = Self.makeFederalCircuits()
         if case .global = scope {
@@ -443,7 +477,32 @@ public final class GlobalChatController: ObservableObject {
         options.topP = 1
         options.topK = nil
         options.repetitionPenalty = nil
+        // Literal extraction, not reasoning: a chain-of-thought scratchpad is what lets
+        // a model "derive" a full name from an email prefix. Disable thinking so the
+        // grounded turn copies facts from the sources instead of inferring them.
+        options.thinkingBudget = .off
         return options
+    }
+
+    /// A warning footer for a grounded answer listing identities (names/emails/phones)
+    /// that don't appear in the cited sources, or nil when everything is grounded. The
+    /// answer is always shown; this only marks what could not be verified in the record.
+    nonisolated static func entityGroundingBanner(_ issues: [LegalVerificationIssue]) -> String? {
+        let excerpts = issues.compactMap { issue -> String? in
+            guard let excerpt = issue.excerpt?.trimmingCharacters(in: .whitespacesAndNewlines), !excerpt.isEmpty else { return nil }
+            return excerpt
+        }
+        guard !excerpts.isEmpty else { return nil }
+        var lines = [
+            "",
+            "---",
+            "",
+            "⚠️ **Grounding check — not found in the cited documents.** The following were stated in the answer above but do not appear verbatim in the sources, and may be inferred (for example, a name reconstructed from an email prefix). Verify each against the record before relying on it:"
+        ]
+        for excerpt in excerpts {
+            lines.append("- \(excerpt)")
+        }
+        return "\n" + lines.joined(separator: "\n")
     }
 
     /// Requests cancellation of the active generation. The runtime emits a
@@ -516,6 +575,7 @@ public final class GlobalChatController: ObservableObject {
             let effectiveSystemPrompt = grounded.map { $0.systemPrompt } ?? systemPrompt
             let effectiveOptions = grounded == nil ? options : Self.groundedOptions(options)
             let groundingTrailer = grounded?.trailer
+            let groundingSourceTexts = grounded?.sourceTexts ?? []
 
             guard let modelID else {
                 errorMessage = "Load or register a local MLX model in the Models tab."
@@ -595,11 +655,28 @@ public final class GlobalChatController: ObservableObject {
                         try? store.chats.appendToken(to: variant.id, token: Self.contextTrimmedNotice)
                         streamedContent += Self.contextTrimmedNotice
                     }
+                    // The model's answer, before the source trailer — what the
+                    // entity-grounding check inspects.
+                    let answerText = streamedContent
                     // Append the grounded answer's source key so inline [S#] citations
                     // resolve to document names for the reader. Only on success.
                     if let groundingTrailer, !groundingTrailer.isEmpty {
                         try? store.chats.appendToken(to: variant.id, token: groundingTrailer)
                         streamedContent += groundingTrailer
+                    }
+                    // Post-generation grounding check: flag any name / email / phone the
+                    // answer asserts that is absent from the cited sources (e.g. a full
+                    // name reconstructed from an email prefix). Surfaced as a warning,
+                    // never suppressed — the reader sees both the answer and the caveat.
+                    if !groundingSourceTexts.isEmpty {
+                        let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
+                            answer: answerText,
+                            sourceText: groundingSourceTexts.joined(separator: "\n\n")
+                        )
+                        if let banner = Self.entityGroundingBanner(entityIssues) {
+                            try? store.chats.appendToken(to: variant.id, token: banner)
+                            streamedContent += banner
+                        }
                     }
                     try store.chats.completeVariant(variant.id)
                     try store.generation.completeGeneration(
@@ -763,8 +840,32 @@ public final class GlobalChatController: ObservableObject {
     ) async throws -> LegalWorkflowResult {
         switch route.mode {
         case .legalVerify:
+            // What to verify: pasted, citation-bearing text is checked as-is (the
+            // "/verify <text with cites>" use case). A bare command or a short comment
+            // ("/verify these names look wrong") instead verifies the PRIOR ASSISTANT
+            // ANSWER — the user's intent, and the fix for /verify previously inspecting
+            // its own command string and falsely "passing".
+            let typed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            let priorDraft = (priorAssistantDraft ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let typedIsContent = !typed.isEmpty
+                && (typed.range(of: #"\[[AS]\d+\]"#, options: .regularExpression) != nil
+                    || !LegalCitationVerifier.extractCitationLikeStrings(from: typed).isEmpty)
+            let answerToVerify = typedIsContent ? typed : (priorDraft.isEmpty ? typed : priorDraft)
+
+            // A document-grounded answer cites [S#] document sources, not the [A#]
+            // legal-authority packet; checking it against a (possibly stale) CourtListener
+            // packet would be a meaningless, falsely-reassuring "pass". Those answers are
+            // already checked for un-sourced names/identities inline when generated.
+            if answerToVerify.range(of: #"\[S\d+\]"#, options: .regularExpression) != nil,
+               answerToVerify.range(of: #"\[A\d+\]"#, options: .regularExpression) == nil {
+                let note = "This answer is grounded in this matter's documents ([S#]), not in a legal-authority packet, so `/verify` (which checks case-law citations) does not apply here. Document-grounded answers are checked automatically when generated — look for a “⚠️ Grounding check” note beneath the answer flagging any name or identifier not found in the cited documents. Use `/verify` after a `/research` or `/legal` answer to check its [A#] citations."
+                return LegalWorkflowResult(
+                    output: note, queryTerms: [], authorities: [], verification: nil, researchSessionID: nil
+                )
+            }
+
             let packet = latestLegalSourcePacket(chatID: chatID)
-            let report = LegalCitationVerifier.verify(answer: prompt, authorities: packet.authorities)
+            let report = LegalCitationVerifier.verify(answer: answerToVerify, authorities: packet.authorities)
             let preface = packet.authorities.isEmpty
                 ? "No source packet is available for this chat. Run `/research` in a matter chat first, or paste source-supported text with citations for a limited citation check.\n\n"
                 : "Verified against the latest source packet\(packet.researchSessionID.map { " (research session \($0))" } ?? "").\n\n"
@@ -864,11 +965,16 @@ public final class GlobalChatController: ObservableObject {
         options: GenerationOptions,
         history: [GenerateRequest.Turn]
     ) async throws -> LegalWorkflowResult {
-        let classification = classificationApplyingChatJurisdiction(
+        let scopedClassification = classificationApplyingChatJurisdiction(
             classificationApplyingMatterScope(LegalQueryClassifier.classify(prompt)),
             prompt: prompt
         )
-        if route.requiresJurisdiction, classification.needsJurisdictionForAuthority {
+        let sourcePlan = LegalResearchSourcePlanner.plan(
+            classification: scopedClassification,
+            target: legalSourceTarget(for: scopedClassification)
+        )
+        let classification = sourcePlan.effectiveClassification
+        if route.requiresJurisdiction, !sourcePlan.satisfiesJurisdictionRequirement {
             let message = """
             I need the jurisdiction before I can give source-grounded legal authority. Please specify the state, federal circuit, court, or other governing jurisdiction. If you only want a general non-authoritative overview, use `/draft` or ask for a general overview.
             """
@@ -887,17 +993,44 @@ public final class GlobalChatController: ObservableObject {
             return LegalWorkflowResult(output: message, queryTerms: [], authorities: [], verification: nil, researchSessionID: nil)
         }
 
-        let retrieval = try await retrieveAuthorities(for: classification, matterID: scopedMatterID)
+        let statutoryLookup: (provisions: [StatutoryProvision], notes: [String]) = sourcePlan.shouldRetrievePrimaryLaw
+            ? await statutoryProvisions(for: sourcePlan)
+            : ([], [])
+        if sourcePlan.requiresPrimaryLaw, statutoryLookup.provisions.isEmpty {
+            let terms = [sourcePlan.primaryLawQueryTerms].filter { !$0.isEmpty }
+            let output = Self.missingPrimaryLawMessage(plan: sourcePlan, notes: statutoryLookup.notes)
+            return LegalWorkflowResult(output: output, queryTerms: terms, authorities: [], verification: nil, researchSessionID: nil)
+        }
+
+        let retrieval: (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?)
+        do {
+            retrieval = try await retrieveAuthorities(for: classification, matterID: scopedMatterID)
+        } catch {
+            guard !statutoryLookup.provisions.isEmpty else { throw error }
+            retrieval = ([], [], nil)
+        }
         let rankedAll = await hydrateTopAuthorities(LegalAuthorityRanker.rank(retrieval.authorities, for: classification))
         // Cap to exactly the packet the model is shown. buildAnswerPrompt caps the
         // SOURCE PACKET at maxPacketAuthorities, so the model only ever sees
         // [A1]…[A maxPacketAuthorities]. The verifier and the stored packet (used by
         // /verify) must use the SAME capped set — otherwise a fabricated [A13+] label
         // pointing at an authority that was never in the prompt would pass as grounded.
-        let ranked = Array(rankedAll.prefix(LegalResearchPromptBuilder.maxPacketAuthorities))
+        // Packet construction is source-plan driven: primary law leads when present,
+        // and statutory/legal-rule questions are blocked before this point if primary
+        // law was required but unavailable.
+        let ranked = StatutoryPacketMerge.merge(
+            statutoryProvisions: statutoryLookup.provisions,
+            rankedCases: rankedAll,
+            jurisdictionLabel: classification.jurisdiction,
+            cap: LegalResearchPromptBuilder.maxPacketAuthorities
+        )
         let authorities = ranked.map(\.authority)
+        let queryTerms = Self.uniqued(
+            ([sourcePlan.primaryLawQueryTerms].filter { sourcePlan.shouldRetrievePrimaryLaw && !$0.isEmpty })
+            + retrieval.queryTerms
+        )
         let packet = LegalSourcePacket(
-            queryTerms: retrieval.queryTerms,
+            queryTerms: queryTerms,
             authorities: authorities,
             researchSessionID: retrieval.researchSessionID
         )
@@ -911,7 +1044,7 @@ public final class GlobalChatController: ObservableObject {
             """
             return LegalWorkflowResult(
                 output: message,
-                queryTerms: retrieval.queryTerms,
+                queryTerms: queryTerms,
                 authorities: [],
                 verification: nil,
                 researchSessionID: retrieval.researchSessionID
@@ -921,7 +1054,8 @@ public final class GlobalChatController: ObservableObject {
         let answerPrompt = LegalResearchPromptBuilder.buildAnswerPrompt(
             question: prompt,
             classification: classification,
-            rankedAuthorities: ranked
+            rankedAuthorities: ranked,
+            authorityPriority: sourcePlan.authorityPriority
         )
         let request = GenerateRequest(
             generationID: generationID,
@@ -949,6 +1083,7 @@ public final class GlobalChatController: ObservableObject {
             || (route.requiresCitations && !Self.hasSupportedCitation(failed)) {
             let revisionPrompt = LegalResearchPromptBuilder.buildRevisionPrompt(
                 question: prompt, classification: classification, rankedAuthorities: ranked,
+                authorityPriority: sourcePlan.authorityPriority,
                 priorAnswer: output, issues: failed.issues
             )
             let revisionRequest = GenerateRequest(
@@ -982,15 +1117,26 @@ public final class GlobalChatController: ObservableObject {
             // uncited proposition) only append the advisory report.
             if Self.hasHardVerificationFailure(verification, route: route)
                 || (route.requiresCitations && !Self.hasSupportedCitation(verification)) {
-                output = Self.unverifiedDraftBanner + output + "\n\n---\n\n" + LegalCitationVerifier.markdownReport(verification)
+                output = Self.blockedLegalResearchMessage(report: verification)
             } else {
                 output += "\n\n---\n\n" + LegalCitationVerifier.markdownReport(verification)
             }
         }
 
+        // Firewall: guarantee a currency caveat reaches the reader whenever the answer cites an
+        // UNVERIFIED statutory provision (a `.statute` authority with no confirmed effective date,
+        // e.g. Open Legal Codes), regardless of whether the model hedged. Dated sources (eCFR) are exempt.
+        output = Self.statutoryCurrencyCaveatApplied(to: output, authorities: authorities)
+
+        // Append a NON-citable "Legal developments" section (pending bills / rulemaking) when there
+        // is relevant tracking context. Never enters the citable packet — best-effort, never blocks.
+        if sourcePlan.shouldRetrieveDevelopments, let developments = await legalDevelopmentsSection(for: classification) {
+            output += "\n\n---\n\n" + developments
+        }
+
         return LegalWorkflowResult(
             output: output,
-            queryTerms: retrieval.queryTerms,
+            queryTerms: queryTerms,
             authorities: authorities,
             verification: verification,
             researchSessionID: retrieval.researchSessionID
@@ -1003,6 +1149,36 @@ public final class GlobalChatController: ObservableObject {
     > ⚠️ **UNVERIFIED DRAFT — DO NOT RELY.** Automated citation verification found unsupported or mismatched authority below. Independently verify every citation, quotation, and holding before use.
 
     """
+
+    static func blockedLegalResearchMessage(report: LegalVerificationReport) -> String {
+        """
+        I cannot provide a source-grounded legal answer from the retrieved packet because automated verification still found unsupported or mismatched authority after repair.
+
+        \(LegalCitationVerifier.markdownReport(report))
+        """
+    }
+
+    static func missingPrimaryLawMessage(plan: LegalResearchSourcePlan, notes: [String]) -> String {
+        var lines = [
+            "I could not retrieve the governing primary law required for this question, so I cannot answer it from case law or model memory alone.",
+            "",
+            "Primary-law search target:",
+            "- Jurisdiction: \(plan.effectiveClassification.jurisdiction ?? "Unspecified")",
+            "- Issue: \(plan.primaryLawQueryTerms)"
+        ]
+        if let citation = plan.primaryLawCitationQuery, !citation.isEmpty {
+            lines.append("- Citation target: \(citation)")
+        }
+        let allNotes = plan.notes + notes
+        if !allNotes.isEmpty {
+            lines.append("")
+            lines.append("Retrieval notes:")
+            lines += allNotes.map { "- \($0)" }
+        }
+        lines.append("")
+        lines.append("Provide the governing statute/regulation text or narrow the citation, then rerun the research.")
+        return lines.joined(separator: "\n")
+    }
 
     /// Appended when the runtime had to drop the oldest turns to fit the context
     /// window, so the user knows earlier messages were not in view for this reply
@@ -1025,7 +1201,9 @@ public final class GlobalChatController: ObservableObject {
                 return true
             case .jurisdictionMismatch:
                 return route.requiresJurisdiction
-            case .missingCitation, .noRetrievedAuthorities:
+            case .missingCitation, .noRetrievedAuthorities, .ungroundedEntity:
+                // .ungroundedEntity is a soft "shown but unverified" warning, never a
+                // hard failure that would trigger self-repair.
                 return false
             }
         }.count
@@ -1062,6 +1240,59 @@ public final class GlobalChatController: ObservableObject {
             result[index].authority.text = body
         }
         return result
+    }
+
+    private func statutoryProvisions(
+        for sourcePlan: LegalResearchSourcePlan
+    ) async -> (provisions: [StatutoryProvision], notes: [String]) {
+        guard statutoryOrchestrator.hasSources else {
+            return ([], ["No statutory or regulatory source is configured."])
+        }
+        let query = LegalResearchSourcePlanner.statutoryQuery(
+            for: sourcePlan,
+            limit: Self.maxStatutoryProvisions
+        )
+        return await statutoryOrchestrator.lookup(query)
+    }
+
+    /// Firewall: appends a currency caveat when the answer cites an unverified statutory provision
+    /// (a `.statute` authority with no confirmed effective date). Dated sources (eCFR) are exempt;
+    /// if the model already hedged, the caveat is not duplicated.
+    private static func statutoryCurrencyCaveatApplied(to output: String, authorities: [LegalAuthority]) -> String {
+        let cited = citedPacketIndices(in: output)
+        let unverifiedCited = cited.contains { index in
+            guard index >= 1, index <= authorities.count else { return false }
+            let authority = authorities[index - 1]
+            return authority.authorityType == .statute && (authority.dateFiled?.isEmpty ?? true)
+        }
+        guard unverifiedCited else { return output }
+        let lowered = output.lowercased()
+        if lowered.contains("unverified") || lowered.contains("confirm against") { return output }
+        return output + "\n\n⚠️ A cited statutory provision comes from an unverified source (no confirmed effective date). Confirm its current text against the official code before relying on it."
+    }
+
+    private static func citedPacketIndices(in text: String) -> Set<Int> {
+        guard let regex = try? NSRegularExpression(pattern: #"\[A(\d+)\]"#) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        var indices = Set<Int>()
+        regex.enumerateMatches(in: text, range: range) { match, _, _ in
+            guard let match, let captured = Range(match.range(at: 1), in: text), let value = Int(text[captured]) else { return }
+            indices.insert(value)
+        }
+        return indices
+    }
+
+    /// Best-effort, non-citable legal-developments section (pending bills / rulemaking). Runs on
+    /// statutory/regulatory questions; a lookup failure simply yields no section.
+    private func legalDevelopmentsSection(for classification: LegalQueryClassification) async -> String? {
+        guard developmentsOrchestrator.hasSources else { return nil }
+        let query = LegalDevelopmentQuery(
+            terms: classification.legalIssue,
+            jurisdiction: classification.jurisdiction,
+            limit: Self.maxDevelopments
+        )
+        let (developments, _) = await developmentsOrchestrator.lookup(query)
+        return LegalDevelopmentFormatter.section(developments: developments)
     }
 
     private func retrieveAuthorities(
@@ -1207,9 +1438,6 @@ public final class GlobalChatController: ObservableObject {
         if let posture = classification.proceduralPosture {
             terms.append(posture)
         }
-        if classification.bindingAuthorityRequired {
-            terms.append("binding controlling")
-        }
         if adverse {
             terms.append("adverse limiting distinguished rejected")
         }
@@ -1320,6 +1548,33 @@ public final class GlobalChatController: ObservableObject {
             return id
         }
         return nil
+    }
+
+    private func legalSourceTarget(for classification: LegalQueryClassification) -> LegalSourceTarget {
+        switch scope {
+        case .global:
+            return LegalSourceTarget(
+                kind: .global,
+                jurisdiction: classification.jurisdiction,
+                courtIDs: classification.courtIDs
+            )
+        case let .matter(id):
+            let matterScope = matterJurisdictionScope()
+            let matterDocuments = (try? store.documentLibrary.fetchDocuments(matterID: id)) ?? []
+            let savedAuthorities = ((try? store.authorities.fetchAuthorities(matterID: id)) ?? [])
+                .filter { record in
+                    record.useStatus != AuthorityUseStatus.doNotUse.rawValue
+                        && record.reviewState != ResearchResultReviewState.skipped.rawValue
+                }
+            return LegalSourceTarget(
+                kind: .matter,
+                matterID: id,
+                jurisdiction: classification.jurisdiction ?? matterScope?.jurisdictionName,
+                courtIDs: classification.courtIDs.isEmpty ? (matterScope?.courtListenerIDs ?? []) : classification.courtIDs,
+                hasMatterDocuments: !matterDocuments.isEmpty,
+                hasSavedMatterAuthorities: !savedAuthorities.isEmpty
+            )
+        }
     }
 
     private func classificationApplyingMatterScope(

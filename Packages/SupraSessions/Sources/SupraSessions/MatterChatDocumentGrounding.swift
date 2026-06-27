@@ -38,6 +38,24 @@ enum MatterChatDocumentIntent: Equatable {
         "case file", "casefile"
     ]
 
+    /// Questions about the matter's OWN record — who the parties/counsel are, their
+    /// contact details, who signed/served/filed. In a matter chat these are answered
+    /// from the matter's documents, not the model's memory; this is what makes a bare
+    /// "who are the parties?" ground in the file instead of confabulating names.
+    /// Deliberately specific (e.g. "email address", not bare "email") so an ordinary
+    /// "rewrite this email" doesn't get pulled into document retrieval.
+    static let matterEntityPhrases = [
+        "who is", "who are", "who's", "who was", "who were", "whose ",
+        "the parties", "all parties", "parties in", "parties to", "named parties", "party to",
+        "plaintiff", "defendant", "petitioner", "respondent", "movant", "appellant", "appellee",
+        "counsel for", "counsel of", "who represents", "who is representing", "attorneys for",
+        "attorneys representing", "the attorneys", "law firm", "lead counsel",
+        "name of", "names of", "identify the", "list the parties", "list the attorneys",
+        "email address", "e-mail address", "their email", "phone number", "telephone number",
+        "contact information", "contact info", "address for",
+        "who signed", "who served", "who filed", "signatory", "signed by", "served by", "filed by"
+    ]
+
     /// Phrases that mean "enumerate what exists" rather than "tell me what it says".
     static let inventoryPhrases = [
         "list ", "a list of", "list all", "list the", "list every",
@@ -64,11 +82,20 @@ enum MatterChatDocumentIntent: Equatable {
         let referencesCollection = mentionsFolderWord
             || countingInventory
             || collectionPhrases.contains { lower.contains($0) }
-        guard referencesCollection else { return .none }
+
+        // Identity / party / counsel / contact questions are about the matter's own
+        // record — ground them in the matter's documents even when they don't name the
+        // document collection. An "@" means the message already carries an address.
+        let asksAboutMatterEntities = matterEntityPhrases.contains { lower.contains($0) }
+            || lower.contains("@")
+
+        guard referencesCollection || asksAboutMatterEntities else { return .none }
 
         let folderHint = Self.folderHint(in: lower, folderNames: folderNames)
 
-        if inventoryPhrases.contains(where: { lower.contains($0) }) {
+        // Only the "enumerate what exists" phrasing is an inventory listing; an identity
+        // question ("who are the parties?") wants the content path (retrieved passages).
+        if referencesCollection, inventoryPhrases.contains(where: { lower.contains($0) }) {
             return .inventory(folderHint: folderHint)
         }
         return .content(folderHint: folderHint)
@@ -105,6 +132,10 @@ struct GroundedChatContext: Sendable, Equatable {
     var modelPrompt: String
     var systemPrompt: String?
     var trailer: String?
+    /// The packed source passages ([S#]) shown to the model, kept so the controller can
+    /// run a post-generation entity-grounding check (catch names absent from the record).
+    /// Empty for inventory / no-match contexts, where there is nothing to extract.
+    var sourceTexts: [String] = []
 }
 
 /// Grounds a matter chat in the matter's OWN documents. Inventory questions ("what's
@@ -243,7 +274,8 @@ final class MatterChatDocumentGrounding {
             )
         })
         return GroundedChatContext(
-            modelPrompt: prompt, systemPrompt: groundedSystemPrompt(), trailer: "\n" + appendix.markdown()
+            modelPrompt: prompt, systemPrompt: groundedSystemPrompt(), trailer: "\n" + appendix.markdown(),
+            sourceTexts: sources.map(\.text)
         )
     }
 

@@ -6,6 +6,10 @@ public enum LegalVerificationIssueKind: String, Codable, Hashable, Sendable {
     case unsupportedQuote = "unsupported_quote"
     case jurisdictionMismatch = "jurisdiction_mismatch"
     case noRetrievedAuthorities = "no_retrieved_authorities"
+    /// A person/entity name, email, or phone number asserted in a document-grounded
+    /// ([S#]) answer that does not appear in the cited source text — i.e. likely
+    /// inferred (e.g. a full name reconstructed from an email prefix) rather than read.
+    case ungroundedEntity = "ungrounded_entity"
 }
 
 public struct LegalVerificationIssue: Codable, Hashable, Sendable {
@@ -166,6 +170,104 @@ public enum LegalCitationVerifier {
             citedStrings: extracted + labelStrings
         )
     }
+
+    /// Grounding check for DOCUMENT-grounded ([S#]) chat answers: flags person/entity
+    /// NAMES, emails, and phone numbers asserted in `answer` that do not appear in the
+    /// retrieved `sourceText`. This is what catches the model expanding an email prefix
+    /// ("nrust@firm.com") into a full name ("Nancy Rust") it never actually read.
+    ///
+    /// Deliberately a SOFT signal: the caller surfaces these as an "unverified" warning,
+    /// not a suppression, so a correct-but-unstated inference is still shown — just
+    /// marked. A name is flagged when any of its significant (multi-letter) tokens is
+    /// absent from the source as a whole word; structural/organizational words are
+    /// excluded so headings and entity names are not mistaken for people.
+    public static func verifyGroundedEntities(answer: String, sourceText: String) -> [LegalVerificationIssue] {
+        let sourceWords = wordTokenSet(sourceText)
+        let sourceLower = sourceText.lowercased()
+        let sourceDigits = sourceLower.filter(\.isNumber)
+        var issues: [LegalVerificationIssue] = []
+        var seen = Set<String>()
+
+        func flag(_ excerpt: String, _ message: String) {
+            guard seen.insert(excerpt.lowercased()).inserted else { return }
+            issues.append(LegalVerificationIssue(kind: .ungroundedEntity, message: message, excerpt: excerpt))
+        }
+
+        for candidate in personNameCandidates(in: answer) {
+            let tokens = significantNameTokens(candidate)
+            guard !tokens.isEmpty else { continue }
+            if tokens.contains(where: { !sourceWords.contains($0) }) {
+                flag(candidate, "This name does not appear verbatim in the cited documents — it may be inferred (e.g. reconstructed from an email prefix or initials). The record does not spell it out; confirm it before relying on it.")
+            }
+        }
+
+        for email in regexMatches(in: answer, pattern: #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#) {
+            if !sourceLower.contains(email.lowercased()) {
+                flag(email, "This email address does not appear in the cited documents.")
+            }
+        }
+
+        for phone in regexMatches(in: answer, pattern: #"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"#) {
+            let digits = phone.filter(\.isNumber)
+            if digits.count >= 10, !sourceDigits.contains(digits) {
+                flag(phone, "This phone number does not appear in the cited documents.")
+            }
+        }
+
+        return issues
+    }
+
+    /// Whole-word, lowercased alphanumeric token set (≥2 chars) — the haystack a name
+    /// token must appear in to count as "present in the record".
+    private static func wordTokenSet(_ text: String) -> Set<String> {
+        Set(
+            text.lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { $0.count >= 2 }
+        )
+    }
+
+    private static func regexMatches(in text: String, pattern: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: nsRange).compactMap {
+            Range($0.range, in: text).map { String(text[$0]) }
+        }
+    }
+
+    /// Candidate person names: runs of 2–3 capitalized words or initials
+    /// ("Nancy Rust", "C. Todd Gallagher"), dropping any run that contains a
+    /// structural/organizational word so headings and entity names aren't read as people.
+    private static func personNameCandidates(in text: String) -> [String] {
+        let pattern = #"\b(?:[A-Z][a-zA-Z]+|[A-Z]\.)(?:\s+(?:[A-Z][a-zA-Z]+|[A-Z]\.)){1,2}\b"#
+        return regexMatches(in: text, pattern: pattern).filter { candidate in
+            let tokens = candidate.lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { !$0.isEmpty }
+            return !tokens.contains { entityNonNameTokens.contains($0) }
+        }
+    }
+
+    private static func significantNameTokens(_ candidate: String) -> [String] {
+        candidate.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 2 }
+    }
+
+    /// Words whose presence marks a capitalized run as NOT a personal name — section
+    /// headings, roles, and organizational/structural terms.
+    private static let entityNonNameTokens: Set<String> = [
+        "plaintiff", "plaintiffs", "defendant", "defendants", "appellant", "appellee",
+        "attorney", "attorneys", "counsel", "email", "note", "source", "sources", "packet",
+        "question", "answer", "analysis", "verification", "review", "summary", "based",
+        "certificate", "service", "court", "county", "circuit", "district", "division",
+        "credit", "union", "bank", "llc", "inc", "llp", "corp", "corporation", "company",
+        "holdings", "partners", "enterprises", "management", "construction", "properties",
+        "investments", "group", "fund", "trust", "city", "state", "united", "states",
+        "department", "commission", "respectfully", "sincerely", "dear", "exhibit", "docket",
+        "parties", "involved", "matter", "legal", "provided", "information", "details",
+        "contact", "representing", "thus", "verified"
+    ]
 
     public static func markdownReport(_ report: LegalVerificationReport) -> String {
         if report.passed {

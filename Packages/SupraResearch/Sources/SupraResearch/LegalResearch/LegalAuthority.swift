@@ -2,6 +2,13 @@ import Foundation
 
 public enum LegalAuthoritySource: String, Codable, Hashable, Sendable {
     case courtlistener
+    /// Statutory text from Open Legal Codes (lowest-weight, currency-caveated). Add a new case
+    /// here when wiring another statutory provider (e.g. `govinfo`, `openlaws`).
+    case openlegalcodes
+    /// Federal regulations from the official eCFR (currency-verifiable — carries an effective date).
+    case ecfr
+    /// Federal statutory materials from govinfo.
+    case govinfo
 }
 
 public enum LegalAuthorityType: String, Codable, Hashable, Sendable {
