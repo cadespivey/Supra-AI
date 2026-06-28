@@ -21,6 +21,18 @@ final class APIKeyServiceTests: XCTestCase {
         XCTAssertFalse(store.hasEnvironmentAPIKey(for: .legiScan))
     }
 
+    func testEnvironmentBackedStorePrefersEnvKeyOverPrimaryKey() throws {
+        let primary = MultiKeyStore()
+        try primary.saveAPIKey("stored-key", for: .govInfo)
+        let store = EnvironmentBackedTokenStore(
+            primary: primary,
+            environment: ["SUPRA_GOVINFO_API_KEY": "env-key"]
+        )
+
+        XCTAssertEqual(try store.loadAPIKey(for: .govInfo), "env-key")
+        XCTAssertTrue(store.hasEnvironmentAPIKey(for: .govInfo))
+    }
+
     func testEnvironmentBackedStoreDelegatesToPrimaryWhenNoEnvKey() throws {
         let store = EnvironmentBackedTokenStore(primary: MultiKeyStore(), environment: [:])
         XCTAssertNil(try store.loadAPIKey(for: .legiScan))

@@ -66,7 +66,6 @@ final class SettingsControllerTests: XCTestCase {
         XCTAssertTrue(settings.isEnvironmentAPIKey(.govInfo))
     }
 
-
     func testSelectingPresetSnapsSamplingParametersAndPersists() throws {
         let store = try makeStore()
         let settings = SettingsController(store: store)
