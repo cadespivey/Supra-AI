@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import SupraCore
+import SupraDocuments
 import SupraNetworking
 import SupraResearch
 import SupraRuntimeClient
@@ -198,7 +199,16 @@ public final class GlobalChatController: ObservableObject {
             messages = []
             return
         }
-        messages = (try? store.chats.fetchMessages(chatID: selectedChatID))?.map(ChatMessage.init) ?? []
+        let records = (try? store.chats.fetchMessages(chatID: selectedChatID)) ?? []
+        messages = records.map { record in
+            var message = ChatMessage(record: record)
+            // Inline citations only exist for finalized assistant messages.
+            if message.role == .assistant, !message.isStreaming {
+                let citations = (try? store.chats.fetchCitations(messageID: message.id)) ?? []
+                message.citations = citations.map(MessageCitation.init)
+            }
+            return message
+        }
     }
 
     /// Opens a fresh, blank chat: deselects the current chat (clearing the message
@@ -242,6 +252,50 @@ public final class GlobalChatController: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Renders an entire chat conversation as a Markdown transcript: the chat title
+    /// as an H1, then each turn labelled "You" / "Assistant". Assistant turns use the
+    /// answer with chain-of-thought stripped (matching what's shown on screen), and
+    /// system turns are dropped. Emoji stripping is applied by the caller (the view's
+    /// `EmojiStripper`). Pure and order-preserving so it can be unit-tested directly.
+    /// Surfaces a user-facing error from a view-driven action (e.g. a failed file
+    /// export) through the same banner the controller uses internally.
+    public func reportError(_ message: String) {
+        errorMessage = message
+    }
+
+    /// Resolves a tapped `[S#]` matter-document citation into a renderable preview
+    /// (navigated to its page, with a best-effort highlight). Keeps the view free of
+    /// the store, mirroring `MatterDocumentsController.preview(documentID:)`.
+    public func citationPreview(
+        documentID: String,
+        locator: DocumentSourceLocator,
+        matchText: String?
+    ) -> DocumentPreviewModel {
+        DocumentPreviewLoader(store: store).load(
+            documentID: documentID, locator: locator, matchText: matchText
+        )
+    }
+
+    public func exportTranscriptMarkdown(chatID: String, title: String) -> String {
+        let messages = (try? store.chats.fetchMessages(chatID: chatID))?.map(ChatMessage.init) ?? []
+        var lines: [String] = ["# \(title)", ""]
+        for message in messages where message.role != .system {
+            let label = message.role == .user ? "**You:**" : "**Assistant:**"
+            let body = message.role == .assistant
+                ? ReasoningContent.answer(from: message.content)
+                : message.content
+            let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            lines.append(label)
+            lines.append("")
+            lines.append(trimmed)
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Re-homes a global chat into a matter (e.g. a chat that turned out to belong
@@ -576,6 +630,7 @@ public final class GlobalChatController: ObservableObject {
             let effectiveOptions = grounded == nil ? options : Self.groundedOptions(options)
             let groundingTrailer = grounded?.trailer
             let groundingSourceTexts = grounded?.sourceTexts ?? []
+            let groundingSources = grounded?.sources ?? []
 
             guard let modelID else {
                 errorMessage = "Load or register a local MLX model in the Models tab."
@@ -683,7 +738,13 @@ public final class GlobalChatController: ObservableObject {
                         generationID: session.id,
                         metrics: storedMetrics(from: finalMetrics)
                     )
+                    let citations = persistSourceCitations(
+                        messageID: assistant.id,
+                        answer: answerText,
+                        sources: groundingSources
+                    )
                     updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                    attachCitations(citations, toMessage: assistant.id)
 
                 case .generationCancelled:
                     sawTerminal = true
@@ -791,7 +852,13 @@ public final class GlobalChatController: ObservableObject {
             try store.chats.appendToken(to: variant.id, token: result.output)
             try store.chats.completeVariant(variant.id)
             try store.generation.completeGeneration(generationID: session.id)
+            let citations = persistAuthorityCitations(
+                messageID: assistant.id,
+                answer: result.output,
+                authorities: result.authorities
+            )
             updateMessage(id: assistant.id, content: result.output, status: .completed)
+            attachCitations(citations, toMessage: assistant.id)
             recordLegalResearchAudit(
                 route: route,
                 modelID: modelID,
@@ -967,7 +1034,8 @@ public final class GlobalChatController: ObservableObject {
     ) async throws -> LegalWorkflowResult {
         let scopedClassification = classificationApplyingChatJurisdiction(
             classificationApplyingMatterScope(LegalQueryClassifier.classify(prompt)),
-            prompt: prompt
+            prompt: prompt,
+            history: history
         )
         let sourcePlan = LegalResearchSourcePlanner.plan(
             classification: scopedClassification,
@@ -1618,7 +1686,8 @@ public final class GlobalChatController: ObservableObject {
     /// bound by `classificationApplyingMatterScope`.
     private func classificationApplyingChatJurisdiction(
         _ classification: LegalQueryClassification,
-        prompt: String
+        prompt: String,
+        history: [GenerateRequest.Turn] = []
     ) -> LegalQueryClassification {
         guard scopedMatterID == nil else { return classification }
 
@@ -1627,7 +1696,7 @@ public final class GlobalChatController: ObservableObject {
         if isExplicit {
             option = JurisdictionCatalog.shared.option(id: jurisdictionOverrideID)
         } else if classification.jurisdiction == nil {
-            option = inferredJurisdictionOption(from: prompt)
+            option = inferredJurisdictionOption(from: prompt, history: history)
         } else {
             option = nil
         }
@@ -1661,9 +1730,33 @@ public final class GlobalChatController: ObservableObject {
 
     /// Best-effort detection of a jurisdiction named in the prompt across every
     /// state aggregate plus the federal courts — broader than the classifier's
-    /// built-in shortlist, used only as the auto-detect fallback.
-    private func inferredJurisdictionOption(from prompt: String) -> JurisdictionOption? {
-        let lower = prompt.lowercased()
+    /// built-in shortlist, used only as the auto-detect fallback. When the current
+    /// prompt names no jurisdiction, the most recent user turns are scanned too, so
+    /// a follow-up like "what is the exact language of the statute?" inherits the
+    /// federal (or state) jurisdiction established earlier in the conversation.
+    private func inferredJurisdictionOption(
+        from prompt: String,
+        history: [GenerateRequest.Turn] = []
+    ) -> JurisdictionOption? {
+        if let option = inferredJurisdictionOption(fromText: prompt) {
+            return option
+        }
+        // Fall back to recent user turns (most recent first), stopping at the first
+        // match. Restricted to user turns so the assistant's own boilerplate (e.g.
+        // the "I need the jurisdiction" prompt) can't re-trigger detection.
+        for turn in history.reversed() where turn.role == .user {
+            if let option = inferredJurisdictionOption(fromText: turn.content) {
+                return option
+            }
+        }
+        return nil
+    }
+
+    /// Single-string jurisdiction detection: explicit state/circuit names, the
+    /// "federal court(s)" phrase, or a federal citation shape (U.S.C., C.F.R.,
+    /// federal reporters, the U.S. reporter) — all of which imply federal courts.
+    private func inferredJurisdictionOption(fromText text: String) -> JurisdictionOption? {
+        let lower = text.lowercased()
         func mentions(_ needle: String) -> Bool {
             guard !needle.isEmpty else { return false }
             let pattern = "(^|[^a-z])" + NSRegularExpression.escapedPattern(for: needle.lowercased()) + "([^a-z]|$)"
@@ -1680,10 +1773,27 @@ public final class GlobalChatController: ObservableObject {
         if lower.range(
             of: #"(^|[^a-z])(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|federal|d\.?c\.?)\s+circuit"#,
             options: .regularExpression
-        ) != nil || mentions("federal court") || mentions("federal courts") {
+        ) != nil || mentions("federal court") || mentions("federal courts")
+            || Self.mentionsFederalCitation(lower) {
             return topLevelJurisdictions.first { $0.id == "federal-courts" }
         }
         return nil
+    }
+
+    /// Conservative, digit-anchored detection of a federal statute, regulation, or
+    /// reporter citation (e.g. "18 U.S.C. § 1001", "32 C.F.R. § 1100", "123 F.3d
+    /// 456", "410 U.S. 113"). All imply federal jurisdiction. Each pattern requires
+    /// a leading volume/section number so prose mentions of "U.S." don't trigger it.
+    static func mentionsFederalCitation(_ lowercasedText: String) -> Bool {
+        let patterns = [
+            #"\b\d+\s+u\.?\s?s\.?\s?c\.?(\s?a\.?)?\b"#,                              // U.S.C. / U.S.C.A.
+            #"\b\d+\s+c\.?\s?f\.?\s?r\.?\b"#,                                        // C.F.R.
+            #"\b\d+\s+f\.(\s?(2d|3d|4th|app'?x|supp\.?(\s?(2d|3d))?))?\s+\d+"#,      // F., F.2d, F.3d, F. Supp. 2d
+            #"\b\d+\s+u\.?\s?s\.?\s+\d+"#                                            // U.S. reporter, e.g. 410 U.S. 113
+        ]
+        return patterns.contains {
+            lowercasedText.range(of: $0, options: .regularExpression) != nil
+        }
     }
 
     private static func makeTopLevelJurisdictions() -> [JurisdictionOption] {
@@ -1991,6 +2101,92 @@ public final class GlobalChatController: ObservableObject {
         }
         messages[index].content = content
         messages[index].status = status
+    }
+
+    /// Attaches resolved citations to the in-memory message so the chat UI can wire
+    /// taps without waiting for a full reload (and tolerates a since-deselected chat).
+    private func attachCitations(_ citations: [MessageCitation], toMessage id: String) {
+        guard !citations.isEmpty,
+              let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        messages[index].citations = citations
+    }
+
+    /// Persists `[A#]` legal-research authorities for a finalized message. The ranked
+    /// `authorities` are the same capped, ordered packet the model saw, so `[A1]` =
+    /// `authorities[0]`. Only labels that actually appear in the answer are stored, so
+    /// unused packet entries don't become orphan rows. Returns the domain citations.
+    @discardableResult
+    private func persistAuthorityCitations(
+        messageID: String,
+        answer: String,
+        authorities: [LegalAuthority]
+    ) -> [MessageCitation] {
+        guard !authorities.isEmpty else { return [] }
+        let present = Self.citationLabels(in: answer)
+        var records: [MessageCitationRecord] = []
+        for (index, authority) in authorities.enumerated() {
+            let label = "A\(index + 1)"
+            guard present.contains(label), let url = authority.url, !url.isEmpty else { continue }
+            records.append(
+                MessageCitationRecord(
+                    messageID: messageID,
+                    label: label,
+                    kind: MessageCitation.Kind.authority.rawValue,
+                    url: url,
+                    displayName: authority.caseName ?? authority.citation,
+                    rank: index
+                )
+            )
+        }
+        guard !records.isEmpty else { return [] }
+        try? store.chats.replaceCitations(messageID: messageID, records)
+        return records.map(MessageCitation.init)
+    }
+
+    /// Persists `[S#]` matter-document sources for a finalized message, so a tapped
+    /// marker opens the in-app preview at the cited page. Only labels present in the
+    /// answer are stored. Returns the domain citations. Chat-attachment `[S#]` (which
+    /// carry no document reference) pass an empty `sources` and so persist nothing.
+    @discardableResult
+    private func persistSourceCitations(
+        messageID: String,
+        answer: String,
+        sources: [GroundedSourceRef]
+    ) -> [MessageCitation] {
+        guard !sources.isEmpty else { return [] }
+        let present = Self.citationLabels(in: answer)
+        var records: [MessageCitationRecord] = []
+        for (index, source) in sources.enumerated() {
+            guard present.contains(source.label) else { continue }
+            records.append(
+                MessageCitationRecord(
+                    messageID: messageID,
+                    label: source.label,
+                    kind: MessageCitation.Kind.source.rawValue,
+                    documentID: source.documentID,
+                    locatorJSON: source.locator.encodedJSON(),
+                    displayName: source.documentName,
+                    matchText: source.excerpt,
+                    rank: index
+                )
+            )
+        }
+        guard !records.isEmpty else { return [] }
+        try? store.chats.replaceCitations(messageID: messageID, records)
+        return records.map(MessageCitation.init)
+    }
+
+    /// The distinct `[A#]`/`[S#]` citation labels (no brackets) present in an answer.
+    static func citationLabels(in text: String) -> Set<String> {
+        guard let regex = try? NSRegularExpression(pattern: #"\[([AS]\d{1,3})\]"#) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        var labels: Set<String> = []
+        for match in regex.matches(in: text, range: range) {
+            if let r = Range(match.range(at: 1), in: text) {
+                labels.insert(String(text[r]))
+            }
+        }
+        return labels
     }
 
     private func storedMetrics(from metrics: RuntimeMetrics?) -> StoredRuntimeMetrics {

@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import SupraCore
+import SupraDocuments
 import SupraNetworking
 import SupraResearch
 import SupraRuntimeClient
@@ -203,6 +204,75 @@ final class AppEnvironment: ObservableObject {
         if mattersController.matters.isEmpty {
             _ = try? mattersController.createMatter(name: "McKernon Motors v. Liberty Rail")
             mattersController.loadMatters()
+        }
+        seedUITestCitationsChatIfNeeded()
+    }
+
+    /// Seeds a global chat whose assistant answer carries clickable `[A1]` (authority)
+    /// and `[S1]` (document source) citations, plus a small text document so the
+    /// `[S1]` preview resolves to real content. Lets UI tests exercise the sources
+    /// block / inline-citation / export features without a model or network.
+    private func seedUITestCitationsChatIfNeeded() {
+        let existing = (try? store.chats.fetchGlobalChats()) ?? []
+        guard !existing.contains(where: { $0.title == "Citations Demo" }) else { return }
+        do {
+            // A text document so the [S1] citation opens a real preview.
+            var documentID: String?
+            if let matterID = mattersController.matters.first?.id {
+                let blob = try store.documentLibrary.upsertBlob(
+                    DocumentBlobRecord(
+                        sha256: "uitest-agreement-sha",
+                        byteSize: 0,
+                        originalExtension: "pdf",
+                        managedRelativePath: "uitest/agreement.pdf"
+                    )
+                ).blob
+                let document = try store.documentLibrary.insertDocument(
+                    MatterDocumentRecord(
+                        matterID: matterID,
+                        blobID: blob.id,
+                        displayName: "agreement.pdf",
+                        status: MatterDocumentStatus.ready.rawValue
+                    )
+                )
+                try store.documentIndex.replaceParts(documentID: document.id, parts: [
+                    DocumentPagePartRecord(
+                        documentID: document.id,
+                        partIndex: 0,
+                        sourceKind: DocumentSourceKind.text.rawValue,
+                        normalizedText: "SECTION 3. The term of this Agreement is two (2) years from the Effective Date.",
+                        charCount: 76
+                    )
+                ])
+                documentID = document.id
+            }
+
+            let chat = try store.chats.createGlobalChat(title: "Citations Demo")
+            _ = try store.chats.appendUserMessage(
+                chatID: chat.id,
+                content: "Summarize the controlling authority and the contract term."
+            )
+            let assistant = try store.chats.createAssistantMessageShell(chatID: chat.id)
+            let variant = try store.chats.createVariant(messageID: assistant.id, generationSessionID: nil)
+            let answer = "The Ninth Circuit recognized the claim [A1]. Your agreement confirms a two-year term [S1]."
+            try store.chats.appendToken(to: variant.id, token: answer)
+            try store.chats.completeVariant(variant.id)
+
+            let locator = DocumentSourceLocator(sourceKind: .text, charStart: 0, charEnd: 9)
+            try store.chats.replaceCitations(messageID: assistant.id, [
+                MessageCitationRecord(
+                    messageID: assistant.id, label: "A1", kind: "authority",
+                    url: "https://www.courtlistener.com/opinion/1/foo-v-bar/",
+                    displayName: "Foo v. Bar, 1 F.4th 1", rank: 0
+                ),
+                MessageCitationRecord(
+                    messageID: assistant.id, label: "S1", kind: "source",
+                    documentID: documentID, locatorJSON: locator.encodedJSON(),
+                    displayName: "agreement.pdf", matchText: "SECTION 3", rank: 1
+                )
+            ])
+        } catch {
+            // Best-effort fixture seeding — a failure just means the demo chat is absent.
         }
     }
 
