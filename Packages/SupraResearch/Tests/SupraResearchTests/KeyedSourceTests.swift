@@ -85,6 +85,8 @@ final class KeyedSourceTests: XCTestCase {
         XCTAssertEqual(provision.effectiveDate, "2024-01-03")
         XCTAssertNil(provision.currencyCaveat)
         XCTAssertTrue(provision.url?.contains("USCODE-2023-title11") ?? false)
+        XCTAssertFalse(provision.isCitableAuthority, "govinfo search hits are package locators until exact section text is fetched")
+        XCTAssertTrue(result.note?.contains("package-level") ?? false)
     }
 
     func testGovInfoMissingKeyYieldsActionableNote() async {

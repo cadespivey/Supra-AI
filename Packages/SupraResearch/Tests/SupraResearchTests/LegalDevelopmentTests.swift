@@ -55,6 +55,48 @@ final class LegalDevelopmentTests: XCTestCase {
         XCTAssertEqual(merged.first?.identifier, "b", "most recent first")
     }
 
+    func testOrchestratorFiltersUnrelatedDevelopments() async {
+        let relevant = LegalDevelopment(
+            sourceID: "fr",
+            sourceName: "FR",
+            kind: .regulatory,
+            identifier: "FR Doc 1",
+            title: "Defense Base Act claims administration update",
+            jurisdiction: "Federal",
+            date: "2026-06-01"
+        )
+        let unrelated = LegalDevelopment(
+            sourceID: "fr",
+            sourceName: "FR",
+            kind: .regulatory,
+            identifier: "FR Doc 2",
+            title: "Federal Acquisition Regulation overhaul",
+            jurisdiction: "Federal",
+            date: "2026-06-02"
+        )
+        let singleTokenOverlap = LegalDevelopment(
+            sourceID: "fr",
+            sourceName: "FR",
+            kind: .regulatory,
+            identifier: "FR Doc 3",
+            title: "Base Seattle modernization environmental review",
+            jurisdiction: "Federal",
+            date: "2026-06-03"
+        )
+
+        let (merged, _) = await LegalDevelopmentOrchestrator(sources: [
+            StubDevSource(developments: [singleTokenOverlap, unrelated, relevant])
+        ]).lookup(LegalDevelopmentQuery(terms: "latest Defense Base Act claim filing limits"))
+
+        XCTAssertEqual(merged.map(\.identifier), ["FR Doc 1"])
+
+        let (acronymMerged, _) = await LegalDevelopmentOrchestrator(sources: [
+            StubDevSource(developments: [singleTokenOverlap, unrelated, relevant])
+        ]).lookup(LegalDevelopmentQuery(terms: "latest DBA filing limits"))
+
+        XCTAssertEqual(acronymMerged.map(\.identifier), ["FR Doc 1"])
+    }
+
     // MARK: - Formatter (non-citable section)
 
     func testFormatterProducesLabeledNonCitableSection() throws {

@@ -264,15 +264,20 @@ public enum LegalResearchSourcePlanner {
         if values.contains(where: { $0.contains("federal") || $0.contains("circuit") }) {
             return true
         }
-        let federalCourtIDs: Set<String> = [
-            "scotus", "ca1", "ca2", "ca3", "ca4", "ca5", "ca6", "ca7", "ca8", "ca9",
-            "ca10", "ca11", "cadc", "cafc", "cand", "dcd", "nysd", "nyed", "txsd",
-            "txnd", "flsd", "flmd", "flnd"
-        ]
-        if classification.courtIDs.contains(where: federalCourtIDs.contains) {
+        let courtIDs = classification.courtIDs + target.courtIDs
+        if courtIDs.contains(where: isKnownFederalCourtID) {
             return true
         }
         return federalSchemeHint(for: classification.legalIssue) != nil
+    }
+
+    private static func isKnownFederalCourtID(_ courtID: String) -> Bool {
+        let normalized = courtID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return false }
+        return JurisdictionCatalog.shared.options.contains { option in
+            option.system == .federal
+                && option.courtListenerIDs.contains { $0.lowercased() == normalized }
+        }
     }
 
     private struct FederalSchemeHint {

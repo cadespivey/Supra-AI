@@ -375,6 +375,16 @@ public enum LegalCitationVerifier {
     /// free bidirectional substring containment, which previously let an unrelated
     /// authority "support" a fabricated cite.
     private static func supportingAuthority(for citation: String, among authorities: [LegalAuthority]) -> LegalAuthority? {
+        let citedStatutes = statutoryCitationKeys(in: citation)
+        if !citedStatutes.isEmpty {
+            return authorities.first { authority in
+                let authorityStatutes = statutoryCitationKeys(for: authority)
+                return citedStatutes.allSatisfy { cited in
+                    authorityStatutes.contains { statutoryCitationMatches(cited, $0) }
+                }
+            }
+        }
+
         let reporterCitations = citationMatches(in: citation, patterns: reporterCitationPatterns)
         let caseName = caseNamePart(from: citation)
         if !reporterCitations.isEmpty {
@@ -403,6 +413,99 @@ public enum LegalCitationVerifier {
         return authorities.first { authority in
             authority.allCitationStrings.contains { exactCitationMatch(citation, $0) }
         }
+    }
+
+    private struct StatutoryCitationKey: Hashable {
+        var code: String
+        var title: String
+        var section: String
+    }
+
+    private static func statutoryCitationKeys(for authority: LegalAuthority) -> [StatutoryCitationKey] {
+        let values = authority.allCitationStrings + [
+            authority.id,
+            authority.caseName,
+            authority.url,
+            authority.jurisdiction
+        ].compactMap { $0 }
+        return Array(Set(values.flatMap(statutoryCitationKeys(in:)))).sorted {
+            [$0.code, $0.title, $0.section].joined(separator: "|")
+                < [$1.code, $1.title, $1.section].joined(separator: "|")
+        }
+    }
+
+    private static func statutoryCitationKeys(in value: String) -> [StatutoryCitationKey] {
+        var keys: [StatutoryCitationKey] = []
+        keys += statutoryCitationKeys(
+            in: value,
+            pattern: #"(?i)\b(\d{1,4})\s+U\.?\s?S\.?\s?C\.?(?:A\.?)?\s*§+\s*([\w().-]+)"#,
+            code: "usc"
+        )
+        keys += statutoryCitationKeys(
+            in: value,
+            pattern: #"(?i)\b(\d{1,4})\s+C\.?\s?F\.?\s?R\.?\s*§+\s*([\w().-]+)"#,
+            code: "cfr"
+        )
+        keys += statutoryCitationKeys(
+            in: value,
+            pattern: #"(?i)\b(?:United States Code|U\.?\s?S\.?\s?Code),?\s+Title\s+(\d{1,4})\b[^§\n\r]*§+\s*([\w().-]+)"#,
+            code: "usc"
+        )
+        keys += statutoryCitationKeys(
+            in: value,
+            pattern: #"(?i)\b(?:Code of Federal Regulations|C\.?\s?F\.?\s?R\.?),?\s+Title\s+(\d{1,4})\b[^§\n\r]*§+\s*([\w().-]+)"#,
+            code: "cfr"
+        )
+        keys += providerLocatorStatutoryKeys(in: value)
+        return Array(Set(keys))
+    }
+
+    private static func statutoryCitationKeys(in value: String, pattern: String, code: String) -> [StatutoryCitationKey] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let nsRange = NSRange(value.startIndex..<value.endIndex, in: value)
+        return regex.matches(in: value, range: nsRange).compactMap { match in
+            guard match.numberOfRanges >= 3,
+                  let titleRange = Range(match.range(at: 1), in: value),
+                  let sectionRange = Range(match.range(at: 2), in: value)
+            else { return nil }
+            return StatutoryCitationKey(
+                code: code,
+                title: String(value[titleRange]),
+                section: canonicalStatutorySection(String(value[sectionRange]))
+            )
+        }
+    }
+
+    private static func providerLocatorStatutoryKeys(in value: String) -> [StatutoryCitationKey] {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(?i)\bus-(usc|cfr)-title-(\d{1,4})\b[^A-Za-z0-9]+(?:chapter-[^/\s]+/)?section-([\w().-]+)"#
+        ) else { return [] }
+        let nsRange = NSRange(value.startIndex..<value.endIndex, in: value)
+        return regex.matches(in: value, range: nsRange).compactMap { match in
+            guard match.numberOfRanges >= 4,
+                  let codeRange = Range(match.range(at: 1), in: value),
+                  let titleRange = Range(match.range(at: 2), in: value),
+                  let sectionRange = Range(match.range(at: 3), in: value)
+            else { return nil }
+            return StatutoryCitationKey(
+                code: String(value[codeRange]).lowercased(),
+                title: String(value[titleRange]),
+                section: canonicalStatutorySection(String(value[sectionRange]))
+            )
+        }
+    }
+
+    private static func canonicalStatutorySection(_ value: String) -> String {
+        value.lowercased()
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".,;:")))
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .joined()
+    }
+
+    private static func statutoryCitationMatches(_ lhs: StatutoryCitationKey, _ rhs: StatutoryCitationKey) -> Bool {
+        lhs.code == rhs.code
+            && lhs.title == rhs.title
+            && lhs.section == rhs.section
     }
 
     /// Generic connectives and corporate suffixes that carry no identifying weight

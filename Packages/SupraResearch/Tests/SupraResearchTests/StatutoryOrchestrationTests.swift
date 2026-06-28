@@ -147,6 +147,30 @@ final class StatutoryOrchestrationTests: XCTestCase {
         XCTAssertEqual(merged.last?.authority.authorityType, .case)
     }
 
+    func testPacketMergeSkipsLocatorOnlyStatutes() {
+        let cases = LegalAuthorityRanker.rank([caseAuthority("A")], for: statuteClassification())
+        let locatorOnly = StatutoryProvision(
+            sourceID: "govinfo",
+            sourceName: "govinfo",
+            weightTier: .currencyVerifiable,
+            jurisdictionName: "United States Code",
+            citation: "United States Code, 2023 Edition, Title 33",
+            text: "Locator only",
+            effectiveDate: "2024-01-03",
+            isCitableAuthority: false
+        )
+
+        let merged = StatutoryPacketMerge.merge(
+            statutoryProvisions: [locatorOnly],
+            rankedCases: cases,
+            jurisdictionLabel: "Federal",
+            cap: 12
+        )
+
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.authority.authorityType, .case, "package-level locators must not enter the citable source packet")
+    }
+
     func testGovInfoProvisionKeepsGovInfoProvenance() {
         let provision = StatutoryProvision(
             sourceID: "govinfo", sourceName: "govinfo", weightTier: .currencyVerifiable,

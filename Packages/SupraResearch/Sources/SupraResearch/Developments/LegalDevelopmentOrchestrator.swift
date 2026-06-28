@@ -23,11 +23,14 @@ public struct LegalDevelopmentOrchestrator: Sendable {
             return collected
         }
 
+        let queryTerms = Self.significantTerms(in: query.terms)
         var seen = Set<String>()
         var developments: [LegalDevelopment] = []
         for result in results {
             for development in result.developments where seen.insert(development.dedupKey).inserted {
-                developments.append(development)
+                if Self.isRelevant(development, to: queryTerms) {
+                    developments.append(development)
+                }
             }
         }
         // Most recent first (developments are time-sensitive); undated entries sort last.
@@ -36,4 +39,58 @@ public struct LegalDevelopmentOrchestrator: Sendable {
         let notes = results.compactMap(\.note)
         return (developments, notes)
     }
+
+    private static func isRelevant(_ development: LegalDevelopment, to queryTerms: Set<String>) -> Bool {
+        guard !queryTerms.isEmpty else { return true }
+        let haystack = [
+            development.identifier,
+            development.title,
+            development.status,
+            development.summary
+        ]
+        .compactMap { $0 }
+        .joined(separator: " ")
+        let developmentTerms = significantTerms(in: haystack)
+        let overlap = queryTerms.intersection(developmentTerms).count
+        let requiredOverlap = queryTerms.count <= 1 ? 1 : min(2, queryTerms.count)
+        return overlap >= requiredOverlap
+    }
+
+    private static func significantTerms(in text: String) -> Set<String> {
+        let normalized = text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .map(Self.normalizeDevelopmentTerm)
+            .filter { $0.count >= 3 && !developmentStopwords.contains($0) }
+        return Set(normalized.flatMap(Self.expandedDevelopmentTerms))
+    }
+
+    private static func normalizeDevelopmentTerm(_ value: String) -> String {
+        if value.hasSuffix("ies"), value.count > 4 {
+            return String(value.dropLast(3)) + "y"
+        }
+        if value.hasSuffix("s"), value.count > 4 {
+            return String(value.dropLast())
+        }
+        return value
+    }
+
+    private static func expandedDevelopmentTerms(_ value: String) -> [String] {
+        switch value {
+        case "dba":
+            return ["dba", "defense", "base"]
+        case "lhwca":
+            return ["lhwca", "longshore", "harbor", "worker", "compensation"]
+        default:
+            return [value]
+        }
+    }
+
+    private static let developmentStopwords: Set<String> = [
+        "act", "acts", "affect", "affecting", "agency", "agencies", "amendment",
+        "bill", "case", "claim", "claimant", "code", "current", "deadline",
+        "does", "federal", "file", "filing", "jurisdiction", "latest", "law",
+        "legal", "limit", "limitation", "made", "pending", "period", "proposed",
+        "recent", "regulation", "regulatory", "rule", "rulemaking", "rules",
+        "section", "state", "statute", "statutory", "time", "under", "when"
+    ]
 }
