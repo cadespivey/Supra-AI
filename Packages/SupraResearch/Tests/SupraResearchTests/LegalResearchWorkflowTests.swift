@@ -355,6 +355,28 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertTrue(report.issues.contains { $0.kind == .unsupportedCitation && ($0.excerpt?.contains("§ 9999") ?? false) })
     }
 
+    func testFederalUSCCitationMatchesOpenLegalCodesTitleLabel() {
+        let authority = LegalAuthority(
+            id: "open-legal-codes:us-usc-title-33:chapter-18/section-913",
+            source: .openlegalcodes,
+            authorityType: .statute,
+            caseName: "Filing of claims",
+            citation: "United States Code, Title 33 § 913",
+            citations: ["§ 913", "United States Code, Title 33 § 913"],
+            jurisdiction: "Federal",
+            snippet: "Time for filing claims under the Longshore and Harbor Workers' Compensation Act.",
+            text: "Time for filing claims under the Longshore and Harbor Workers' Compensation Act."
+        )
+        let answer = "The claim-filing provision is codified at 33 U.S.C. § 913 [A1]."
+
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [authority], expectedJurisdiction: "Federal")
+
+        XCTAssertFalse(
+            report.issues.contains { $0.kind == .unsupportedCitation && ($0.excerpt?.contains("33 U.S.C. § 913") ?? false) },
+            "federal statutory citations should match equivalent provider labels"
+        )
+    }
+
     // MARK: - Per-citation jurisdiction (audit [17])
 
     func testJurisdictionMismatchFlaggedPerCitedAuthority() {
@@ -489,6 +511,32 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertEqual(labels.first, "Governing federal text")
         XCTAssertTrue(labels.contains("U.S. Supreme Court"))
         XCTAssertTrue(labels.contains("Governing federal circuit"))
+    }
+
+    func testAuthorityPriorityTreatsEveryCatalogFederalCourtIDAsFederal() {
+        let federalCourtIDs = Array(Set(
+            JurisdictionCatalog.shared.options
+                .filter { $0.system == .federal }
+                .flatMap(\.courtListenerIDs)
+        )).sorted()
+        XCTAssertTrue(federalCourtIDs.contains("cacd"), "the catalog includes federal districts beyond the old allowlist")
+        XCTAssertTrue(federalCourtIDs.contains("ded"), "D. Del. is a federal district court")
+
+        for courtID in federalCourtIDs {
+            let classification = LegalQueryClassification(
+                legalIssue: "motion to dismiss standard",
+                courtIDs: [courtID]
+            )
+            let plan = LegalResearchSourcePlanner.plan(
+                classification: classification,
+                target: LegalSourceTarget(kind: .global)
+            )
+            XCTAssertEqual(
+                plan.authorityPriority.first?.label,
+                "Governing federal text",
+                "courtID \(courtID) should use the federal authority hierarchy"
+            )
+        }
     }
 
     func testAuthorityPriorityKeepsCaliforniaStateHierarchy() {

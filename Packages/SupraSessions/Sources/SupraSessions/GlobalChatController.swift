@@ -996,7 +996,8 @@ public final class GlobalChatController: ObservableObject {
         let statutoryLookup: (provisions: [StatutoryProvision], notes: [String]) = sourcePlan.shouldRetrievePrimaryLaw
             ? await statutoryProvisions(for: sourcePlan)
             : ([], [])
-        if sourcePlan.requiresPrimaryLaw, statutoryLookup.provisions.isEmpty {
+        let citableStatutoryProvisions = statutoryLookup.provisions.filter(\.isCitableAuthority)
+        if sourcePlan.requiresPrimaryLaw, citableStatutoryProvisions.isEmpty {
             let terms = [sourcePlan.primaryLawQueryTerms].filter { !$0.isEmpty }
             let output = Self.missingPrimaryLawMessage(plan: sourcePlan, notes: statutoryLookup.notes)
             return LegalWorkflowResult(output: output, queryTerms: terms, authorities: [], verification: nil, researchSessionID: nil)
@@ -1019,7 +1020,7 @@ public final class GlobalChatController: ObservableObject {
         // and statutory/legal-rule questions are blocked before this point if primary
         // law was required but unavailable.
         let ranked = StatutoryPacketMerge.merge(
-            statutoryProvisions: statutoryLookup.provisions,
+            statutoryProvisions: citableStatutoryProvisions,
             rankedCases: rankedAll,
             jurisdictionLabel: classification.jurisdiction,
             cap: LegalResearchPromptBuilder.maxPacketAuthorities

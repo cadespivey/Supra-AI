@@ -53,6 +53,11 @@ public struct StatutoryProvision: Sendable, Equatable {
     public var effectiveDate: String?
     /// A caveat to show with this provision (non-nil for `.convenience` sources).
     public var currencyCaveat: String?
+    /// Whether this record contains enough source text to support a legal proposition.
+    /// Locator-only hits (for example, package-level search results) may still be
+    /// useful notes, but they must not satisfy the primary-law gate or enter the
+    /// citable `[A#]` packet.
+    public var isCitableAuthority: Bool
 
     public init(
         sourceID: String,
@@ -67,7 +72,8 @@ public struct StatutoryProvision: Sendable, Equatable {
         url: String? = nil,
         locatorPath: String? = nil,
         effectiveDate: String? = nil,
-        currencyCaveat: String? = nil
+        currencyCaveat: String? = nil,
+        isCitableAuthority: Bool = true
     ) {
         self.sourceID = sourceID
         self.sourceName = sourceName
@@ -82,6 +88,7 @@ public struct StatutoryProvision: Sendable, Equatable {
         self.locatorPath = locatorPath
         self.effectiveDate = effectiveDate
         self.currencyCaveat = currencyCaveat
+        self.isCitableAuthority = isCitableAuthority
     }
 
     /// Dedup key — two provisions for the same section are the same regardless of which provider

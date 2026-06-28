@@ -6,7 +6,7 @@ import SupraNetworking
 /// USCODE package carries a `dateIssued`, so for the same provision it OUTRANKS Open Legal Codes.
 ///
 /// Note: govinfo's search is package/title-level (e.g. "U.S. Code, Title 11 — Bankruptcy"), not
-/// section-level, so the grounding text is the package title + a link to the official full text.
+/// section-level, so these results are locator notes until a section-text fetcher is added.
 /// Federal-only; best-effort (a missing key or failure yields no provisions + a note).
 public struct GovInfoStatutorySource: StatutorySource {
     public let id = "govinfo"
@@ -29,7 +29,11 @@ public struct GovInfoStatutorySource: StatutorySource {
         }
         do {
             let response = try await client.searchUSCode(term: query.terms, limit: query.limit)
-            return StatutoryLookupResult(provisions: response.results.prefix(query.limit).compactMap(Self.provision(from:)))
+            let provisions = response.results.prefix(query.limit).compactMap(Self.provision(from:))
+            let note = provisions.isEmpty
+                ? nil
+                : "govinfo returned official U.S. Code package-level locators only; section text was not retrieved, so those locators were not used as citable primary law."
+            return StatutoryLookupResult(provisions: provisions, note: note)
         } catch GovInfoError.missingKey {
             return StatutoryLookupResult(note: "Add a govinfo API key in Settings for official U.S. Code lookups.")
         } catch {
@@ -48,11 +52,12 @@ public struct GovInfoStatutorySource: StatutorySource {
             citation: title,
             heading: title,
             snippet: title,
-            text: "\(title)\n\nOfficial full text: https://www.govinfo.gov/app/details/\(packageId)",
+            text: "Locator only: \(title)\n\nOfficial full text: https://www.govinfo.gov/app/details/\(packageId)",
             url: "https://www.govinfo.gov/app/details/\(packageId)",
             locatorPath: packageId,
             effectiveDate: result.dateIssued,   // a real issue date → no currency caveat
-            currencyCaveat: nil
+            currencyCaveat: nil,
+            isCitableAuthority: false
         )
     }
 }

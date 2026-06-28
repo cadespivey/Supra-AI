@@ -16,11 +16,12 @@ public enum StatutoryPacketMerge {
         cap: Int
     ) -> [RankedLegalAuthority] {
         guard cap > 0 else { return [] }
-        guard !statutoryProvisions.isEmpty else { return Array(rankedCases.prefix(cap)) }
+        let citableProvisions = statutoryProvisions.filter(\.isCitableAuthority)
+        guard !citableProvisions.isEmpty else { return Array(rankedCases.prefix(cap)) }
 
         // Reserve at most ~half the packet for statutes so case law isn't fully evicted.
         let statuteBudget = max(1, cap - cap / 2)
-        let statRanked = statutoryProvisions.prefix(statuteBudget).map { provision in
+        let statRanked = citableProvisions.prefix(statuteBudget).map { provision in
             RankedLegalAuthority(
                 authority: provision.asLegalAuthority(jurisdictionLabel: jurisdictionLabel),
                 score: Self.statutoryLeadScore,
