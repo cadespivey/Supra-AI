@@ -179,6 +179,29 @@ final class SupraNetworkingTests: XCTestCase {
         XCTAssertTrue(record.requestMetadataJSON?.localizedCaseInsensitiveContains("noncompete") ?? false)
     }
 
+    func testAuthorizedHTTPClientAlwaysRedactsSensitiveQueryParameters() async throws {
+        let store = try makeStore()
+        let spy = TransportSpy()
+        let client = AuthorizedHTTPClient(
+            keyStore: InMemoryKeyStore(token: nil),
+            policy: NetworkPolicyService(),
+            logger: NetworkRequestLogger(repository: store.networkRequests),
+            redactsQueryValues: false,
+            transport: { request in await spy.respond(to: request, statusCode: 200) }
+        )
+        let url = try XCTUnwrap(URL(string: "https://api.legiscan.com/?key=legiscan-secret&op=getSearch&query=noncompete&X-Api-Key=second-secret"))
+
+        _ = try await client.sendUnauthenticated(URLRequest(url: url))
+
+        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
+        let metadata = try XCTUnwrap(record.requestMetadataJSON)
+        XCTAssertFalse(metadata.contains("legiscan-secret"), "query-string API keys must never be persisted")
+        XCTAssertFalse(metadata.contains("second-secret"), "query-string API keys must never be persisted")
+        XCTAssertTrue(metadata.contains("key=#redacted"))
+        XCTAssertTrue(metadata.contains("X-Api-Key=#redacted"))
+        XCTAssertTrue(metadata.contains("query=noncompete"), "non-sensitive query terms can still be logged when explicitly enabled")
+    }
+
     func testAuthorizedHTTPClientLogsBlockedPolicyRequestWithoutSending() async throws {
         let store = try makeStore()
         let spy = TransportSpy()

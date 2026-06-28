@@ -152,11 +152,10 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
     private func requestMetadataJSON(for request: URLRequest) -> String? {
         guard let url = request.url else { return nil }
         let sanitizedHeaders = Self.sanitizedHeaders(request.allHTTPHeaderFields ?? [:])
-        // The query string carries the user's privileged search terms (e.g. the
-        // CourtListener `q=` parameter). Unless query-term logging is explicitly
-        // enabled, redact parameter *values* to a stable fingerprint while keeping
-        // the parameter names, matching the audit-event privacy guarantee.
-        let query = url.query.map { redactsQueryValues ? Self.redactedQuery($0) : $0 }
+        // The query string can carry privileged search terms and, for some APIs,
+        // credentials. Sensitive parameter names are always masked; other values
+        // are fingerprinted unless query-term logging is explicitly enabled.
+        let query = url.query.map { Self.sanitizedQuery($0, redactsValues: redactsQueryValues) }
         let metadata = NetworkRequestAuditMetadata(
             query: query,
             headers: sanitizedHeaders.isEmpty ? nil : sanitizedHeaders
@@ -188,15 +187,48 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         "ocp-apim-subscription-key"
     ]
 
+    private static let sensitiveQueryParameterNames: Set<String> = [
+        "key",
+        "x-api-key",
+        "x_api_key",
+        "api_key",
+        "apikey",
+        "api-key",
+        "access_token",
+        "auth_token",
+        "token",
+        "client_secret",
+        "subscription_key",
+        "subscription-key",
+        "ocp-apim-subscription-key"
+    ]
+
     /// Replaces each query parameter's value with a stable fingerprint, preserving
     /// the parameter names so the *shape* of the request remains auditable.
     static func redactedQuery(_ query: String) -> String {
+        sanitizedQuery(query, redactsValues: true)
+    }
+
+    static func sanitizedQuery(_ query: String, redactsValues: Bool) -> String {
         query.split(separator: "&", omittingEmptySubsequences: false).map { pair -> String in
             let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
             guard parts.count == 2 else { return String(pair) }
+            let name = String(parts[0])
             let value = String(parts[1])
-            let marker = value.isEmpty ? "" : "#\(fingerprint(value))"
-            return "\(parts[0])=\(marker)"
+            let normalizedName = name
+                .removingPercentEncoding?
+                .lowercased() ?? name.lowercased()
+            let marker: String
+            if value.isEmpty {
+                marker = ""
+            } else if sensitiveQueryParameterNames.contains(normalizedName) {
+                marker = "#redacted"
+            } else if redactsValues {
+                marker = "#\(fingerprint(value))"
+            } else {
+                marker = value
+            }
+            return "\(name)=\(marker)"
         }.joined(separator: "&")
     }
 
