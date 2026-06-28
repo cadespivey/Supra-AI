@@ -1,3 +1,4 @@
+import Foundation
 import SupraSessions
 import SwiftUI
 
@@ -15,6 +16,7 @@ struct MatterWorkspaceView: View {
     @State private var showEditor = false
     @State private var confirmingDelete = false
     @State private var showDraftSheet = false
+    @State private var lastUITestTabCommand: String?
 
     enum MatterTab: String, CaseIterable, Identifiable {
         case chat = "Chat"
@@ -48,7 +50,7 @@ struct MatterWorkspaceView: View {
         }
         .sheet(isPresented: $showDraftSheet) {
             if let drafting = controller.draftingController {
-                MatterDraftingView(controller: drafting, matterID: matter.id, matterName: matter.name)
+                MatterDraftingView(controller: drafting, library: library, matterID: matter.id, matterName: matter.name)
             }
         }
         .confirmationDialog(
@@ -61,6 +63,7 @@ struct MatterWorkspaceView: View {
         } message: {
             Text("This hides the matter and its chats. You can't undo this from the app.")
         }
+        .task { await pollUITestTabCommand() }
     }
 
     private var header: some View {
@@ -109,35 +112,41 @@ struct MatterWorkspaceView: View {
     }
 
     private var tabBar: some View {
-        HStack(spacing: 4) {
-            ForEach(MatterTab.allCases) { item in
-                Button {
-                    tab = item
-                } label: {
+        HStack {
+            Picker("Matter section", selection: $tab) {
+                ForEach(MatterTab.allCases) { item in
                     Text(item.label)
-                        .font(.callout.weight(tab == item ? .semibold : .regular))
-                        .foregroundStyle(tabForeground(item))
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 10)
-                        .background(
-                            tab == item ? Color.accentColor.opacity(0.15) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 7)
-                        )
+                        .tag(item)
+                        .accessibilityIdentifier("matterTab.\(item.rawValue)")
                 }
-                .buttonStyle(.plain)
-                .help(item.rawValue)
-                .accessibilityLabel(Text(item.label))
-                .accessibilityValue(tab == item ? Text("Selected") : Text(""))
-                .accessibilityIdentifier("matterTab.\(item.rawValue)")
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 640, alignment: .leading)
+            .accessibilityIdentifier("matterTab.picker")
             Spacer()
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
     }
 
-    private func tabForeground(_ item: MatterTab) -> Color {
-        tab == item ? .accentColor : .primary
+    @MainActor
+    private func pollUITestTabCommand() async {
+        guard AppEnvironment.isUITestMode,
+              let path = ProcessInfo.processInfo.environment["SUPRA_UI_TEST_TAB_COMMAND_FILE"],
+              !path.isEmpty else { return }
+        let url = URL(fileURLWithPath: path)
+        while !Task.isCancelled {
+            let rawValue = (try? String(contentsOf: url, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let rawValue, !rawValue.isEmpty, rawValue != lastUITestTabCommand {
+                lastUITestTabCommand = rawValue
+                if let target = MatterTab(rawValue: rawValue) {
+                    tab = target
+                }
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     @ViewBuilder

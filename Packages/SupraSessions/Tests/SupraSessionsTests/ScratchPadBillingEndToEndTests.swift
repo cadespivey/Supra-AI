@@ -22,12 +22,12 @@ final class ScratchPadBillingEndToEndTests: XCTestCase {
         let store = try SupraStore.inMemory()
 
         // A litigation matter carrying the LEDES identifiers + a per-matter code set.
-        let matterID = "m-vystar"
+        let matterID = "m-mckernon"
         try await store.database.writer.write { db in
             try MatterRecord(
-                id: matterID, name: "Reardon v. VyStar",
-                clientNames: "VyStar Credit Union", internalMatterID: "12044-0007",
-                clientID: "VYSTAR", clientMatterID: "VS-LIT-2026-031"
+                id: matterID, name: "McKernon Motors v. Liberty Rail",
+                clientNames: "McKernon Motors", internalMatterID: "12044-0007",
+                clientID: "MCKERNON", clientMatterID: "VS-LIT-2026-031"
             ).insert(db)
         }
         try store.billing.upsertBillingProfile(
@@ -38,7 +38,7 @@ final class ScratchPadBillingEndToEndTests: XCTestCase {
         let settings = BillingSettings(
             globalInstructions: "Spell out abbreviations on first use.",
             timekeeper: BillingTimekeeper(
-                id: "TK-1001", name: "C. Spivey", classification: "PARTNER", defaultRate: 450, lawFirmID: "98-7654321"
+                id: "TK-1001", name: "Harvey Specter", classification: "PARTNER", defaultRate: 450, lawFirmID: "98-7654321"
             )
         )
 
@@ -47,10 +47,10 @@ final class ScratchPadBillingEndToEndTests: XCTestCase {
         scratch.load()
         let dayID = try XCTUnwrap(scratch.currentDay?.id)
         XCTAssertTrue(scratch.addEntry(
-            "Drafted opposition to motion to compel for @VyStar #discovery", explicitMentions: ["VyStar": matterID]
+            "Drafted opposition to motion to compel for @McKernon #discovery", explicitMentions: ["McKernon": matterID]
         ))
         XCTAssertTrue(scratch.addEntry(
-            "TC w/ client re custodian list @VyStar", explicitMentions: ["VyStar": matterID]
+            "TC w/ client re custodian list @McKernon", explicitMentions: ["McKernon": matterID]
         ))
         XCTAssertEqual(scratch.entries.count, 2)
 
@@ -94,7 +94,7 @@ final class ScratchPadBillingEndToEndTests: XCTestCase {
         XCTAssertTrue(billing.exportIssues().isEmpty, "a fully-configured draft must be export-ready")
         let ledes = billing.exportString(format: .ledes)
         XCTAssertTrue(ledes.hasPrefix("LEDES1998B[]"))
-        XCTAssertTrue(ledes.contains("VYSTAR"))      // CLIENT_ID
+        XCTAssertTrue(ledes.contains("MCKERNON"))    // CLIENT_ID
         XCTAssertTrue(ledes.contains("12044-0007"))  // LAW_FIRM_MATTER_ID
         XCTAssertTrue(ledes.contains("TK-1001"))     // TIMEKEEPER_ID
 
@@ -113,12 +113,12 @@ final class ScratchPadBillingEndToEndTests: XCTestCase {
         let matterID = "m1"
         try await store.database.writer.write { db in
             try MatterRecord(
-                id: matterID, name: "Acme", clientNames: "Acme", internalMatterID: "F-1",
-                clientID: "ACME", clientMatterID: "AC-1"
+                id: matterID, name: "McKernon Motors", clientNames: "McKernon Motors", internalMatterID: "F-1",
+                clientID: "MCKERNON", clientMatterID: "AC-1"
             ).insert(db)
         }
         let day = try store.scratchPad.fetchOrCreateDay("2026-06-22")
-        try store.scratchPad.addEntry(dayID: day.id, text: "Work @Acme", mentions: [matterID])
+        try store.scratchPad.addEntry(dayID: day.id, text: "Work @McKernon", mentions: [matterID])
 
         let json = #"{"lineItems":[{"matterID":"m1","narrative":"Reviewed filings.","hours":0.5,"activityCode":"A104","confidence":"high"}]}"#
         let billing = BillingDraftController(

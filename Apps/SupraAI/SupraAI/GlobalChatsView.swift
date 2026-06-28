@@ -532,7 +532,14 @@ struct GlobalChatsView: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
                 .focused($inputFocused)
-                .onSubmit(send)
+                // Plain Return sends; Shift-Return (and ⌘-Return) fall through so the
+                // field inserts a newline / the send button's shortcut fires. Replaces
+                // .onSubmit so Return cannot fire twice.
+                .onKeyPress(keys: [.return]) { keyPress in
+                    guard keyPress.modifiers.isEmpty else { return .ignored }
+                    send()
+                    return .handled
+                }
             if controller.isGenerating {
                 Button(role: .cancel, action: controller.cancel) {
                     Image(systemName: "stop.circle.fill").font(.title2)

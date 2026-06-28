@@ -22,7 +22,7 @@ final class DocumentClassificationTests: XCTestCase {
           "is_court_filed_likely": true,
           "is_discovery_material_likely": false,
           "detected_document_date": "2025-03-04",
-          "detected_parties_or_entities": ["Acme Corp", "Beta LLC"],
+          "detected_parties_or_entities": ["McKernon Motors", "Liberty Rail, LLC"],
           "detected_jurisdiction": "N.D. Cal.",
           "warnings": []
         }
@@ -33,7 +33,7 @@ final class DocumentClassificationTests: XCTestCase {
         XCTAssertEqual(result.confidence, 0.92, accuracy: 0.0001)
         XCTAssertTrue(result.isCourtFiledLikely)
         XCTAssertEqual(result.detectedDocumentDate, "2025-03-04")
-        XCTAssertEqual(result.detectedPartiesOrEntities, ["Acme Corp", "Beta LLC"])
+        XCTAssertEqual(result.detectedPartiesOrEntities, ["McKernon Motors", "Liberty Rail, LLC"])
         XCTAssertEqual(result.detectedJurisdiction, "N.D. Cal.")
     }
 
@@ -157,7 +157,7 @@ final class DocumentClassificationTests: XCTestCase {
             isConfidentialLikely: true,
             isDiscoveryMaterialLikely: true,
             detectedDocumentDate: "2024-11-12",
-            detectedPartiesOrEntities: ["Jane Roe"],
+            detectedPartiesOrEntities: ["Rachel Zane"],
             detectedJurisdiction: "S.D.N.Y.",
             warnings: ["partial OCR"]
         ).normalized()
@@ -171,7 +171,7 @@ final class DocumentClassificationTests: XCTestCase {
         XCTAssertTrue(decoded.isConfidentialLikely)
         XCTAssertTrue(decoded.isDiscoveryMaterialLikely)
         XCTAssertEqual(decoded.detectedDocumentDate, "2024-11-12")
-        XCTAssertEqual(decoded.detectedPartiesOrEntities, ["Jane Roe"])
+        XCTAssertEqual(decoded.detectedPartiesOrEntities, ["Rachel Zane"])
         XCTAssertEqual(decoded.detectedJurisdiction, "S.D.N.Y.")
         XCTAssertEqual(decoded.warnings, ["partial OCR"])
     }

@@ -62,10 +62,10 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
 
     // MARK: - Derived gating
 
-    /// True when setup has been completed and not since invalidated. Import is
-    /// blocked unless this is true.
+    /// True when every required setup check currently passes. The completion
+    /// timestamp is stamped automatically when this first becomes true.
     public var isComplete: Bool {
-        settings.setupCompletedAt != nil && settings.setupInvalidatedReason == nil
+        canCompleteSetup && settings.setupInvalidatedReason == nil
     }
 
     public var isReadyForImport: Bool { isComplete }
@@ -77,17 +77,24 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
         chatModelLoaded || settings.chatModelLastLoadedAt != nil
     }
 
-    /// True when every setup step passes, so the user may mark setup complete.
+    /// True when every required setup step passes.
     public var canCompleteSetup: Bool {
-        chatModelReady
-            && selectedEmbeddingModel != nil
-            && embeddingTestPassed
-            && (toolchain?.meetsMinimumForSetup ?? false)
-            && storageInitialized
+        completedRequiredStepCount == requiredStepCount
     }
 
-    /// Human-readable list of steps still outstanding, for the Settings UI.
-    public var outstandingSteps: [String] {
+    public var requiredStepCount: Int { 4 }
+
+    public var completedRequiredStepCount: Int {
+        [
+            chatModelReady,
+            selectedEmbeddingModel != nil && embeddingTestPassed,
+            toolchain?.meetsMinimumForSetup ?? false,
+            storageInitialized
+        ].filter { $0 }.count
+    }
+
+    /// Human-readable list of required steps still outstanding, for the setup UI.
+    public var requiredOutstandingSteps: [String] {
         var steps: [String] = []
         if !chatModelReady { steps.append("Load a runtime text model in the Models tab.") }
         if selectedEmbeddingModel == nil { steps.append("Download and select an embedding model.") }
@@ -98,8 +105,18 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
         }
         if !(toolchain?.meetsMinimumForSetup ?? false) { steps.append("Confirm the local extraction/OCR toolchain.") }
         if !storageInitialized { steps.append("Initialize document storage.") }
+        return steps
+    }
+
+    public var optionalOutstandingSteps: [String] {
+        var steps: [String] = []
         if notificationStatus == .notDetermined { steps.append("Allow completion notifications (optional).") }
         return steps
+    }
+
+    /// Human-readable list of all remaining setup notes, required first.
+    public var outstandingSteps: [String] {
+        requiredOutstandingSteps + optionalOutstandingSteps
     }
 
     // MARK: - Refresh
@@ -119,6 +136,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     public func refreshChatModelStatus() async {
         guard let status = try? await runtimeClient.runtimeStatus() else {
             chatModelLoaded = false
+            syncCompletionStateIfNeeded()
             return
         }
         chatModelLoaded = status.loadedModelID != nil
@@ -128,6 +146,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
                 settings.chatModelLastLoadedAt = Date()
             }) ?? settings
         }
+        syncCompletionStateIfNeeded()
     }
 
     /// Detects and persists the local extraction/OCR toolchain capabilities.
@@ -142,11 +161,13 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             settings.ocrCheckedAt = Date()
             settings.converterCapabilityJSON = json.flatMap { String(data: $0, encoding: .utf8) }
         }) ?? settings
+        syncCompletionStateIfNeeded()
         return capabilities
     }
 
     public func refreshStorage() {
         storageInitialized = storage.isInitialized()
+        syncCompletionStateIfNeeded()
     }
 
     public func refreshNotificationStatus() async {
@@ -161,6 +182,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             try storage.initializeStorage()
             storageInitialized = true
             settings = (try? store.documentSettings.updateSettings { $0.storageInitializedAt = Date() }) ?? settings
+            syncCompletionStateIfNeeded()
         } catch {
             message = "Could not initialize document storage: \(error.localizedDescription)"
         }
@@ -260,22 +282,15 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
         reloadLocalState()
     }
 
-    /// Marks setup complete when every step passes, and audits it.
+    /// Kept for compatibility with older callers. Setup completion is now automatic.
     @discardableResult
     public func completeSetup() -> Bool {
         guard canCompleteSetup else {
             message = "Finish the remaining setup steps first."
             return false
         }
-        settings = (try? store.documentSettings.updateSettings { settings in
-            settings.setupCompletedAt = Date()
-            settings.setupInvalidatedReason = nil
-        }) ?? settings
-        _ = try? store.auditEvents.recordEvent(
-            eventType: "document_intelligence_setup_completed", actor: "user",
-            summary: "Document Intelligence setup completed"
-        )
-        return true
+        syncCompletionStateIfNeeded()
+        return isComplete
     }
 
     public func invalidateSetup(reason: String) {
@@ -309,5 +324,20 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
         // selected model has proven loadable.
         embeddingTestPassed = settings.embeddingModelLastTestedAt != nil
             && (selectedEmbeddingModel?.lastTestLoadResult == "passed")
+        syncCompletionStateIfNeeded()
+    }
+
+    private func syncCompletionStateIfNeeded() {
+        guard canCompleteSetup else { return }
+        let shouldAudit = settings.setupCompletedAt == nil || settings.setupInvalidatedReason != nil
+        guard shouldAudit else { return }
+        settings = (try? store.documentSettings.updateSettings { settings in
+            settings.setupCompletedAt = settings.setupCompletedAt ?? Date()
+            settings.setupInvalidatedReason = nil
+        }) ?? settings
+        _ = try? store.auditEvents.recordEvent(
+            eventType: "document_intelligence_setup_completed", actor: "system",
+            summary: "Document Intelligence setup completed automatically"
+        )
     }
 }

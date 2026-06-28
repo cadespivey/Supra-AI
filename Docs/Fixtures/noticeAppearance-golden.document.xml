@@ -66,7 +66,7 @@
           </w:tcPr>
           <w:p w14:paraId="73FAC203" w14:textId="77777777" w:rsidR="00DC5BB4" w:rsidRDefault="00DC5BB4">
             <w:r>
-              <w:t>MERIDIAN CAPITAL PARTNERS, LLC,</w:t>
+              <w:t>MCKERNON MOTORS, INC.,</w:t>
             </w:r>
           </w:p>
           <w:p w14:paraId="75F1D28A" w14:textId="77777777" w:rsidR="00DC5BB4" w:rsidRDefault="00DC5BB4"/>
@@ -87,7 +87,7 @@
           <w:p w14:paraId="482A4916" w14:textId="77777777" w:rsidR="00DC5BB4" w:rsidRDefault="00DC5BB4"/>
           <w:p w14:paraId="1942BA0B" w14:textId="77777777" w:rsidR="00DC5BB4" w:rsidRDefault="00DC5BB4">
             <w:r>
-              <w:t>ATLANTIC RIDGE HOLDINGS, INC.,</w:t>
+              <w:t>LIBERTY RAIL, LLC,</w:t>
             </w:r>
           </w:p>
           <w:p w14:paraId="2FE804CD" w14:textId="77777777" w:rsidR="00DC5BB4" w:rsidRDefault="00DC5BB4"/>
@@ -157,7 +157,7 @@
         <w:jc w:val="both"/>
       </w:pPr>
       <w:r>
-        <w:t>PLEASE TAKE NOTICE that the undersigned attorney, Jordan A. Reyes of Harwell &amp; Branch, P.A., hereby enters an appearance as counsel of record for Defendant, Atlantic Ridge Holdings, Inc., in the above-styled action, and requests that copies of all pleadings, notices, orders, correspondence, and other documents filed or served in this action be furnished to the undersigned at the addresses set forth below.</w:t>
+        <w:t>PLEASE TAKE NOTICE that the undersigned attorney, Harvey Specter of Pearson Specter Litt, hereby enters an appearance as counsel of record for Defendant, Liberty Rail, LLC, in the above-styled action, and requests that copies of all pleadings, notices, orders, correspondence, and other documents filed or served in this action be furnished to the undersigned at the addresses set forth below.</w:t>
       </w:r>
     </w:p>
     <w:p w14:paraId="74D79292" w14:textId="77777777" w:rsidR="00DC5BB4" w:rsidRDefault="00000000">
@@ -178,7 +178,7 @@
       </w:pPr>
       <w:proofErr w:type="spellStart"/>
       <w:r>
-        <w:t>jreyes@harwellbranch.example</w:t>
+        <w:t>hspecter@pearsonspecterlitt.example</w:t>
       </w:r>
       <w:proofErr w:type="spellEnd"/>
       <w:r>
@@ -193,7 +193,7 @@
       </w:pPr>
       <w:proofErr w:type="spellStart"/>
       <w:r>
-        <w:t>litdocket@harwellbranch.example</w:t>
+        <w:t>litdocket@pearsonspecterlitt.example</w:t>
       </w:r>
       <w:proofErr w:type="spellEnd"/>
       <w:r>
@@ -211,7 +211,7 @@
       </w:pPr>
       <w:proofErr w:type="spellStart"/>
       <w:r>
-        <w:t>msalas@harwellbranch.example</w:t>
+        <w:t>mross@pearsonspecterlitt.example</w:t>
       </w:r>
       <w:proofErr w:type="spellEnd"/>
       <w:r>
@@ -228,7 +228,7 @@
           <w:b/>
           <w:caps/>
         </w:rPr>
-        <w:t>HARWELL &amp; BRANCH, P.A.</w:t>
+        <w:t>PEARSON SPECTER LITT</w:t>
       </w:r>
     </w:p>
     <w:p w14:paraId="200EBF29" w14:textId="4E23371C" w:rsidR="009655EA" w:rsidRDefault="00000000">
@@ -243,7 +243,7 @@
           <w:i/>
           <w:u w:val="single"/>
         </w:rPr>
-        <w:t>/s/ Jordan A. Reyes</w:t>
+        <w:t>/s/ Harvey Specter</w:t>
       </w:r>
       <w:r w:rsidR="00DC5BB4">
         <w:rPr>
@@ -265,7 +265,7 @@
         <w:ind w:left="4680"/>
       </w:pPr>
       <w:r>
-        <w:t>Jordan A. Reyes</w:t>
+        <w:t>Harvey Specter</w:t>
       </w:r>
     </w:p>
     <w:p w14:paraId="4E244B77" w14:textId="77777777" w:rsidR="009655EA" w:rsidRDefault="00000000">
@@ -281,7 +281,7 @@
         <w:ind w:left="4680"/>
       </w:pPr>
       <w:r>
-        <w:t>Harwell &amp; Branch, P.A.</w:t>
+        <w:t>Pearson Specter Litt</w:t>
       </w:r>
     </w:p>
     <w:p w14:paraId="1F9F681C" w14:textId="77777777" w:rsidR="009655EA" w:rsidRDefault="00000000">
@@ -341,7 +341,7 @@
       </w:r>
       <w:proofErr w:type="spellStart"/>
       <w:r>
-        <w:t>jreyes@harwellbranch.example</w:t>
+        <w:t>hspecter@pearsonspecterlitt.example</w:t>
       </w:r>
       <w:proofErr w:type="spellEnd"/>
     </w:p>
@@ -351,7 +351,7 @@
       </w:pPr>
       <w:proofErr w:type="spellStart"/>
       <w:r>
-        <w:t>litdocket@harwellbranch.example</w:t>
+        <w:t>litdocket@pearsonspecterlitt.example</w:t>
       </w:r>
       <w:proofErr w:type="spellEnd"/>
     </w:p>
@@ -392,12 +392,12 @@
     <w:p w14:paraId="4A290BC3" w14:textId="77777777" w:rsidR="009655EA" w:rsidRDefault="009655EA"/>
     <w:p w14:paraId="23B51C19" w14:textId="77777777" w:rsidR="009655EA" w:rsidRDefault="00000000">
       <w:r>
-        <w:t>Marcus T. Whitfield, Esq.</w:t>
+        <w:t>Daniel Hardman, Esq.</w:t>
       </w:r>
     </w:p>
     <w:p w14:paraId="76039FE7" w14:textId="77777777" w:rsidR="009655EA" w:rsidRDefault="00000000">
       <w:r>
-        <w:t>Caldwell &amp; Pierce, LLP</w:t>
+        <w:t>Hardman &amp; Tanner, LLP</w:t>
       </w:r>
     </w:p>
     <w:p w14:paraId="041A634C" w14:textId="77777777" w:rsidR="009655EA" w:rsidRDefault="00000000">
@@ -413,7 +413,7 @@
     <w:p w14:paraId="1759B00C" w14:textId="77777777" w:rsidR="009655EA" w:rsidRDefault="00000000">
       <w:proofErr w:type="spellStart"/>
       <w:r>
-        <w:t>mwhitfield@caldwellpierce.example</w:t>
+        <w:t>dhardman@hardmantanner.example</w:t>
       </w:r>
       <w:proofErr w:type="spellEnd"/>
     </w:p>
@@ -435,7 +435,7 @@
           <w:i/>
           <w:u w:val="single"/>
         </w:rPr>
-        <w:t>/s/ Jordan A. Reyes</w:t>
+        <w:t>/s/ Harvey Specter</w:t>
       </w:r>
       <w:r w:rsidR="00DC5BB4">
         <w:rPr>
@@ -450,7 +450,7 @@
         <w:ind w:left="4680"/>
       </w:pPr>
       <w:r>
-        <w:t>Jordan A. Reyes</w:t>
+        <w:t>Harvey Specter</w:t>
       </w:r>
     </w:p>
     <w:sectPr w:rsidR="009655EA">

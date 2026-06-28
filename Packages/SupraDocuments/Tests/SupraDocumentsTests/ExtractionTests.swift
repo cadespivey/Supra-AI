@@ -32,10 +32,10 @@ final class ExtractionTests: XCTestCase {
         XCTAssertEqual(result.parts.first?.sourceKind, .text)
         XCTAssertTrue(result.combinedText.contains("Wire transfer"))
 
-        let md = try write("intake.md", "# Intake\n\nClient: Acme Corp")
+        let md = try write("intake.md", "# Intake\n\nClient: McKernon Motors")
         let mdResult = try await service.extract(fileURL: md)
         XCTAssertEqual(mdResult.parts.first?.sourceKind, .markdown)
-        XCTAssertTrue(mdResult.combinedText.contains("Acme Corp"))
+        XCTAssertTrue(mdResult.combinedText.contains("McKernon Motors"))
     }
 
     func testHTMLStripsTagsAndDecodesEntities() async throws {
@@ -57,11 +57,11 @@ final class ExtractionTests: XCTestCase {
     }
 
     func testXMLExtractsTextAndAttributes() async throws {
-        let xml = try write("metadata.xml", "<doc author=\"Jane Roe\"><title>Contract</title><note>Signed 2023</note></doc>")
+        let xml = try write("metadata.xml", "<doc author=\"Harvey Specter\"><title>Contract</title><note>Signed 2023</note></doc>")
         let result = try await service.extract(fileURL: xml)
         XCTAssertEqual(result.parts.first?.sourceKind, .xml)
         let text = result.combinedText
-        XCTAssertTrue(text.contains("Jane Roe"))
+        XCTAssertTrue(text.contains("Harvey Specter"))
         XCTAssertTrue(text.contains("Contract"))
     }
 
@@ -77,7 +77,7 @@ final class ExtractionTests: XCTestCase {
         let xlsx = try writeXlsx(
             "invoice.xlsx",
             sheetName: "Invoices",
-            sharedStrings: ["Invoice", "Amount", "Acme Corp"],
+            sharedStrings: ["Invoice", "Amount", "McKernon Motors"],
             cells: [("A1", "s", "0"), ("B1", "s", "1"), ("A2", "s", "2"), ("B2", nil, "5000")]
         )
         let result = try await service.extract(fileURL: xlsx)
@@ -85,7 +85,7 @@ final class ExtractionTests: XCTestCase {
         let part = try XCTUnwrap(result.parts.first)
         XCTAssertEqual(part.sheetName, "Invoices")
         XCTAssertEqual(part.cellRange, "A1:B2")
-        XCTAssertTrue(part.text.contains("Acme Corp"))
+        XCTAssertTrue(part.text.contains("McKernon Motors"))
         XCTAssertTrue(part.text.contains("5000"))
     }
 

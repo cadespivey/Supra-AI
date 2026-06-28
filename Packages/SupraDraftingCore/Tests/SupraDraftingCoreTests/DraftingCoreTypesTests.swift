@@ -53,10 +53,10 @@ final class DraftingCoreTypesTests: XCTestCase {
         let amount = SlotContent.money(Decimal(1250), currency: "USD")
         let serviceRecipients = SlotContent.serviceRecipients([
             ServiceRecipient(
-                name: "Alex Counsel",
+                name: "Harvey Specter",
                 firm: "Example LLP",
                 address: OfficeBlock(street: "1 Main St", suite: nil, city: "Jacksonville", state: "FL", zip: "32202", phone: "904-555-0100", fax: nil),
-                emails: ["alex@example.com"],
+                emails: ["hspecter@psl.com"],
                 role: "Counsel for Plaintiff"
             )
         ])
@@ -64,12 +64,12 @@ final class DraftingCoreTypesTests: XCTestCase {
         XCTAssertEqual(officeSpec.validator, .none)
         XCTAssertEqual(officeSpec.type, .officeBlock)
         XCTAssertEqual(amount, .money(Decimal(1250), currency: "USD"))
-        XCTAssertEqual(serviceRecipients.serviceRecipientValues?.first?.emails, ["alex@example.com"])
+        XCTAssertEqual(serviceRecipients.serviceRecipientValues?.first?.emails, ["hspecter@psl.com"])
     }
 
     func testVerifyUnitCarriesFactsAndAuthoritiesForAsyncVerifier() async {
         let section = GeneratedSection(
-            blocks: [.paragraph("Atlantic Ridge failed to pay [S1].")],
+            blocks: [.paragraph("Liberty Rail failed to pay [S1].")],
             citesUsed: [CitationRef(raw: "[cite]")],
             assertedFacts: [FactRef(label: "[S1]")]
         )

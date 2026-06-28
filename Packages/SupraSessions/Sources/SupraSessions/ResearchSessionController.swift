@@ -224,7 +224,9 @@ public final class ResearchSessionController: ObservableObject {
     public func generatePlan(draft: ResearchPlanDraft, modelID: ModelID?, route: ModelRoute? = nil) async {
         let effectiveRoute = route ?? ModelRouter().route(for: .legalResearch)
         guard let modelID else {
-            plannedQueries = []
+            if plannedQueries.isEmpty {
+                addQuery()
+            }
             planState = .incomplete(
                 "Assign a \(effectiveRoute.role.displayName) model in the Models tab to generate queries, or add them manually."
             )
@@ -241,15 +243,27 @@ public final class ResearchSessionController: ObservableObject {
                 excludedCourts: draft.excludedCourts,
                 dateRange: formatDateRange(start: draft.dateRangeStart, end: draft.dateRangeEnd)
             )
-            let output = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
-            let parsed = planner.parseQueries(from: output)
-            plannedQueries = parsed.map { PlannedQuery(id: UUID(), text: $0, approved: true) }
-            if parsed.isEmpty {
-                planState = .incomplete("Query generation didn't return any queries. Add them manually below.")
-            } else if parsed.count < ResearchQueryPlanner.expectedQueryCount {
-                planState = .incomplete("Query generation incomplete (\(parsed.count) of \(ResearchQueryPlanner.expectedQueryCount)). Edit or add queries as needed.")
-            } else {
-                planState = .ready
+            let options = planningOptions(for: effectiveRoute)
+            let output = try await collect(prompt: prompt, modelID: modelID, options: options)
+            // Resolve before parsing: if thinking is ever enabled for planning and the
+            // model is cut off mid-`<think>` (no `</think>`), report that distinctly
+            // rather than feeding a partial chain-of-thought to the parser (which would
+            // surface as a misleading "no queries"). With the thinking-off planning
+            // options above this branch is defensive, not the common path.
+            switch ReasoningContent.resolve(rawOutput: output, thinkingEnabled: options.thinkingBudget.enablesModelThinking) {
+            case .truncatedReasoning:
+                plannedQueries = []
+                planState = .incomplete("The model ran out of room while thinking before it wrote any queries. Try again, or add queries manually below.")
+            case let .answer(answer):
+                let parsed = planner.parseQueries(from: answer)
+                plannedQueries = parsed.map { PlannedQuery(id: UUID(), text: $0, approved: true) }
+                if parsed.isEmpty {
+                    planState = .incomplete("Query generation didn't return any queries. Add them manually below.")
+                } else if parsed.count < ResearchQueryPlanner.expectedQueryCount {
+                    planState = .incomplete("Query generation incomplete (\(parsed.count) of \(ResearchQueryPlanner.expectedQueryCount)). Edit or add queries as needed.")
+                } else {
+                    planState = .ready
+                }
             }
         } catch {
             plannedQueries = []
@@ -760,7 +774,23 @@ public final class ResearchSessionController: ObservableObject {
         return result
     }
 
-    private func collect(prompt: String, modelID: ModelID, route: ModelRoute?) async throws -> String {
+    /// Query planning is a short, deterministic structured-extraction task — not the
+    /// long-form research the `.legalResearch` route is tuned for. That route carries
+    /// `thinkingBudget: .high`, which makes a reasoning model spend its whole output
+    /// budget *answering the legal question* inside a `<think>` trace instead of emitting
+    /// the `## Query N` template, so the parser finds zero queries ("no recommended
+    /// queries"). Force thinking off and cap the output so the model writes the structure
+    /// directly. `collect(...)` is planner-only, so this override is correctly scoped.
+    private static let planningMaxOutputTokens = 1024
+
+    private func planningOptions(for route: ModelRoute?) -> GenerationOptions {
+        var options = route?.options ?? GenerationOptions()
+        options.thinkingBudget = .off
+        options.maxOutputTokens = min(options.maxOutputTokens, Self.planningMaxOutputTokens)
+        return options
+    }
+
+    private func collect(prompt: String, modelID: ModelID, options: GenerationOptions) async throws -> String {
         let request = GenerateRequest(
             generationID: GenerationID(),
             modelID: modelID,
@@ -769,7 +799,7 @@ public final class ResearchSessionController: ObservableObject {
             // machine-parsed into `## Query N` blocks, so a broader route prompt
             // must not override the required structure.
             systemPrompt: defaultSystemPrompt,
-            options: route?.options ?? GenerationOptions()
+            options: options
         )
         return try await runtimeClient.collectGeneratedText(request)
     }

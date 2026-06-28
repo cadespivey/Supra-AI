@@ -16,17 +16,31 @@ final class EmbeddingCatalogTests: XCTestCase {
         XCTAssertEqual(EmbeddingModelCatalog.queryText("x", forModelID: "acme/custom-embedder"), "x")
     }
 
-    func testExpandedCatalogIncludesQwenAndBgeM3WithSupportedFamilies() {
+    func testCuratedCatalogUsesOnlyLoadableFamiliesAndDropsFailedOriginals() {
+        // Only families MLXEmbedders reliably loads are offered. xlm-roberta is still a
+        // supported registry family in principle, but the raw BGE-M3 original failed to
+        // load, so it (and the raw Nomic original) were removed.
         let supportedFamilies: Set<String> = ["bert", "roberta", "xlm-roberta", "distilbert", "nomic_bert", "qwen3", "gemma3", "gemma3_text", "gemma3n"]
         for model in EmbeddingModelCatalog.curated {
             XCTAssertTrue(supportedFamilies.contains(model.runtimeFamily),
                           "\(model.repoID) uses unsupported runtimeFamily \(model.runtimeFamily)")
         }
+        // Every offered family is one of the two reliably-loadable ones.
+        for model in EmbeddingModelCatalog.curated {
+            XCTAssertTrue(["bert", "qwen3"].contains(model.runtimeFamily),
+                          "\(model.repoID) is not in a verified-loadable family")
+        }
         let ids = Set(EmbeddingModelCatalog.curated.map(\.repoID))
         XCTAssertTrue(ids.contains("mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"))
         XCTAssertTrue(ids.contains("mlx-community/Qwen3-Embedding-8B-4bit-DWQ"))
-        XCTAssertTrue(ids.contains("BAAI/bge-m3"))
-        XCTAssertTrue(ids.contains("nomic-ai/nomic-embed-text-v1.5"))
+        XCTAssertTrue(ids.contains("mlx-community/mxbai-embed-large-v1"))
+        XCTAssertTrue(ids.contains("BAAI/bge-large-en-v1.5"))
+        // The raw xlm-roberta (BGE-M3) and nomic_bert (Nomic) originals failed to load
+        // and were removed.
+        XCTAssertFalse(ids.contains("BAAI/bge-m3"))
+        XCTAssertFalse(ids.contains("nomic-ai/nomic-embed-text-v1.5"))
+        // Default is the MLX-native Qwen3-Embedding 0.6B.
+        XCTAssertEqual(EmbeddingModelCatalog.defaultModel.repoID, "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ")
     }
 
     func testQwen3QueryGetsInstructionPrefixAndPassagesStayRaw() {

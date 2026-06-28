@@ -11,21 +11,21 @@ final class MotionAssemblyTests: XCTestCase {
     private var signature: SignatureBlockModel {
         SignatureBlockModel(
             respectfullySubmitted: DateOnly(year: 2026, month: 6, day: 25),
-            firmName: "Harwell & Branch, P.A.", signingAttorney: "Jordan A. Reyes",
-            attorneys: [AttorneyLine(name: "Jordan A. Reyes", barNumber: "Florida Bar No. 100847")],
+            firmName: "Pearson Specter Litt", signingAttorney: "Harvey Specter",
+            attorneys: [AttorneyLine(name: "Harvey Specter", barNumber: "Florida Bar No. 100847")],
             office: OfficeBlock(street: "200 West Forsyth Street", suite: "Suite 1400",
                                 city: "Jacksonville", state: "Florida", zip: "32202",
                                 phone: "(904) 555-0142", fax: "(904) 555-0143"),
             partyRepresented: "Defendant",
-            emails: EmailDesignation(primary: "jreyes@harwellbranch.example", secondary: [])
+            emails: EmailDesignation(primary: "hspecter@pearsonspecterlitt.example", secondary: [])
         )
     }
 
     private var caption: CaptionModel {
         CaptionModel(
             courtHeader: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
-            parties: [PartyLine(name: "MERIDIAN CAPITAL PARTNERS, LLC,", designation: "Plaintiff,"),
-                      PartyLine(name: "ATLANTIC RIDGE HOLDINGS, INC.,", designation: "Defendant.")],
+            parties: [PartyLine(name: "MCKERNON MOTORS, INC.,", designation: "Plaintiff,"),
+                      PartyLine(name: "LIBERTY RAIL, LLC,", designation: "Defendant.")],
             caseNumber: "2026-CA-001847", division: "CV-G", judge: nil
         )
     }
@@ -33,17 +33,17 @@ final class MotionAssemblyTests: XCTestCase {
     private func certificate() -> CertificateModel {
         CertificateModel(date: DateOnly(year: 2026, month: 6, day: 25), clause: .flEPortal,
                          documentTitle: "MOTION TO DISMISS",
-                         recipients: [ServiceRecipient(name: "Marcus T. Whitfield, Esq.", firm: "Caldwell & Pierce, LLP",
+                         recipients: [ServiceRecipient(name: "Daniel Hardman, Esq.", firm: "Hardman & Tanner, LLP",
                                                        address: OfficeBlock(street: "1 Independent Drive", suite: "Suite 2400",
                                                                             city: "Jacksonville", state: "Florida", zip: "32202", phone: "", fax: nil),
-                                                       emails: ["mwhitfield@caldwellpierce.example"], role: "Counsel for Plaintiff")],
-                         signOffAttorney: "Jordan A. Reyes")
+                                                       emails: ["dhardman@hardmantanner.example"], role: "Counsel for Plaintiff")],
+                         signOffAttorney: "Harvey Specter")
     }
 
     private func buildMotion() -> DocumentModel {
         MotionToDismiss.assemble(
             caption: caption,
-            title: MotionToDismiss.title(party: "Atlantic Ridge Holdings, Inc.", partyRole: "Defendant", pleading: "Plaintiff's Complaint"),
+            title: MotionToDismiss.title(party: "Liberty Rail, LLC", partyRole: "Defendant", pleading: "Plaintiff's Complaint"),
             introduction: [.paragraph("Defendant moves to dismiss the Complaint.")],
             numberedFacts: ["The parties are alleged to have entered an agreement.",
                             "The Complaint does not attach the agreement.",
@@ -53,13 +53,13 @@ final class MotionAssemblyTests: XCTestCase {
                     heading: "THE COMPLAINT FAILS TO STATE A CAUSE OF ACTION FOR BREACH OF CONTRACT.",
                     body: [.paragraph("To state a claim, a plaintiff must allege a valid contract, breach, and damages. [cite]")],
                     subPoints: [MotionToDismiss.ArgumentPoint(
-                        heading: "Meridian Fails to Allege the Essential Terms of a Valid Contract.",
+                        heading: "McKernon Fails to Allege the Essential Terms of a Valid Contract.",
                         body: [.paragraph("A claim on a written instrument must set forth its essential terms. [cite]")]
                     )]
                 ),
                 MotionToDismiss.ArgumentPoint(
                     heading: "THE COMPLAINT IS AN IMPERMISSIBLE SHOTGUN PLEADING.",
-                    body: [.paragraph("By incorporating every allegation into one count, the Complaint deprives Atlantic Ridge of fair notice.")]
+                    body: [.paragraph("By incorporating every allegation into one count, the Complaint deprives Liberty Rail of fair notice.")]
                 )
             ],
             conclusion: "WHEREFORE, Defendant respectfully requests that this Court dismiss the Complaint.",
@@ -70,7 +70,7 @@ final class MotionAssemblyTests: XCTestCase {
 
     func testMotionTitleUppercased() {
         let model = buildMotion()
-        XCTAssertEqual(model.title, "DEFENDANT ATLANTIC RIDGE HOLDINGS, INC.'S MOTION TO DISMISS PLAINTIFF'S COMPLAINT")
+        XCTAssertEqual(model.title, "DEFENDANT LIBERTY RAIL, LLC'S MOTION TO DISMISS PLAINTIFF'S COMPLAINT")
     }
 
     func testSkeletonLaysOutSectionsInOrder() {

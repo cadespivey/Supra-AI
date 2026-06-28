@@ -18,7 +18,7 @@ final class DocumentImportTests: XCTestCase {
 
     func testRecursiveImportPreservesHierarchyDedupsAndExpandsAttachments() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let storage = DocumentStorage(root: storageRoot)
         let service = DocumentImportService(store: store, storage: storage)
 
@@ -72,7 +72,7 @@ final class DocumentImportTests: XCTestCase {
 
     func testMockedOCRFillsImageTextWithLowConfidenceReview() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let imageURL = sourceRoot.appendingPathComponent("Images/scanned-notice.png")
         try FileManager.default.createDirectory(at: imageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("fake-png-bytes".utf8).write(to: imageURL)
@@ -101,7 +101,7 @@ final class DocumentImportTests: XCTestCase {
 
     func testEditedTextMarksDocumentStaleForReindex() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot))
         _ = try await service.importSources([sourceRoot.appendingPathComponent("Contracts/agreement.txt")], matterID: matter.id)
 
@@ -117,7 +117,7 @@ final class DocumentImportTests: XCTestCase {
 
     func testImportSourcesFilesTopLevelItemsIntoTargetFolder() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let folder = try store.documentLibrary.createFolder(matterID: matter.id, name: "Research")
         let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot))
 

@@ -43,13 +43,13 @@ final class ScratchPadSchemaTests: XCTestCase {
     func testMattersHasLEDESColumnsAndRoundTrips() throws {
         let store = try makeStore()
         let matter = MatterRecord(
-            name: "Reardon v. VyStar",
-            clientID: "VYSTAR",
+            name: "McKernon Motors v. Liberty Rail",
+            clientID: "MCKERNON",
             clientMatterID: "VS-LIT-2026-031"
         )
         try store.database.writer.write { db in try matter.insert(db) }
         let fetched = try store.matters.fetchMatter(id: matter.id)
-        XCTAssertEqual(fetched?.clientID, "VYSTAR")
+        XCTAssertEqual(fetched?.clientID, "MCKERNON")
         XCTAssertEqual(fetched?.clientMatterID, "VS-LIT-2026-031")
     }
 
@@ -64,11 +64,11 @@ final class ScratchPadSchemaTests: XCTestCase {
     func testEntriesSeqOrderingAndTagRoundTrip() throws {
         let store = try makeStore()
         let day = try store.scratchPad.fetchOrCreateDay("2026-06-22")
-        try store.scratchPad.addEntry(dayID: day.id, text: "Reviewed motion", mentions: ["m-vystar"], tags: ["review", "discovery"])
+        try store.scratchPad.addEntry(dayID: day.id, text: "Reviewed motion", mentions: ["m-mckernon"], tags: ["review", "discovery"])
         try store.scratchPad.addEntry(dayID: day.id, text: "Drafted opposition", mentions: [], tags: ["drafting"])
         let entries = try store.scratchPad.entries(dayID: day.id)
         XCTAssertEqual(entries.map(\.seq), [1, 2])
-        XCTAssertEqual(entries[0].mentions, ["m-vystar"])
+        XCTAssertEqual(entries[0].mentions, ["m-mckernon"])
         XCTAssertEqual(entries[0].tags, ["review", "discovery"])
         XCTAssertEqual(entries[1].mentions, [])
     }
@@ -108,7 +108,7 @@ final class ScratchPadSchemaTests: XCTestCase {
         let day = try store.scratchPad.fetchOrCreateDay("2026-06-22")
         let d1 = try store.billing.createDraft(dayID: day.id, sensitivity: 0.6, lineItems: [
             BillingLineItemInput(
-                matterID: "m-vystar",
+                matterID: "m-mckernon",
                 narrative: "Drafted opposition to motion to compel",
                 hours: 1.3,
                 workDate: "2026-06-22",
@@ -157,7 +157,7 @@ final class ScratchPadSchemaTests: XCTestCase {
 
     func testMatterBillingProfileUpsertIsSingleRow() throws {
         let store = try makeStore()
-        let matter = MatterRecord(name: "Meridian MSA")
+        let matter = MatterRecord(name: "Hessington MSA")
         try store.database.writer.write { db in try matter.insert(db) }
         _ = try store.billing.upsertBillingProfile(matterID: matter.id, overrideInstructions: "No block billing.", billingCodeSet: .transactional)
         _ = try store.billing.upsertBillingProfile(matterID: matter.id, overrideInstructions: "Require UTBMS codes.", billingCodeSet: .transactional)

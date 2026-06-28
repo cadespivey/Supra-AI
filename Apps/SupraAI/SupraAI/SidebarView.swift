@@ -19,6 +19,9 @@ struct SidebarView: View {
                 ForEach(matters.matters) { matter in
                     Label(matter.name, systemImage: "folder")
                         .tag(SidebarSelection.matter(matter.id))
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(matter.name)
+                        .accessibilityIdentifier("matter.row.\(matter.name)")
                 }
             } header: {
                 HStack {
@@ -33,6 +36,8 @@ struct SidebarView: View {
             }
         }
         .navigationTitle("Supra AI")
-        .onAppear { matters.loadMatters() }
+        .onAppear {
+            Task { @MainActor in matters.loadMatters() }
+        }
     }
 }

@@ -46,7 +46,9 @@ struct MainShellView: View {
             set: { newValue in
                 selection = newValue
                 if case let .matter(id) = newValue {
-                    environment.mattersController.select(matterID: id)
+                    Task { @MainActor in
+                        environment.mattersController.select(matterID: id)
+                    }
                 }
             }
         )

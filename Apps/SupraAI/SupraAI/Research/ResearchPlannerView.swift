@@ -46,9 +46,15 @@ struct ResearchPlannerView: View {
                 Section("Issue") {
                     TextField("Title", text: $draft.title)
                         .accessibilityIdentifier("planner.title")
-                    TextField("Legal issue or question", text: $draft.issueText, axis: .vertical)
-                        .lineLimit(3...6)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Legal issue or question").font(.caption).foregroundStyle(.secondary)
+                        MultilineField(
+                            placeholder: "e.g. Does the UCC govern a sale of goods under $500?",
+                            text: $draft.issueText,
+                            minLines: 4
+                        )
                         .accessibilityIdentifier("planner.issue")
+                    }
                     JurisdictionAutocompleteField(
                         jurisdiction: $draft.jurisdiction,
                         court: $jurisdictionCourt,
@@ -132,8 +138,11 @@ struct ResearchPlannerView: View {
             }
             .padding()
         }
-        .frame(width: 600, height: 740)
-        .onAppear { library.refresh() }
+        .frame(minWidth: 560, idealWidth: 680, maxWidth: .infinity, minHeight: 640, idealHeight: 780, maxHeight: .infinity)
+        .onAppear {
+            library.refresh()
+            Task { @MainActor in seedManualQueryIfNeeded() }
+        }
     }
 
     private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
@@ -202,6 +211,11 @@ struct ResearchPlannerView: View {
         if (try? controller.savePlan(draft: draft)) != nil {
             dismiss()
         }
+    }
+
+    private func seedManualQueryIfNeeded() {
+        guard routeModel == nil, controller.plannedQueries.isEmpty else { return }
+        controller.addQuery()
     }
 
     private func syncFilters() {

@@ -1317,14 +1317,14 @@ final class SupraSessionsTests: XCTestCase {
         controller.loadMatters()
         XCTAssertTrue(controller.matters.isEmpty)
 
-        let matter = try controller.createMatter(name: "Acme v. Roe")
+        let matter = try controller.createMatter(name: "McKernon Motors v. Liberty Rail")
         XCTAssertEqual(controller.matters.count, 1)
         XCTAssertEqual(controller.selectedMatterID, matter.id)
 
         // Creating a matter also creates a default matter chat and a
         // matter_created audit event (WO 23 / spec §8.3).
         XCTAssertEqual(try store.chats.fetchMatterChats(matterID: matter.id).count, 1)
-        XCTAssertEqual(try store.chats.fetchMatterChats(matterID: matter.id).first?.title, "General — Acme v. Roe")
+        XCTAssertEqual(try store.chats.fetchMatterChats(matterID: matter.id).first?.title, "General — McKernon Motors v. Liberty Rail")
         let auditEvents = try store.auditEvents.fetchEvents(matterID: matter.id)
         XCTAssertTrue(auditEvents.contains { $0.eventType == "matter_created" })
 
@@ -1343,7 +1343,7 @@ final class SupraSessionsTests: XCTestCase {
         let controller = MattersController(store: store, runtimeClient: stub)
 
         let matter = try controller.createMatter(
-            MatterDraft(name: "Doe v. Roe", jurisdiction: "California", partyPerspective: .plaintiff)
+            MatterDraft(name: "Hessington Oil v. Gillis Industries", jurisdiction: "California", partyPerspective: .plaintiff)
         )
         XCTAssertEqual(controller.selectedMatter?.jurisdiction, "California")
         XCTAssertEqual(controller.selectedMatter?.partyPerspective, .plaintiff)
@@ -1410,7 +1410,7 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(audit.contains { $0.eventType == "research_queries_approved" })
     }
 
-    func testResearchPlannerUsesLegalResearchRouteOptions() async throws {
+    func testResearchPlannerForcesThinkingOffOnLegalResearchRoute() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California", partyPerspective: .plaintiff)
         let markdown = """
@@ -1428,8 +1428,12 @@ final class SupraSessionsTests: XCTestCase {
         """
         let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
         let stub = StubRuntimeClient { request in
+            // Query planning inherits the legalResearch context/model but must NOT inherit
+            // its `.high` thinking budget — that crowded out the `## Query N` output and
+            // produced "no recommended queries". Thinking is forced off and output capped.
             XCTAssertEqual(request.options.preset, .legalResearch)
-            XCTAssertEqual(request.options.thinkingBudget, .high)
+            XCTAssertEqual(request.options.thinkingBudget, .off)
+            XCTAssertLessThanOrEqual(request.options.maxOutputTokens, 1024)
             XCTAssertEqual(request.options.maxContextTokens, route.options.maxContextTokens)
             XCTAssertNil(request.systemPrompt)
             return .events([
@@ -1548,7 +1552,7 @@ final class SupraSessionsTests: XCTestCase {
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
 
         let dto = CourtListenerSearchResultDTO(
-            caseName: "Roe v. Doe", citation: ["1 U.S. 1"], court: "SCOTUS",
+            caseName: "Specter v. Hardman", citation: ["1 U.S. 1"], court: "SCOTUS",
             dateFiled: "2020-01-15",
             opinions: [CourtListenerOpinionDTO(id: 9, type: nil, snippet: "snippet", downloadURL: nil, localPath: nil, authorID: nil, perCuriam: nil, sha1: nil)],
             rawResultJSON: "{\"x\":1}"
@@ -1566,7 +1570,7 @@ final class SupraSessionsTests: XCTestCase {
         )
         let q1 = controller.sessionQueries[0]
         XCTAssertEqual(q1.status, ResearchQueryStatus.completed.rawValue)
-        XCTAssertEqual(controller.resultsByQuery[q1.id]?.first?.caseName, "Roe v. Doe")
+        XCTAssertEqual(controller.resultsByQuery[q1.id]?.first?.caseName, "Specter v. Hardman")
         XCTAssertEqual(controller.resultsByQuery[q1.id]?.first?.citation, "1 U.S. 1")
         let audit = try store.auditEvents.fetchEvents(matterID: matter.id)
         XCTAssertTrue(audit.contains { $0.eventType == "courtlistener_search_started" })
@@ -1697,7 +1701,7 @@ final class SupraSessionsTests: XCTestCase {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
-        let dto = CourtListenerSearchResultDTO(caseName: "Roe v. Doe", citation: ["1 U.S. 1"], rawResultJSON: "{}")
+        let dto = CourtListenerSearchResultDTO(caseName: "Specter v. Hardman", citation: ["1 U.S. 1"], rawResultJSON: "{}")
         let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
         let controller = makeRunController(store: store, matterID: matter.id, client: client)
 
@@ -1731,7 +1735,7 @@ final class SupraSessionsTests: XCTestCase {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
-        let dto = CourtListenerSearchResultDTO(caseName: "Roe v. Doe", citation: ["1 U.S. 1"], rawResultJSON: "{}")
+        let dto = CourtListenerSearchResultDTO(caseName: "Specter v. Hardman", citation: ["1 U.S. 1"], rawResultJSON: "{}")
         let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
         let runController = makeRunController(store: store, matterID: matter.id, client: client)
         runController.openSession(sessionID)
@@ -1764,7 +1768,7 @@ final class SupraSessionsTests: XCTestCase {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
-        let dto = CourtListenerSearchResultDTO(caseName: "Roe v. Doe", rawResultJSON: "{}")
+        let dto = CourtListenerSearchResultDTO(caseName: "Specter v. Hardman", rawResultJSON: "{}")
         let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
         let controller = makeRunController(store: store, matterID: matter.id, client: client)
 

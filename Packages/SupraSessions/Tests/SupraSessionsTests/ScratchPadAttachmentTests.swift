@@ -93,10 +93,10 @@ final class ScratchPadAttachmentTests: XCTestCase {
     @MainActor
     func testControllerDefaultsAttachmentMatterToMostMentioned() async throws {
         let store = try SupraStore.inMemory()
-        let matter = try store.matters.createMatter(name: "Reardon v. VyStar")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let controller = ScratchPadController(store: store)
         controller.load()
-        XCTAssertTrue(controller.addEntry("Reviewed motion for @VyStar"))
+        XCTAssertTrue(controller.addEntry("Reviewed motion for @Liberty"))
         let url = try tempFile("note.eml", emlSample)
         await controller.addAttachment(fileURL: url)
         XCTAssertEqual(controller.attachments.first?.matterID, matter.id)
@@ -105,11 +105,11 @@ final class ScratchPadAttachmentTests: XCTestCase {
     @MainActor
     func testAddEntryWithAttachmentTiesFileToTheNote() async throws {
         let store = try SupraStore.inMemory()
-        let matter = try store.matters.createMatter(name: "Reardon v. VyStar")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let controller = ScratchPadController(store: store)
         controller.load()
         let url = try tempFile("opp.txt", "Opposition draft.")
-        let ok = await controller.addEntry("Drafted opposition for @VyStar", attachmentURLs: [url])
+        let ok = await controller.addEntry("Drafted opposition for @Liberty", attachmentURLs: [url])
         XCTAssertTrue(ok)
         XCTAssertEqual(controller.entries.count, 1)
         let entryID = try XCTUnwrap(controller.entries.first?.id)

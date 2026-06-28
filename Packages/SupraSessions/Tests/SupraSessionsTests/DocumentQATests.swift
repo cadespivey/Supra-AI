@@ -34,7 +34,7 @@ final class DocumentQATests: XCTestCase {
 
     func testAutoSourceQAGeneratesCitedAnswerSavedWithSourceSet() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme")
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
         try await indexDoc(store, matter.id, "agreement.txt", "The service agreement was signed on March 3, 2024 by both parties.")
 
         let runtime = StubRuntimeClient(outcome: { request in
@@ -64,7 +64,7 @@ final class DocumentQATests: XCTestCase {
 
     func testUnsupportedQuestionDoesNotInventAnswer() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme")
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
         try await indexDoc(store, matter.id, "note.txt", "The deposition discussed the wire transfer schedule.")
 
         let runtime = StubRuntimeClient(outcome: { request in
@@ -82,7 +82,7 @@ final class DocumentQATests: XCTestCase {
 
     func testDocumentQAUsesStructuredOutputRouteOptionsAndPrompt() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme")
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
         try await indexDoc(store, matter.id, "agreement.txt", "The agreement required notice by May 1, 2024.")
 
         let runtime = StubRuntimeClient(outcome: { request in
@@ -103,7 +103,7 @@ final class DocumentQATests: XCTestCase {
 
     func testMissingCitationsMarkNeedsReview() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme")
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
         try await indexDoc(store, matter.id, "a.txt", "Damages were assessed at fifty thousand dollars.")
 
         let runtime = StubRuntimeClient(outcome: { request in
@@ -121,7 +121,7 @@ final class DocumentQATests: XCTestCase {
 
     func testGeneratingBlockedWhenScopeNotIndexed() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme")
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
         // Insert a doc but do NOT index it.
         let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(sha256: "z", byteSize: 1, originalExtension: "txt", managedRelativePath: "b/z.txt")).blob
         _ = try store.documentLibrary.insertDocument(MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "x.txt", status: MatterDocumentStatus.extracting.rawValue, extractionStatus: DocumentExtractionStatus.extracted.rawValue))

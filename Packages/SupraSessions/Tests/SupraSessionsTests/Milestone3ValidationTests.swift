@@ -58,7 +58,7 @@ final class Milestone3ValidationTests: XCTestCase {
         let docx = try XCTUnwrap(docs.first { $0.displayName == "termination-letter.docx" })
         XCTAssertTrue(try store.documentIndex.fetchParts(documentID: docx.id).first?.normalizedText.contains("Termination") ?? false)
         let xlsx = try XCTUnwrap(docs.first { $0.displayName == "invoice-summary.xlsx" })
-        XCTAssertTrue(try store.documentIndex.fetchParts(documentID: xlsx.id).contains { $0.normalizedText.contains("Acme") })
+        XCTAssertTrue(try store.documentIndex.fetchParts(documentID: xlsx.id).contains { $0.normalizedText.contains("McKernon") })
 
         // Gate: OCR persisted with confidence for the image.
         let image = try XCTUnwrap(docs.first { $0.displayName == "scanned-notice.png" })
@@ -144,14 +144,14 @@ final class Milestone3ValidationTests: XCTestCase {
         try DocumentExportBuilder.write(DocumentExportPayload(title: "Termination Letter", contentMarkdown: "This Termination Letter is effective March 3, 2024.", reviewWarning: "", sources: []), format: .docx, to: try mk("Contracts/termination-letter.docx"))
         try DocumentExportBuilder.write(DocumentExportPayload(title: "Notice Template", contentMarkdown: "Notice template body.", reviewWarning: "", sources: []), format: .docx, to: try mk("Contracts/notice-template.dotx"))
         // XLSX (real OOXML).
-        try DocumentExportBuilder.write(DocumentExportPayload(title: "Invoices", contentMarkdown: "x", reviewWarning: "", sources: [.init(label: "S1", documentName: "Acme Corp", locator: "Invoice", excerpt: "5000")]), format: .xlsx, to: try mk("Finance/invoice-summary.xlsx"))
+        try DocumentExportBuilder.write(DocumentExportPayload(title: "Invoices", contentMarkdown: "x", reviewWarning: "", sources: [.init(label: "S1", documentName: "McKernon Motors", locator: "Invoice", excerpt: "5000")]), format: .xlsx, to: try mk("Finance/invoice-summary.xlsx"))
 
         // Text-family fixtures.
-        try "# Intake\n\nClient: Acme Corp. Wire transfer discussed.".write(to: try mk("Notes/intake-notes.md"), atomically: true, encoding: .utf8)
+        try "# Intake\n\nClient: McKernon Motors. Wire transfer discussed.".write(to: try mk("Notes/intake-notes.md"), atomically: true, encoding: .utf8)
         try "The deposition referenced a wire transfer on March 5, 2024.".write(to: try mk("Notes/witness-notes.txt"), atomically: true, encoding: .utf8)
         try #"{\rtf1\ansi Retainer note.\par}"#.write(to: try mk("Notes/rich-text-note.rtf"), atomically: true, encoding: .utf8)
         try "<html><body><h1>Archived</h1><p>Filed 2024-01-10.</p></body></html>".write(to: try mk("Web/archived-page.html"), atomically: true, encoding: .utf8)
-        try "<doc author=\"Jane Roe\"><note>Metadata 2023</note></doc>".write(to: try mk("Web/metadata.xml"), atomically: true, encoding: .utf8)
+        try "<doc author=\"Harvey Specter\"><note>Metadata 2023</note></doc>".write(to: try mk("Web/metadata.xml"), atomically: true, encoding: .utf8)
 
         // Email with a base64 attachment.
         let attachment = Data("Attached termination notice dated March 3, 2024.".utf8).base64EncodedString()

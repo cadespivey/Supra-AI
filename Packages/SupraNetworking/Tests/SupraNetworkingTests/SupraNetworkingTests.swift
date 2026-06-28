@@ -90,6 +90,33 @@ final class SupraNetworkingTests: XCTestCase {
         XCTAssertFalse(record.requestMetadataJSON?.localizedCaseInsensitiveContains("authorization") ?? true)
     }
 
+    func testAuthorizedHTTPClientRedactsAPIKeyHeadersFromLog() async throws {
+        let store = try makeStore()
+        let spy = TransportSpy()
+        let client = AuthorizedHTTPClient(
+            keyStore: InMemoryKeyStore(token: nil),
+            policy: NetworkPolicyService(),
+            logger: NetworkRequestLogger(repository: store.networkRequests),
+            rateLimitTracker: RateLimitTracker(),
+            transport: { request in
+                await spy.respond(to: request, statusCode: 200)
+            }
+        )
+        let url = try XCTUnwrap(URL(string: "https://api.govinfo.gov/search"))
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("govinfo-secret", forHTTPHeaderField: "X-Api-Key")
+        request.setValue("probe-1", forHTTPHeaderField: "X-Request-ID")
+
+        _ = try await client.sendUnauthenticated(request, relatedResearchSessionID: nil)
+
+        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
+        let metadata = try XCTUnwrap(record.requestMetadataJSON)
+        XCTAssertFalse(metadata.contains("govinfo-secret"), "API keys must never be persisted in request metadata")
+        XCTAssertTrue(metadata.contains("\"X-Api-Key\":\"#redacted\""))
+        XCTAssertTrue(metadata.contains("\"X-Request-ID\":\"probe-1\""))
+    }
+
     func testAuthenticatedSendToStorageCDNRefusesRatherThanLeakToken() async throws {
         let store = try makeStore()
         let spy = TransportSpy()

@@ -26,8 +26,46 @@ private struct LoadFailingTokenStore: APIKeyStoreProtocol, @unchecked Sendable {
     }
 }
 
+private final class MultiKeySettingsStore: APIKeyStoreProtocol, @unchecked Sendable {
+    private var keys: [APIKeyService: String] = [:]
+    func saveCourtListenerToken(_ token: String) throws {}
+    func loadCourtListenerToken() throws -> String? { nil }
+    func deleteCourtListenerToken() throws {}
+    func hasCourtListenerToken() throws -> Bool { false }
+    func saveAPIKey(_ key: String, for service: APIKeyService) throws { keys[service] = key }
+    func loadAPIKey(for service: APIKeyService) throws -> String? { keys[service] }
+    func deleteAPIKey(for service: APIKeyService) throws { keys[service] = nil }
+    func hasAPIKey(for service: APIKeyService) throws -> Bool { keys[service] != nil }
+}
+
 @MainActor
 final class SettingsControllerTests: XCTestCase {
+
+    func testSaveAndClearAPIKeyUpdatesConfiguredState() throws {
+        let store = try makeStore()
+        let settings = SettingsController(store: store, tokenStore: MultiKeySettingsStore())
+        XCTAssertFalse(settings.hasAPIKey(.openStates))
+
+        settings.saveAPIKey("os-key", for: .openStates)
+        XCTAssertTrue(settings.hasAPIKey(.openStates))
+        XCTAssertTrue(settings.configuredAPIKeys.contains(.openStates))
+        XCTAssertFalse(settings.hasAPIKey(.legiScan))
+
+        settings.clearAPIKey(for: .openStates)
+        XCTAssertFalse(settings.hasAPIKey(.openStates))
+    }
+
+    func testEnvironmentAPIKeyIsReportedReadOnly() throws {
+        let store = try makeStore()
+        let envStore = EnvironmentBackedTokenStore(
+            primary: MultiKeySettingsStore(),
+            environment: ["SUPRA_GOVINFO_API_KEY": "env"]
+        )
+        let settings = SettingsController(store: store, tokenStore: envStore)
+        XCTAssertTrue(settings.hasAPIKey(.govInfo))
+        XCTAssertTrue(settings.isEnvironmentAPIKey(.govInfo))
+    }
+
 
     func testSelectingPresetSnapsSamplingParametersAndPersists() throws {
         let store = try makeStore()

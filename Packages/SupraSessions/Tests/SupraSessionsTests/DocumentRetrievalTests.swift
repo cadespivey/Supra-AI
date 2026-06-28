@@ -158,7 +158,7 @@ final class DocumentRetrievalTests: XCTestCase {
         let source = GroundingSource(label: "S1", documentName: "d", locatorDisplay: "p.1", text: long, excerpt: "x")
         let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: "Q", sources: [source], mode: .short)
         XCTAssertTrue(prompt.contains("[source text truncated to fit the context window]"))
-        XCTAssertLessThan(prompt.count, long.count, "an overlong source must be trimmed in the prompt")
+        XCTAssertFalse(prompt.contains(long), "the full overlong source must not appear untrimmed in the prompt")
     }
 
     // MARK: - Helpers

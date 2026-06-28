@@ -112,8 +112,11 @@ private struct NewOutputSheet: View {
                     }
                 }
                 Section {
-                    TextField("Issue, facts, or notes for this output", text: $context, axis: .vertical)
-                        .lineLimit(4...10)
+                    MultilineField(
+                        placeholder: "The issue, key facts, or your notes",
+                        text: $context,
+                        minLines: 4
+                    )
                 } header: {
                     Text("Context")
                 } footer: {
@@ -174,7 +177,7 @@ private struct NewOutputSheet: View {
             }
             .padding()
         }
-        .frame(width: 520, height: 600)
+        .frame(minWidth: 460, idealWidth: 540, maxWidth: .infinity, minHeight: 460, idealHeight: 600, maxHeight: .infinity)
         .onAppear {
             library.refresh()
             documents = controller.documentChoices()

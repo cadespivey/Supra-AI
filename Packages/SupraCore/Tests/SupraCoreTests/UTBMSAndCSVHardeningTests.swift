@@ -46,11 +46,11 @@ final class UTBMSAndCSVHardeningTests: XCTestCase {
 
     func testCSVExportHardensFormulaNarrative() {
         let line = BillingLine(
-            clientID: "C", lawFirmMatterID: "F", clientDisplay: "Acme", matterDisplay: "Matter",
+            clientID: "C", lawFirmMatterID: "F", clientDisplay: "McKernon Motors", matterDisplay: "Matter",
             narrative: "=HYPERLINK(\"http://evil\")", hours: 1, workDate: "2026-06-22",
             activityCode: "A103", rate: 450
         )
-        let tk = BillingTimekeeper(id: "TK", name: "C. Spivey", classification: "PARTNER", defaultRate: 450, lawFirmID: "F")
+        let tk = BillingTimekeeper(id: "TK", name: "Harvey Specter", classification: "PARTNER", defaultRate: 450, lawFirmID: "F")
         let csv = BillingExporter.csv(lines: [line], timekeeper: tk)
         // The dangerous cell is prefixed with an apostrophe and quoted (contains comma/quote).
         XCTAssertTrue(csv.contains("\"'=HYPERLINK"), "formula narrative must be neutralized")

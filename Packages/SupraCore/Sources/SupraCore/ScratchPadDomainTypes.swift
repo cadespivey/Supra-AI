@@ -145,7 +145,7 @@ public struct BillingSettings: Codable, Sendable, Equatable {
 
     ENTRY SPLITTING — separate entries by task type: research, drafting, revision, filing/order review, document review, client comms, opposing-counsel comms, internal conferences, hearings, mediations, depositions, trial prep. Consolidate same-day emails only when the matter, participant group, and subject all match; never merge email with drafting/research/review/conferences.
 
-    TIME — minimum billable entry 0.2; round to the configured increment; preserve recorded time already a valid increment ≥ 0.2; raise anything below 0.2 to 0.2.
+    TIME — round each entry to the rounding increment configured in Settings; preserve recorded time that is already a valid increment; raise sub-increment time up to a single increment. Apply a firm minimum only if the attorney has specified one in their instructions — do not assume one.
 
     SPLIT MATTERS — "[A x N]" means N separate allocations of A hours each across related matters; do not collapse into one row. A single total that must be split → divide across the implicated matters (equal unless evidence shows otherwise), one row per matter, and append "(split)" to the narrative.
 

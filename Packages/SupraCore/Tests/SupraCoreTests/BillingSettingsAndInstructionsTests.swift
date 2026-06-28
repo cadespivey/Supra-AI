@@ -26,7 +26,7 @@ final class BillingSettingsAndInstructionsTests: XCTestCase {
             sensitivity: 0.8,
             roundingIncrement: 0.25,
             utbmsAutoCoding: false,
-            timekeeper: BillingTimekeeper(id: "TK-9", name: "A. Counsel", classification: "PARTNER", defaultRate: 525, lawFirmID: "98-1")
+            timekeeper: BillingTimekeeper(id: "TK-9", name: "Harvey Specter", classification: "PARTNER", defaultRate: 525, lawFirmID: "98-1")
         )
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(BillingSettings.self, from: data)
@@ -57,8 +57,8 @@ final class BillingSettingsAndInstructionsTests: XCTestCase {
         let rules = [
             MatterBillingRules(
                 matterID: "m1",
-                matterName: "Reardon v. VyStar",
-                clientName: "VyStar",
+                matterName: "McKernon Motors v. Liberty Rail",
+                clientName: "McKernon Motors",
                 codeSet: .litigation,
                 overrideInstructions: "Do not bill clerical tasks.",
                 guidelineExcerpts: ["Travel is billed at 50%. Block billing is prohibited."]
@@ -105,13 +105,13 @@ final class BillingSettingsAndInstructionsTests: XCTestCase {
 
     private func validLine(codeSet: BillingCodeSet = .litigation) -> BillingLine {
         BillingLine(
-            clientID: "VYSTAR", lawFirmMatterID: "12044-0007", clientMatterID: "VS-1",
+            clientID: "MCKERNON", lawFirmMatterID: "12044-0007", clientMatterID: "VS-1",
             narrative: "Drafted opposition.", hours: 1.3, workDate: "2026-06-22",
             taskCode: codeSet.requiresTaskCode ? "L350" : nil, activityCode: "A103", rate: 450, codeSet: codeSet
         )
     }
 
-    private let timekeeper = BillingTimekeeper(id: "TK-1", name: "C. Spivey", classification: "PARTNER", defaultRate: 450, lawFirmID: "98-7654321")
+    private let timekeeper = BillingTimekeeper(id: "TK-1", name: "Harvey Specter", classification: "PARTNER", defaultRate: 450, lawFirmID: "98-7654321")
 
     func testValidDraftHasNoIssues() {
         XCTAssertTrue(BillingExportValidator.validateForLEDES(lines: [validLine()], timekeeper: timekeeper).isEmpty)

@@ -40,10 +40,17 @@ public struct CatalogEmbeddingModel: Identifiable, Sendable, Equatable {
     }
 }
 
-/// Curated embedding models offered in Document Intelligence setup. All are
-/// supported by MLXEmbedders and run fully locally after download. Quality is
-/// favored over speed/disk size (plan §2.2), so the default is a strong English
-/// model and larger options are offered.
+/// Curated embedding models offered in Document Intelligence setup, **sorted by general
+/// quality (highest first, fastest/smallest last)**. Every repo is verified to exist on
+/// Hugging Face and load via MLXEmbedders.
+///
+/// Only two architecture families are offered because they reliably load with
+/// MLXEmbedders: `qwen3` (the MLX-native, instruction-tuned, multilingual Qwen3-Embedding
+/// models — the recommended choice) and `bert` (the BGE/mxbai English encoders). The raw
+/// `xlm-roberta` (BGE-M3) and `nomic_bert` (Nomic) originals were dropped: their PyTorch
+/// weight layouts do not map cleanly to the Swift port and fail to load. Multilingual
+/// retrieval is covered by the Qwen3-Embedding models (100+ languages), so no separate
+/// multilingual model is needed.
 public enum EmbeddingModelCatalog {
     /// The retrieval query instruction shared by the BGE and mxbai families (both
     /// were trained with this s2p query prompt; passages stay raw).
@@ -55,14 +62,43 @@ public enum EmbeddingModelCatalog {
     private static let qwen3QueryInstruction = "Instruct: Given a legal search query, retrieve relevant passages that answer the query\nQuery:"
 
     public static let curated: [CatalogEmbeddingModel] = [
+        // MARK: Qwen3-Embedding · MLX-native, instruction-tuned, multilingual (recommended)
         CatalogEmbeddingModel(
-            repoID: "BAAI/bge-base-en-v1.5",
-            displayName: "BGE Base EN v1.5",
-            dimension: 768,
-            runtimeFamily: "bert",
-            approxSizeMB: 210,
+            repoID: "mlx-community/Qwen3-Embedding-8B-4bit-DWQ",
+            displayName: "Qwen3-Embedding 8B",
+            dimension: 4096,
+            runtimeFamily: "qwen3",
+            approxSizeMB: 4600,
+            notes: "Highest-quality retrieval (MTEB-leading), instruction-tuned, multilingual. Large: needs ample RAM and disk; slower to embed.",
+            queryInstruction: qwen3QueryInstruction
+        ),
+        CatalogEmbeddingModel(
+            repoID: "mlx-community/Qwen3-Embedding-4B-4bit-DWQ",
+            displayName: "Qwen3-Embedding 4B",
+            dimension: 2560,
+            runtimeFamily: "qwen3",
+            approxSizeMB: 2400,
+            notes: "Excellent instruction-tuned multilingual retrieval; a strong middle option.",
+            queryInstruction: qwen3QueryInstruction
+        ),
+        CatalogEmbeddingModel(
+            repoID: "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
+            displayName: "Qwen3-Embedding 0.6B",
+            dimension: 1024,
+            runtimeFamily: "qwen3",
+            approxSizeMB: 400,
             isDefault: true,
-            notes: "Curated default. Strong English retrieval quality at a moderate size.",
+            notes: "Curated default. Instruction-tuned, multilingual, MLX-native — small and fast with strong quality.",
+            queryInstruction: qwen3QueryInstruction
+        ),
+        // MARK: BGE / mxbai · BERT English encoders (proven)
+        CatalogEmbeddingModel(
+            repoID: "mlx-community/mxbai-embed-large-v1",
+            displayName: "mxbai Embed Large v1",
+            dimension: 1024,
+            runtimeFamily: "bert",
+            approxSizeMB: 640,
+            notes: "Top-tier English retrieval quality (MLX-community build).",
             queryInstruction: bgeQueryInstruction
         ),
         CatalogEmbeddingModel(
@@ -71,55 +107,17 @@ public enum EmbeddingModelCatalog {
             dimension: 1024,
             runtimeFamily: "bert",
             approxSizeMB: 1300,
-            notes: "Highest English quality; larger on disk and slower to embed.",
+            notes: "Highest BGE English quality; larger on disk and slower to embed.",
             queryInstruction: bgeQueryInstruction
         ),
         CatalogEmbeddingModel(
-            repoID: "BAAI/bge-m3",
-            displayName: "BGE-M3 (multilingual)",
-            dimension: 1024,
-            runtimeFamily: "xlm-roberta",
-            approxSizeMB: 2200,
-            notes: "Multilingual retrieval across 100+ languages with long-context (8K) support. Larger on disk.",
-            queryInstruction: bgeQueryInstruction
-        ),
-        CatalogEmbeddingModel(
-            repoID: "mixedbread-ai/mxbai-embed-large-v1",
-            displayName: "mxbai Embed Large v1",
-            dimension: 1024,
-            runtimeFamily: "bert",
-            approxSizeMB: 640,
-            notes: "Top-tier retrieval quality.",
-            queryInstruction: bgeQueryInstruction
-        ),
-        CatalogEmbeddingModel(
-            repoID: "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
-            displayName: "Qwen3-Embedding 0.6B",
-            dimension: 1024,
-            runtimeFamily: "qwen3",
-            approxSizeMB: 400,
-            notes: "Instruction-tuned, strong multilingual + code retrieval. 4-bit quantized for a small footprint.",
-            queryInstruction: qwen3QueryInstruction
-        ),
-        CatalogEmbeddingModel(
-            repoID: "mlx-community/Qwen3-Embedding-8B-4bit-DWQ",
-            displayName: "Qwen3-Embedding 8B",
-            dimension: 4096,
-            runtimeFamily: "qwen3",
-            approxSizeMB: 4600,
-            notes: "Highest-quality retrieval (MTEB-leading), instruction-tuned. Large: needs ample RAM and disk; slower to embed.",
-            queryInstruction: qwen3QueryInstruction
-        ),
-        CatalogEmbeddingModel(
-            repoID: "nomic-ai/nomic-embed-text-v1.5",
-            displayName: "Nomic Embed Text v1.5",
+            repoID: "BAAI/bge-base-en-v1.5",
+            displayName: "BGE Base EN v1.5",
             dimension: 768,
-            runtimeFamily: "nomic_bert",
-            approxSizeMB: 550,
-            // Nomic expects symmetric "search_query:"/"search_document:" prefixes on
-            // BOTH sides; applying a query prefix without re-embedding passages would
-            // mismatch existing (raw) vectors, so leave it raw until a re-index path.
-            notes: "Longer context and Matryoshka dimensions."
+            runtimeFamily: "bert",
+            approxSizeMB: 210,
+            notes: "Solid English retrieval at a small size.",
+            queryInstruction: bgeQueryInstruction
         ),
         CatalogEmbeddingModel(
             repoID: "BAAI/bge-small-en-v1.5",
@@ -127,7 +125,7 @@ public enum EmbeddingModelCatalog {
             dimension: 384,
             runtimeFamily: "bert",
             approxSizeMB: 130,
-            notes: "Faster, smaller; lower quality than the base/large models.",
+            notes: "Fastest and smallest; lower quality than the base/large models.",
             queryInstruction: bgeQueryInstruction
         )
     ]
