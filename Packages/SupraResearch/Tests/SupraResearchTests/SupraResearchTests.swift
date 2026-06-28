@@ -68,13 +68,13 @@ final class SupraResearchTests: XCTestCase {
         XCTAssertEqual(query["highlight"], "on")
         XCTAssertEqual(query["order_by"], "score desc")
         XCTAssertEqual(response.count, 1)
-        XCTAssertEqual(response.results.single?.caseName, "Foo v. Foo")
+        XCTAssertEqual(response.results.single?.caseName, "Specter v. Hardman")
         XCTAssertEqual(response.results.single?.citation, ["101 Haw. 235", "65 P.3d 182"])
         XCTAssertEqual(response.results.single?.opinions.single?.id, 6489975)
         XCTAssertTrue(response.results.single?.rawResultJSON.contains("extra_unknown") ?? false)
         XCTAssertEqual(
             CourtListenerMapper.displayURL(for: try XCTUnwrap(response.results.single))?.absoluteString,
-            "https://www.courtlistener.com/opinion/6613686/foo-v-foo/"
+            "https://www.courtlistener.com/opinion/6613686/specter-v-hardman/"
         )
     }
 
@@ -181,9 +181,9 @@ final class SupraResearchTests: XCTestCase {
       "previous": null,
       "results": [
         {
-          "absolute_url": "/opinion/6613686/foo-v-foo/",
-          "caseName": "Foo v. Foo",
-          "caseNameFull": "Foo v. Foo",
+          "absolute_url": "/opinion/6613686/specter-v-hardman/",
+          "caseName": "Specter v. Hardman",
+          "caseNameFull": "Specter v. Hardman",
           "citation": ["101 Haw. 235", "65 P.3d 182"],
           "citeCount": 0,
           "cluster_id": 6613686,

@@ -118,6 +118,9 @@ final class AppEnvironment: ObservableObject {
             documentQueue: queue,
             isImportReady: { documentSetup.isReadyForImport }
         )
+        if Self.isUITestMode {
+            seedUITestFixturesIfNeeded()
+        }
     }
 
     /// Loads persisted state and refreshes runtime status on launch.
@@ -135,13 +138,16 @@ final class AppEnvironment: ObservableObject {
         // prompts — rather than reopening the last conversation. The prior chats
         // stay one click away in the history sidebar.
         chatController.startNewChat()
+        // Seed UI-test data before any runtime/status refresh that may take time on
+        // a machine without the helper service running; the shell can render matters
+        // immediately while the rest of bootstrap finishes.
+        if Self.isUITestMode { seedUITestFixturesIfNeeded() }
         await refreshRuntimeStatus()
         // If the runtime already holds a model from a previous session, re-enable
         // chat without forcing the user to re-load it (the chat gate keys on
         // ModelLibrary.loadState, which otherwise starts idle each launch).
         modelLibrary.reconcileLoadedModel(runtimeStatusController.loadedModelID)
         autoLoadStartupModelIfNeeded()
-        if Self.isUITestMode { seedUITestFixturesIfNeeded() }
         await documentSetupController.refreshAll()
         // Reconcile any document job interrupted by a previous quit (plan §5.4).
         documentQueue.bootstrap()
@@ -195,7 +201,7 @@ final class AppEnvironment: ObservableObject {
     private func seedUITestFixturesIfNeeded() {
         mattersController.loadMatters()
         if mattersController.matters.isEmpty {
-            _ = try? mattersController.createMatter(name: "UITest Matter")
+            _ = try? mattersController.createMatter(name: "McKernon Motors v. Liberty Rail")
             mattersController.loadMatters()
         }
     }

@@ -65,22 +65,28 @@ struct MatterEditorSheet: View {
                 }
 
                 Section("Optional") {
-                    TextField("Client name(s)", text: $draft.clientNames, axis: .vertical)
-                        .lineLimit(1...3)
-                    TextField("Matter description", text: $draft.matterDescription, axis: .vertical)
-                        .lineLimit(2...6)
-                    TextField("Court", text: $draft.court)
-                    TextField("Judge", text: $draft.judge)
-                    TextField("Case number", text: $draft.docketNumber)
-                    TextField("Practice area", text: $draft.practiceArea)
-                    TextField("Notes", text: $draft.notes, axis: .vertical)
-                        .lineLimit(2...5)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Client name(s)").font(.caption).foregroundStyle(.secondary)
+                        MultilineField(placeholder: "Client name(s)", text: $draft.clientNames, minLines: 2)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Matter description").font(.caption).foregroundStyle(.secondary)
+                        MultilineField(placeholder: "Matter description", text: $draft.matterDescription, minLines: 3)
+                    }
+                    LabeledTextField(label: "Court", text: $draft.court)
+                    LabeledTextField(label: "Judge", text: $draft.judge)
+                    LabeledTextField(label: "Case number", text: $draft.docketNumber)
+                    LabeledTextField(label: "Practice area", text: $draft.practiceArea)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Notes").font(.caption).foregroundStyle(.secondary)
+                        MultilineField(placeholder: "Notes", text: $draft.notes, minLines: 3)
+                    }
                 }
 
                 Section {
-                    TextField("Firm matter ID (LAW_FIRM_MATTER_ID)", text: $draft.internalMatterID)
-                    TextField("Client ID (CLIENT_ID)", text: $draft.clientID)
-                    TextField("Client matter ID (CLIENT_MATTER_ID)", text: $draft.clientMatterID)
+                    LabeledTextField(label: "Firm matter ID", text: $draft.internalMatterID, prompt: "LAW_FIRM_MATTER_ID")
+                    LabeledTextField(label: "Client ID", text: $draft.clientID, prompt: "CLIENT_ID")
+                    LabeledTextField(label: "Client matter ID", text: $draft.clientMatterID, prompt: "CLIENT_MATTER_ID")
                 } header: {
                     Text("E-billing (LEDES)")
                 } footer: {
@@ -99,7 +105,7 @@ struct MatterEditorSheet: View {
             }
             .padding()
         }
-        .frame(width: 560, height: 620)
+        .frame(minWidth: 480, idealWidth: 600, maxWidth: .infinity, minHeight: 520, idealHeight: 640, maxHeight: .infinity)
     }
 
     private var nameInvalid: Bool {
@@ -113,7 +119,7 @@ struct MatterEditorSheet: View {
     @ViewBuilder
     private func field(_ label: String, text: Binding<String>, invalid: Bool, message: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            TextField(label, text: text)
+            LabeledTextField(label: label, text: text)
             if invalid {
                 Text(message)
                     .font(.caption)

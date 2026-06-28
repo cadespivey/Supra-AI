@@ -358,7 +358,7 @@ public final class MattersController: ObservableObject {
             queue: documentQueue,
             isImportReady: isImportReady ?? { true }
         )
-        draftingController = MatterDraftingController(store: store)
+        draftingController = MatterDraftingController(store: store, runtimeClient: runtimeClient)
     }
 
     private func reload() {

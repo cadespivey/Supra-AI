@@ -8,23 +8,23 @@ import XCTest
 final class BillingDraftServiceTests: XCTestCase {
 
     private let timekeeper = BillingTimekeeper(
-        id: "TK-1001", name: "C. Spivey", classification: "PARTNER", defaultRate: 450, lawFirmID: "98-7654321"
+        id: "TK-1001", name: "Harvey Specter", classification: "PARTNER", defaultRate: 450, lawFirmID: "98-7654321"
     )
 
     private func makeStoreWithMatterAndDay() throws -> (store: SupraStore, matterID: String, dayID: String) {
         let store = try SupraStore.inMemory()
-        let matterID = "m-vystar"
+        let matterID = "m-mckernon"
         try store.database.writer.write { db in
             try MatterRecord(
-                id: matterID, name: "Reardon v. VyStar",
-                clientNames: "VyStar Credit Union", internalMatterID: "12044-0007",
-                clientID: "VYSTAR", clientMatterID: "VS-LIT-2026-031"
+                id: matterID, name: "McKernon Motors v. Liberty Rail",
+                clientNames: "McKernon Motors", internalMatterID: "12044-0007",
+                clientID: "MCKERNON", clientMatterID: "VS-LIT-2026-031"
             ).insert(db)
         }
         // Litigation matter → L-codes validate (UTBMS code-set validation).
         try store.billing.upsertBillingProfile(matterID: matterID, overrideInstructions: nil, billingCodeSet: .litigation)
         let day = try store.scratchPad.fetchOrCreateDay("2026-06-22")
-        try store.scratchPad.addEntry(dayID: day.id, text: "Drafting opposition for @VyStar", mentions: [matterID], tags: ["drafting"])
+        try store.scratchPad.addEntry(dayID: day.id, text: "Drafting opposition for @McKernon", mentions: [matterID], tags: ["drafting"])
         return (store, matterID, day.id)
     }
 
@@ -52,7 +52,7 @@ final class BillingDraftServiceTests: XCTestCase {
         let persisted = try store.billing.lineItems(draftID: result.draftID)
         XCTAssertEqual(persisted.count, 2)
         XCTAssertEqual(persisted[0].matterID, matterID)
-        XCTAssertEqual(persisted[0].clientID, "VYSTAR")
+        XCTAssertEqual(persisted[0].clientID, "MCKERNON")
         XCTAssertEqual(persisted[0].utbmsTaskCode, "L350")
         XCTAssertNil(persisted[0].rate, "lines inherit the configured timekeeper rate (stored nil); the $765 total confirms the effective $450")
         XCTAssertEqual(persisted[0].hours, 1.3, accuracy: 0.001)
@@ -209,7 +209,7 @@ final class BillingDraftServiceTests: XCTestCase {
         // A client billing-guideline document with extracted text, tagged.
         let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(sha256: "g", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/g.pdf")).blob
         let guideline = try store.documentLibrary.insertDocument(MatterDocumentRecord(
-            matterID: matterID, blobID: blob.id, displayName: "VyStar Guidelines.pdf",
+            matterID: matterID, blobID: blob.id, displayName: "McKernon Guidelines.pdf",
             extractionStatus: DocumentExtractionStatus.extracted.rawValue
         ))
         try store.documentIndex.replaceParts(documentID: guideline.id, parts: [
@@ -320,9 +320,9 @@ final class BillingDraftServiceTests: XCTestCase {
     }
 
     func testResolveMatterByNameAndPureHelpers() throws {
-        let matter = MatterRecord(id: "m1", name: "Meridian MSA")
+        let matter = MatterRecord(id: "m1", name: "Hessington MSA")
         XCTAssertEqual(BillingDraftService.resolveMatter("m1", in: [matter])?.id, "m1")
-        XCTAssertEqual(BillingDraftService.resolveMatter("meridian msa", in: [matter])?.id, "m1")
+        XCTAssertEqual(BillingDraftService.resolveMatter("hessington msa", in: [matter])?.id, "m1")
         XCTAssertNil(BillingDraftService.resolveMatter("unknown", in: [matter]))
         XCTAssertEqual(BillingDraftService.roundToIncrement(0.17, 0.1), 0.2, accuracy: 0.0001)
         XCTAssertEqual(BillingDraftService.roundToIncrement(0.62, 0.25), 0.5, accuracy: 0.0001)

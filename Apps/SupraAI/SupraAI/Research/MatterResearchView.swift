@@ -39,7 +39,7 @@ struct MatterResearchView: View {
                 Text("Plan and run CourtListener research for this matter.")
             } actions: {
                 Button("New Research Session") { showPlanner = true }
-                    .accessibilityIdentifier("research.newSession.empty")
+                    .accessibilityIdentifier("research.newSession")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityIdentifier("research.empty")
@@ -61,6 +61,7 @@ struct MatterResearchView: View {
                     }
                     .padding(.vertical, 2)
                 }
+                .accessibilityIdentifier("research.session.\(session.title)")
             }
         }
     }

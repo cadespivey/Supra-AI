@@ -152,8 +152,8 @@ final class AssistantProfileTests: XCTestCase {
 
     func testHiddenLegacyBarNumberDoesNotSatisfyReadinessAfterStructuredRowsExist() {
         var profile = AssistantProfile()
-        profile.fullName = "Pat Vance"
-        profile.organization = "Vance LLP"
+        profile.fullName = "Harvey Specter"
+        profile.organization = "Pearson Specter Litt"
         profile.barNumber = "100847"
         profile.barLicenses = [.init(jurisdictionID: "fl", barNumber: "")]
         profile.officeStreet = "1 Main"
@@ -161,7 +161,7 @@ final class AssistantProfileTests: XCTestCase {
         profile.officeState = "Florida"
         profile.officeZip = "32202"
         profile.officePhone = "904-555-0100"
-        profile.primaryEmail = "pat@example.com"
+        profile.primaryEmail = "hspecter@psl.com"
 
         XCTAssertFalse(profile.hasAnyBarLicense)
         XCTAssertFalse(profile.hasDraftingIdentity)
@@ -180,8 +180,8 @@ final class AssistantProfileTests: XCTestCase {
 
     func testFirmProfileMatchesBarLicenseToCourtJurisdiction() {
         var profile = AssistantProfile()
-        profile.fullName = "Pat Vance"
-        profile.organization = "Vance LLP"
+        profile.fullName = "Harvey Specter"
+        profile.organization = "Pearson Specter Litt"
         profile.barLicenses = [
             .init(jurisdictionID: "fl", barNumber: "100847"),
             .init(jurisdictionID: "tx", barNumber: "24011223")

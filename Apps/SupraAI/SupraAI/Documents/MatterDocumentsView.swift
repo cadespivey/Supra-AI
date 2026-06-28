@@ -540,8 +540,14 @@ struct DocumentQASheet: View {
             .padding()
             Divider()
             Form {
-                TextField("Your question", text: $question, axis: .vertical)
-                    .lineLimit(2...4)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Your question").font(.caption).foregroundStyle(.secondary)
+                    MultilineField(
+                        placeholder: "e.g. What are the termination provisions in the lease?",
+                        text: $question,
+                        minLines: 3
+                    )
+                }
                 Picker("Answer style", selection: $mode) {
                     Text("Short").tag(DocumentAnswerMode.short)
                     Text("Memo").tag(DocumentAnswerMode.memo)
@@ -595,7 +601,7 @@ struct DocumentQASheet: View {
             }
             .padding()
         }
-        .frame(width: 620, height: 600)
+        .frame(minWidth: 520, idealWidth: 620, maxWidth: .infinity, minHeight: 460, idealHeight: 600, maxHeight: .infinity)
         .onAppear { library.refresh() }
     }
 
@@ -736,7 +742,7 @@ struct DocumentChronologySheet: View {
             }
             .padding()
         }
-        .frame(width: 640, height: 620)
+        .frame(minWidth: 540, idealWidth: 640, maxWidth: .infinity, minHeight: 480, idealHeight: 620, maxHeight: .infinity)
         .onAppear { library.refresh() }
     }
 

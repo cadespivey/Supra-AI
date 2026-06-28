@@ -87,9 +87,10 @@ struct FirstRunOnboardingView: View {
     @ObservedObject var documentSetup: DocumentIntelligenceSetupController
     let onComplete: () -> Void
 
-    // Per-job download selections, defaulted to the curated recommendations.
-    @State private var reasoningRepo = ModelCatalog.curated[0].repoID
-    @State private var draftingRepo = ModelCatalog.curated[1].repoID
+    // Per-job download selections, defaulted to the curated role recommendations
+    // (addressed by name so the catalog list can be sorted by quality).
+    @State private var reasoningRepo = ModelCatalog.defaultReasoningModel.repoID
+    @State private var draftingRepo = ModelCatalog.defaultDraftingModel.repoID
     @State private var embeddingRepo = EmbeddingModelCatalog.defaultModel.repoID
     // Models whose download was started here, by display name → the role to assign on
     // registration (captured at click time so changing a picker later can't misroute).

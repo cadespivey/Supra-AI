@@ -224,7 +224,7 @@ public final class BillingDraftController: ObservableObject {
         let billingLines = self.billingLines()
         switch format {
         case .ledes:
-            return BillingExporter.ledes1998B(lines: billingLines, timekeeper: timekeeper, invoice: BillingInvoiceInfo(invoiceDate: invoiceDate ?? Self.todayString()))
+            return BillingExporter.ledes1998B(lines: billingLines, timekeeper: timekeeper, invoice: BillingInvoiceInfo(invoiceDate: invoiceDate))
         case .csv:
             return BillingExporter.csv(lines: billingLines, timekeeper: timekeeper)
         case .clipboard:

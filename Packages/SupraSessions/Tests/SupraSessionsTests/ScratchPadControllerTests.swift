@@ -21,30 +21,30 @@ final class ScratchPadControllerTests: XCTestCase {
     // MARK: - Token parsing
 
     func testTokenParserExtractsMentionsAndTags() {
-        let parsed = ScratchPadTokenParser.parse("TC w/ @Acme-Roe, re custodian list #call #discovery")
-        XCTAssertEqual(parsed.mentions, ["Acme-Roe"])
+        let parsed = ScratchPadTokenParser.parse("TC w/ @McKernon-LibertyRail, re custodian list #call #discovery")
+        XCTAssertEqual(parsed.mentions, ["McKernon-LibertyRail"])
         XCTAssertEqual(parsed.tags, ["call", "discovery"])
     }
 
     func testTokenParserDeduplicatesAndIgnoresBareSigils() {
-        let parsed = ScratchPadTokenParser.parse("@VyStar @VyStar # @ #drafting plain")
-        XCTAssertEqual(parsed.mentions, ["VyStar"])
+        let parsed = ScratchPadTokenParser.parse("@McKernon @McKernon # @ #drafting plain")
+        XCTAssertEqual(parsed.mentions, ["McKernon"])
         XCTAssertEqual(parsed.tags, ["drafting"])
     }
 
     // MARK: - Resolution
 
     func testResolveMentionsByExplicitMapAndNamePrefix() {
-        let chips = [MatterChip(id: "m1", name: "Reardon v. VyStar"), MatterChip(id: "m2", name: "Meridian MSA")]
-        // Best-effort: "VyStar" matches the slug of "Reardon v. VyStar".
-        XCTAssertEqual(ScratchPadTagResolver.resolveMentions(["VyStar"], chips: chips), ["m1"])
+        let chips = [MatterChip(id: "m1", name: "McKernon Motors v. Liberty Rail"), MatterChip(id: "m2", name: "Hessington MSA")]
+        // Best-effort: "McKernon" matches the slug of "McKernon Motors v. Liberty Rail".
+        XCTAssertEqual(ScratchPadTagResolver.resolveMentions(["McKernon"], chips: chips), ["m1"])
         // Explicit pick wins regardless of text.
         XCTAssertEqual(ScratchPadTagResolver.resolveMentions(["x"], chips: chips, explicit: ["x": "m2"]), ["m2"])
     }
 
     func testMatterSuggestionsRankPrefixFirst() {
-        let chips = [MatterChip(id: "m1", name: "Reardon v. VyStar"), MatterChip(id: "m2", name: "Meridian MSA")]
-        let suggestions = ScratchPadTagResolver.matterSuggestions(prefix: "mer", chips: chips)
+        let chips = [MatterChip(id: "m1", name: "McKernon Motors v. Liberty Rail"), MatterChip(id: "m2", name: "Hessington MSA")]
+        let suggestions = ScratchPadTagResolver.matterSuggestions(prefix: "hes", chips: chips)
         XCTAssertEqual(suggestions.first?.id, "m2")
     }
 
@@ -116,10 +116,10 @@ final class ScratchPadControllerTests: XCTestCase {
 
     func testAddEntryPersistsResolvedMentionsAndTags() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Reardon v. VyStar")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let controller = ScratchPadController(store: store, now: fixedNow)
         controller.load()
-        XCTAssertTrue(controller.addEntry("Reviewed motion to compel for @VyStar #discovery #review"))
+        XCTAssertTrue(controller.addEntry("Reviewed motion to compel for @McKernon #discovery #review"))
         XCTAssertEqual(controller.entries.count, 1)
         let entry = controller.entries[0]
         XCTAssertEqual(entry.mentionMatterIDs, [matter.id])
@@ -129,10 +129,10 @@ final class ScratchPadControllerTests: XCTestCase {
 
     func testAddEntryHonorsExplicitMentionBinding() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Meridian Health Systems")
+        let matter = try store.matters.createMatter(name: "Hessington Oil v. Gillis Industries")
         let controller = ScratchPadController(store: store, now: fixedNow)
         controller.load()
-        XCTAssertTrue(controller.addEntry("Drafted issues memo @mer", explicitMentions: ["mer": matter.id]))
+        XCTAssertTrue(controller.addEntry("Drafted issues memo @hes", explicitMentions: ["hes": matter.id]))
         XCTAssertEqual(controller.entries[0].mentionMatterIDs, [matter.id])
     }
 

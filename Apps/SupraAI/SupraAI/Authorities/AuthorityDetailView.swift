@@ -103,7 +103,7 @@ struct AuthorityDetailView: View {
             }
 
             Section("Notes") {
-                TextField("User notes", text: $notes, axis: .vertical).lineLimit(2...5)
+                MultilineField(placeholder: "User notes", text: $notes, minLines: 3)
                 Button("Save Notes") { controller.updateUserNotes(authorityID: authorityID, notes) }
                     .disabled(notes == (authority.userNotes ?? ""))
             }
@@ -316,7 +316,7 @@ private struct OpinionWebView: NSViewRepresentable {
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+            decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
         ) {
             // Allow the initial in-memory load; clicked links open in the browser.
             if navigationAction.navigationType == .linkActivated, let url = navigationAction.request.url {

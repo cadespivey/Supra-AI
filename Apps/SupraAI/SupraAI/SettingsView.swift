@@ -1,5 +1,6 @@
 import AppKit
 import SupraCore
+import SupraNetworking
 import SupraSessions
 import SwiftUI
 import UniformTypeIdentifiers
@@ -10,7 +11,6 @@ struct SettingsView: View {
     @ObservedObject var profile: AssistantProfileController
     @ObservedObject var update: UpdateController
     @ObservedObject var billing: BillingSettingsController
-    @State private var courtListenerToken = ""
 
     var body: some View {
         Form {
@@ -52,29 +52,53 @@ struct SettingsView: View {
             }
 
             Section {
-                HStack(spacing: 8) {
-                    Image(systemName: settings.hasCourtListenerToken ? "checkmark.seal.fill" : "key.slash")
-                        .foregroundStyle(settings.hasCourtListenerToken ? .green : .orange)
-                    Text(courtListenerStatusText)
-                        .font(.callout.weight(.medium))
-                    Spacer()
-                }
-                if settings.courtListenerTokenSource == .keychain {
-                    Button("Clear Token", role: .destructive) {
-                        settings.clearCourtListenerToken()
-                    }
-                } else if settings.courtListenerTokenSource == .none {
-                    SecureField("CourtListener API token", text: $courtListenerToken)
-                    Button("Save Token") {
-                        settings.saveCourtListenerToken(courtListenerToken)
-                        courtListenerToken = ""
-                    }
-                    .disabled(courtListenerToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
+                // Case law
+                APIKeyDisclosure(
+                    settings: settings, title: "CourtListener",
+                    description: "Federal & state case law from courts and PACER, via the nonprofit Free Law Project. Updated continuously as new opinions are published.",
+                    kind: .courtListener(signupURL: URL(string: "https://www.courtlistener.com/help/api/rest/")!)
+                )
+                // Codified law
+                APIKeyDisclosure(
+                    settings: settings, title: "govinfo",
+                    description: "The official U.S. Code from the U.S. Government Publishing Office. USCODE editions are issued annually, with supplements between editions.",
+                    kind: .service(.govInfo, prompt: "govinfo (api.data.gov) API key", signupURL: URL(string: "https://api.data.gov/signup/")!)
+                )
+                APIKeyDisclosure(
+                    settings: settings, title: "eCFR",
+                    description: "The official Code of Federal Regulations. Continuously updated; each section carries an effective date, typically current to within a few days.",
+                    kind: .builtIn(sourceID: "ecfr")
+                )
+                APIKeyDisclosure(
+                    settings: settings, title: "Open Legal Codes",
+                    description: "State statutes, the U.S. Code, and the CFR, crawled best-effort. Coverage varies and there is no verified effective date — always confirm currency against the official source.",
+                    kind: .builtIn(sourceID: "open-legal-codes")
+                )
+                // Legislative & regulatory developments (tracked, not cited as authority)
+                APIKeyDisclosure(
+                    settings: settings, title: "Federal Register",
+                    description: "Federal rules, proposed rules, and agency notices. Published every federal business day. Tracked as developments — not cited as authority.",
+                    kind: .builtIn(sourceID: "federal-register")
+                )
+                APIKeyDisclosure(
+                    settings: settings, title: "OpenStates",
+                    description: "State & federal bills, from the Plural civic-data project. Updated daily while legislatures are in session.",
+                    kind: .service(.openStates, prompt: "OpenStates API key", signupURL: URL(string: "https://openstates.org/accounts/profile/")!)
+                )
+                APIKeyDisclosure(
+                    settings: settings, title: "LegiScan",
+                    description: "Bills across all 50 states and Congress. Status is refreshed continuously, typically within a day of legislative action.",
+                    kind: .service(.legiScan, prompt: "LegiScan API key", signupURL: URL(string: "https://legiscan.com/legiscan")!)
+                )
+                APIKeyDisclosure(
+                    settings: settings, title: "Regulations.gov",
+                    description: "Federal rulemaking dockets and public comments. Updated each federal business day. Tracked as developments — not cited as authority.",
+                    kind: .service(.regulationsGov, prompt: "Regulations.gov API key", signupURL: URL(string: "https://api.data.gov/signup/")!)
+                )
             } header: {
-                Text("CourtListener")
+                Text("Legal Data Sources")
             } footer: {
-                Text(courtListenerFooterText)
+                Text("Connectors that ground research in primary law and track legislative & regulatory developments. Expand a source to add and verify a key — keys are free and stored only in your Keychain. Sources marked “Free · no key required” are public APIs with no key; use Verify to confirm they’re reachable.")
             }
 
             Section("Model Storage") {
@@ -135,10 +159,19 @@ struct SettingsView: View {
                 Link(destination: URL(string: "https://free.law")!) {
                     Label("Free Law Project", systemImage: "building.columns")
                 }
+                Link(destination: URL(string: "https://openlegalcodes.org")!) {
+                    Label("Open Legal Codes", systemImage: "text.book.closed")
+                }
+                Link(destination: URL(string: "https://openstates.org")!) {
+                    Label("OpenStates", systemImage: "building.2")
+                }
+                Link(destination: URL(string: "https://legiscan.com")!) {
+                    Label("LegiScan", systemImage: "doc.text.magnifyingglass")
+                }
             } header: {
                 Text("About")
             } footer: {
-                Text("Supra AI's legal research is powered by CourtListener and the Free Law Project — free, nonprofit resources. Please consider creating a free account to support and sustain their work.")
+                Text("Supra AI's research is grounded in free, public-interest data projects: CourtListener and the Free Law Project (case law), Open Legal Codes (statutes & codes), and OpenStates and LegiScan (legislation). Please consider creating a free account or otherwise supporting their work.")
             }
         }
         .formStyle(.grouped)
@@ -156,28 +189,6 @@ struct SettingsView: View {
     private func revealInFinder(_ path: String) {
         try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-    }
-
-    private var courtListenerStatusText: String {
-        switch settings.courtListenerTokenSource {
-        case .environment:
-            "API token from environment"
-        case .keychain:
-            "API token saved in Keychain"
-        case .none:
-            "No API token saved"
-        }
-    }
-
-    private var courtListenerFooterText: String {
-        switch settings.courtListenerTokenSource {
-        case .environment:
-            "Using SUPRA_COURTLISTENER_API_KEY from the environment. Change or unset that variable to use a different token."
-        case .keychain:
-            "Stored in your Keychain. Clear it to enter a different token."
-        case .none:
-            "Add your token to run CourtListener research. Stored only in your Keychain."
-        }
     }
 }
 
@@ -205,10 +216,168 @@ private struct AboutBanner: View {
     }
 }
 
-/// ScratchPad → billing settings (Milestone 4 Phase 7, spec §9): the firm-wide
-/// billing instructions, time/rounding behaviour, auto-coding toggle, and the
-/// single configured timekeeper + firm identity that populate fee lines. Every
-/// control persists immediately. Written for a legal audience — no ML jargon.
+/// One collapsible row in the consolidated "Legal Data Sources" group. Collapsed, it shows the
+/// source name + a one-word status; expanded, it shows the update/currency note plus the relevant
+/// controls. Handles three kinds: a keyed `APIKeyService`, the CourtListener token (its own store
+/// methods), and a key-less "built in" source (free, no entry — just the description).
+private struct APIKeyDisclosure: View {
+    @ObservedObject var settings: SettingsController
+    let title: String
+    /// One line on coverage + how current the source is — shown when expanded.
+    let description: String
+    let kind: Kind
+    @State private var entry = ""
+
+    enum Kind {
+        case service(APIKeyService, prompt: String, signupURL: URL)
+        case courtListener(signupURL: URL)
+        /// A free, key-less public source (eCFR / Federal Register / Open Legal Codes).
+        /// `sourceID` drives the reachability "Verify" check.
+        case builtIn(sourceID: String)
+    }
+
+    private var configured: Bool {
+        switch kind {
+        case let .service(service, _, _): settings.hasAPIKey(service)
+        case .courtListener: settings.courtListenerTokenSource != .none
+        case .builtIn: true
+        }
+    }
+
+    private var isEnvironment: Bool {
+        switch kind {
+        case let .service(service, _, _): settings.isEnvironmentAPIKey(service)
+        case .courtListener: settings.courtListenerTokenSource == .environment
+        case .builtIn: false
+        }
+    }
+
+    private var verificationState: SettingsController.KeyVerificationState {
+        switch kind {
+        case let .service(service, _, _): settings.verificationState(service)
+        case .courtListener: settings.courtListenerVerification
+        case .builtIn: .idle
+        }
+    }
+
+    private var statusLabel: String {
+        if case let .builtIn(sourceID) = kind {
+            return settings.keylessVerificationState(sourceID) == .valid ? "Verified" : "Free · no key"
+        }
+        if isEnvironment { return "From environment" }
+        return configured ? "Key saved" : "No key"
+    }
+
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(description)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                controls
+            }
+            .padding(.top, 4)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: configured ? "checkmark.seal.fill" : "key.slash")
+                    .foregroundStyle(configured ? .green : .orange)
+                Text(title).font(.callout.weight(.medium))
+                Spacer()
+                Text(statusLabel).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private var controls: some View {
+        switch kind {
+        case let .builtIn(sourceID):
+            Text("Free · no key required.").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Verify") { Task { await settings.verifyKeylessSource(sourceID) } }
+                    .disabled(settings.keylessVerificationState(sourceID) == .verifying)
+                Spacer()
+            }
+            KeyVerificationStatusView(state: settings.keylessVerificationState(sourceID))
+        case let .service(service, prompt, signupURL):
+            keyControls(
+                prompt: prompt, signupURL: signupURL,
+                save: { settings.saveAPIKey($0, for: service) },
+                clear: { settings.clearAPIKey(for: service) },
+                verify: { await settings.verifyAPIKey(service) }
+            )
+        case let .courtListener(signupURL):
+            keyControls(
+                prompt: "CourtListener API token", signupURL: signupURL,
+                save: { settings.saveCourtListenerToken($0) },
+                clear: { settings.clearCourtListenerToken() },
+                verify: { await settings.verifyCourtListenerToken() }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func keyControls(
+        prompt: String,
+        signupURL: URL,
+        save: @escaping (String) -> Void,
+        clear: @escaping () -> Void,
+        verify: @escaping () async -> Void
+    ) -> some View {
+        if isEnvironment {
+            Text("Provided by the environment.").font(.caption).foregroundStyle(.secondary)
+            verifyButton(verify)
+            KeyVerificationStatusView(state: verificationState)
+        } else if configured {
+            HStack {
+                Button("Clear Key", role: .destructive) { clear() }
+                Spacer()
+                verifyButton(verify)
+            }
+            KeyVerificationStatusView(state: verificationState)
+        } else {
+            SecureField(prompt, text: $entry)
+            HStack {
+                Button("Save Key") { save(entry); entry = "" }
+                    .disabled(entry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Spacer()
+            }
+        }
+        // Always reachable — the app ships with no key preloaded.
+        Link("Get a \(title) key…", destination: signupURL).font(.callout)
+    }
+
+    private func verifyButton(_ verify: @escaping () async -> Void) -> some View {
+        Button("Verify Key") { Task { await verify() } }
+            .disabled(verificationState == .verifying)
+    }
+}
+
+/// Shared "Verify Key" outcome line, used by every API-key row and the CourtListener token.
+private struct KeyVerificationStatusView: View {
+    let state: SettingsController.KeyVerificationState
+
+    var body: some View {
+        switch state {
+        case .idle:
+            EmptyView()
+        case .verifying:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Checking…").font(.caption).foregroundStyle(.secondary)
+            }
+        case .valid:
+            Label("Verified", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green)
+        case let .invalid(message):
+            Label(message, systemImage: "xmark.octagon.fill")
+                .font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+        case let .unreachable(message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 private struct ScratchPadBillingSection: View {
     @ObservedObject var billing: BillingSettingsController
 
@@ -276,7 +445,7 @@ private struct ScratchPadBillingSection: View {
 
         Section {
             LabeledTextField(label: "Timekeeper ID", text: $billing.timekeeperID, prompt: "e.g. TK-1001")
-            LabeledTextField(label: "Timekeeper name", text: $billing.timekeeperName, prompt: "e.g. C. Spivey")
+            LabeledTextField(label: "Timekeeper name", text: $billing.timekeeperName, prompt: "e.g. H. Specter")
             LabeledTextField(label: "Classification", text: $billing.timekeeperClassification, prompt: "e.g. PARTNER, ASSOCIATE, PARALEGAL")
             HStack {
                 Text("Default rate")
@@ -297,67 +466,8 @@ private struct ScratchPadBillingSection: View {
     }
 }
 
-/// A captioned, full-width, left-aligned bordered single-line field — the unified
-/// style for Settings text entry. A bare `TextField` row in a grouped form is
-/// right-aligned and reads as an unlabeled value; this keeps the label visible (like
-/// the Writing Style / Citations fields) and the text flowing naturally from the left.
-private struct LabeledTextField: View {
-    let label: String
-    @Binding var text: String
-    var prompt: String? = nil
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
-            LeadingTextField(text: $text, placeholder: prompt ?? "")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 5)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(nsColor: .separatorColor)))
-        }
-    }
-}
-
-/// An AppKit-backed single-line text field that stays LEFT-aligned even inside a
-/// grouped `Form`, where SwiftUI's `TextField` is unavoidably forced to trailing
-/// alignment. Borderless/transparent so the SwiftUI wrapper draws the box.
-private struct LeadingTextField: NSViewRepresentable {
-    @Binding var text: String
-    var placeholder: String
-
-    func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField(string: text)
-        field.alignment = .left
-        field.placeholderString = placeholder
-        field.isBordered = false
-        field.drawsBackground = false
-        field.focusRingType = .none
-        field.font = .preferredFont(forTextStyle: .body)
-        field.lineBreakMode = .byTruncatingTail
-        field.cell?.usesSingleLineMode = true
-        field.delegate = context.coordinator
-        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return field
-    }
-
-    func updateNSView(_ nsView: NSTextField, context: Context) {
-        if nsView.stringValue != text { nsView.stringValue = text }
-        nsView.placeholderString = placeholder
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
-
-    final class Coordinator: NSObject, NSTextFieldDelegate {
-        private let text: Binding<String>
-        init(text: Binding<String>) { self.text = text }
-        func controlTextDidChange(_ notification: Notification) {
-            guard let field = notification.object as? NSTextField else { return }
-            text.wrappedValue = field.stringValue
-        }
-    }
-}
+// `LabeledTextField` / `LeadingTextField` now live in `MultilineField.swift` (shared
+// across Settings, Edit Matter, and drafting — spec §9.3).
 
 /// Editor for the attorney's bar admissions (multi-jurisdiction). Each row is a
 /// jurisdiction + bar number; one is marked primary (★). At draft time the admission
@@ -487,11 +597,11 @@ private struct AssistantProfileSection: View {
             }
             LabeledTextField(label: "Telephone", text: $profile.profile.officePhone, prompt: "e.g. (904) 555-0142")
             LabeledTextField(label: "Facsimile (optional)", text: $profile.profile.officeFax)
-            LabeledTextField(label: "Primary service e-mail", text: $profile.profile.primaryEmail, prompt: "e.g. you@firm.com")
+            LabeledTextField(label: "Primary service e-mail", text: $profile.profile.primaryEmail, prompt: "e.g. hspecter@psl.com")
             VStack(alignment: .leading, spacing: 4) {
                 Text("Secondary service e-mails (one per line)").font(.caption).foregroundStyle(.secondary)
                 MultilineField(
-                    placeholder: "e.g. litdocket@firm.com",
+                    placeholder: "e.g. litdocket@psl.com",
                     text: secondaryEmailsBinding
                 )
             }

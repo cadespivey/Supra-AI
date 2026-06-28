@@ -35,7 +35,7 @@ final class BillingSettingsControllerTests: XCTestCase {
         controller.roundingIncrement = 0.25
         controller.utbmsAutoCoding = false
         controller.timekeeperID = "TK-77"
-        controller.timekeeperName = "C. Spivey"
+        controller.timekeeperName = "J. Smith"
         controller.timekeeperClassification = "PARTNER"
         controller.timekeeperRate = 525
         controller.lawFirmID = "98-7654321"
@@ -54,9 +54,9 @@ final class BillingSettingsControllerTests: XCTestCase {
 
     func testTimekeeperTrimsWhitespaceAndFloorsRate() throws {
         let controller = BillingSettingsController(store: try makeStore())
-        controller.timekeeperName = "  C. Spivey  "
+        controller.timekeeperName = "  J. Smith  "
         controller.timekeeperRate = -10
-        XCTAssertEqual(controller.timekeeper.name, "C. Spivey")
+        XCTAssertEqual(controller.timekeeper.name, "J. Smith")
         XCTAssertEqual(controller.timekeeper.defaultRate, 0)
     }
 

@@ -151,7 +151,7 @@ public enum LegalResearchSourcePlanner {
         let markers = [
             "statute of limitations", "limitations period", "deadline", "time limit",
             "limitations run", "claim filing", "file a claim",
-            "elements of", "required elements", "statutory scheme", "agency administer",
+            "statutory scheme", "agency administer",
             "agency-administered", "department oversees", "administrative claim",
             "benefits claim", "exhaustion", "notice requirement"
         ]

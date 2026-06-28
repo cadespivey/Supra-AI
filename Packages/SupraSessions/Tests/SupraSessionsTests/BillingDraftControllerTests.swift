@@ -8,23 +8,23 @@ import XCTest
 final class BillingDraftControllerTests: XCTestCase {
 
     private let timekeeper = BillingTimekeeper(
-        id: "TK-1001", name: "C. Spivey", classification: "PARTNER", defaultRate: 450, lawFirmID: "98-7654321"
+        id: "TK-1001", name: "Harvey Specter", classification: "PARTNER", defaultRate: 450, lawFirmID: "98-7654321"
     )
 
     private let json = """
     {"lineItems":[
-      {"matterID":"m-vystar","narrative":"Drafted opposition to motion to compel.","hours":1.3,"taskCode":"L350","activityCode":"A103","confidence":"high","sourceEntryIDs":["e1"]},
-      {"matterID":"m-vystar","narrative":"Telephone conference re custodian list.","hours":0.4,"taskCode":"L350","activityCode":"A106","confidence":"medium","sourceEntryIDs":["e2"]}
+      {"matterID":"m-mckernon","narrative":"Drafted opposition to motion to compel.","hours":1.3,"taskCode":"L350","activityCode":"A103","confidence":"high","sourceEntryIDs":["e1"]},
+      {"matterID":"m-mckernon","narrative":"Telephone conference re custodian list.","hours":0.4,"taskCode":"L350","activityCode":"A106","confidence":"medium","sourceEntryIDs":["e2"]}
     ]}
     """
 
     private func setUp() throws -> (store: SupraStore, dayID: String) {
         let store = try SupraStore.inMemory()
         try store.database.writer.write { db in
-            try MatterRecord(id: "m-vystar", name: "Reardon v. VyStar", clientNames: "VyStar", internalMatterID: "12044-0007", clientID: "VYSTAR", clientMatterID: "VS-LIT-2026-031").insert(db)
+            try MatterRecord(id: "m-mckernon", name: "McKernon Motors v. Liberty Rail", clientNames: "McKernon", internalMatterID: "12044-0007", clientID: "MCKERNON", clientMatterID: "VS-LIT-2026-031").insert(db)
         }
         let day = try store.scratchPad.fetchOrCreateDay("2026-06-22")
-        try store.scratchPad.addEntry(dayID: day.id, text: "Working on @VyStar", mentions: ["m-vystar"])
+        try store.scratchPad.addEntry(dayID: day.id, text: "Working on @McKernon", mentions: ["m-mckernon"])
         return (store, day.id)
     }
 
@@ -148,15 +148,15 @@ final class BillingDraftControllerTests: XCTestCase {
         let remaining = try XCTUnwrap(controller.lines.first)
         controller.reassignMatter(lineID: remaining.id, to: nil)
         XCTAssertNil(controller.lines.first?.matterID)
-        controller.reassignMatter(lineID: remaining.id, to: "m-vystar")
-        XCTAssertEqual(controller.lines.first?.matterID, "m-vystar")
-        XCTAssertEqual(controller.lines.first?.clientID, "VYSTAR")
+        controller.reassignMatter(lineID: remaining.id, to: "m-mckernon")
+        XCTAssertEqual(controller.lines.first?.matterID, "m-mckernon")
+        XCTAssertEqual(controller.lines.first?.clientID, "MCKERNON")
 
         // Export marks the draft exported and records an audit trail.
         controller.markExported(format: .csv)
         let draft = try XCTUnwrap(store.billing.latestDraft(dayID: dayID))
         XCTAssertEqual(draft.status, BillingDraftStatus.exported.rawValue)
-        let events = try store.auditEvents.fetchEvents(matterID: "m-vystar")
+        let events = try store.auditEvents.fetchEvents(matterID: "m-mckernon")
         XCTAssertTrue(events.contains { $0.eventType == "export_completed" })
         XCTAssertTrue(events.contains { $0.eventType == "billing_draft_generated" })
     }

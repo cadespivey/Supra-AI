@@ -324,7 +324,7 @@ private struct EditLineSheet: View {
             Text("Edit line").font(.headline)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Narrative").font(.caption).foregroundStyle(.secondary)
-                TextField("Narrative", text: $narrative, axis: .vertical).lineLimit(2...5).textFieldStyle(.roundedBorder)
+                MultilineField(placeholder: "Narrative", text: $narrative, minLines: 3)
             }
             HStack(alignment: .top, spacing: 12) {
                 field("Hours", text: $hoursText, width: 80)
@@ -347,7 +347,7 @@ private struct EditLineSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 520)
+        .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity)
     }
 
     @ViewBuilder

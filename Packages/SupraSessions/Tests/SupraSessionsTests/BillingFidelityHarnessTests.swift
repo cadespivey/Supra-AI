@@ -8,7 +8,7 @@ import XCTest
 final class BillingFidelityHarnessTests: XCTestCase {
 
     private let timekeeper = BillingTimekeeper(
-        id: "TK-1001", name: "C. Spivey", classification: "PARTNER", defaultRate: 450, lawFirmID: "98-7654321"
+        id: "TK-1001", name: "Harvey Specter", classification: "PARTNER", defaultRate: 450, lawFirmID: "98-7654321"
     )
 
     func testScorerDiscriminatesGoodFromBad() {

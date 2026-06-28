@@ -151,9 +151,7 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
 
     private func requestMetadataJSON(for request: URLRequest) -> String? {
         guard let url = request.url else { return nil }
-        let sanitizedHeaders = (request.allHTTPHeaderFields ?? [:]).filter { key, _ in
-            key.lowercased() != "authorization"
-        }
+        let sanitizedHeaders = Self.sanitizedHeaders(request.allHTTPHeaderFields ?? [:])
         // The query string carries the user's privileged search terms (e.g. the
         // CourtListener `q=` parameter). Unless query-term logging is explicitly
         // enabled, redact parameter *values* to a stable fingerprint while keeping
@@ -166,6 +164,29 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         guard let data = try? JSONEncoder().encode(metadata) else { return nil }
         return String(data: data, encoding: .utf8)
     }
+
+    private static func sanitizedHeaders(_ headers: [String: String]) -> [String: String] {
+        headers.reduce(into: [:]) { result, item in
+            let normalized = item.key.lowercased()
+            if normalized == "authorization" {
+                return
+            }
+            if sensitiveHeaderNames.contains(normalized) {
+                result[item.key] = "#redacted"
+            } else {
+                result[item.key] = item.value
+            }
+        }
+    }
+
+    private static let sensitiveHeaderNames: Set<String> = [
+        "x-api-key",
+        "api-key",
+        "apikey",
+        "x-auth-token",
+        "x-access-token",
+        "ocp-apim-subscription-key"
+    ]
 
     /// Replaces each query parameter's value with a stable fingerprint, preserving
     /// the parameter names so the *shape* of the request remains auditable.

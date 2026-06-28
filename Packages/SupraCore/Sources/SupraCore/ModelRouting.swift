@@ -350,7 +350,15 @@ public struct ModelRouter: Sendable {
         let contextualMarkers = [
             "contract law", "under california law", "under new york law",
             "governing law", "elements of", "cause of action", "burden of proof",
-            "standard of review", "recover damages", "damages under"
+            "standard of review", "recover damages", "damages under",
+            // Common legal questions a user opens global research with — so they default
+            // to source-grounded answers rather than the model's parametric memory.
+            "lawsuit", "sue ", "can i sue", "liable", "liability", "breach of",
+            "negligence", "statute of limitations", " tort", "wrongful", "discrimination",
+            "is it legal", "legal to", "my legal rights", "what are my rights",
+            "lease agreement", "evict", "custody", "alimony", "warranty", "easement",
+            "fiduciary", "indemnif", "good faith", "due process", "first amendment",
+            "is enforceable", "legally required", "legally binding", "right to"
         ]
         return contextualMarkers.contains { lower.contains($0) }
     }
@@ -388,6 +396,8 @@ public enum LegalPromptTemplates {
 
     public static let documentGroundedSystemPrompt = """
     You are a legal document analysis assistant operating in a source-grounded mode. Use only the provided document sources. Cite source labels for every factual claim, do not invent facts, dates, quotations, or document contents, and say when the provided sources do not support an answer. Preserve the requested output structure.
+
+    Treat identifiers as literal strings: never expand an email prefix, initials, a signature stub, or a username into a person's name (an address like "nrust@firm.com" does not tell you the person's name). State a person's or entity's name only if that exact name appears verbatim in a source; if a source shows only an identifier but never spells out the name, say the name is not stated in the documents rather than guessing it.
     """
 
     public static let draftingSystemPrompt = """

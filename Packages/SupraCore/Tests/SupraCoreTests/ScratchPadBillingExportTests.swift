@@ -7,7 +7,7 @@ final class ScratchPadBillingExportTests: XCTestCase {
 
     private let timekeeper = BillingTimekeeper(
         id: "TK-1001",
-        name: "C. Spivey",
+        name: "Harvey Specter",
         classification: "PARTNER",
         defaultRate: 450,
         lawFirmID: "98-7654321"
@@ -16,20 +16,20 @@ final class ScratchPadBillingExportTests: XCTestCase {
     private func sampleLines() -> [BillingLine] {
         [
             BillingLine(
-                clientID: "VYSTAR", lawFirmMatterID: "12044-0007", clientMatterID: "VS-LIT-2026-031",
-                clientDisplay: "VyStar Credit Union", matterDisplay: "VyStar",
+                clientID: "MCKERNON", lawFirmMatterID: "12044-0007", clientMatterID: "VS-LIT-2026-031",
+                clientDisplay: "McKernon Motors, Inc.", matterDisplay: "McKernon",
                 narrative: "Drafted opposition to Defendant's motion to compel.",
                 hours: 1.3, workDate: "2026-06-22", taskCode: "L350", activityCode: "A103", confidence: .high
             ),
             BillingLine(
-                clientID: "VYSTAR", lawFirmMatterID: "12044-0007", clientMatterID: "VS-LIT-2026-031",
-                clientDisplay: "VyStar Credit Union", matterDisplay: "VyStar",
+                clientID: "MCKERNON", lawFirmMatterID: "12044-0007", clientMatterID: "VS-LIT-2026-031",
+                clientDisplay: "McKernon Motors, Inc.", matterDisplay: "McKernon",
                 narrative: "Telephone conference re custodian list.",
                 hours: 0.4, workDate: "2026-06-22", taskCode: "L350", activityCode: "A106", confidence: .medium
             ),
             BillingLine(
-                clientID: "MERIDIAN", lawFirmMatterID: "12061-0003",
-                clientDisplay: "Meridian Health Systems, Inc.", matterDisplay: "Meridian",
+                clientID: "HESSINGTON", lawFirmMatterID: "12061-0003",
+                clientDisplay: "Hessington Oil, Inc.", matterDisplay: "Hessington",
                 narrative: "Reviewed MSA redlines, with commas, and \"quotes\".",
                 hours: 0.8, workDate: "2026-06-22", activityCode: "A104", confidence: .medium
             )
@@ -41,12 +41,12 @@ final class ScratchPadBillingExportTests: XCTestCase {
         XCTAssertEqual(result.billableTotalHours, 2.5, accuracy: 0.001)
         XCTAssertEqual(result.totalAmount, 1125, accuracy: 0.001)
         XCTAssertEqual(result.byMatter.count, 2)
-        let vystar = try XCTUnwrap(result.byMatter.first { $0.matterKey == "VyStar" })
-        XCTAssertEqual(vystar.hours, 1.7, accuracy: 0.001)
-        XCTAssertEqual(vystar.amount, 765, accuracy: 0.001)
-        let meridian = try XCTUnwrap(result.byMatter.first { $0.matterKey == "Meridian" })
-        XCTAssertEqual(meridian.hours, 0.8, accuracy: 0.001)
-        XCTAssertEqual(meridian.amount, 360, accuracy: 0.001)
+        let mckernon = try XCTUnwrap(result.byMatter.first { $0.matterKey == "McKernon" })
+        XCTAssertEqual(mckernon.hours, 1.7, accuracy: 0.001)
+        XCTAssertEqual(mckernon.amount, 765, accuracy: 0.001)
+        let hessington = try XCTUnwrap(result.byMatter.first { $0.matterKey == "Hessington" })
+        XCTAssertEqual(hessington.hours, 0.8, accuracy: 0.001)
+        XCTAssertEqual(hessington.amount, 360, accuracy: 0.001)
     }
 
     func testReconcileFlagsNonMultipleLowConfidenceAndUnassigned() {
@@ -91,15 +91,15 @@ final class ScratchPadBillingExportTests: XCTestCase {
         func field(_ row: String, _ index: Int) -> String {
             String(row.dropLast(2)).components(separatedBy: "|")[index]
         }
-        // Two VyStar lines: invoice total 765.00, line numbers 1 and 2.
+        // Two McKernon lines: invoice total 765.00, line numbers 1 and 2.
         XCTAssertEqual(field(dataRows[0], 4), "765.00")
         XCTAssertEqual(field(dataRows[1], 4), "765.00")
         XCTAssertEqual(field(dataRows[0], 8), "1")
         XCTAssertEqual(field(dataRows[1], 8), "2")
-        // One Meridian line: its own invoice, total 360.00, line number restarts at 1.
+        // One Hessington line: its own invoice, total 360.00, line number restarts at 1.
         XCTAssertEqual(field(dataRows[2], 4), "360.00")
         XCTAssertEqual(field(dataRows[2], 8), "1")
-        // Dates are YYYYMMDD; task code blank on the transactional Meridian line.
+        // Dates are YYYYMMDD; task code blank on the transactional Hessington line.
         XCTAssertEqual(field(dataRows[2], 13), "20260622")
         XCTAssertEqual(field(dataRows[2], 14), "")
     }
@@ -151,8 +151,8 @@ final class ScratchPadBillingExportTests: XCTestCase {
 
     func testWeeklyTableExport() {
         let line = BillingLine(
-            clientID: "VYSTAR", lawFirmMatterID: "12044-0007", clientMatterID: "VS-031",
-            clientDisplay: "VyStar Credit Union", matterDisplay: "VyStar - Celebration Point",
+            clientID: "MCKERNON", lawFirmMatterID: "12044-0007", clientMatterID: "VS-031",
+            clientDisplay: "McKernon Motors, Inc.", matterDisplay: "McKernon - Celebration Point",
             narrative: "Draft opposition to motion to compel.", hours: 1.0, workDate: "2026-06-22",
             narrativeTerminal: .noPeriod
         )
@@ -160,6 +160,6 @@ final class ScratchPadBillingExportTests: XCTestCase {
         XCTAssertEqual(rows[0], "| DATE | CLIENT / MATTER | MATTER NO. | NARRATIVE | TIME |")
         XCTAssertEqual(rows[1], "|---|---|---|---|---:|")
         // MM/DD/YYYY date, matter name, firm matter no., punctuation-free narrative, one-decimal time.
-        XCTAssertEqual(rows[2], "| 06/22/2026 | VyStar - Celebration Point | 12044-0007 | Draft opposition to motion to compel | 1.0 |")
+        XCTAssertEqual(rows[2], "| 06/22/2026 | McKernon - Celebration Point | 12044-0007 | Draft opposition to motion to compel | 1.0 |")
     }
 }

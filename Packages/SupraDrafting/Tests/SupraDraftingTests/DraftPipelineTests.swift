@@ -10,32 +10,32 @@ final class DraftPipelineTests: XCTestCase {
 
     private var profile: FirmProfile {
         FirmProfile(
-            firmName: "Harwell & Branch, P.A.",
-            signingAttorney: "Jordan A. Reyes",
+            firmName: "Pearson Specter Litt",
+            signingAttorney: "Harvey Specter",
             barNumber: "100847",
             office: OfficeBlock(street: "200 West Forsyth Street", suite: "Suite 1400",
                                 city: "Jacksonville", state: "Florida", zip: "32202",
                                 phone: "(904) 555-0142", fax: "(904) 555-0143"),
-            primaryEmail: "jreyes@harwellbranch.example",
-            secondaryEmails: ["litdocket@harwellbranch.example"]
+            primaryEmail: "hspecter@pearsonspecterlitt.example",
+            secondaryEmails: ["litdocket@pearsonspecterlitt.example"]
         )
     }
 
     private var noticeInputs: NoticeAppearance.Inputs {
         NoticeAppearance.Inputs(
             courtHeader: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
-            parties: [PartyLine(name: "MERIDIAN CAPITAL PARTNERS, LLC,", designation: "Plaintiff,"),
-                      PartyLine(name: "ATLANTIC RIDGE HOLDINGS, INC.,", designation: "Defendant.")],
+            parties: [PartyLine(name: "MCKERNON MOTORS, INC.,", designation: "Plaintiff,"),
+                      PartyLine(name: "LIBERTY RAIL, LLC,", designation: "Defendant.")],
             partyRepresented: "Defendant",
-            representedPartyName: "Atlantic Ridge Holdings, Inc.",
+            representedPartyName: "Liberty Rail, LLC",
             caseNumber: "2026-CA-001847",
             division: "CV-G",
             serviceDate: DateOnly(year: 2026, month: 6, day: 25),
             recipients: [ServiceRecipient(
-                name: "Marcus T. Whitfield, Esq.", firm: "Caldwell & Pierce, LLP",
+                name: "Daniel Hardman, Esq.", firm: "Hardman & Tanner, LLP",
                 address: OfficeBlock(street: "1 Independent Drive", suite: "Suite 2400",
                                      city: "Jacksonville", state: "Florida", zip: "32202", phone: "", fax: nil),
-                emails: ["mwhitfield@caldwellpierce.example"], role: "Counsel for Plaintiff"
+                emails: ["dhardman@hardmantanner.example"], role: "Counsel for Plaintiff"
             )]
         )
     }
@@ -55,18 +55,18 @@ final class DraftPipelineTests: XCTestCase {
         let xmlA = try renderer.documentXML(NoticeAppearance.assemble(noticeInputs, profile: profile), style: .defaultFL)
 
         let firmB = FirmProfile(
-            firmName: "Sterling Vance LLP", signingAttorney: "Pat Vance", barNumber: "990012",
+            firmName: "Rand Kaldor Zane", signingAttorney: "Robert Zane", barNumber: "990012",
             office: OfficeBlock(street: "1 Bay St", suite: nil, city: "Tampa", state: "Florida",
                                 zip: "33601", phone: "(813) 555-0001", fax: nil),
-            primaryEmail: "pvance@sterlingvance.example"
+            primaryEmail: "rzane@randkaldorzane.example"
         )
         let xmlB = try renderer.documentXML(NoticeAppearance.assemble(noticeInputs, profile: firmB), style: .defaultFL)
 
-        XCTAssertTrue(xmlA.contains("Jordan A. Reyes"))
-        XCTAssertFalse(xmlA.contains("Pat Vance"))
-        XCTAssertTrue(xmlB.contains("Pat Vance"))
-        XCTAssertFalse(xmlB.contains("Jordan A. Reyes"))
-        XCTAssertFalse(xmlB.contains("jreyes@harwellbranch.example"))
+        XCTAssertTrue(xmlA.contains("Harvey Specter"))
+        XCTAssertFalse(xmlA.contains("Robert Zane"))
+        XCTAssertTrue(xmlB.contains("Robert Zane"))
+        XCTAssertFalse(xmlB.contains("Harvey Specter"))
+        XCTAssertFalse(xmlB.contains("hspecter@pearsonspecterlitt.example"))
     }
 
     func testTemplatePurity_NoBakedProperNamesInBodyTemplate() {
@@ -116,12 +116,12 @@ final class DraftPipelineTests: XCTestCase {
 
     func testLetterGateNeverAddsCertificateRequirement() {
         let letter = LetterModel(
-            letterhead: LetterheadFill(firmName: "Harwell & Branch, P.A.", office: profile.office),
+            letterhead: LetterheadFill(firmName: "Pearson Specter Litt", office: profile.office),
             date: DateOnly(year: 2026, month: 6, day: 25),
-            recipient: AddressBlock(name: "Mr. Coleman", title: nil, firm: "Coleman Logistics, LLC",
+            recipient: AddressBlock(name: "Mr. Charles Forstman", title: nil, firm: "Forstman Capital, LLC",
                                     street: "4820 Southpoint Parkway", city: "Jacksonville", state: "Florida", zip: "32216"),
-            reLine: "Demand", salutation: "Dear Mr. Coleman:", body: ["Body."],
-            closing: "Respectfully,", signerName: "Jordan A. Reyes", signerTitle: nil, enclosures: [], cc: []
+            reLine: "Demand", salutation: "Dear Mr. Forstman:", body: ["Body."],
+            closing: "Respectfully,", signerName: "Harvey Specter", signerTitle: nil, enclosures: [], cc: []
         )
         let result = PreFileGate().check(letter: letter, style: .defaultFL)
         XCTAssertFalse(result.followUps.contains { $0.message.lowercased().contains("certificate") },

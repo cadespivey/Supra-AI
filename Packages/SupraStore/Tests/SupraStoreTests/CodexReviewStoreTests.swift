@@ -54,18 +54,18 @@ final class CodexReviewStoreTests: XCTestCase {
     func testMatterCreateAndUpdatePersistLedesIdentifiers() throws {
         let store = try makeStore()
         let created = try store.matters.createMatter(
-            name: "Reardon v. VyStar", jurisdiction: "FL",
-            clientID: "VYSTAR", clientMatterID: "VS-LIT-2026-031"
+            name: "McKernon Motors v. Liberty Rail", jurisdiction: "FL",
+            clientID: "MCKERNON", clientMatterID: "VS-LIT-2026-031"
         )
-        XCTAssertEqual(created.clientID, "VYSTAR")
+        XCTAssertEqual(created.clientID, "MCKERNON")
         XCTAssertEqual(created.clientMatterID, "VS-LIT-2026-031")
 
         try store.matters.updateMatter(
             id: created.id, name: created.name, jurisdiction: "FL", partyPerspective: .plaintiff,
-            clientID: "VYSTAR-2", clientMatterID: "VS-2027"
+            clientID: "MCKERNON-2", clientMatterID: "VS-2027"
         )
         let reloaded = try XCTUnwrap(store.matters.fetchMatter(id: created.id))
-        XCTAssertEqual(reloaded.clientID, "VYSTAR-2")
+        XCTAssertEqual(reloaded.clientID, "MCKERNON-2")
         XCTAssertEqual(reloaded.clientMatterID, "VS-2027")
     }
 

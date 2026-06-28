@@ -49,9 +49,9 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
         XCTAssertTrue(controller.storageInitialized)
         XCTAssertTrue(controller.canCompleteSetup, "outstanding: \(controller.outstandingSteps)")
 
-        XCTAssertTrue(controller.completeSetup())
         XCTAssertTrue(controller.isComplete)
         XCTAssertTrue(controller.isReadyForImport)
+        XCTAssertNotNil(controller.settings.setupCompletedAt)
         XCTAssertTrue(controller.outstandingSteps.isEmpty)
     }
 
@@ -62,14 +62,26 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
         try store.documentSettings.upsertEmbeddingModel(modelA)
         try store.documentSettings.upsertEmbeddingModel(modelB)
         try store.documentSettings.selectEmbeddingModel(id: modelA.id)
-        // Pretend setup was completed.
-        try store.documentSettings.updateSettings { $0.setupCompletedAt = Date() }
+        try store.documentSettings.recordTestLoad(modelID: modelA.id, result: "passed")
+        let storage = DocumentStorage(root: FileManager.default.temporaryDirectory.appendingPathComponent("SetupTests-\(UUID().uuidString)"))
+        try storage.initializeStorage()
+        let capabilityJSON = String(data: try JSONEncoder().encode(capableToolchain), encoding: .utf8)
+        try store.documentSettings.updateSettings {
+            $0.chatModelLastLoadedAt = Date()
+            $0.embeddingModelLastTestedAt = Date()
+            $0.converterToolchainVersion = capableToolchain.version
+            $0.converterCapabilityJSON = capabilityJSON
+            $0.ocrAvailable = capableToolchain.ocr
+            $0.ocrCheckedAt = Date()
+            $0.storageInitializedAt = Date()
+            $0.setupCompletedAt = Date()
+        }
 
         let controller = DocumentIntelligenceSetupController(
             store: store,
             runtimeClient: SetupStubRuntimeClient(embeddingDimension: 768),
             notifier: FakeNotifier(status: .authorized),
-            storage: DocumentStorage(root: FileManager.default.temporaryDirectory.appendingPathComponent("SetupTests-\(UUID().uuidString)")),
+            storage: storage,
             capabilitiesProvider: { capableToolchain }
         )
         XCTAssertTrue(controller.isComplete)

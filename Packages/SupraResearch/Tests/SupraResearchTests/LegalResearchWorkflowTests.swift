@@ -457,6 +457,20 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertFalse(plan.shouldRetrievePrimaryLaw)
     }
 
+    func testCommonLawElementsQuestionDoesNotRequireStatutoryGate() {
+        let classification = LegalQueryClassifier.classify(
+            "What are the elements of promissory estoppel?"
+        )
+        let plan = LegalResearchSourcePlanner.plan(
+            classification: classification,
+            target: LegalSourceTarget(kind: .global, jurisdiction: "Federal")
+        )
+
+        XCTAssertFalse(plan.requiresPrimaryLaw)
+        XCTAssertFalse(plan.shouldRetrievePrimaryLaw)
+        XCTAssertTrue(plan.shouldRetrieveCaseLaw)
+    }
+
     func testDevelopmentsAreNotRetrievedForOrdinaryStatutoryQuestion() {
         let ordinary = LegalQueryClassifier.classify("What is the deadline to file a DBA claim?")
         XCTAssertFalse(LegalResearchSourcePlanner.plan(classification: ordinary, target: LegalSourceTarget(kind: .global)).shouldRetrieveDevelopments)

@@ -7,6 +7,8 @@ build/
 website/.next/
 website/node_modules/
 
-# Local environment config — may hold the CourtListener API token. Never commit.
+# Local environment config — may hold API keys/tokens (SUPRA_*_API_KEY). Never commit.
+# Keep the empty template (.env.example) tracked; exclude every real dotenv variant.
 .env
-.env.local
+.env.*
+!.env.example

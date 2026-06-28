@@ -585,7 +585,7 @@ private struct ModelDownloadSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 580)
+        .frame(minWidth: 480, idealWidth: 580, maxWidth: .infinity)
     }
 
     @ViewBuilder
@@ -646,18 +646,20 @@ private struct DocumentIntelligenceSection: View {
             Text("Document Intelligence")
                 .font(.title3.weight(.semibold))
             HStack {
-                Image(systemName: setup.isComplete ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(setup.isComplete ? .green : .orange)
+                Image(systemName: setup.isComplete ? "checkmark.seal.fill" : "xmark.octagon.fill")
+                    .foregroundStyle(setup.isComplete ? .green : .red)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(setup.isComplete ? "Setup complete — document import is enabled." : "Setup required before importing documents.")
                         .font(.callout.weight(.medium))
                     if let reason = setup.settings.setupInvalidatedReason {
-                        Text("Needs review: \(reason)").font(.caption).foregroundStyle(.orange)
+                        Text("Needs review: \(reason)").font(.caption).foregroundStyle(.red)
                     }
                 }
                 Spacer()
                 if setup.isBusy { ProgressView().controlSize(.small) }
             }
+
+            readinessProgress
 
             stepRow(
                 "Runtime text model loaded",
@@ -699,19 +701,33 @@ private struct DocumentIntelligenceSection: View {
             HStack {
                 Button("Re-check") { Task { await setup.refreshAll() } }
                 Spacer()
-                Button("Mark Setup Complete") { _ = setup.completeSetup() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!setup.canCompleteSetup)
             }
             if let message = setup.message {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }
-            if !setup.outstandingSteps.isEmpty {
-                Text("Remaining: " + setup.outstandingSteps.joined(separator: " "))
+            if !setup.requiredOutstandingSteps.isEmpty {
+                Text("Remaining: " + setup.requiredOutstandingSteps.joined(separator: " "))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !setup.optionalOutstandingSteps.isEmpty {
+                Text("Optional: " + setup.optionalOutstandingSteps.joined(separator: " "))
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var readinessProgress: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ProgressView(
+                value: Double(setup.completedRequiredStepCount),
+                total: Double(setup.requiredStepCount)
+            )
+            .tint(setup.isComplete ? .green : .orange)
+            Text("\(setup.completedRequiredStepCount) of \(setup.requiredStepCount) required checks complete")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func stepRow(

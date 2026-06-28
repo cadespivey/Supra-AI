@@ -15,20 +15,20 @@ final class CourtFLRendererTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    // MARK: - Fixtures (fictional — the design-render "Harwell & Branch / Meridian" set)
+    // MARK: - Fixtures (fictional — the design-render "Pearson Specter Litt / McKernon" set)
 
     private var harwellBranch: SignatureBlockModel {
         SignatureBlockModel(
             respectfullySubmitted: nil,
-            firmName: "Harwell & Branch, P.A.",
-            signingAttorney: "Jordan A. Reyes",
-            attorneys: [AttorneyLine(name: "Jordan A. Reyes", barNumber: "Florida Bar No. 100847")],
+            firmName: "Pearson Specter Litt",
+            signingAttorney: "Harvey Specter",
+            attorneys: [AttorneyLine(name: "Harvey Specter", barNumber: "Florida Bar No. 100847")],
             office: OfficeBlock(street: "200 West Forsyth Street", suite: "Suite 1400",
                                 city: "Jacksonville", state: "Florida", zip: "32202",
                                 phone: "(904) 555-0142", fax: "(904) 555-0143"),
             partyRepresented: "Defendant",
-            emails: EmailDesignation(primary: "jreyes@harwellbranch.example",
-                                     secondary: ["litdocket@harwellbranch.example"])
+            emails: EmailDesignation(primary: "hspecter@pearsonspecterlitt.example",
+                                     secondary: ["litdocket@pearsonspecterlitt.example"])
         )
     }
 
@@ -36,8 +36,8 @@ final class CourtFLRendererTests: XCTestCase {
         DocumentModel(
             caption: CaptionModel(
                 courtHeader: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
-                parties: [PartyLine(name: "MERIDIAN CAPITAL PARTNERS, LLC,", designation: "Plaintiff,"),
-                          PartyLine(name: "ATLANTIC RIDGE HOLDINGS, INC.,", designation: "Defendant.")],
+                parties: [PartyLine(name: "MCKERNON MOTORS, INC.,", designation: "Plaintiff,"),
+                          PartyLine(name: "LIBERTY RAIL, LLC,", designation: "Defendant.")],
                 caseNumber: "2026-CA-001847",
                 division: "CV-G",
                 judge: nil
@@ -50,14 +50,14 @@ final class CourtFLRendererTests: XCTestCase {
                 clause: .flEPortal,
                 documentTitle: "NOTICE OF APPEARANCE",
                 recipients: [ServiceRecipient(
-                    name: "Marcus T. Whitfield, Esq.", firm: "Caldwell & Pierce, LLP",
+                    name: "Daniel Hardman, Esq.", firm: "Hardman & Tanner, LLP",
                     address: OfficeBlock(street: "1 Independent Drive", suite: "Suite 2400",
                                          city: "Jacksonville", state: "Florida", zip: "32202",
                                          phone: "", fax: nil),
-                    emails: ["mwhitfield@caldwellpierce.example"],
+                    emails: ["dhardman@hardmantanner.example"],
                     role: "Counsel for Plaintiff"
                 )],
-                signOffAttorney: "Jordan A. Reyes"
+                signOffAttorney: "Harvey Specter"
             )
         )
     }
@@ -101,7 +101,7 @@ final class CourtFLRendererTests: XCTestCase {
     func testESignatureLineIsSingleParagraphItalicUnderlinedNameAndPinnedTab() throws {
         let xml = try CourtFLRenderer().documentXML(noticeModel, style: .defaultFL)
         // "By: " plain + italic+underlined "/s/ Name" + italic+underlined tab to pinned stop 4680+2880=7560.
-        XCTAssertTrue(xml.contains(#"<w:tabs><w:tab w:val="left" w:pos="7560"/></w:tabs><w:ind w:left="4680"/></w:pPr><w:r><w:t xml:space="preserve">By: </w:t></w:r><w:r><w:rPr><w:i/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">/s/ Jordan A. Reyes</w:t></w:r><w:r><w:rPr><w:i/><w:u w:val="single"/></w:rPr><w:tab/></w:r>"#))
+        XCTAssertTrue(xml.contains(#"<w:tabs><w:tab w:val="left" w:pos="7560"/></w:tabs><w:ind w:left="4680"/></w:pPr><w:r><w:t xml:space="preserve">By: </w:t></w:r><w:r><w:rPr><w:i/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">/s/ Harvey Specter</w:t></w:r><w:r><w:rPr><w:i/><w:u w:val="single"/></w:rPr><w:tab/></w:r>"#))
     }
 
     // MARK: - Signature block order
@@ -112,7 +112,7 @@ final class CourtFLRendererTests: XCTestCase {
         XCTAssertTrue(xml.contains(#"<w:t xml:space="preserve">Primary and Secondary E-Mail: </w:t>"#))
         // "Attorneys for Defendant" italic, and after the e-mails.
         XCTAssertTrue(xml.contains(#"<w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">Attorneys for Defendant</w:t></w:r>"#))
-        let emailIdx = try XCTUnwrap(text.range(of: "jreyes@harwellbranch.example"))
+        let emailIdx = try XCTUnwrap(text.range(of: "hspecter@pearsonspecterlitt.example"))
         let attorneysIdx = try XCTUnwrap(text.range(of: "Attorneys for Defendant"))
         XCTAssertTrue(emailIdx.lowerBound < attorneysIdx.lowerBound, "Attorneys-for line must come after the e-mails")
         XCTAssertFalse(text.contains("Respectfully submitted"), "Notice carries no Respectfully submitted line")
@@ -205,11 +205,11 @@ final class CourtFLRendererTests: XCTestCase {
         let golden = OoxmlNormalizer.visibleText(try loadGolden("noticeAppearance-golden.document.xml"))
         // Shared anchor lines present in both (renderer-owned, slot-driven).
         for anchor in ["IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,",
-                       "MERIDIAN CAPITAL PARTNERS, LLC,", "Plaintiff,", "v.",
-                       "ATLANTIC RIDGE HOLDINGS, INC.,", "Defendant.",
+                       "MCKERNON MOTORS, INC.,", "Plaintiff,", "v.",
+                       "LIBERTY RAIL, LLC,", "Defendant.",
                        "CASE NO.: 2026-CA-001847", "DIVISION: CV-G",
-                       "NOTICE OF APPEARANCE", "Harwell & Branch, P.A.",
-                       "/s/ Jordan A. Reyes", "Florida Bar No. 100847",
+                       "NOTICE OF APPEARANCE", "Pearson Specter Litt",
+                       "/s/ Harvey Specter", "Florida Bar No. 100847",
                        "Attorneys for Defendant", "CERTIFICATE OF SERVICE",
                        "Counsel for Plaintiff"] {
             XCTAssertTrue(text.contains(anchor), "renderer output missing anchor: \(anchor)")

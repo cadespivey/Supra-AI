@@ -49,6 +49,8 @@ public enum DocumentQAPromptBuilder {
         lines.append("Rules:")
         lines.append("- Cite every factual claim inline with its source label in square brackets, e.g. [\(sources.first?.label ?? "S1")].")
         lines.append("- Do not use outside knowledge. If the sources do not contain the answer, reply exactly: \"The provided sources do not support an answer to this question.\"")
+        lines.append("- Treat identifiers literally. Emails, usernames, case/docket numbers, and citations are exact strings — quote them exactly and never expand, normalize, or interpret them. Never infer a person's name, role, or title from an email prefix, initials, a signature stub, or a username (do NOT turn an address like \"nrust@firm.com\" into a first name).")
+        lines.append("- State a person's or entity's full name only if that exact name appears verbatim in a source. If a source shows only an identifier (e.g. an email) but never spells out the name, say the name is not stated in the documents — do not guess or reconstruct it.")
         if mode == .memo {
             lines.append("- Write a formal memo with short headed sections (Question Presented, Short Answer, Analysis), still citing inline.")
         } else {

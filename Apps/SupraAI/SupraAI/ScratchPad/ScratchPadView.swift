@@ -321,7 +321,14 @@ struct ScratchPadView: View {
                             .textFieldStyle(.plain)
                             .lineLimit(1...5)
                             .focused($composerFocused)
-                            .onSubmit(submit)
+                            // Plain Return adds the note; Shift-Return (and ⌘-Return) fall
+                            // through so the field inserts a newline / the button shortcut
+                            // fires. Replaces .onSubmit so Return cannot fire twice.
+                            .onKeyPress(keys: [.return]) { keyPress in
+                                guard keyPress.modifiers.isEmpty else { return .ignored }
+                                submit()
+                                return .handled
+                            }
                         Button(action: submit) {
                             Image(systemName: "arrow.up.circle.fill")
                                 .font(.title2)

@@ -137,7 +137,7 @@ public enum BillingFidelityHarness {
             _ = try? store.billing.upsertBillingProfile(matterID: matter.id, overrideInstructions: nil, billingCodeSet: matter.codeSet)
         }
         for entry in testCase.entries {
-            try? store.scratchPad.addEntry(dayID: day.id, text: entry.text, mentions: entry.mentionIDs, tags: entry.tags)
+            _ = try? store.scratchPad.addEntry(dayID: day.id, text: entry.text, mentions: entry.mentionIDs, tags: entry.tags)
         }
 
         let service = BillingDraftService(store: store, generate: generate)

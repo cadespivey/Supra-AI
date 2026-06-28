@@ -26,7 +26,7 @@ struct MatterAuthoritiesView: View {
                 Button { onNewResearch() } label: {
                     Label("New Research Session", systemImage: "plus")
                 }
-                .accessibilityIdentifier("authorities.newResearch.header")
+                .accessibilityIdentifier("authorities.newResearch")
             } content: {
                 VStack(spacing: 0) {
                     if let importBanner {
@@ -64,6 +64,7 @@ struct MatterAuthoritiesView: View {
                 Text("Save reviewed CourtListener results, or import your own research, to build this matter's library.")
             } actions: {
                 Button("Import Research") { importResearch() }
+                    .accessibilityIdentifier("authorities.importResearch")
                 Button("New Research Session") { onNewResearch() }
                     .accessibilityIdentifier("authorities.newResearch")
             }

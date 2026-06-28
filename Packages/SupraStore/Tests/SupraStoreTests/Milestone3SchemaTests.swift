@@ -50,7 +50,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testBlobDedupCreatesOneBlobWithMultipleDocumentInstances() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let folderA = try store.documentLibrary.createFolder(matterID: matter.id, name: "Contracts")
         let folderB = try store.documentLibrary.createFolder(matterID: matter.id, name: "Duplicates")
 
@@ -77,7 +77,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testFolderSoftDeleteCascadesAndRestores() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let parent = try store.documentLibrary.createFolder(matterID: matter.id, name: "Contracts")
         let child = try store.documentLibrary.createFolder(matterID: matter.id, name: "Amendments", parentFolderID: parent.id)
         let blob = try store.documentLibrary.upsertBlob(
@@ -102,7 +102,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testDocumentMoveCopyAndPermanentDelete() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let folderA = try store.documentLibrary.createFolder(matterID: matter.id, name: "A")
         let folderB = try store.documentLibrary.createFolder(matterID: matter.id, name: "B")
         let blob = try store.documentLibrary.upsertBlob(
@@ -133,7 +133,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testTagsCreateAssignAndFetch() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let blob = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(sha256: "s3", byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/s3.txt")
         ).blob
@@ -151,7 +151,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testChunkReplacementUpdatesFTSAndCascadesEmbeddings() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let blob = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(sha256: "s4", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/s4.pdf")
         ).blob
@@ -200,7 +200,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testPermanentDeleteRemovesFTSRows() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let blob = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(sha256: "fts", byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/fts.txt")
         ).blob
@@ -222,7 +222,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testPermanentDeleteOfParentPurgesAttachmentSubtreeWithoutLeaks() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         // Parent email + child attachment, each with its own distinct blob.
         let parentBlob = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(sha256: "email", byteSize: 1, originalExtension: "eml", managedRelativePath: "blobs/email.eml")
@@ -256,7 +256,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testDateFilteredScopeRetainsDocumentsWithNoKnownDate() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let blob = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(sha256: "undated", byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/undated.txt")
         ).blob
@@ -274,7 +274,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testSearchExcludesSoftDeletedDocuments() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let blob = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(sha256: "s5", byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/s5.txt")
         ).blob
@@ -316,7 +316,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testJobQueueIsFIFOWithSingleActiveAndResumeReconciliation() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
 
         let job1 = try store.documentJobs.enqueueJob(matterID: matter.id)
         let job2 = try store.documentJobs.enqueueJob(matterID: matter.id)
@@ -341,7 +341,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testSourceSetsAttachToOutputVersionsAndExportsPersist() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let blob = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(sha256: "s6", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/s6.pdf")
         ).blob
@@ -390,7 +390,7 @@ final class Milestone3SchemaTests: XCTestCase {
 
     func testImportBatchProgressAndFinalReport() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let batch = try store.documentJobs.createBatch(matterID: matter.id, sourceRootDisplay: "Validation Matter")
         try store.documentJobs.updateBatchProgress(id: batch.id, discoveredCount: 10, importedCount: 8, failedCount: 1)
         try store.documentJobs.finalizeBatch(id: batch.id, status: .completeWithFailures, reportJSON: #"{"imported":8,"failed":1}"#)

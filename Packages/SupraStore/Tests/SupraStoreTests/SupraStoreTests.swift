@@ -43,7 +43,7 @@ final class SupraStoreTests: XCTestCase {
 
     func testMatterChatsAreScopedSeparatelyFromGlobalChats() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
 
         _ = try store.chats.createGlobalChat(title: "Global")
         let matterChat = try store.chats.createMatterChat(matterID: matter.id, title: "Issue 1")
@@ -74,7 +74,7 @@ final class SupraStoreTests: XCTestCase {
 
     func testMoveGlobalChatToMatterRetainsConversationAndValidatesTargets() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme v. Roe")
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
         let chat = try store.chats.createGlobalChat(title: "Global issue")
         _ = try store.chats.appendUserMessage(chatID: chat.id, content: "Move this")
 
@@ -102,30 +102,30 @@ final class SupraStoreTests: XCTestCase {
         let store = try makeStore()
 
         let matter = try store.matters.createMatter(
-            name: "  Acme v. Roe  ",
+            name: "  McKernon Motors v. Liberty Rail  ",
             jurisdiction: "  Delaware  ",
             partyPerspective: .plaintiff,
             court: "Chancery",
             docketNumber: "2026-001",
-            clientNames: #"ACME Holdings, LLC; O'Neil & Sons / María-José"#,
+            clientNames: #"MCKERNON MOTORS, INC.; O'Neil & Sons / María-José"#,
             matterDescription: #"Post-closing indemnity dispute re: § 2.4(a), escrow #A-17 & "side letter""#,
-            internalMatterID: #"LIT-2026/ACME#001-A&B"#
+            internalMatterID: #"LIT-2026/MCKERNON#001-A&B"#
         )
 
-        XCTAssertEqual(matter.name, "Acme v. Roe")
+        XCTAssertEqual(matter.name, "McKernon Motors v. Liberty Rail")
         XCTAssertEqual(matter.jurisdiction, "Delaware")
         XCTAssertEqual(matter.partyPerspective, PartyPerspective.plaintiff.rawValue)
         XCTAssertEqual(matter.court, "Chancery")
         XCTAssertEqual(matter.docketNumber, "2026-001")
-        XCTAssertEqual(matter.clientNames, #"ACME Holdings, LLC; O'Neil & Sons / María-José"#)
+        XCTAssertEqual(matter.clientNames, #"MCKERNON MOTORS, INC.; O'Neil & Sons / María-José"#)
         XCTAssertEqual(matter.matterDescription, #"Post-closing indemnity dispute re: § 2.4(a), escrow #A-17 & "side letter""#)
-        XCTAssertEqual(matter.internalMatterID, #"LIT-2026/ACME#001-A&B"#)
+        XCTAssertEqual(matter.internalMatterID, #"LIT-2026/MCKERNON#001-A&B"#)
     }
 
     func testMilestone2ResearchAuthorityOutputAuditAndNetworkRoundTrip() throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(
-            name: "Acme v. Roe",
+            name: "McKernon Motors v. Liberty Rail",
             jurisdiction: "Delaware",
             partyPerspective: .plaintiff
         )
@@ -149,12 +149,12 @@ final class SupraStoreTests: XCTestCase {
                 researchQueryID: query.id,
                 courtlistenerID: "123",
                 clusterID: "456",
-                caseName: "Acme Corp. v. Roe",
+                caseName: "McKernon Motors v. Liberty Rail",
                 citationJSON: #"["1 A.3d 100"]"#,
                 preferredCitation: "1 A.3d 100",
                 court: "Del.",
                 reviewState: ResearchResultReviewState.saved.rawValue,
-                rawResultJSON: #"{"caseName":"Acme Corp. v. Roe"}"#
+                rawResultJSON: #"{"caseName":"McKernon Motors v. Liberty Rail"}"#
             )
         )
         let authority = try store.authorities.insertAuthority(
@@ -355,7 +355,7 @@ final class SupraStoreTests: XCTestCase {
 
     func testSoftDeleteMatterCascadesToChildFolders() throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme")
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
         _ = try store.documentLibrary.createFolder(matterID: matter.id, name: "Contracts")
         _ = try store.documentLibrary.createFolder(matterID: matter.id, name: "Notes")
         XCTAssertEqual(try store.documentLibrary.fetchFolders(matterID: matter.id).count, 2)

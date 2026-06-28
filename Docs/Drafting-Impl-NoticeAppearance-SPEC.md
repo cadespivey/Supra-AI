@@ -509,3 +509,464 @@ All of the original open items are now **locked** against `Docs/Fixtures/noticeA
 **Done = this slice renders byte-stable golden files, the leakage fixtures pass, and the gate
 fixtures fire.** That is the proof the §1–§17 architecture survives real types; `motionToDismiss`
 then adds the generation/firewall path on the same renderer + pipeline.
+
+---
+
+## 9. Draft menu UX repair and multi-kind selection — Codex review addendum
+
+This addendum supersedes the current `MatterDraftingView` surface, which is a fixed
+`560 x 640` sheet hard-wired to Notice of Appearance. The current view becomes cramped,
+cuts off service-recipient fields, uses placeholder-only text fields that read like static
+labels, and gives the user no way to choose a document kind or describe a different work
+product.
+
+### 9.1 Proposed interaction model
+
+When the user clicks **Draft** in a matter workspace, open a **Draft Workspace** rather
+than a one-kind dialog.
+
+1. **Choose work product** comes first.
+   - Show a compact picker/list backed by `DefaultDraftKindRegistry.defaultDefinitions`.
+   - Enabled now: `noticeAppearance`.
+   - Present but unavailable until wired: `motionToDismiss`, `letterDemand`, with a short
+     disabled reason instead of silently hiding them.
+   - Add `Custom / describe work product` for anything outside the wired catalog. It should
+     show a large prose field where the user can describe the desired output in ordinary
+     language.
+2. **Fill required inputs** changes based on the selected work product.
+   - Notice of Appearance shows caption parties, represented party/client, service date,
+     and service recipients.
+   - Custom description shows a required multiline "Describe the work product" field plus
+     optional context/instructions. It should not pretend to produce a court-formatted DOCX
+     unless a renderer/pipeline exists for that kind.
+3. **Generate** uses a kind-specific action label:
+   - `Generate Notice of Appearance`
+   - `Generate work-product description`
+   - Later, `Generate Motion to Dismiss`, `Generate Demand Letter`, etc.
+4. Validation must explain missing requirements inline. Do not rely on a disabled button
+   with no reason; show the missing fields near the footer or next to the affected section.
+
+### 9.2 Resizable presentation
+
+The drafting surface must be resizable on macOS. Preferred implementation:
+
+- Promote the draft surface to a separate resizable window using `WindowGroup` / `openWindow`
+  with a route containing the `matterID`, if that can be done cleanly in `SupraAIApp`.
+- If staying with `.sheet` for the first repair, remove the fixed `.frame(width: 560,
+  height: 640)` and use flexible constraints: minimum around `760 x 620`, ideal around
+  `940 x 760`, and max width/height `.infinity`. The content must lay out correctly when
+  widened and remain usable at the minimum size.
+- Keep header and footer pinned; only the form content scrolls. The footer must never cover
+  the last service-recipient field.
+- Persisting the last size is nice-to-have, not required for the first pass.
+
+### 9.3 Field design
+
+Adopt the Settings-style field treatment for drafting inputs and the Edit Matter sheet.
+This is a shared form-system repair, not a draft-only styling tweak.
+
+- Extract the existing Settings `LabeledTextField` / `LeadingTextField` pattern into a
+  reusable shared component. Do not leave it private to Settings if Drafting and Matters
+  also need it.
+- Every input must have a visible label outside the field. Placeholders may provide examples,
+  but cannot be the only label.
+- Single-line fields use rounded, bordered, left-aligned text boxes.
+- Long legal values use scalable fields:
+  - party names and client names should allow wrapping/growth;
+  - street/address and role fields should not be squeezed into tiny HStacks;
+  - matter description and notes in Edit Matter should use multiline/scalable fields;
+  - the custom work-product description must use `MultilineField`.
+- Use a responsive layout: two columns when the window is wide, one column when narrow.
+  Avoid fixed widths like the `State` field's `.frame(width: 90)` in `MatterDraftingView.swift:138`
+  unless they are inside a grid that leaves the main fields room to breathe. (The Settings
+  exemplar itself uses `width: 72` for State — `SettingsView.swift:485`.)
+- Add keyboard tab order and accessibility labels for every dynamic row, especially party
+  and service-recipient rows.
+
+`MatterEditorSheet` must consume the same shared fields:
+
+- Required: Matter name, Jurisdiction/court search, and Client perspective must read as
+  explicit controls, not a label/value table.
+- Optional: Client names, Matter description, Court, Judge, Case number, Practice area,
+  Notes, and LEDES IDs must all use visible labels and bordered entry regions.
+- The jurisdiction autocomplete row needs the same bordered search field treatment, while
+  keeping suggestions, N/A/Clear actions, and validation text intact.
+- Avoid right-aligned typed values in the grouped form; user-entered text should flow from
+  the left like Settings.
+
+### 9.4 Controller/API changes
+
+Do not keep adding one-off UI calls like `draftNoticeOfAppearance(...)` as the only public
+entry point. Keep that method as the implementation for the existing kind, but add a small
+request layer for the UI:
+
+```swift
+public enum MatterDraftRequest: Sendable, Equatable {
+    case noticeAppearance(NoticeAppearanceDraftInput)
+    case customDescription(CustomDraftDescriptionInput)
+}
+
+public struct DraftKindAvailability: Sendable, Equatable, Identifiable {
+    public var id: DraftKindID
+    public var title: String
+    public var isEnabled: Bool
+    public var disabledReason: String?
+}
+
+public struct CustomDraftDescriptionInput: Sendable, Equatable {
+    public var title: String
+    public var description: String
+    public var instructions: String
+}
+```
+
+`MatterDraftingController` should expose:
+
+- `availableDraftKinds() -> [DraftKindAvailability]`, sourced from the registry and the
+  controller's actually wired generation paths.
+- `draft(_ request: MatterDraftRequest) async -> Result<DraftArtifact, DraftError>`.
+
+For this repair, `draft(.noticeAppearance(...))` dispatches to the existing deterministic
+pipeline. `draft(.customDescription(...))` may initially create a structured plain-text /
+markdown artifact or route through the existing drafting model path, but it must clearly
+label the output as a description/request, not a court-ready rendered filing.
+
+Also update the result model so it can represent custom artifacts without forcing them into
+`DraftKindID`. For example, add an `artifactType` / `format` field and make the draft kind
+optional, or introduce a wrapper enum such as `MatterDraftArtifactSource.kind(DraftKindID)` /
+`.customDescription`. Do not add a fake `DraftKindID.custom` unless the drafting registry,
+renderer, and tests all genuinely support it.
+
+### 9.5 File-by-file implementation plan
+
+Edited:
+
+- `Apps/SupraAI/SupraAI/Matters/MatterWorkspaceView.swift` — open the new resizable Draft
+  Workspace instead of the fixed Notice-only sheet.
+- `Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift` — split into a work-product picker,
+  shared shell, `NoticeAppearanceForm`, `CustomDescriptionForm`, result section, and pinned
+  footer.
+- `Apps/SupraAI/SupraAI/Matters/MatterEditorSheet.swift` — replace placeholder-only grouped
+  form rows with the same labeled/bordered fields and make long values scalable.
+- `Apps/SupraAI/SupraAI/SettingsView.swift` or a new shared component file — extract the
+  Settings-style labeled text field so drafting uses the same identifiable input boxes.
+- `Packages/SupraSessions/Sources/SupraSessions/MatterDraftingController.swift` — add request
+  dispatch and availability metadata while preserving `draftNoticeOfAppearance` internally.
+
+New if useful:
+
+- `Apps/SupraAI/SupraAI/Matters/DraftInputField.swift` — reusable labeled field wrappers for
+  single-line and multiline draft inputs.
+- `Apps/SupraAI/SupraAI/Matters/DraftKindPicker.swift` — registry-backed work-product chooser.
+
+Tests:
+
+- UI smoke test opens Draft Workspace, selects Notice of Appearance, resizes wider/taller, and
+  verifies the footer does not overlap the recipient fields.
+- UI/accessibility test verifies all visible entry boxes have labels independent of placeholder
+  text in both Draft Workspace and Edit Matter.
+- UI smoke test opens Edit Matter, verifies required/optional fields have visible bordered
+  entry boxes, and confirms long matter descriptions/notes expand without overlapping rows.
+- Controller test verifies availability reports Notice of Appearance enabled and unwired kinds
+  disabled with reasons.
+- Controller test verifies custom description requires non-empty description text and returns a
+  clearly labeled plain-text/markdown artifact until a rendered pipeline is wired.
+
+### 9.6 Phasing
+
+1. Extract/shared labeled field components and apply them to Edit Matter first, since it is
+   the smaller surface and proves the component.
+2. Resizable shell + Settings-style labeled fields for the existing Notice of Appearance flow.
+3. Work-product picker with disabled-but-visible catalog kinds and inline validation.
+4. Custom description path and controller request wrapper.
+5. Wire additional kinds (`letterDemand`, then `motionToDismiss`) behind the same picker when
+   their pipelines are ready.
+
+## 10. Research Session planner repair — Codex review addendum
+
+The "New Research Session" planner (`ResearchPlannerView`) has the same form-field and
+presentation defects this addendum already catalogues for the drafting surface, plus a
+distinct model-routing defect that makes query generation fail on simple questions. The
+two field/presentation fixes reuse the shared components from §9.2–§9.3; the routing fix
+is planner-specific.
+
+### 10.1 Field design — reuse the §9.3 components
+
+`ResearchPlannerView` currently builds the "Legal issue or question" input with
+`TextField(..., axis: .vertical).lineLimit(3...6)`
+([`ResearchPlannerView.swift`](../Apps/SupraAI/SupraAI/Research/ResearchPlannerView.swift) §"Issue").
+On macOS that control commits-and-reselects on Return instead of inserting a newline, has
+no visible border, and does not grow past six lines — the exact problem §9.3 fixes.
+
+- Replace the issue field with the existing `MultilineField`
+  (`Apps/SupraAI/SupraAI/MultilineField.swift`): it is bordered, auto-grows from
+  `minLines`, and inserts real line breaks on Return. Use `minLines: 4` so a multi-sentence
+  issue has room.
+- The single-line filter fields ("Additional preferred courts", "Excluded courts") and the
+  "Title" field must adopt the same Settings-style labeled/bordered single-line treatment
+  §9.3 extracts, with a visible label outside the field — not placeholder-only labels.
+- The per-query editor rows in the "Proposed Queries" section use plain `TextField("Query",
+  …)`. A query can be long; give it the same bordered single-line (or growing) treatment so
+  it reads as an editable field, not a label.
+
+### 10.2 Resizable presentation — reuse the §9.2 rule
+
+The planner is shown as a `.sheet` and hard-pins itself to `.frame(width: 600, height: 740)`
+(`MatterResearchView.swift` presents it; the fixed frame is set at the bottom of
+`ResearchPlannerView.body`). Apply the §9.2 rule:
+
+- Remove the fixed `.frame(width: 600, height: 740)`. Use flexible constraints: minimum
+  around `560 x 640`, ideal around `680 x 780`, max width/height `.infinity`. Content must
+  stay usable at the minimum and lay out correctly when widened.
+- Keep the "New Research Session" header and the Cancel / "N approved" / Save Plan footer
+  pinned; only the `Form` scrolls. The footer must never cover the last query row.
+- Persisting the last size is nice-to-have, not required.
+
+### 10.3 Model-routing defect — query generation returns zero queries
+
+**Symptom.** On a plain question of law (observed: "Does the Uniform Commercial Code apply
+to sales of goods less than $500?") the planner runs a long analysis and then reports "no
+recommended queries," even though search terms are trivial to produce.
+
+**Root cause.** Query generation reuses the heavyweight `.legalResearch` preset, which is
+tuned for long-form substantive research answers, not structured extraction:
+
+- `ResearchPlannerView` (`ResearchPlannerView.swift:139-141`) builds the route via
+  `ModelRouter(configuration: .fromEnvironment()).route(for: .legalResearch)` and passes it
+  into `controller.generatePlan(... route: route)` (`:197`). `generatePlan`
+  (`ResearchSessionController.swift:225`) uses `route ?? ModelRouter().route(for:
+  .legalResearch)` — so the **view-supplied** `.legalResearch` route wins, and the bare
+  `ModelRouter()` form is only the fallback when no route is passed. Either way,
+  `collect(...)` (`ResearchSessionController.swift:763-774`) forwards
+  `route.options` to the runtime **verbatim** (`options: route?.options ?? GenerationOptions()`).
+  The `.legalResearch` preset carries `thinkingBudget: .high` and `maxOutputTokens: 6000`
+  (`GenerationOptions.swift:181`, `generationParameters`).
+- With high thinking enabled, a reasoning model spends most of its budget *answering the
+  legal question* inside a `<think>` trace instead of emitting the `## Query N` template.
+- `ResearchQueryPlanner.parseQueries` calls `ReasoningContent.answer(from:)`, which splits
+  on `</think>`. If the output truncates before the close tag, the entire chain-of-thought
+  is returned as the "answer"; if thinking closes and the model writes a prose conclusion,
+  there is still no `## Query` heading. Either way the parser finds zero queries and the
+  controller reports the generic `.incomplete("Query generation didn't return any
+  queries.")`.
+
+The prompt template (`research-query-generation-v1.md`) is already correct — it says
+"Output only the Markdown below — no commentary." The defect is the **route**, not the
+prompt: a deterministic 5-query extraction is being run through the app's heaviest
+reasoning preset.
+
+**Fix.**
+
+1. **Stop reusing `.legalResearch` options for query planning.** Query generation needs a
+   short, deterministic, thinking-off route. **Chosen path (lowest-risk): override the
+   options inside `ResearchSessionController.collect(...)`.** `collect(...)` is the single
+   generation chokepoint for planning (its only caller is `generatePlan`, line 244), so
+   forcing `thinkingBudget = .off` and capping `maxOutputTokens` (~1024) there fixes both the
+   view-supplied route and the bare-`ModelRouter()` fallback at once, with no SupraCore enum
+   churn and no view edit. With thinking off, the model emits the `## Query N` structure
+   directly and the existing parser succeeds.
+   - Alternative (dedicated preset) — only if presets-as-single-source-of-truth is worth the
+     churn: add `GenerationPreset.legalQueryPlanning` with `(temperature 0.15, topP 0.85,
+     topK 20, maxContextTokens 32_768, maxOutputTokens ~1024, thinkingBudget .off,
+     repetitionPenalty nil)`. If you take this path you **must** add the case to BOTH
+     exhaustive `switch self` statements — `displayName` (`GenerationOptions.swift:145-156`)
+     and `generationParameters` (`GenerationOptions.swift:167-189`) — or SupraCore won't
+     compile, and you must **leave it out of** `userSelectableDefaults`
+     (`GenerationOptions.swift:115-120`), which `GenerationPresetTests.swift:69` asserts
+     equals exactly `[.balanced, .precise, .drafting, .extractive]`. The preset must then be
+     wired into what the **view** computes at `ResearchPlannerView.swift:141` (and the
+     controller fallback at `:225`), not just one of them. The `collect()` override avoids
+     all of this.
+2. **Report truncated reasoning honestly.** In `generatePlan` (around
+   `ResearchSessionController.swift:244-253`), after `collect(...)`, resolve the raw output
+   *before* parsing: `ReasoningContent.resolve(rawOutput: output, thinkingEnabled:
+   effectiveRoute.options.thinkingBudget.enablesModelThinking)`. On `.truncatedReasoning`,
+   set a distinct `planState` message ("The model ran out of room while thinking — try
+   again, or add queries manually.") and do **not** call `parseQueries` — required because
+   `parseQueries` internally calls `ReasoningContent.answer(from:)`
+   (`ResearchQueryPlanner.swift:50`), which returns a partial CoT unchanged when there is no
+   `</think>`. On `.answer(text)`, pass the resolved text to `parseQueries`. This is the
+   first production adopter of `resolve(...)` (the ~10 existing sites use `answer(from:)`).
+   With the chosen thinking-off path this branch is mostly defensive, but it makes a future
+   thinking-on planner safe.
+3. **Parser salvage (optional hardening).** When the resolved answer contains no `## Query`
+   heading but does contain candidate lines (a numbered list, or quoted phrases), salvage up
+   to `expectedQueryCount` of them rather than returning zero. Lower priority once (1) lands;
+   keep it behind a clear fallback path so it never masks a real generation failure.
+
+### 10.4 File-by-file implementation plan
+
+Edited:
+
+- `Packages/SupraSessions/Sources/SupraSessions/ResearchSessionController.swift` — **the
+  whole routing fix lives here.** In `collect(...)` derive planning options from the route
+  (force `thinkingBudget = .off`, cap `maxOutputTokens`) instead of forwarding `route.options`
+  verbatim; in `generatePlan` resolve via `ReasoningContent.resolve` before `parseQueries` and
+  report truncated reasoning distinctly.
+- `Apps/SupraAI/SupraAI/Research/ResearchPlannerView.swift` — swap the issue `TextField` for
+  `MultilineField` with a visible caption label; remove the fixed `.frame(width: 600, height:
+  740)` and apply the §10.2 flexible constraints with pinned header/footer.
+- **Do NOT touch `route(forStructuredOutput:)`'s `.researchPlan` case** (`ModelRouting.swift:262`).
+  The per-query planner never calls that API — it routes via `route(for: .legalResearch)`
+  (view `:141` → `generatePlan` → `collect` `:225/:244/:772`). `route(forStructuredOutput:
+  .researchPlan)` feeds the *separate* Matter Outputs / structured-output surface
+  (`StructuredOutputController.swift:172`, `MatterOutputsView.swift:86`); editing it would not
+  fix the planner and would change an unrelated feature.
+- `Packages/SupraResearch/Sources/SupraResearch/ResearchQueryPlanner.swift` — only if
+  implementing §10.3(3) salvage; otherwise unchanged.
+
+### 10.5 Tests
+
+- Planner-parsing test: a raw output that is pure `<think>…` with no `</think>` (truncated)
+  resolves to truncated-reasoning, NOT to an answer, and the controller reports the distinct
+  message rather than "didn't return any queries."
+- Planner-parsing test: a well-formed `# Research Queries` / `## Query N` block still parses
+  to five queries (regression guard on the happy path).
+- Routing test: the query-planning route reports `thinkingBudget == .off` and a bounded
+  `maxOutputTokens`, and is not the `.legalResearch` preset.
+- UI smoke test: open New Research Session, type a multi-line issue with a Return in the
+  middle (verify the newline is inserted, not a commit), resize the sheet wider/taller, and
+  confirm the footer never covers the query rows.
+- UI/accessibility test: every visible entry box in the planner has a label independent of
+  placeholder text.
+
+### 10.6 Phasing
+
+1. Routing fix first (§10.3 items 1–2): it is the functional defect and is independently
+   testable with parser/routing unit tests, no UI work required.
+2. Field design (§10.1) reusing the §9.3 shared components.
+3. Resizable presentation (§10.2).
+4. Optional parser salvage (§10.3 item 3) only if real-world generations still under-produce
+   after the routing fix.
+
+## 11. App-wide form-field and resizable-sheet sweep — Codex review addendum
+
+§9 and §10 fix the same two defects (placeholder-only `TextField(axis: .vertical)` prose
+fields, and fixed-frame non-resizable sheets) on the drafting, Edit Matter, and research
+surfaces. The same two anti-patterns recur on several more surfaces — the "Ask the
+Documents" panel screenshotted in review is one. Fix them in one sweep using the shared
+`MultilineField` (already in the app target and already proven inside Settings' grouped
+`Form`) rather than one screen per bug report. Compare every one of these against the Settings
+field treatment: a visible label outside the field, a bordered/rounded entry region, and prose
+fields that grow and accept a Return as a line break. Match Settings' label idiom — a
+`VStack(alignment: .leading, spacing: 4)` with `Text(label).font(.caption).foregroundStyle(.secondary)`
+above the `MultilineField` (see `SettingsView.swift:224-229`).
+
+> **Implemented (pass 1 — defect sweep).** The routing fix (§10.3), every prose-field →
+> `MultilineField` conversion (§9.3 multiline rows, §10.1, §11.1) with a visible label, every
+> resizable-sheet fix (§9.2, §10.2, §11.2), and Shift-Return on the composers (§11.3).
+>
+> **Implemented (pass 2 — multi-kind drafting, §9.1/§9.4).** `MatterDraftingController` now exposes
+> `availableDraftKinds()`, `draft(_ request: MatterDraftRequest, matterID:)`, and
+> `draftCustomDescription(...)`, with `MatterDraftRequest` / `NoticeAppearanceDraftInput` /
+> `CustomDraftDescriptionInput` / `DraftKindAvailability`. `DraftArtifact` now carries
+> `source: MatterDraftArtifactSource` (`.kind`/`.customDescription`) + `format` (`.docx`/`.markdown`)
+> instead of a bare `DraftKindID` — no fake `.custom` kind. `MatterDraftingView` became a Draft
+> Workspace: a work-product picker (wired kinds enabled; motion/letter shown disabled-with-reason;
+> a Custom option), per-kind forms, a kind-specific Generate label, and inline validation, all
+> routed through `draft(_:)`. The custom path writes a clearly-labeled markdown description (the
+> user's own words + matter context — no LLM, firewall intact).
+>
+> **Implemented (pass 3 — field restyle + Demand Letter).** (a) `LabeledTextField`/`LeadingTextField`
+> were moved out of `SettingsView` into the shared `MultilineField.swift` (internal), and Edit
+> Matter's single-line fields (name, court, judge, case number, practice area, LEDES IDs) now use
+> them — visible labels, bordered, left-aligned. (b) The **`letterDemand` generator is wired**:
+> `MatterDraftingController.draftLetterDemand(matterID:input:modelID:route:)` builds grounded facts
+> from the user's claim/amount/deadline, generates the body with the on-device drafting model via
+> `RuntimeLetterGenerator` (a `LetterGenerator` that emits no citations), and renders the `.docx`
+> through the existing `runLetter` pipeline (verifier + pre-file gate + letterhead). The Draft
+> Workspace gained a Demand Letter form + model resolution; `letterDemand` enables only when a
+> runtime is present. Firewall: the model sees only the user's grounded facts and is told not to
+> invent facts or cite law; the attorney reviews every line.
+>
+> **Still deferred:** wiring real generation for `motionToDismiss` (the milestone — it needs
+> CourtListener citation verification + the authority firewall + multi-section grounded generation;
+> it stays disabled-with-reason, routable via Custom); and an LLM-routed *custom* path (today the
+> custom path is deterministic — the user's own words, not model-generated prose).
+
+### 11.1 Prose fields to convert to `MultilineField`
+
+These are form fields (not chat composers — see §11.3) where Return should insert a newline
+and the box should be bordered and auto-growing:
+
+- `Apps/SupraAI/SupraAI/Documents/MatterDocumentsView.swift` — "Your question" in the Ask
+  the Documents panel (`TextField("Your question", axis: .vertical).lineLimit(2...4)`). Give
+  it a visible "Your question" label and `MultilineField(minLines: 3)`.
+- `Apps/SupraAI/SupraAI/Outputs/MatterOutputsView.swift` — "Issue, facts, or notes for this
+  output."
+- `Apps/SupraAI/SupraAI/Authorities/AuthorityDetailView.swift` — "User notes."
+- `Apps/SupraAI/SupraAI/ScratchPad/BillingDraftView.swift` — "Narrative" (already
+  `.roundedBorder`, but still commits on Return; move to `MultilineField` for newline
+  support and consistency).
+- (Already covered: `ResearchPlannerView` issue field in §10.1; `MatterEditorSheet` client
+  names / description / notes in §9.3.)
+
+### 11.2 Sheets to make resizable
+
+Apply the §9.2 rule (remove the fixed `.frame(width:height:)`, use min/ideal/max with pinned
+header + footer, only the body scrolls):
+
+- `Apps/SupraAI/SupraAI/Documents/MatterDocumentsView.swift` — Ask the Documents sheet
+  (`.frame(width: 620, height: 600)`) and the Document Chronology sheet
+  (`.frame(width: 640, height: 620)`). Both grow useful content (Q&A answer, chronology
+  table) and must be resizable; the answer/result region should take the extra height.
+- `Apps/SupraAI/SupraAI/Outputs/MatterOutputsView.swift` — new-output sheet
+  (`.frame(width: 520, height: 600)`).
+- `Apps/SupraAI/SupraAI/ScratchPad/BillingDraftView.swift` — `EditLineSheet`, the LEDES line
+  editor (`.frame(width: 520)` at `:350`, presented via `.sheet(item: $editing)` at `:38`).
+  This is the **same** sheet whose "Narrative" field §11.1 grows to `MultilineField`, so it
+  must be widenable or the grown field has no horizontal room. It is **width-only** today (no
+  height frame — it sizes to content), so just unlock width: `.frame(minWidth: 480,
+  idealWidth: 560, maxWidth: .infinity)`. Do not impose a fixed height.
+- `Apps/SupraAI/SupraAI/ModelsView.swift` — `ModelDownloadSheet` (`.frame(width: 580)` at
+  `:588`, `.sheet(isPresented: $showDownloadSheet)`). Width-only; swap for `.frame(minWidth:
+  480, idealWidth: 580, maxWidth: .infinity)` so long repo IDs/notes get room. Its body is a
+  plain `VStack`/`ForEach` (not scrollable), so if height resizing is also wanted, wrap the
+  body in a `ScrollView` first to avoid clipping. Lower priority (no prose field).
+- (Already covered: `ResearchPlannerView` 600×740 in §10.2; `MatterDraftingView` 560×640 and
+  `MatterEditorSheet` 560×620 in §9.)
+
+### 11.3 Composers — keep Return-to-send, make Shift-Return insert a newline
+
+The chat and note composers use `TextField(axis: .vertical)` with `.onSubmit` on purpose:
+Return *sends*, and the single rounded-border pill is the intended chrome. Do **not** convert
+them to `MultilineField` — that would break Return-to-send. Instead, the prescribed line-break
+affordance is **Shift-Return → insert a newline** (with plain Return still sending and
+⌘-Return kept as the explicit send shortcut on the button).
+
+Two code sites cover all three surfaces the user named:
+
+- `Apps/SupraAI/SupraAI/GlobalChatsView.swift` — the `inputBox` composer
+  (`TextField(..., axis: .vertical).onSubmit(send)`). This component is reused **inline** by
+  the matter Chat tab (`MatterWorkspaceView` instantiates `GlobalChatsView(... listStyle:
+  .inline)`), so fixing `inputBox` fixes **both** global chat and matter chat — there is no
+  separate matter-chat composer to touch.
+- `Apps/SupraAI/SupraAI/ScratchPad/ScratchPadView.swift` — the note composer
+  (`TextField(..., axis: .vertical).onSubmit(submit)`, with ⌘-Return on the send button).
+
+Implementation:
+
+- On macOS, a vertical-axis `TextField` with `.onSubmit` already routes plain Return to
+  submit and Shift-Return to a newline. **Verify** this holds in the running app first; if it
+  does, the only change is a discoverability hint (e.g. a `.help`/placeholder note such as
+  "⇧�return for a new line"). Do not add redundant handlers that could double-fire `send`.
+- If the default does not reliably insert the newline, make it deterministic with
+  `.onKeyPress(.return)`: when `press.modifiers.contains(.shift)` return `.ignored` (let the
+  field insert the newline); otherwise call `send`/`submit` and return `.handled`. If you take
+  this path, **remove** the now-redundant `.onSubmit` so Return cannot send twice. `.onKeyPress`
+  is macOS 14+, which is within the app's deployment target.
+- Keep the `canSend`/disabled guards and the ⌘-Return button shortcut unchanged.
+
+Add one small UI test asserting that Shift-Return on the composer increases the draft's line
+count without sending, and plain Return sends and clears the draft.
+
+### 11.4 Tests and phasing
+
+- Reuse the §9/§10 UI/accessibility tests, extended to assert that the Ask the Documents
+  question field, the new-output context field, and the authority notes field each have a
+  visible label, accept a Return as a newline, and grow with content.
+- Resizable smoke tests for the Ask the Documents and Chronology sheets: widen/heighten and
+  confirm the footer never covers the last field and the result region absorbs the slack.
+- Phasing: land §11 together with the §9.3 shared-component extraction — once the shared
+  labeled field and `MultilineField` adoption pattern exist, these conversions are
+  mechanical and should all go in the same sweep so the app reads consistently.
