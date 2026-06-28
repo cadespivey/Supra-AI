@@ -20,6 +20,9 @@ final class ResearchAuthoritiesUITests: XCTestCase {
             .appendingPathComponent("SupraAI-UITest-\(UUID().uuidString)-matter-tab.txt")
         try? "".write(to: tabCommandURL, atomically: true, encoding: .utf8)
         self.tabCommandURL = tabCommandURL
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: tabCommandURL)
+        }
         app.launchEnvironment["SUPRA_UI_TEST_TAB_COMMAND_FILE"] = tabCommandURL.path
         app.launch()
         app.activate()
