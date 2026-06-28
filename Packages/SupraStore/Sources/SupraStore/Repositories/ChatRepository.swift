@@ -188,6 +188,34 @@ public final class ChatRepository: @unchecked Sendable {
         }
     }
 
+    /// Replaces the inline citations for a message (delete-then-insert in one write),
+    /// so re-finalizing a regenerated message doesn't leave orphan rows.
+    public func replaceCitations(messageID: String, _ citations: [MessageCitationRecord]) throws {
+        try writer.write { db in
+            try db.execute(sql: "DELETE FROM message_citations WHERE message_id = ?", arguments: [messageID])
+            for citation in citations {
+                var row = citation
+                row.messageID = messageID
+                try row.insert(db)
+            }
+        }
+    }
+
+    /// The persisted inline citations for a message, ordered by rank ([A1], [A2], …).
+    public func fetchCitations(messageID: String) throws -> [MessageCitationRecord] {
+        try writer.read { db in
+            try MessageCitationRecord.fetchAll(
+                db,
+                sql: """
+                SELECT * FROM message_citations
+                WHERE message_id = ?
+                ORDER BY rank ASC
+                """,
+                arguments: [messageID]
+            )
+        }
+    }
+
     public func fetchVariants(messageID: String, includeDeleted: Bool = false) throws -> [MessageVariantRecord] {
         try writer.read { db in
             let deletedClause = includeDeleted ? "" : "AND deleted_at IS NULL"

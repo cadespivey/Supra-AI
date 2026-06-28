@@ -506,6 +506,141 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(court.requests.allSatisfy { !$0.courtIDs.isEmpty })
     }
 
+    /// A federal reporter citation in the prompt ("123 F.3d 456") must auto-detect
+    /// federal jurisdiction, so case-law research proceeds (CourtListener is bounded)
+    /// instead of asking for jurisdiction.
+    func testGlobalChatAutoDetectsFederalJurisdictionFromCitation() async throws {
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Answer."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        controller.loadChats()
+        // jurisdictionOverrideID stays "" (auto-detect).
+
+        await controller.performSend(
+            prompt: "Summarize the holding in 123 F.3d 456.",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        XCTAssertEqual(controller.messages.last?.content, "Answer.")
+        XCTAssertFalse(court.requests.isEmpty)
+        XCTAssertTrue(court.requests.allSatisfy { !$0.courtIDs.isEmpty })
+        XCTAssertFalse(controller.messages.last?.content.contains("I need the jurisdiction") ?? true)
+    }
+
+    /// A follow-up that names no jurisdiction ("the statute") must inherit the federal
+    /// jurisdiction established by an earlier turn's citation, rather than asking.
+    func testGlobalChatInheritsFederalJurisdictionFromPriorTurn() async throws {
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Answer."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What is 18 U.S.C. § 1001?",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+        await controller.performSend(
+            prompt: "What is the exact language of the statute?",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        XCTAssertEqual(controller.messages.last?.content, "Answer.")
+        XCTAssertFalse(controller.messages.last?.content.contains("I need the jurisdiction") ?? true)
+        XCTAssertFalse(court.requests.isEmpty)
+    }
+
+    func testExportTranscriptMarkdownLabelsTurnsAndStripsReasoning() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "<think>musing</think>Hello there."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+        await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
+
+        let chatID = try XCTUnwrap(controller.selectedChatID)
+        let markdown = controller.exportTranscriptMarkdown(chatID: chatID, title: "My Chat")
+
+        XCTAssertTrue(markdown.hasPrefix("# My Chat"))
+        XCTAssertTrue(markdown.contains("**You:**"))
+        XCTAssertTrue(markdown.contains("Hi"))
+        XCTAssertTrue(markdown.contains("**Assistant:**"))
+        XCTAssertTrue(markdown.contains("Hello there."))
+        XCTAssertFalse(markdown.contains("musing"))  // chain-of-thought stripped
+    }
+
+    func testMentionsFederalCitationMatchesStatutesRegulationsAndReporters() {
+        XCTAssertTrue(GlobalChatController.mentionsFederalCitation("see 18 u.s.c. § 1001"))
+        XCTAssertTrue(GlobalChatController.mentionsFederalCitation("18 usc 1001"))
+        XCTAssertTrue(GlobalChatController.mentionsFederalCitation("32 c.f.r. § 1100"))
+        XCTAssertTrue(GlobalChatController.mentionsFederalCitation("123 f.3d 456"))
+        XCTAssertTrue(GlobalChatController.mentionsFederalCitation("410 u.s. 113"))
+        // Prose mentions without a citation shape must not trigger it.
+        XCTAssertFalse(GlobalChatController.mentionsFederalCitation("the u.s. economy"))
+        XCTAssertFalse(GlobalChatController.mentionsFederalCitation("what are the elements of negligence?"))
+    }
+
+    func testCitationLabelsExtractsDistinctMarkers() {
+        let labels = GlobalChatController.citationLabels(in: "Per [A1] and [S2]; again [A1]. Not [B3] or [A].")
+        XCTAssertEqual(labels, ["A1", "S2"])
+    }
+
+    /// `[A#]` markers present in the answer are persisted as clickable authority
+    /// citations carrying the CourtListener URL.
+    func testGlobalChatPersistsAuthorityCitations() async throws {
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "The Ninth Circuit recognized the claim [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        controller.loadChats()
+        controller.jurisdictionOverrideID = "federal-courts"
+
+        await controller.performSend(
+            prompt: "Did the Ninth Circuit recognize the claim?",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        let citations = controller.messages.last?.citations ?? []
+        XCTAssertEqual(citations.map(\.label), ["A1"])
+        XCTAssertEqual(citations.first?.kind, .authority)
+        XCTAssertNotNil(citations.first?.url)
+    }
+
     private static let singleResultResponse = CourtListenerSearchResponse(
         count: 1,
         results: [

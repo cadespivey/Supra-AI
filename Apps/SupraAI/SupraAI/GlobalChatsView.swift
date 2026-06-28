@@ -1,5 +1,6 @@
 import AppKit
 import SupraCore
+import SupraDocuments
 import SupraResearch
 import SupraSessions
 import SwiftUI
@@ -37,6 +38,9 @@ struct GlobalChatsView: View {
     @State private var renamingChat: ChatSummary?
     @State private var renameText = ""
     @State private var pendingDeleteChat: ChatSummary?
+    /// A tapped `[S#]` matter-document citation, presented as a preview sheet at the
+    /// view root (one host, not per-row, to avoid LazyVStack sheet churn).
+    @State private var citationPreview: PreviewItem?
 
     private let attachmentLoader = ChatAttachmentLoader()
     private static let maxAttachments = 10
@@ -63,6 +67,9 @@ struct GlobalChatsView: View {
         .onChange(of: chatSearch) { _, newValue in
             let query = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             tagHits = query.count > 1 ? controller.tagSearch(term: query) : []
+        }
+        .sheet(item: $citationPreview) { item in
+            DocumentPreviewView(model: item.model) { citationPreview = nil }
         }
     }
 
@@ -205,6 +212,7 @@ struct GlobalChatsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("chat.row.\(chat.title)")
 
             // Always-visible action affordance (more discoverable than relying on
             // right-click alone); disabled while this chat is still generating.
@@ -220,6 +228,7 @@ struct GlobalChatsView: View {
             .opacity(selected ? 1 : 0.7)
             .disabled(controller.isGenerating && selected)
             .help("Chat actions")
+            .accessibilityIdentifier("chat.menu.\(chat.title)")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -251,6 +260,13 @@ struct GlobalChatsView: View {
             }
         }
 
+        Button {
+            exportChat(chat)
+        } label: {
+            Label("Export Chat", systemImage: "square.and.arrow.up")
+        }
+        .accessibilityIdentifier("chat.export")
+
         Divider()
 
         Button(role: .destructive) {
@@ -258,6 +274,37 @@ struct GlobalChatsView: View {
         } label: {
             Label("Delete", systemImage: "trash")
         }
+    }
+
+    /// Saves the full conversation as a Markdown file via a save panel, then reveals
+    /// it in Finder. Emojis are stripped (matching the per-message copy) and the
+    /// filename is derived from the chat title.
+    private func exportChat(_ chat: ChatSummary) {
+        let markdown = EmojiStripper.strip(
+            controller.exportTranscriptMarkdown(chatID: chat.id, title: chat.title)
+        )
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = Self.sanitizedFilename(chat.title) + ".md"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try markdown.write(to: url, atomically: true, encoding: .utf8)
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } catch {
+                controller.reportError(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Strips path separators and control characters from a chat title so it's safe
+    /// as a filename; falls back to "chat" when nothing usable remains.
+    private static func sanitizedFilename(_ title: String) -> String {
+        let cleaned = title
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:").union(.controlCharacters))
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "chat" : cleaned
     }
 
     /// In-scope chats matched by title OR by message content (a `#tag` or any text).
@@ -350,8 +397,21 @@ struct GlobalChatsView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(controller.messages) { message in
-                        MessageRow(message: message)
-                            .id(message.id)
+                        MessageRow(
+                            message: message,
+                            onOpenAuthority: { NSWorkspace.shared.open($0) },
+                            onOpenSource: { citation in
+                                guard let documentID = citation.documentID,
+                                      let locator = citation.locator else { return }
+                                let model = controller.citationPreview(
+                                    documentID: documentID,
+                                    locator: locator,
+                                    matchText: citation.matchText
+                                )
+                                citationPreview = PreviewItem(model: model)
+                            }
+                        )
+                        .id(message.id)
                     }
                 }
                 .padding(16)
@@ -881,6 +941,10 @@ struct GlobalChatsView: View {
 
 private struct MessageRow: View {
     let message: ChatMessage
+    /// Opens a tapped `[A#]` authority's CourtListener page.
+    var onOpenAuthority: (URL) -> Void = { _ in }
+    /// Opens a tapped `[S#]` matter-document citation in the preview sheet.
+    var onOpenSource: (MessageCitation) -> Void = { _ in }
     /// nil until the user toggles. Until then the reasoning section auto-expands
     /// only while the response is still generating, and stays collapsed for
     /// completed/reloaded messages so chat history isn't a wall of reasoning.
@@ -914,6 +978,11 @@ private struct MessageRow: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                // Expose as one accessibility leaf. A selectable `Text` otherwise
+                // exposes per-run children whose role resolution cycles (role↔label)
+                // and overflows the stack when the a11y tree is walked (VoiceOver /
+                // the XCUITest harness); mouse selection is unaffected.
+                .accessibilityElement(children: .ignore)
                 .accessibilityLabel(Text("You said: \(displayContent)"))
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -943,6 +1012,8 @@ private struct MessageRow: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 2)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Text(EmojiStripper.strip(reasoning)))
                 } label: {
                     Label("Reasoning", systemImage: "brain")
                         .font(.caption.weight(.medium))
@@ -950,9 +1021,25 @@ private struct MessageRow: View {
                 }
                 .tint(.secondary)
             }
-            MarkdownView(text: displayContent)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            MarkdownView(
+                text: displayContent,
+                citationLabels: citationLabels,
+                onCitationTap: handleCitationTap
+            )
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Expose the rendered answer as one accessibility leaf. Markdown text
+            // (`Text(AttributedString(markdown:))`), text selection, and the inline
+            // `supracite://` citation links otherwise create per-run children whose
+            // role resolution cycles (role↔label) and overflows the stack when the
+            // a11y tree is walked (VoiceOver / the XCUITest harness). Mouse clicks and
+            // selection don't traverse the a11y tree, so they keep working; the
+            // citations stay independently actionable via the sources block below.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(displayContent))
+            if !message.citations.isEmpty {
+                sourcesBlock
+            }
             if showsCopy {
                 copyButton
                     .opacity(isHovered ? 1 : 0.35)
@@ -1002,6 +1089,69 @@ private struct MessageRow: View {
         .help("Copy this response as Markdown")
     }
 
+    /// Citation labels that should render as tappable inline links.
+    private var citationLabels: Set<String> {
+        Set(message.citations.map(\.label))
+    }
+
+    /// Routes a tapped citation (inline marker or sources-block row) to its action:
+    /// authorities open their CourtListener page, sources open the preview at a page.
+    private func handleCitationTap(_ label: String) {
+        guard let citation = message.citations.first(where: { $0.label == label }) else { return }
+        switch citation.kind {
+        case .authority:
+            if let urlString = citation.url, let url = URL(string: urlString) {
+                onOpenAuthority(url)
+            }
+        case .source:
+            onOpenSource(citation)
+        }
+    }
+
+    /// A footnote-style, lighter-grey, indented list of the message's sources, set
+    /// apart from the answer prose. Each row shares the inline marker's tap action.
+    private var sourcesBlock: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(message.citations) { citation in
+                Button {
+                    handleCitationTap(citation.label)
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Image(systemName: citation.kind == .authority ? "link" : "doc.text.magnifyingglass")
+                            .font(.caption2)
+                            .accessibilityHidden(true)
+                        Text(sourceLine(citation))
+                            .font(.caption)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .buttonStyle(.plain)
+                // A clean labeled button leaf — deriving the label from the child
+                // Image+Text would make accessibility resolve their roles, which
+                // cycles (role↔label) like the message text above.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(sourceLine(citation)))
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("message.source.\(citation.label)")
+            }
+        }
+        .foregroundStyle(.tertiary)
+        .padding(.leading, 32)
+        .padding(.top, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// "[A1] Doe v. Smith" or "[S1] agreement.pdf — p. 3".
+    private func sourceLine(_ citation: MessageCitation) -> String {
+        let name = citation.displayName ?? (citation.kind == .authority ? "Authority" : "Document")
+        var line = "[\(citation.label)] \(name)"
+        if citation.kind == .source, let display = citation.locator?.displayString, !display.isEmpty {
+            line += " — \(display)"
+        }
+        return line
+    }
+
     private var displayContent: String {
         if message.content.isEmpty {
             return message.isStreaming ? "…" : message.content
@@ -1048,6 +1198,11 @@ private struct MessageRow: View {
 /// degrades gracefully on partial/streaming input.
 struct MarkdownView: View {
     let text: String
+    /// Citation labels ("A1", "S1") that should render as tappable links. Empty for
+    /// ordinary messages, which then parse byte-identically to before.
+    var citationLabels: Set<String> = []
+    /// Invoked with a citation label when its inline marker is tapped.
+    var onCitationTap: ((String) -> Void)?
     @State private var blocks: [MarkdownBlock] = []
     @State private var sourceText: String = ""
 
@@ -1057,17 +1212,57 @@ struct MarkdownView: View {
                 MarkdownBlockView(block: blocks[index])
             }
         }
+        .environment(\.openURL, OpenURLAction { url in
+            guard let label = Self.citationLabel(from: url) else { return .systemAction }
+            onCitationTap?(label)
+            return .handled
+        })
         .onAppear(perform: refresh)
         .onChange(of: text) { _, _ in refresh() }
     }
 
     /// Parse only when the text actually changes, so hover/selection re-renders
     /// don't re-parse. Emojis are stripped once here (never inside code spacing,
-    /// because the stripper only removes real emoji glyphs).
+    /// because the stripper only removes real emoji glyphs). When the message has
+    /// citations, inline `[A#]`/`[S#]` markers are rewritten to tappable links first.
     private func refresh() {
         guard text != sourceText else { return }
         sourceText = text
-        blocks = MarkdownParser.parse(EmojiStripper.strip(text))
+        let stripped = EmojiStripper.strip(text)
+        let linked = citationLabels.isEmpty
+            ? stripped
+            : Self.citationLinked(stripped, labels: citationLabels)
+        blocks = MarkdownParser.parse(linked)
+    }
+
+    /// Rewrites standalone `[A#]`/`[S#]` markers whose label is a known citation into
+    /// custom-scheme Markdown links, e.g. `[A1]` → `[\[A1\]](supracite://A1)`. The
+    /// escaped brackets keep the visible text literal ("[A1]"); the lookbehind avoids
+    /// corrupting link syntax or path-like text. Unknown labels are left untouched.
+    static func citationLinked(_ text: String, labels: Set<String>) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"(?<![\w/])\[([AS]\d{1,3})\]"#) else { return text }
+        let ns = text as NSString
+        var result = ""
+        var cursor = 0
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let label = ns.substring(with: match.range(at: 1))
+            result += ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+            if labels.contains(label) {
+                result += "[\\[\(label)\\]](supracite://\(label))"
+            } else {
+                result += ns.substring(with: match.range)
+            }
+            cursor = match.range.location + match.range.length
+        }
+        result += ns.substring(from: cursor)
+        return result
+    }
+
+    /// Extracts an uppercased citation label from a tapped `supracite://A1` URL.
+    static func citationLabel(from url: URL) -> String? {
+        guard url.scheme == "supracite" else { return nil }
+        let raw = url.host ?? String(url.absoluteString.dropFirst("supracite://".count))
+        return raw.isEmpty ? nil : raw.uppercased()
     }
 }
 

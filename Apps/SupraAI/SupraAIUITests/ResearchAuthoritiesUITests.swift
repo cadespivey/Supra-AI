@@ -123,3 +123,59 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         try? rawValue.write(to: tabCommandURL, atomically: true, encoding: .utf8)
     }
 }
+
+/// End-to-end UI test for the chat citation + export features, driven against the
+/// `-uiTestMode` "Citations Demo" global chat seeded with an assistant answer that
+/// carries clickable `[A1]` (authority) and `[S1]` (document) citations. Fully
+/// offline — no model or network (see AppEnvironment.seedUITestCitationsChatIfNeeded).
+@MainActor
+final class ChatCitationsAndExportUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    private func launchApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-uiTestMode"]
+        app.launch()
+        app.activate()
+        if !app.windows.firstMatch.waitForExistence(timeout: 5) {
+            app.typeKey("n", modifierFlags: .command)
+            _ = app.windows.firstMatch.waitForExistence(timeout: 10)
+        }
+        return app
+    }
+
+    func testSourcesBlockOpensCitationPreviewAndExportIsAvailable() {
+        let app = launchApp()
+
+        // The seeded global chat appears in the chat-history sidebar; open it.
+        let chatRow = app.buttons["chat.row.Citations Demo"]
+        XCTAssertTrue(chatRow.waitForExistence(timeout: 20), "Seeded 'Citations Demo' chat not found")
+        chatRow.click()
+
+        // The lighter-grey sources block beneath the answer lists both citations.
+        let authorityRow = app.descendants(matching: .any)["message.source.A1"]
+        let sourceRow = app.descendants(matching: .any)["message.source.S1"]
+        XCTAssertTrue(authorityRow.waitForExistence(timeout: 10), "Authority [A1] source row not shown")
+        XCTAssertTrue(sourceRow.waitForExistence(timeout: 10), "Document [S1] source row not shown")
+
+        // Tapping the [S1] document source opens the in-app preview at the cited text.
+        sourceRow.click()
+        let preview = app.descendants(matching: .any)["documentPreview"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 10), "Document preview did not open for [S1]")
+        XCTAssertTrue(app.staticTexts["agreement.pdf"].waitForExistence(timeout: 5), "Preview did not show the document name")
+        app.buttons["Done"].click()
+
+        // Export Chat is reachable from the chat's actions menu. (SwiftUI's Menu
+        // surfaces as a menu/pop-up control rather than a plain button, so match any
+        // element type by identifier.)
+        let menu = app.descendants(matching: .any)["chat.menu.Citations Demo"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "Chat actions menu not found")
+        menu.click()
+        XCTAssertTrue(
+            app.menuItems["Export Chat"].waitForExistence(timeout: 10),
+            "Export Chat action not found in the chat menu"
+        )
+    }
+}

@@ -822,6 +822,7 @@ struct DocumentPreviewView: View {
             body(for: model.kind)
                 .frame(minWidth: 560, minHeight: 460)
         }
+        .accessibilityIdentifier("documentPreview")
     }
 
     @ViewBuilder
