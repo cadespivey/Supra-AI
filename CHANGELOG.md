@@ -9,6 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [1.8.0] - 2026-06-28
+
+Legal research gets a source-grounded authority stack, stricter guardrails, and safer
+credential handling.
+
+### Added
+
+- **Primary-law-first legal research.** Federal and state legal questions now plan
+  source retrieval around the governing authority hierarchy before asking the model to
+  answer. Statutory/regulatory questions fetch primary law first, then layer controlling
+  and persuasive cases behind it.
+- **Federal statutory and regulatory sources.** Legal research can retrieve U.S. Code
+  and C.F.R. material from Open Legal Codes, eCFR, and govinfo, with provider metadata,
+  currency notes, and citable source packets.
+- **Legal-development tracking.** Research answers can include a separate, non-citable
+  tracking section for recent or pending legislation and regulations from Federal
+  Register, Regulations.gov, OpenStates, and LegiScan providers.
+- **API-key readiness checks.** Settings and diagnostics now verify legal-data provider
+  keys and surface missing, invalid, and unreachable states without leaking secrets.
+
+### Changed
+
+- **Global and matter chats share the same legal-research structure.** Both chat types
+  use the same source-planning, primary-law gating, authority ranking, source-packet
+  persistence, and citation-verification behavior; only the target source scope differs.
+- **Legal answers are more conservative when authority is missing.** If a limitations,
+  deadline, filing, statutory, or regulatory question requires primary law and no citable
+  provision is available, the app now blocks the answer instead of letting case snippets
+  or package-level locator hits stand in for the governing text.
+- **Federal-court authority routing uses the jurisdiction catalog.** Court IDs are no
+  longer recognized through a small hand-written allowlist, so district and appellate
+  federal issues follow the federal authority hierarchy consistently.
+- **Network logging redacts sensitive query parameters.** Provider keys and other
+  credentials are stripped from diagnostic output before logging.
+
+### Fixed
+
+- **Locator-only govinfo hits no longer satisfy the primary-law gate.** govinfo package
+  results are retained as notes until section text is retrieved, but they are excluded
+  from citable `[A#]` packets.
+- **Statutory citation verification recognizes equivalent source labels.** Citations
+  like `33 U.S.C. § 913` now match provider labels such as `United States Code, Title 33
+  § 913`, avoiding false unsupported-citation warnings when the retrieved text is
+  actually the cited provision.
+- **Recent-development results are relevance-filtered.** Off-topic Federal Register and
+  Regulations.gov items no longer appear just because they share generic words like
+  "base" or "federal"; acronym queries such as "DBA" still match "Defense Base Act."
+
 ## [1.7.0] - 2026-06-26
 
 A broad app overhaul: draft a Notice of Appearance from within a matter's chat and
