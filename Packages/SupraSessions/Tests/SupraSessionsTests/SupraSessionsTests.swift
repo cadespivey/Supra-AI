@@ -572,6 +572,42 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertFalse(court.requests.isEmpty)
     }
 
+    func testRequiresRuntimeModelInheritsJurisdictionFromPriorTurn() async throws {
+        let store = try makeStore()
+        let config = LegalModelConfiguration(jurisdictionRequired: true)
+        let route = ModelRouter(configuration: config).route(for: .legalResearch)
+        let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Answer."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        controller.loadChats()
+
+        // Turn 1 establishes federal jurisdiction via a U.S.C. citation.
+        await controller.performSend(
+            prompt: "What is 18 U.S.C. § 1001?",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        // The follow-up carries no citation of its own. The model-preload preflight
+        // must still report that a model is required, because the send path infers
+        // the federal jurisdiction from the prior turn — otherwise the UI sends with
+        // no model loaded and the answer is replaced by a "load a model" error.
+        let routed = ModelRouter(configuration: config)
+            .routePrompt("/research What is the exact language of the statute?")
+        XCTAssertEqual(routed.route.mode, .legalResearch)
+        XCTAssertTrue(
+            controller.requiresRuntimeModel(for: routed),
+            "Preflight should require a model because the follow-up inherits the prior turn's federal jurisdiction"
+        )
+    }
+
     func testExportTranscriptMarkdownLabelsTurnsAndStripsReasoning() async throws {
         let store = try makeStore()
         let stub = StubRuntimeClient { request in
