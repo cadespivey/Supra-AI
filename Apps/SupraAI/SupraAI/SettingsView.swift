@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @ObservedObject var settings: SettingsController
     @ObservedObject var profile: AssistantProfileController
-    @ObservedObject var update: UpdateController
+    @ObservedObject var update: SparkleUpdaterController
     @ObservedObject var billing: BillingSettingsController
 
     var body: some View {
@@ -115,40 +115,27 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Check for updates automatically", isOn: $update.autoCheckEnabled)
-                if let available = update.available {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.down.circle.fill").foregroundStyle(.green)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Version \(available.version) is available")
-                                .font(.callout.weight(.medium))
-                            Text("You have \(settings.appVersion.marketingVersion).")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Download") {
-                            NSWorkspace.shared.open(available.downloadURL ?? available.releaseURL)
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    Button("Release notes…") { NSWorkspace.shared.open(available.releaseURL) }
-                }
+                Text("Supra AI updates itself: new versions download in the background and install with a single restart — no browser, no drag-to-Applications. Update checks fetch only a signed version feed from supralegal.ai; no usage data is sent.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Check for updates automatically", isOn: $update.automaticallyChecksForUpdates)
                 HStack {
-                    Button("Check Now") { Task { await update.checkNow() } }
-                        .disabled(update.isChecking)
-                    if update.isChecking { ProgressView().controlSize(.small) }
+                    Button("Check for Updates") { update.checkForUpdates() }
+                        .disabled(!update.canCheckForUpdates)
                     Spacer()
-                    if update.available == nil, let message = update.statusMessage {
+                    if let message = update.statusMessage {
                         Text(message).font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("You're on \(settings.appVersion.marketingVersion).")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             } header: {
                 Text("Software Update")
-            } footer: {
-                Text("Checks GitHub for newer releases of Supra AI. It only fetches the latest version number — no usage data is sent — and only when you ask or turn on automatic checks.")
             }
 
             Section {
+                Text("Supra AI's research is grounded in free, public-interest data projects: CourtListener and the Free Law Project (case law), Open Legal Codes (statutes & codes), and OpenStates and LegiScan (legislation). Please consider creating a free account or otherwise supporting their work.")
+                    .font(.caption).foregroundStyle(.secondary)
                 AboutBanner(version: settings.appVersion.marketingVersion)
                 Link(destination: URL(string: "https://github.com/cadespivey/Supra-AI")!) {
                     Label("GitHub repository", systemImage: "chevron.left.forwardslash.chevron.right")

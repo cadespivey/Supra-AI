@@ -99,7 +99,7 @@ struct MainShellView: View {
             SettingsView(
                 settings: environment.settingsController,
                 profile: environment.assistantProfileController,
-                update: environment.updateController,
+                update: environment.sparkleUpdater,
                 billing: environment.billingSettingsController
             )
         }

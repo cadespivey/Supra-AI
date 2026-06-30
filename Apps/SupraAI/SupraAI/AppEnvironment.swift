@@ -31,7 +31,7 @@ final class AppEnvironment: ObservableObject {
     let modelDownloadController: ModelDownloadController
     let settingsController: SettingsController
     let assistantProfileController: AssistantProfileController
-    let updateController: UpdateController
+    let sparkleUpdater: SparkleUpdaterController
     let mattersController: MattersController
     // Milestone 4: ScratchPad daily notes -> billing.
     let scratchPadController: ScratchPadController
@@ -67,7 +67,7 @@ final class AppEnvironment: ObservableObject {
         )
         self.settingsController = SettingsController(store: store, appVersion: appVersion)
         self.assistantProfileController = AssistantProfileController(store: store, basePrompt: systemPrompt)
-        self.updateController = UpdateController(store: store, currentVersion: appVersion.marketingVersion)
+        self.sparkleUpdater = SparkleUpdaterController()
         self.scratchPadController = ScratchPadController(store: store)
         // Phase 7: the billing draft controller is seeded from the firm's persisted
         // ScratchPad billing settings (timekeeper, rounding, sensitivity, etc.).
@@ -154,8 +154,9 @@ final class AppEnvironment: ObservableObject {
         documentQueue.bootstrap()
         // Auto-purge documents soft-deleted past the retention window (plan §12.2).
         DocumentMaintenance(store: store).purgeExpired()
-        // Opt-in only: reaches GitHub solely when the user enabled update checks.
-        updateController.checkOnLaunchIfEnabled()
+        // Start Sparkle: scheduled background checks + silent download, surfacing a
+        // single "Install and Relaunch" prompt. Skipped in UI tests.
+        if !Self.isUITestMode { sparkleUpdater.start() }
     }
 
     /// Records that first-run onboarding was completed or skipped and dismisses it.
