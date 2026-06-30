@@ -35,4 +35,12 @@ public final class AppSettingsRepository: @unchecked Sendable {
             }
         }
     }
+
+    /// Deletes a setting if present (no-op when absent). Used to drop per-entity
+    /// overrides — e.g. a chat's generation settings when the chat is deleted.
+    public func removeSetting(_ key: String) throws {
+        _ = try writer.write { db in
+            try AppSettingRecord.deleteOne(db, key: key)
+        }
+    }
 }
