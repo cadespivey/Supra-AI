@@ -8,7 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		096A3B8C77F46429416E8442 /* MatterBillingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F52F39531ED04359DF5332 /* MatterBillingView.swift */; };
+		22F7DAF29E7C9ADF37A470F5 /* SparkleUpdaterController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F43C5F55C1C9D84C4CE827A /* SparkleUpdaterController.swift */; };
 		29B269CAAD0AA32A038AF808 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 45DF0346474345DA98F88B95 /* Cocoa.framework */; };
+		33C50DA123DB9228B7278A03 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 77C61A194EE2C8F5298894BC /* Sparkle */; };
 		58BC6CD3754B6B7C554C2FCF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A9C463ED2E226080392F154A /* Assets.xcassets */; };
 		5A0000000000000000000001 /* SupraAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000101 /* SupraAIApp.swift */; };
 		5A0000000000000000000002 /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000102 /* AppEnvironment.swift */; };
@@ -47,7 +49,6 @@
 		5A0000000000000000000025 /* SupraNetworking in Frameworks */ = {isa = PBXBuildFile; productRef = 5A0000000000000000000410 /* SupraNetworking */; };
 		5A0000000000000000000026 /* SupraResearch in Frameworks */ = {isa = PBXBuildFile; productRef = 5A0000000000000000000411 /* SupraResearch */; };
 		5A0000000000000000000027 /* MatterWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000117 /* MatterWorkspaceView.swift */; };
-		5A0000000000000000000F02 /* MatterDraftingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000F03 /* MatterDraftingView.swift */; };
 		5A0000000000000000000028 /* MatterEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000118 /* MatterEditorSheet.swift */; };
 		5A0000000000000000000029 /* MatterResearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000119 /* MatterResearchView.swift */; };
 		5A000000000000000000002A /* ResearchPlannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A000000000000000000011A /* ResearchPlannerView.swift */; };
@@ -59,6 +60,7 @@
 		5A00000000000000000000E1 /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = 5A0000000000000000000421 /* MLXEmbedders */; };
 		5A00000000000000000000E2 /* MLXEmbeddingModelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000130 /* MLXEmbeddingModelController.swift */; };
 		5A00000000000000000000E3 /* MatterDocumentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000131 /* MatterDocumentsView.swift */; };
+		5A0000000000000000000F02 /* MatterDraftingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000F03 /* MatterDraftingView.swift */; };
 		89AC1CC2D0CFEA61CB407D94 /* ResearchAuthoritiesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDDEEEEA83AAE455AE64D9F5 /* ResearchAuthoritiesUITests.swift */; };
 		92040226CB4C642EDABCE796 /* BillingDraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D443FEB23479EC80411A4759 /* BillingDraftView.swift */; };
 		C8914D48FD9E94ED7FA33488 /* ScratchPadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8792ADFD107281343AFEEA5C /* ScratchPadView.swift */; };
@@ -119,7 +121,6 @@
 		5A0000000000000000000114 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000115 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000117 /* MatterWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterWorkspaceView.swift; sourceTree = "<group>"; };
-		5A0000000000000000000F03 /* MatterDraftingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterDraftingView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000118 /* MatterEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterEditorSheet.swift; sourceTree = "<group>"; };
 		5A0000000000000000000119 /* MatterResearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterResearchView.swift; sourceTree = "<group>"; };
 		5A000000000000000000011A /* ResearchPlannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchPlannerView.swift; sourceTree = "<group>"; };
@@ -132,7 +133,9 @@
 		5A0000000000000000000131 /* MatterDocumentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterDocumentsView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000201 /* SupraAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SupraAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A0000000000000000000202 /* SupraRuntimeService.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = SupraRuntimeService.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
+		5A0000000000000000000F03 /* MatterDraftingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterDraftingView.swift; sourceTree = "<group>"; };
 		6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MultilineField.swift; sourceTree = "<group>"; };
+		7F43C5F55C1C9D84C4CE827A /* SparkleUpdaterController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SparkleUpdaterController.swift; sourceTree = "<group>"; };
 		8792ADFD107281343AFEEA5C /* ScratchPadView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScratchPadView.swift; sourceTree = "<group>"; };
 		A7F52F39531ED04359DF5332 /* MatterBillingView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MatterBillingView.swift; sourceTree = "<group>"; };
 		A9C463ED2E226080392F154A /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -164,6 +167,7 @@
 				5A0000000000000000000021 /* SupraSessions in Frameworks */,
 				5A0000000000000000000025 /* SupraNetworking in Frameworks */,
 				5A0000000000000000000026 /* SupraResearch in Frameworks */,
+				33C50DA123DB9228B7278A03 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -219,6 +223,7 @@
 				A9C463ED2E226080392F154A /* Assets.xcassets */,
 				F9B3AC7517E21AE2746EF924 /* ScratchPad */,
 				6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */,
+				7F43C5F55C1C9D84C4CE827A /* SparkleUpdaterController.swift */,
 			);
 			path = SupraAI;
 			sourceTree = "<group>";
@@ -376,6 +381,7 @@
 				5A000000000000000000040F /* SupraSessions */,
 				5A0000000000000000000410 /* SupraNetworking */,
 				5A0000000000000000000411 /* SupraResearch */,
+				77C61A194EE2C8F5298894BC /* Sparkle */,
 			);
 			productName = SupraAI;
 			productReference = 5A0000000000000000000201 /* SupraAI.app */;
@@ -468,6 +474,7 @@
 				5A000000000000000000030A /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				5A000000000000000000030B /* XCRemoteSwiftPackageReference "swift-tokenizers-mlx" */,
 				5A000000000000000000030C /* XCRemoteSwiftPackageReference "swift-tokenizers" */,
+				032E195841B82B3E0522CD86 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			productRefGroup = 5A0000000000000000000908 /* Products */;
 			projectDirPath = "";
@@ -567,6 +574,7 @@
 				92040226CB4C642EDABCE796 /* BillingDraftView.swift in Sources */,
 				096A3B8C77F46429416E8442 /* MatterBillingView.swift in Sources */,
 				F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */,
+				22F7DAF29E7C9ADF37A470F5 /* SparkleUpdaterController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -754,6 +762,7 @@
 				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = 2DP657YB3K;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SupraAI/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Supra AI";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -780,6 +789,7 @@
 				DEVELOPMENT_TEAM = 2DP657YB3K;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SupraAI/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Supra AI";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -945,6 +955,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		032E195841B82B3E0522CD86 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.3;
+			};
+		};
 		5A0000000000000000000308 /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/groue/GRDB.swift.git";
@@ -1077,6 +1095,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5A000000000000000000030A /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
 			productName = MLXEmbedders;
+		};
+		77C61A194EE2C8F5298894BC /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 032E195841B82B3E0522CD86 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

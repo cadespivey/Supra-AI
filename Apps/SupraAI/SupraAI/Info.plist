@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Sparkle auto-update. CFBundle* and the rest are still synthesized by
+         GENERATE_INFOPLIST_FILE and merged on top of these keys. -->
+    <key>SUFeedURL</key>
+    <string>https://supralegal.ai/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>shxYsr9xkeOEx+LtTfQejWjhQ8YYcgIlXq+aVVuIFU4=</string>
+    <!-- Required for sandboxed in-place install via Sparkle's Installer XPC. -->
+    <key>SUEnableInstallerLauncherService</key>
+    <true/>
+    <!-- Enables automatic checks by default and suppresses the second-launch
+         "check for updates?" permission prompt. -->
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+</dict>
+</plist>
