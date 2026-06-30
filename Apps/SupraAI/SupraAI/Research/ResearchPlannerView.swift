@@ -51,7 +51,8 @@ struct ResearchPlannerView: View {
                         MultilineField(
                             placeholder: "e.g. Does the UCC govern a sale of goods under $500?",
                             text: $draft.issueText,
-                            minLines: 4
+                            minLines: 4,
+                            accessibilityID: "planner.issue"
                         )
                         .accessibilityIdentifier("planner.issue")
                     }

@@ -17,6 +17,9 @@ struct MatterWorkspaceView: View {
     @State private var confirmingDelete = false
     @State private var showDraftSheet = false
     @State private var lastUITestTabCommand: String?
+    /// Set when an action outside the Research tab (the Authorities "New Research
+    /// Session" button) wants the planner to open as the Research tab appears.
+    @State private var autoOpenResearchPlanner = false
 
     enum MatterTab: String, CaseIterable, Identifiable {
         case chat = "Chat"
@@ -113,6 +116,7 @@ struct MatterWorkspaceView: View {
 
     private var tabBar: some View {
         HStack {
+            Spacer(minLength: 0)
             Picker("Matter section", selection: $tab) {
                 ForEach(MatterTab.allCases) { item in
                     Text(item.label)
@@ -122,9 +126,10 @@ struct MatterWorkspaceView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(maxWidth: 640, alignment: .leading)
+            // Size to content and center it (a trailing Spacer alone left-aligned it).
+            .fixedSize()
             .accessibilityIdentifier("matterTab.picker")
-            Spacer()
+            Spacer(minLength: 0)
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
@@ -160,7 +165,12 @@ struct MatterWorkspaceView: View {
             }
         case .research:
             if let research = controller.researchController {
-                MatterResearchView(controller: research, library: library, matter: matter)
+                MatterResearchView(
+                    controller: research,
+                    library: library,
+                    matter: matter,
+                    autoOpenPlanner: $autoOpenResearchPlanner
+                )
             } else {
                 placeholder(
                     "Research unavailable",
@@ -173,7 +183,10 @@ struct MatterWorkspaceView: View {
                 MatterAuthoritiesView(
                     controller: authorities,
                     documentsController: controller.documentsController,
-                    onNewResearch: { tab = .research },
+                    onNewResearch: {
+                        autoOpenResearchPlanner = true
+                        tab = .research
+                    },
                     onShowDocuments: { tab = .documents }
                 )
             } else {

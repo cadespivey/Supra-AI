@@ -52,6 +52,8 @@ struct SettingsView: View {
             }
 
             Section {
+                Text("Connectors that ground research in primary law and track legislative & regulatory developments. Expand a source to add and verify a key — keys are free and stored only in your Keychain. Sources marked “Free · no key required” are public APIs with no key; use Verify to confirm they’re reachable.")
+                    .font(.caption).foregroundStyle(.secondary)
                 // Case law
                 APIKeyDisclosure(
                     settings: settings, title: "CourtListener",
@@ -97,8 +99,6 @@ struct SettingsView: View {
                 )
             } header: {
                 Text("Legal Data Sources")
-            } footer: {
-                Text("Connectors that ground research in primary law and track legislative & regulatory developments. Expand a source to add and verify a key — keys are free and stored only in your Keychain. Sources marked “Free · no key required” are public APIs with no key; use Verify to confirm they’re reachable.")
             }
 
             Section("Model Storage") {
@@ -170,8 +170,6 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("About")
-            } footer: {
-                Text("Supra AI's research is grounded in free, public-interest data projects: CourtListener and the Free Law Project (case law), Open Legal Codes (statutes & codes), and OpenStates and LegiScan (legislation). Please consider creating a free account or otherwise supporting their work.")
             }
         }
         .formStyle(.grouped)
@@ -390,6 +388,8 @@ private struct ScratchPadBillingSection: View {
 
     var body: some View {
         Section {
+            Text("Standing instructions applied to every billing draft. Per-matter rules (Matter → Billing) layer on top of these. “Narrative punctuation” normalizes how every billing narrative ends at export — a matter can override it.")
+                .font(.caption).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Global billing instructions").font(.caption).foregroundStyle(.secondary)
                 MultilineField(
@@ -404,11 +404,11 @@ private struct ScratchPadBillingSection: View {
             }
         } header: {
             Text("ScratchPad & Billing")
-        } footer: {
-            Text("Standing instructions applied to every billing draft. Per-matter rules (Matter → Billing) layer on top of these. “Narrative punctuation” normalizes how every billing narrative ends at export — a matter can override it.")
         }
 
         Section {
+            Text("Auto-timestamp records when each note is written and uses the gaps as time evidence. Turn it off to rely on written cues instead. UTBMS auto-coding proposes task/activity codes you can always edit.")
+                .font(.caption).foregroundStyle(.secondary)
             Toggle("Auto-timestamp entries", isOn: $billing.autoTimestamp)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -439,11 +439,11 @@ private struct ScratchPadBillingSection: View {
             Toggle("Propose UTBMS codes automatically", isOn: $billing.utbmsAutoCoding)
         } header: {
             Text("Time & Coding")
-        } footer: {
-            Text("Auto-timestamp records when each note is written and uses the gaps as time evidence. Turn it off to rely on written cues instead. UTBMS auto-coding proposes task/activity codes you can always edit.")
         }
 
         Section {
+            Text("Populates the timekeeper and firm fields on every fee line. LEDES export is blocked until the rate, timekeeper ID, and firm ID are set.")
+                .font(.caption).foregroundStyle(.secondary)
             LabeledTextField(label: "Timekeeper ID", text: $billing.timekeeperID, prompt: "e.g. TK-1001")
             LabeledTextField(label: "Timekeeper name", text: $billing.timekeeperName, prompt: "e.g. H. Specter")
             LabeledTextField(label: "Classification", text: $billing.timekeeperClassification, prompt: "e.g. PARTNER, ASSOCIATE, PARALEGAL")
@@ -460,8 +460,6 @@ private struct ScratchPadBillingSection: View {
             LabeledTextField(label: "Firm ID (LAW_FIRM_ID)", text: $billing.lawFirmID, prompt: "e.g. 98-7654321")
         } header: {
             Text("Timekeeper & Firm")
-        } footer: {
-            Text("Populates the timekeeper and firm fields on every fee line. LEDES export is blocked until the rate, timekeeper ID, and firm ID are set.")
         }
     }
 }
@@ -574,7 +572,7 @@ private struct AssistantProfileSection: View {
 
     var body: some View {
         Section {
-            Text("Who you are and your firm details. This shapes how the assistant writes for you and fills the signature block and letterhead of documents you draft. Everything is optional — blank drafting fields are asked for rather than guessed.")
+            Text("Who you are and your firm details — this shapes how the assistant writes for you and fills the signature block and letterhead of documents you draft. Everything is optional; blank drafting fields are asked for rather than guessed. Notice of Appearance drafting is currently Florida-only and uses Florida service designations (Fla. R. Jud. Admin. 2.516); when several admissions are saved, the Florida admission prints on that filing.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             LabeledTextField(label: "Full name", text: $profile.profile.fullName)
@@ -607,11 +605,11 @@ private struct AssistantProfileSection: View {
             }
         } header: {
             Text("Profile & Firm Identity")
-        } footer: {
-            Text("Shapes the assistant's writing and fills signature blocks and letterhead. Notice of Appearance drafting is currently Florida-only and uses Florida service designations (Fla. R. Jud. Admin. 2.516); when several admissions are saved, the Florida admission prints on that filing.")
         }
 
         Section {
+            Text("Shapes how the assistant writes for you — how formal, how long, and any habits you prefer.")
+                .font(.caption).foregroundStyle(.secondary)
             Picker("Tone", selection: $profile.profile.formality) {
                 ForEach(AssistantProfile.Formality.allCases) { Text($0.label).tag($0) }
             }
@@ -627,11 +625,11 @@ private struct AssistantProfileSection: View {
             }
         } header: {
             Text("Writing Style")
-        } footer: {
-            Text("Shapes how the assistant writes for you — how formal, how long, and any habits you prefer.")
         }
 
         Section {
+            Text("How you want authorities cited. The assistant follows this when it references cases, statutes, or rules.")
+                .font(.caption).foregroundStyle(.secondary)
             Picker("Citation style", selection: $profile.profile.citationStyle) {
                 Text("Not set").tag("")
                 Section("General") {
@@ -663,22 +661,22 @@ private struct AssistantProfileSection: View {
             }
         } header: {
             Text("Citations")
-        } footer: {
-            Text("How you want authorities cited. The assistant follows this when it references cases, statutes, or rules.")
         }
 
         Section {
+            Text("Standing instructions you'd give a new associate. These apply to every response.")
+                .font(.caption).foregroundStyle(.secondary)
             MultilineField(
                 placeholder: "e.g. Flag missing facts; caveat firm conclusions; prefer primary sources",
                 text: $profile.profile.additionalInstructions
             )
         } header: {
             Text("Other Instructions")
-        } footer: {
-            Text("Standing instructions you'd give a new associate. These apply to every response.")
         }
 
         Section {
+            Text("Add a brief, motion, or letter you've written. The assistant studies its voice and formatting to match your style — it won't reuse the content. Accepts PDF, Word, RTF, or text.")
+                .font(.caption).foregroundStyle(.secondary)
             if profile.profile.writingSamples.isEmpty {
                 Text("No samples added yet.").font(.callout).foregroundStyle(.secondary)
             } else {
@@ -709,8 +707,6 @@ private struct AssistantProfileSection: View {
             }
         } header: {
             Text("Writing Samples")
-        } footer: {
-            Text("Add a brief, motion, or letter you've written. The assistant studies its voice and formatting to match your style — it won't reuse the content. Accepts PDF, Word, RTF, or text.")
         }
         .fileImporter(
             isPresented: $isImportingSample,
@@ -725,6 +721,8 @@ private struct AssistantProfileSection: View {
         }
 
         Section {
+            Text("Everything above is combined into the instructions the assistant follows. Your changes save automatically as you type.")
+                .font(.caption).foregroundStyle(.secondary)
             if let message = profile.message {
                 Text(message).font(.caption).foregroundStyle(.secondary)
             }
@@ -740,8 +738,6 @@ private struct AssistantProfileSection: View {
             }
         } header: {
             Text("Preview")
-        } footer: {
-            Text("Everything above is combined into the instructions the assistant follows. Your changes save automatically as you type.")
         }
     }
 }

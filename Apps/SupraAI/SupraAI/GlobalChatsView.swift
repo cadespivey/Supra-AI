@@ -173,23 +173,10 @@ struct GlobalChatsView: View {
     }
 
     private var chatSearchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
-            TextField("Search chats or #tags", text: $chatSearch)
-                .textFieldStyle(.plain)
-                .font(.callout)
-            if !chatSearch.isEmpty {
-                Button { chatSearch = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Clear search")
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+        // Matches the Documents tab's search field — a standard rounded-border text
+        // field rather than a filled pill with an inline icon.
+        TextField("Search chats or #tags", text: $chatSearch)
+            .textFieldStyle(.roundedBorder)
     }
 
     private func chatHistoryRow(_ chat: ChatSummary) -> some View {

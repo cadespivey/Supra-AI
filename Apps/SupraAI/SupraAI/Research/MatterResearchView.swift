@@ -7,6 +7,10 @@ struct MatterResearchView: View {
     @ObservedObject var controller: ResearchSessionController
     @ObservedObject var library: ModelLibrary
     let matter: MatterSummary
+    /// One-shot flag set by a parent (e.g. the Authorities "New Research Session"
+    /// action) to auto-open the planner once the Research tab appears. Reset to false
+    /// after it fires so a normal return to this tab doesn't reopen the sheet.
+    var autoOpenPlanner: Binding<Bool>? = nil
 
     @State private var showPlanner = false
 
@@ -27,7 +31,20 @@ struct MatterResearchView: View {
         .sheet(isPresented: $showPlanner) {
             ResearchPlannerView(controller: controller, library: library, matter: matter)
         }
-        .onAppear { controller.loadSessions() }
+        .onAppear {
+            controller.loadSessions()
+            consumeAutoOpen()
+        }
+        .onChange(of: autoOpenPlanner?.wrappedValue ?? false) { _, _ in
+            consumeAutoOpen()
+        }
+    }
+
+    /// Opens the planner once if a parent requested it, then clears the request.
+    private func consumeAutoOpen() {
+        guard autoOpenPlanner?.wrappedValue == true else { return }
+        autoOpenPlanner?.wrappedValue = false
+        showPlanner = true
     }
 
     @ViewBuilder
