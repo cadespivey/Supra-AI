@@ -86,6 +86,57 @@ public final class ChatRepository: @unchecked Sendable {
         }
     }
 
+    /// Soft-deleted chats (global and matter-scoped), newest deletion first — the
+    /// Recycle Bin source.
+    public func fetchSoftDeletedChats() throws -> [ChatRecord] {
+        try writer.read { db in
+            try ChatRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM chats WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+            )
+        }
+    }
+
+    /// Soft-deleted chats whose deletion is older than the cutoff — auto-purge
+    /// candidates for the retention policy.
+    public func fetchChatsDeletedBefore(_ cutoff: Date) throws -> [ChatRecord] {
+        try writer.read { db in
+            try ChatRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM chats WHERE deleted_at IS NOT NULL AND deleted_at < ? ORDER BY deleted_at ASC",
+                arguments: [cutoff]
+            )
+        }
+    }
+
+    /// Restores a soft-deleted chat. Returns false if no deleted chat with that id
+    /// exists (so the caller can skip acting on a no-op).
+    @discardableResult
+    public func restoreChat(id: String) throws -> Bool {
+        try writer.write { db in
+            guard try ChatRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM chats WHERE id = ? AND deleted_at IS NOT NULL",
+                arguments: [id]
+            ) != nil else {
+                return false
+            }
+            try db.execute(
+                sql: "UPDATE chats SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+                arguments: [Date(), id]
+            )
+            return true
+        }
+    }
+
+    /// Permanently deletes a chat and its messages, variants, and citations (removed
+    /// by FK cascade). Used by manual purge and the retention policy.
+    public func permanentlyDeleteChat(id: String) throws {
+        try writer.write { db in
+            try db.execute(sql: "DELETE FROM chats WHERE id = ?", arguments: [id])
+        }
+    }
+
     /// Re-homes a global chat into a matter. Messages reference the chat by id, so
     /// they follow it automatically; only the chat's scope/owner changes. Validates
     /// that both the chat and target matter still exist and returns the updated

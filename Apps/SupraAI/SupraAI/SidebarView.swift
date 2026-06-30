@@ -36,6 +36,26 @@ struct SidebarView: View {
             }
         }
         .navigationTitle("Supra AI")
+        // Pinned to the very bottom of the sidebar (below the Matters list, which can
+        // grow), so deleted items always have a clear, fixed home.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                Button {
+                    selection = .recycleBin
+                } label: {
+                    Label("Recycle Bin", systemImage: "trash")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(selection == SidebarSelection.recycleBin ? Color.accentColor.opacity(0.15) : Color.clear)
+                .accessibilityIdentifier("sidebar.recycleBin")
+            }
+            .background(.bar)
+        }
         .onAppear {
             Task { @MainActor in matters.loadMatters() }
         }

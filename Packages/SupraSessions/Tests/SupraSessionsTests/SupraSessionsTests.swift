@@ -693,6 +693,64 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(reloaded.activeChatOptions.temperature, 0.85, accuracy: 0.0001)
     }
 
+    func testChatAutoPurgeRemovesExpiredChatsKeepsRecent() throws {
+        let store = try makeStore()
+        let maintenance = DocumentMaintenance(store: store)
+        maintenance.setAutoPurgeDays(30)
+        let old = try store.chats.createGlobalChat(title: "Old")
+        let recent = try store.chats.createGlobalChat(title: "Recent")
+        _ = try store.chats.softDeleteChat(id: old.id, deletedAt: Date(timeIntervalSinceNow: -40 * 86_400))
+        _ = try store.chats.softDeleteChat(id: recent.id, deletedAt: Date(timeIntervalSinceNow: -5 * 86_400))
+
+        XCTAssertEqual(maintenance.purgeExpiredChats(), 1)
+        XCTAssertEqual(try store.chats.fetchSoftDeletedChats().map(\.id), [recent.id])
+
+        // A retention of 0 disables the purge.
+        maintenance.setAutoPurgeDays(0)
+        _ = try store.chats.softDeleteChat(id: recent.id, deletedAt: Date(timeIntervalSinceNow: -90 * 86_400))
+        XCTAssertEqual(maintenance.purgeExpiredChats(), 0)
+    }
+
+    func testRecycleBinListsAndRestoresMatterAndChat() throws {
+        let store = try makeStore()
+        let bin = RecycleBinController(store: store)
+        let matter = try store.matters.createMatter(name: "Acme v. Roe", jurisdiction: "FL")
+        let chat = try store.chats.createGlobalChat(title: "Notes")
+        try store.matters.softDeleteMatter(id: matter.id)
+        _ = try store.chats.softDeleteChat(id: chat.id)
+
+        bin.reload()
+        XCTAssertEqual(bin.matters.map(\.id), [matter.id])
+        XCTAssertEqual(bin.chats.map(\.id), [chat.id])
+        XCTAssertFalse(bin.isEmpty)
+
+        bin.restoreMatter(id: matter.id)
+        bin.restoreChat(id: chat.id)
+        XCTAssertTrue(bin.isEmpty)
+        XCTAssertEqual(try store.matters.fetchMatters().map(\.id), [matter.id])
+        XCTAssertEqual(try store.chats.fetchGlobalChats().map(\.id), [chat.id])
+    }
+
+    func testPermanentlyDeleteMatterCascadesItsChatsAndMessages() throws {
+        let store = try makeStore()
+        let bin = RecycleBinController(store: store)
+        let matter = try store.matters.createMatter(name: "Doomed", jurisdiction: "FL", defaultChatTitle: "Intake")
+        let matterChat = try XCTUnwrap(try store.chats.fetchMatterChats(matterID: matter.id).first)
+        _ = try store.chats.appendUserMessage(chatID: matterChat.id, content: "hello")
+        XCTAssertFalse(try store.chats.fetchMessages(chatID: matterChat.id).isEmpty)
+
+        try store.matters.softDeleteMatter(id: matter.id)
+        bin.reload()
+        XCTAssertEqual(bin.matters.map(\.id), [matter.id])
+
+        bin.permanentlyDeleteMatter(id: matter.id)
+        bin.reload()
+        XCTAssertTrue(bin.matters.isEmpty)
+        // Matter, its chat, and the chat's messages are all hard-deleted (FK cascade).
+        XCTAssertTrue(try store.chats.fetchMessages(chatID: matterChat.id).isEmpty)
+        XCTAssertTrue(try store.matters.fetchSoftDeletedMatters().isEmpty)
+    }
+
     func testMentionsFederalCitationMatchesStatutesRegulationsAndReporters() {
         XCTAssertTrue(GlobalChatController.mentionsFederalCitation("see 18 u.s.c. § 1001"))
         XCTAssertTrue(GlobalChatController.mentionsFederalCitation("18 usc 1001"))

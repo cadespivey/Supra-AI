@@ -60,4 +60,34 @@ public final class DocumentMaintenance: @unchecked Sendable {
         }
         return purged
     }
+
+    /// Permanently deletes CHATS soft-deleted before the retention cutoff, using the
+    /// same window as documents (0 disables). Matters are intentionally never
+    /// auto-purged — they're removed only by an explicit permanent delete in the
+    /// Recycle Bin. Returns the number purged.
+    @discardableResult
+    public func purgeExpiredChats(now: Date = Date()) -> Int {
+        let days = autoPurgeDays()
+        guard days > 0 else { return 0 }
+        let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
+        let expired = (try? store.chats.fetchChatsDeletedBefore(cutoff)) ?? []
+        var purged = 0
+        for chat in expired {
+            do {
+                try store.chats.permanentlyDeleteChat(id: chat.id)
+                // Matter chats get an audit trail; global chats have no matter to log under.
+                if let matterID = chat.matterID {
+                    _ = try? store.auditEvents.recordEvent(
+                        matterID: matterID, eventType: "chat_permanently_deleted", actor: "system",
+                        summary: "Auto-purged a chat deleted over \(days) days ago",
+                        relatedTable: "chats", relatedID: chat.id
+                    )
+                }
+                purged += 1
+            } catch {
+                continue
+            }
+        }
+        return purged
+    }
 }

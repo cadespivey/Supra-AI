@@ -64,6 +64,7 @@
 		89AC1CC2D0CFEA61CB407D94 /* ResearchAuthoritiesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDDEEEEA83AAE455AE64D9F5 /* ResearchAuthoritiesUITests.swift */; };
 		92040226CB4C642EDABCE796 /* BillingDraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D443FEB23479EC80411A4759 /* BillingDraftView.swift */; };
 		C8914D48FD9E94ED7FA33488 /* ScratchPadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8792ADFD107281343AFEEA5C /* ScratchPadView.swift */; };
+		D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */; };
 		F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */; };
 /* End PBXBuildFile section */
 
@@ -139,6 +140,7 @@
 		8792ADFD107281343AFEEA5C /* ScratchPadView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScratchPadView.swift; sourceTree = "<group>"; };
 		A7F52F39531ED04359DF5332 /* MatterBillingView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MatterBillingView.swift; sourceTree = "<group>"; };
 		A9C463ED2E226080392F154A /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RecycleBinView.swift; sourceTree = "<group>"; };
 		BDDEEEEA83AAE455AE64D9F5 /* ResearchAuthoritiesUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ResearchAuthoritiesUITests.swift; sourceTree = "<group>"; };
 		D443FEB23479EC80411A4759 /* BillingDraftView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BillingDraftView.swift; sourceTree = "<group>"; };
 		D8C3C2791CDAA8C922BB1970 /* SupraAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SupraAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -224,6 +226,7 @@
 				F9B3AC7517E21AE2746EF924 /* ScratchPad */,
 				6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */,
 				7F43C5F55C1C9D84C4CE827A /* SparkleUpdaterController.swift */,
+				AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */,
 			);
 			path = SupraAI;
 			sourceTree = "<group>";
@@ -575,6 +578,7 @@
 				096A3B8C77F46429416E8442 /* MatterBillingView.swift in Sources */,
 				F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */,
 				22F7DAF29E7C9ADF37A470F5 /* SparkleUpdaterController.swift in Sources */,
+				D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
