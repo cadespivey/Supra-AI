@@ -26,24 +26,13 @@ struct ScratchPadView: View {
     /// The token the user dismissed with Esc; the menu stays closed until the token
     /// changes (so typing more re-opens it).
     @State private var dismissedToken: String?
+    /// Cross-day note search term, shown below the day controls in the header.
+    @State private var searchTerm = ""
     @FocusState private var composerFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
-            HStack {
-                Spacer()
-                Picker("View", selection: $tab) {
-                    Text("Note").tag(Tab.note)
-                    Text("Billing draft").tag(Tab.draft)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                Spacer()
-            }
-            .padding(.vertical, 8)
             Divider()
             switch tab {
             case .note:
@@ -75,24 +64,83 @@ struct ScratchPadView: View {
 
     @ViewBuilder
     private var noteContent: some View {
-        entryList
-            .dropDestination(for: URL.self) { urls, _ in
-                // A file dropped on the timeline (not on a specific note) creates a
-                // minimal note carrying it, so it's never orphaned in a day-level tray.
-                guard !controller.isCurrentDayLocked, !urls.isEmpty else { return false }
-                Task { await controller.addEntry("", attachmentURLs: urls) }
-                return true
+        if isSearching {
+            searchResultsList
+        } else {
+            entryList
+                .dropDestination(for: URL.self) { urls, _ in
+                    // A file dropped on the timeline (not on a specific note) creates a
+                    // minimal note carrying it, so it's never orphaned in a day-level tray.
+                    guard !controller.isCurrentDayLocked, !urls.isEmpty else { return false }
+                    Task { await controller.addEntry("", attachmentURLs: urls) }
+                    return true
+                }
+            attachmentBar
+            errorBanner
+            Divider()
+            composer
+        }
+    }
+
+    private var isSearching: Bool {
+        searchTerm.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2
+    }
+
+    private var scratchSearchField: some View {
+        TextField("Search notes", text: $searchTerm)
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .onChange(of: searchTerm) { _, term in controller.search(term) }
+            .accessibilityIdentifier("scratchpad.search")
+    }
+
+    /// Cross-day note search results; tapping a hit opens that day.
+    private var searchResultsList: some View {
+        ScrollView {
+            if controller.searchResults.isEmpty {
+                ContentUnavailableView.search(text: searchTerm)
+                    .padding(.top, 60)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(controller.searchResults, id: \.entryID) { hit in
+                        Button {
+                            controller.openDay(dayString: hit.day)
+                            searchTerm = ""
+                        } label: {
+                            searchHitRow(hit)
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                    }
+                }
+                .padding(.horizontal, 16)
             }
-        attachmentBar
-        errorBanner
-        Divider()
-        composer
+        }
+    }
+
+    @ViewBuilder
+    private func searchHitRow(_ hit: ScratchPadRepository.EntryHit) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(Self.displayDate(hit.day)).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+            Text(hit.text).font(.callout).lineLimit(3)
+            if !hit.tags.isEmpty {
+                Text(hit.tags.map { "#\($0)" }.joined(separator: " "))
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("ScratchPad")
                     .font(.caption)
@@ -101,8 +149,25 @@ struct ScratchPadView: View {
                     .font(.title3.weight(.semibold))
             }
             Spacer()
-            historyButton
-            lockButton
+            // Note / Billing tabs live in the header now (freeing the row they used to
+            // occupy).
+            Picker("View", selection: $tab) {
+                Text("Note").tag(Tab.note)
+                Text("Billing draft").tag(Tab.draft)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            Spacer()
+            // The search box sits directly below the day controls and spans their width.
+            VStack(alignment: .trailing, spacing: 6) {
+                HStack(spacing: 8) {
+                    historyButton
+                    lockButton
+                }
+                scratchSearchField
+                    .frame(width: 200)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
