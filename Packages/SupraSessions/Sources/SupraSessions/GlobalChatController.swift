@@ -18,6 +18,11 @@ import SupraStore
 public final class GlobalChatController: ObservableObject {
     @Published public private(set) var chats: [ChatSummary] = []
     @Published public private(set) var selectedChatID: String?
+    /// Generation options for the SELECTED chat. Seeded from the app-wide default
+    /// (Settings → Generation Defaults) and overridable per chat via the status-bar
+    /// popover; a customized chat keeps its value (persisted) until changed again or
+    /// deleted, independent of later changes to the global default.
+    @Published public private(set) var activeChatOptions = GenerationOptions()
     @Published public private(set) var messages: [ChatMessage] = []
     @Published public private(set) var isGenerating = false
     @Published public private(set) var errorMessage: String?
@@ -153,6 +158,7 @@ public final class GlobalChatController: ObservableObject {
     public func loadChats() {
         chats = fetchScopedChats()
         if let selectedChatID, chats.contains(where: { $0.id == selectedChatID }) {
+            activeChatOptions = loadChatOptions(for: selectedChatID) ?? storedDefaultOptions()
             reloadMessages()
         } else {
             select(chatID: chats.first?.id)
@@ -191,6 +197,7 @@ public final class GlobalChatController: ObservableObject {
 
     public func select(chatID: String?) {
         selectedChatID = chatID
+        activeChatOptions = chatID.flatMap(loadChatOptions(for:)) ?? storedDefaultOptions()
         reloadMessages()
     }
 
@@ -245,6 +252,7 @@ public final class GlobalChatController: ObservableObject {
         }
         do {
             try store.chats.softDeleteChat(id: chatID)
+            clearChatOptions(for: chatID)
             chats = fetchScopedChats()
             if selectedChatID == chatID {
                 select(chatID: nil)
@@ -528,6 +536,48 @@ public final class GlobalChatController: ObservableObject {
 
     private func storedDefaultOptions() -> GenerationOptions {
         (try? store.appSettings.getSetting(SettingsController.generationDefaultsKey, as: GenerationOptions.self)) ?? GenerationOptions()
+    }
+
+    // MARK: - Per-chat generation options
+
+    private static func chatOptionsKey(_ chatID: String) -> String { "generation.chat.\(chatID)" }
+
+    private func loadChatOptions(for chatID: String) -> GenerationOptions? {
+        try? store.appSettings.getSetting(Self.chatOptionsKey(chatID), as: GenerationOptions.self)
+    }
+
+    private func persistChatOptions(_ options: GenerationOptions, for chatID: String) {
+        try? store.appSettings.setSetting(Self.chatOptionsKey(chatID), value: options)
+    }
+
+    private func clearChatOptions(for chatID: String) {
+        try? store.appSettings.removeSetting(Self.chatOptionsKey(chatID))
+    }
+
+    /// Persists the current chat's override (when one is selected). A not-yet-created
+    /// chat keeps the change in memory; `ensureSelectedChat` writes it on the first send.
+    private func persistActiveChatOverride() {
+        if let selectedChatID { persistChatOptions(activeChatOptions, for: selectedChatID) }
+    }
+
+    /// Switches the selected chat's preset (snapping sampling/length to its character),
+    /// scoped to this chat only — the app-wide default is unchanged.
+    public func setActiveChatPreset(_ preset: GenerationPreset) {
+        guard preset != activeChatOptions.preset else { return }
+        activeChatOptions.selectPreset(preset)
+        persistActiveChatOverride()
+    }
+
+    /// Sets the selected chat's temperature (scoped to this chat).
+    public func setActiveChatTemperature(_ temperature: Double) {
+        activeChatOptions.temperature = min(1, max(0, temperature))
+        persistActiveChatOverride()
+    }
+
+    /// Sets the selected chat's max output tokens (scoped to this chat).
+    public func setActiveChatMaxOutputTokens(_ tokens: Int) {
+        activeChatOptions.maxOutputTokens = tokens
+        persistActiveChatOverride()
     }
 
     /// Resolves the options for a send, honoring the user's visible generation
@@ -2125,8 +2175,18 @@ public final class GlobalChatController: ObservableObject {
         if let selectedChatID, let existing = chats.first(where: { $0.id == selectedChatID }) {
             return existing
         }
+        // A brand-new chat inherits the options the user set on the still-chat-less
+        // composer. createChat() calls select(), which resets activeChatOptions to the
+        // global default, so capture the pending customization first and re-apply +
+        // persist it for the freshly created chat.
+        let pending = activeChatOptions
         let title = titleHint.map(Self.derivedTitle(from:)) ?? "New Chat"
-        return try createChat(title: title)
+        let created = try createChat(title: title)
+        if pending != storedDefaultOptions() {
+            activeChatOptions = pending
+            persistChatOptions(pending, for: created.id)
+        }
+        return created
     }
 
     private func updateMessage(id: String, content: String, status: MessageStatus) {

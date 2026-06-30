@@ -16,6 +16,9 @@ struct GlobalChatsView: View {
 
     @ObservedObject var controller: GlobalChatController
     @ObservedObject var library: ModelLibrary
+    /// The app-wide generation default lives here; the chat reads/writes its own
+    /// per-chat options on `controller`, but Settings is still where new chats'
+    /// defaults come from.
     @ObservedObject var settings: SettingsController
     var listStyle: ChatListStyle = .picker
     /// Matters available as "move chat to…" targets, shown only in the global
@@ -784,7 +787,7 @@ struct GlobalChatsView: View {
                 prompt: routed.prompt,
                 modelID: modelID,
                 attachments: rawAttachments,
-                options: settings.currentOptions,
+                options: controller.activeChatOptions,
                 route: routed.route,
                 displayPrompt: rawPrompt
             )
@@ -815,7 +818,7 @@ struct GlobalChatsView: View {
             Button { showGenerationSettings.toggle() } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "slider.horizontal.3")
-                    Text(settings.preset.displayName)
+                    Text(controller.activeChatOptions.preset.displayName)
                 }
             }
             .buttonStyle(.plain)
@@ -906,9 +909,15 @@ struct GlobalChatsView: View {
     }
 
     private var generationSettings: some View {
+        // Scoped to THIS chat (not the app-wide default): edits here become a per-chat
+        // override that sticks with the chat. New chats start from Settings → Generation
+        // Defaults.
         VStack(alignment: .leading, spacing: 14) {
             Text("Generation").font(.headline)
-            Picker("Preset", selection: $settings.preset) {
+            Picker("Preset", selection: Binding(
+                get: { controller.activeChatOptions.preset },
+                set: { controller.setActiveChatPreset($0) }
+            )) {
                 ForEach(GenerationPreset.userSelectableDefaults, id: \.self) { preset in
                     Text(preset.displayName).tag(preset)
                 }
@@ -919,13 +928,26 @@ struct GlobalChatsView: View {
                 HStack {
                     Text("Temperature")
                     Spacer()
-                    Text(String(format: "%.2f", settings.temperature))
+                    Text(String(format: "%.2f", controller.activeChatOptions.temperature))
                         .foregroundStyle(.secondary).monospacedDigit()
                 }
-                Slider(value: $settings.temperature, in: 0...1, step: 0.05)
+                Slider(
+                    value: Binding(
+                        get: { controller.activeChatOptions.temperature },
+                        set: { controller.setActiveChatTemperature($0) }
+                    ),
+                    in: 0...1, step: 0.05
+                )
             }
-            Stepper("Max output tokens: \(settings.maxOutputTokens)", value: $settings.maxOutputTokens, in: 128...8192, step: 128)
-            Text("Applies to all chats — same as Settings → Generation Defaults.")
+            Stepper(
+                "Max output tokens: \(controller.activeChatOptions.maxOutputTokens)",
+                value: Binding(
+                    get: { controller.activeChatOptions.maxOutputTokens },
+                    set: { controller.setActiveChatMaxOutputTokens($0) }
+                ),
+                in: 128...8192, step: 128
+            )
+            Text("Applies to this chat. New chats start from Settings → Generation Defaults.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .padding()

@@ -631,6 +631,68 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertFalse(markdown.contains("musing"))  // chain-of-thought stripped
     }
 
+    func testChatGenerationOptionsArePerChatAndIndependentOfGlobalDefault() throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(
+            SettingsController.generationDefaultsKey,
+            value: GenerationOptions(preset: .balanced, temperature: 0.5)
+        )
+        let controller = GlobalChatController(store: store, runtimeClient: StubRuntimeClient { _ in .events([]) })
+        controller.loadChats()
+
+        // A new chat starts from the app-wide default.
+        let chatA = try controller.createChat(title: "A")
+        XCTAssertEqual(controller.activeChatOptions.temperature, 0.5, accuracy: 0.0001)
+
+        // Customizing scopes to that chat and persists across reselection.
+        controller.setActiveChatTemperature(0.9)
+        controller.select(chatID: nil)
+        XCTAssertEqual(controller.activeChatOptions.temperature, 0.5, accuracy: 0.0001)
+        controller.select(chatID: chatA.id)
+        XCTAssertEqual(controller.activeChatOptions.temperature, 0.9, accuracy: 0.0001)
+
+        // Changing the global default leaves an already-customized chat untouched...
+        try store.appSettings.setSetting(
+            SettingsController.generationDefaultsKey,
+            value: GenerationOptions(preset: .precise, temperature: 0.3)
+        )
+        controller.select(chatID: chatA.id)
+        XCTAssertEqual(controller.activeChatOptions.temperature, 0.9, accuracy: 0.0001)
+
+        // ...but a brand-new chat follows the new default.
+        _ = try controller.createChat(title: "B")
+        XCTAssertEqual(controller.activeChatOptions.temperature, 0.3, accuracy: 0.0001)
+    }
+
+    func testNewChatAdoptsPreSendTemperatureCustomization() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Hi."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+
+        // Customize a brand-new (not-yet-created) chat, then send.
+        controller.startNewChat()
+        controller.setActiveChatTemperature(0.85)
+        await controller.performSend(
+            prompt: "Hello",
+            modelID: ModelID(),
+            systemPrompt: nil,
+            options: controller.activeChatOptions
+        )
+
+        // The created chat kept the customization; a fresh controller reloads it.
+        let chatID = try XCTUnwrap(controller.selectedChatID)
+        let reloaded = GlobalChatController(store: store, runtimeClient: stub)
+        reloaded.loadChats()
+        reloaded.select(chatID: chatID)
+        XCTAssertEqual(reloaded.activeChatOptions.temperature, 0.85, accuracy: 0.0001)
+    }
+
     func testMentionsFederalCitationMatchesStatutesRegulationsAndReporters() {
         XCTAssertTrue(GlobalChatController.mentionsFederalCitation("see 18 u.s.c. § 1001"))
         XCTAssertTrue(GlobalChatController.mentionsFederalCitation("18 usc 1001"))
