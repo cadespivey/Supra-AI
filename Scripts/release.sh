@@ -125,7 +125,10 @@ gh release upload "${TAG}" "${DMG}" "${ZIP}" --clobber
 echo "▶︎ Signing the update (EdDSA) and updating the appcast…"
 # Sparkle's sign_update ships in the resolved SPM artifact bundle. Sign the EXACT
 # .zip that was just uploaded — never re-zip after this.
-SPARKLE_BIN="$(find ~/Library/Developer/Xcode/DerivedData -path '*artifacts/sparkle/Sparkle/bin' -type d 2>/dev/null | head -1)"
+# Honor a releaser-provided SPARKLE_BIN (custom DerivedData, CI, multiple Xcode
+# builds) before falling back to the DerivedData search — the escape hatch the
+# failure message below promises.
+SPARKLE_BIN="${SPARKLE_BIN:-$(find ~/Library/Developer/Xcode/DerivedData -path '*artifacts/sparkle/Sparkle/bin' -type d 2>/dev/null | head -1)}"
 [ -x "${SPARKLE_BIN}/sign_update" ] || { echo "✗ Sparkle sign_update not found (build SupraAI once, or set SPARKLE_BIN)"; exit 1; }
 SIG_FRAGMENT="$("${SPARKLE_BIN}/sign_update" "${ZIP}")"   # -> sparkle:edSignature="…" length="…"
 case "${SIG_FRAGMENT}" in *edSignature=*length=*) ;; *) echo "✗ unexpected sign_update output: ${SIG_FRAGMENT}"; exit 1;; esac

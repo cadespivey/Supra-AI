@@ -1204,6 +1204,7 @@ struct MarkdownView: View {
     var onCitationTap: ((String) -> Void)?
     @State private var blocks: [MarkdownBlock] = []
     @State private var sourceText: String = ""
+    @State private var sourceLabels: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1218,15 +1219,21 @@ struct MarkdownView: View {
         })
         .onAppear(perform: refresh)
         .onChange(of: text) { _, _ in refresh() }
+        // Citations attach AFTER a fresh answer is generated (the streamed text is
+        // unchanged), so re-link the inline markers when the labels arrive — otherwise
+        // they stay plain text until the chat is reloaded.
+        .onChange(of: citationLabels) { _, _ in refresh() }
     }
 
-    /// Parse only when the text actually changes, so hover/selection re-renders
-    /// don't re-parse. Emojis are stripped once here (never inside code spacing,
-    /// because the stripper only removes real emoji glyphs). When the message has
-    /// citations, inline `[A#]`/`[S#]` markers are rewritten to tappable links first.
+    /// Parse only when the text or its citation labels actually change, so
+    /// hover/selection re-renders don't re-parse. Emojis are stripped once here (never
+    /// inside code spacing, because the stripper only removes real emoji glyphs). When
+    /// the message has citations, inline `[A#]`/`[S#]` markers are rewritten to tappable
+    /// links first.
     private func refresh() {
-        guard text != sourceText else { return }
+        guard text != sourceText || citationLabels != sourceLabels else { return }
         sourceText = text
+        sourceLabels = citationLabels
         let stripped = EmojiStripper.strip(text)
         let linked = citationLabels.isEmpty
             ? stripped

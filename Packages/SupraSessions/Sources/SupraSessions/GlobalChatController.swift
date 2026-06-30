@@ -506,9 +506,19 @@ public final class GlobalChatController: ObservableObject {
             // Must mirror legalResearchOutput's classification (incl. the chat's
             // jurisdiction selection/inference); otherwise an auto-detected
             // jurisdiction would let research proceed without a model loaded.
+            // History is part of that inference — a follow-up ("the exact language
+            // of the statute") inherits the federal jurisdiction an earlier turn
+            // established — so replay the same prior turns the send path captures.
+            let history = selectedChatID.map {
+                Self.conversationHistory(
+                    from: (try? store.chats.fetchMessages(chatID: $0))?.map(ChatMessage.init) ?? [],
+                    budget: Self.historyCharBudget
+                )
+            } ?? []
             let classification = classificationApplyingChatJurisdiction(
                 classificationApplyingMatterScope(LegalQueryClassifier.classify(routed.prompt)),
-                prompt: routed.prompt
+                prompt: routed.prompt,
+                history: history
             )
             return !(routed.route.requiresJurisdiction && classification.needsJurisdictionForAuthority)
         case .legalCritique, .drafting, .generalQA:
