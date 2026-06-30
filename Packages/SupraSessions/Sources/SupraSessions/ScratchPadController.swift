@@ -76,6 +76,9 @@ public final class ScratchPadController: ObservableObject {
     @Published public private(set) var matterChips: [MatterChip] = []
     /// Distinct `#tags` seen so far, for the `#` autocomplete.
     @Published public private(set) var knownTags: [String] = []
+    /// The `#` autocomplete vocabulary: used tags merged with the curated litigation
+    /// starter set, so `#` is useful before the user has built up their own tags.
+    @Published public private(set) var tagVocabulary: [String] = ScratchPadTagResolver.mergedTagVocabulary(used: [])
     /// Day-level attachments (evidence) for the current day.
     @Published public private(set) var attachments: [ScratchPadAttachmentView] = []
     /// Set when an attachment can't be ingested (e.g. `.msg`); the view surfaces it.
@@ -322,6 +325,7 @@ public final class ScratchPadController: ObservableObject {
         entries = records.map(ScratchPadEntryView.init)
         // Suggest #tags from every day, not just the one on screen (spec §3).
         knownTags = (try? store.scratchPad.distinctTags()) ?? []
+        tagVocabulary = ScratchPadTagResolver.mergedTagVocabulary(used: knownTags)
     }
 
     private func reloadRecentDays() {

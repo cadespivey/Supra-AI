@@ -32,6 +32,40 @@ final class ScratchPadControllerTests: XCTestCase {
         XCTAssertEqual(parsed.tags, ["drafting"])
     }
 
+    // MARK: - Tag vocabulary
+
+    func testMergedTagVocabularyKeepsUsedFirstThenCuratedExtras() {
+        let merged = ScratchPadTagResolver.mergedTagVocabulary(
+            used: ["custodianhold", "discovery"],
+            curated: ["call", "discovery", "draft"]
+        )
+        // Used tags lead (in order); curated extras follow; the shared "discovery"
+        // appears once, in its used position.
+        XCTAssertEqual(merged, ["custodianhold", "discovery", "call", "draft"])
+    }
+
+    func testMergedTagVocabularyDedupesCaseInsensitivelyPreferringUsedSpelling() {
+        let merged = ScratchPadTagResolver.mergedTagVocabulary(used: ["Draft"], curated: ["draft", "review"])
+        XCTAssertEqual(merged, ["Draft", "review"])
+    }
+
+    func testDefaultLitigationTagsIncludeReservedNonBillableTag() {
+        // The starter set must offer the reserved non-billable tag so the user can
+        // discover it from `#` autocomplete; matching is case-insensitive.
+        XCTAssertTrue(
+            ScratchPadTagResolver.defaultLitigationTags.contains {
+                $0.caseInsensitiveCompare(ScratchPadEntryRecord.nonBillableTag) == .orderedSame
+            },
+            "defaultLitigationTags should include \(ScratchPadEntryRecord.nonBillableTag)"
+        )
+    }
+
+    func testTagSuggestionsOverVocabularyFilterByPrefixAndListAllWhenEmpty() {
+        let vocab = ScratchPadTagResolver.mergedTagVocabulary(used: [])
+        XCTAssertEqual(ScratchPadTagResolver.tagSuggestions(prefix: "", knownTags: vocab, limit: 3).count, 3)
+        XCTAssertEqual(ScratchPadTagResolver.tagSuggestions(prefix: "dr", knownTags: vocab), ["draft"])
+    }
+
     // MARK: - Resolution
 
     func testResolveMentionsByExplicitMapAndNamePrefix() {
