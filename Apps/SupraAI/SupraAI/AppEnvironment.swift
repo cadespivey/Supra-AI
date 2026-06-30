@@ -33,6 +33,7 @@ final class AppEnvironment: ObservableObject {
     let assistantProfileController: AssistantProfileController
     let sparkleUpdater: SparkleUpdaterController
     let mattersController: MattersController
+    let recycleBinController: RecycleBinController
     // Milestone 4: ScratchPad daily notes -> billing.
     let scratchPadController: ScratchPadController
     let billingDraftController: BillingDraftController
@@ -68,6 +69,7 @@ final class AppEnvironment: ObservableObject {
         self.settingsController = SettingsController(store: store, appVersion: appVersion)
         self.assistantProfileController = AssistantProfileController(store: store, basePrompt: systemPrompt)
         self.sparkleUpdater = SparkleUpdaterController()
+        self.recycleBinController = RecycleBinController(store: store)
         self.scratchPadController = ScratchPadController(store: store)
         // Phase 7: the billing draft controller is seeded from the firm's persisted
         // ScratchPad billing settings (timekeeper, rounding, sensitivity, etc.).
@@ -152,8 +154,11 @@ final class AppEnvironment: ObservableObject {
         await documentSetupController.refreshAll()
         // Reconcile any document job interrupted by a previous quit (plan §5.4).
         documentQueue.bootstrap()
-        // Auto-purge documents soft-deleted past the retention window (plan §12.2).
-        DocumentMaintenance(store: store).purgeExpired()
+        // Auto-purge documents and chats soft-deleted past the retention window
+        // (plan §12.2). Matters are never auto-purged — only manually from the Recycle Bin.
+        let maintenance = DocumentMaintenance(store: store)
+        maintenance.purgeExpired()
+        maintenance.purgeExpiredChats()
         // Start Sparkle: scheduled background checks + silent download, surfacing a
         // single "Install and Relaunch" prompt. Skipped in UI tests.
         if !Self.isUITestMode { sparkleUpdater.start() }

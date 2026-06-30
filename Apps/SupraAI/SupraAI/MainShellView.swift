@@ -67,6 +67,12 @@ struct MainShellView: View {
                 settings: environment.settingsController,
                 matterID: id
             )
+        case .recycleBin:
+            RecycleBinView(
+                controller: environment.recycleBinController,
+                matters: environment.mattersController,
+                chats: environment.chatController
+            )
         }
     }
 
