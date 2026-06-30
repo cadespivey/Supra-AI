@@ -147,7 +147,7 @@ final class ChatCitationsAndExportUITests: XCTestCase {
         return app
     }
 
-    func testSourcesBlockOpensCitationPreviewAndExportIsAvailable() {
+    func testSourcesLinkOpensPreviewAndExportIsAvailable() {
         let app = launchApp()
 
         // The seeded global chat appears in the chat-history sidebar; open it.
@@ -155,13 +155,14 @@ final class ChatCitationsAndExportUITests: XCTestCase {
         XCTAssertTrue(chatRow.waitForExistence(timeout: 20), "Seeded 'Citations Demo' chat not found")
         chatRow.click()
 
-        // The lighter-grey sources block beneath the answer lists both citations.
+        // The subtle sources list beneath the answer names both citations and links
+        // each to its source.
         let authorityRow = app.descendants(matching: .any)["message.source.A1"]
         let sourceRow = app.descendants(matching: .any)["message.source.S1"]
         XCTAssertTrue(authorityRow.waitForExistence(timeout: 10), "Authority [A1] source row not shown")
         XCTAssertTrue(sourceRow.waitForExistence(timeout: 10), "Document [S1] source row not shown")
 
-        // Tapping the [S1] document source opens the in-app preview at the cited text.
+        // Clicking the [S1] document source opens the preview (a trailing slideover).
         sourceRow.click()
         let preview = app.descendants(matching: .any)["documentPreview"]
         XCTAssertTrue(preview.waitForExistence(timeout: 10), "Document preview did not open for [S1]")

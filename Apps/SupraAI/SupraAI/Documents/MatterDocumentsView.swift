@@ -1,4 +1,5 @@
 import PDFKit
+import Quartz
 import SupraCore
 import SupraDesignSystem
 import SupraSessions
@@ -24,6 +25,7 @@ struct MatterDocumentsView: View {
     @State private var showChronology = false
     @State private var dropTargeted = false
     @State private var preview: PreviewItem?
+    @State private var previewWidth: CGFloat = 580
     @State private var dismissedImportFailureID: String?
 
     var body: some View {
@@ -40,7 +42,15 @@ struct MatterDocumentsView: View {
                     .frame(minWidth: 200, maxWidth: 280)
                 mainContent
                     .frame(minWidth: 360)
+            }
+            // The preview slides in over the list (it doesn't displace it); clicking a
+            // row populates it.
+            .overlay(alignment: .trailing) {
+                if let item = preview {
+                    PreviewSlideOver(model: item.model, width: $previewWidth) { preview = nil }
                 }
+            }
+            .animation(.snappy(duration: 0.25), value: preview != nil)
         }
         .fileImporter(
             isPresented: $showImporter,
@@ -76,9 +86,6 @@ struct MatterDocumentsView: View {
                     library: library
                 ) { showChronology = false }
             }
-        }
-        .sheet(item: $preview) { item in
-            DocumentPreviewView(model: item.model) { preview = nil }
         }
         .onAppear { controller.reload() }
     }
@@ -219,13 +226,6 @@ struct MatterDocumentsView: View {
                 }
             }
             Spacer()
-            Button {
-                if let model = controller.preview(documentID: doc.id) { preview = PreviewItem(model: model) }
-            } label: {
-                Image(systemName: "eye")
-            }
-            .buttonStyle(.borderless)
-            .help("Preview")
             Menu {
                 ForEach(controller.tags) { tag in
                     Button {
@@ -268,6 +268,17 @@ struct MatterDocumentsView: View {
             .buttonStyle(.borderless)
         }
         .padding(.vertical, 2)
+        // Clicking anywhere on the row (outside the trailing action buttons) opens the
+        // preview pane.
+        .contentShape(Rectangle())
+        .onTapGesture { showPreview(doc) }
+    }
+
+    /// Opens (or refreshes) the preview pane for a document.
+    private func showPreview(_ doc: MatterDocumentRecord) {
+        if let model = controller.preview(documentID: doc.id) {
+            preview = PreviewItem(model: model)
+        }
     }
 
     /// The classifier's suggested categorization, shown inline on a document row:
@@ -792,9 +803,10 @@ struct DocumentChronologySheet: View {
     }
 }
 
-/// In-app source preview (WO 40): PDF page, image, or normalized text with a
-/// best-effort highlight, plus source metadata/warnings. Never fails silently —
-/// an unavailable visual falls back to normalized text (plan §11.2).
+/// In-app source preview (WO 40): PDF page, image, QuickLook-rendered original
+/// file, or normalized text with a best-effort highlight, plus source
+/// metadata/warnings. Never fails silently — an unavailable visual falls back to
+/// normalized text (plan §11.2).
 struct DocumentPreviewView: View {
     let model: DocumentPreviewModel
     let onClose: () -> Void
@@ -830,6 +842,20 @@ struct DocumentPreviewView: View {
         switch kind {
         case let .pdf(path, pageIndex, highlightText):
             PDFKitView(url: URL(fileURLWithPath: path), pageIndex: pageIndex, highlightText: highlightText)
+        case let .quickLook(path, excerpt):
+            VStack(spacing: 0) {
+                if let excerpt, !excerpt.isEmpty {
+                    citedPassageBanner(excerpt)
+                    Divider()
+                }
+                if FileManager.default.fileExists(atPath: path) {
+                    QuickLookView(url: URL(fileURLWithPath: path))
+                } else {
+                    Label("Original file unavailable.", systemImage: "doc.questionmark")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
         case let .image(path, _):
             ScrollView([.horizontal, .vertical]) {
                 if let image = NSImage(contentsOf: URL(fileURLWithPath: path)) {
@@ -867,6 +893,34 @@ struct DocumentPreviewView: View {
         attributed[lower..<upper].backgroundColor = .yellow.opacity(0.4)
         return attributed
     }
+
+    /// QuickLook renders the real file but can't paint the cited range inside it, so
+    /// this banner surfaces the cited passage above the preview (with a copy button)
+    /// — the closest stand-in for the in-document highlight PDFs/text get.
+    @ViewBuilder
+    private func citedPassageBanner(_ excerpt: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "quote.opening").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Cited passage").font(.caption2).foregroundStyle(.secondary)
+                Text(excerpt.count > 280 ? String(excerpt.prefix(280)) + "…" : excerpt)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(excerpt, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .help("Copy cited passage")
+        }
+        .padding(.horizontal).padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.12))
+    }
 }
 
 /// PDFKit preview navigated to a page, with a best-effort text-match highlight.
@@ -898,5 +952,98 @@ struct PDFKitView: NSViewRepresentable {
                 view.go(to: selection)
             }
         }
+    }
+}
+
+/// Renders the original document file with QuickLook (the same engine as Finder's
+/// preview pane), so Word/RTF/spreadsheet/email files look like their real selves
+/// instead of stripped plain text.
+struct QuickLookView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> QLPreviewView {
+        let view = QLPreviewView(frame: .zero, style: .normal) ?? QLPreviewView()
+        view.autostarts = true
+        view.previewItem = url as NSURL
+        return view
+    }
+
+    func updateNSView(_ view: QLPreviewView, context: Context) {
+        if (view.previewItem as? URL) != url {
+            view.previewItem = url as NSURL
+        }
+    }
+}
+
+/// A right-anchored document preview that slides in OVER the content (it does not
+/// displace the list/conversation underneath). A leading drag handle resizes it; a
+/// border + shadow set it apart. Use via `.overlay(alignment: .trailing)`.
+struct PreviewSlideOver: View {
+    let model: DocumentPreviewModel
+    @Binding var width: CGFloat
+    let onClose: () -> Void
+
+    // Floor matches DocumentPreviewView's intrinsic content minWidth (560) so the
+    // panel can never be dragged narrower than the content can render (which would
+    // overflow the fixed-width frame).
+    static let minWidth: CGFloat = 560
+    static let maxWidth: CGFloat = 1100
+
+    var body: some View {
+        HStack(spacing: 0) {
+            PreviewResizeHandle(width: $width, minWidth: Self.minWidth, maxWidth: Self.maxWidth)
+            DocumentPreviewView(model: model, onClose: onClose)
+                .frame(width: width)
+        }
+        .frame(maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Color(nsColor: .separatorColor)).frame(width: 1)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 10, x: -3, y: 0)
+        .transition(.move(edge: .trailing))
+        // Restore the Escape-to-close that the prior sheet/inspector gave for free.
+        .onExitCommand { onClose() }
+    }
+}
+
+/// The thin draggable strip on the leading edge of the slide-over; dragging it left
+/// widens the panel (covering more), right narrows it — the content underneath never
+/// moves. Shows a horizontal-resize cursor on hover.
+private struct PreviewResizeHandle: View {
+    @Binding var width: CGFloat
+    let minWidth: CGFloat
+    let maxWidth: CGFloat
+    @State private var dragStartWidth: CGFloat?
+    // NSCursor.push()/pop() share a process-wide stack and must balance exactly. This
+    // flag guarantees we only pop a cursor we actually pushed — otherwise an exit
+    // hover with no prior enter (common during the slide transition) would pop a
+    // cursor belonging to other UI, and a teardown mid-hover would leak ours.
+    @State private var pushed = false
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: 8)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside {
+                    if !pushed { NSCursor.resizeLeftRight.push(); pushed = true }
+                } else if pushed {
+                    NSCursor.pop(); pushed = false
+                }
+            }
+            .onDisappear {
+                if pushed { NSCursor.pop(); pushed = false }
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        let start = dragStartWidth ?? width
+                        if dragStartWidth == nil { dragStartWidth = width }
+                        width = min(maxWidth, max(minWidth, start - value.translation.width))
+                    }
+                    .onEnded { _ in dragStartWidth = nil }
+            )
     }
 }

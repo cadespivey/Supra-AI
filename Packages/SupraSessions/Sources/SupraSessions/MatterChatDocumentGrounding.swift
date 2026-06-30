@@ -290,15 +290,11 @@ final class MatterChatDocumentGrounding {
                 + "indexed so far; content from the rest may be missing.)\n\n" + prompt
         }
 
-        let appendix = SourceAppendix(entries: sources.map {
-            SourceAppendix.Entry(
-                label: $0.label, documentName: $0.documentName,
-                locatorDisplay: $0.locatorDisplay, excerpt: $0.excerpt,
-                warnings: $0.lowConfidence ? ["low OCR confidence"] : []
-            )
-        })
+        // No source excerpts appended to the answer text: the clickable inline `[S#]`
+        // markers plus the subtle sources list under the message carry the citations
+        // now, so the verbose excerpt block would just duplicate them.
         return GroundedChatContext(
-            modelPrompt: prompt, systemPrompt: groundedSystemPrompt(), trailer: "\n" + appendix.markdown(),
+            modelPrompt: prompt, systemPrompt: groundedSystemPrompt(), trailer: nil,
             sourceTexts: sources.map(\.text),
             sources: sourceRefs
         )

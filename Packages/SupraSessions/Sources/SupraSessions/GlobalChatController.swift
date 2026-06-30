@@ -292,10 +292,35 @@ public final class GlobalChatController: ObservableObject {
             lines.append("")
             lines.append(trimmed)
             lines.append("")
+            // The answer body now carries bare `[S#]`/`[A#]` markers (the resolving
+            // excerpt trailer was dropped from generation), so resolve them from the
+            // persisted citations table here — otherwise the export would leave the
+            // markers dangling.
+            let citations = (try? store.chats.fetchCitations(messageID: message.id))?
+                .map(MessageCitation.init(record:)) ?? []
+            if message.role == .assistant, !citations.isEmpty {
+                lines.append("**Sources:**")
+                lines.append("")
+                for citation in citations { lines.append(Self.exportSourceLine(citation)) }
+                lines.append("")
+            }
             lines.append("---")
             lines.append("")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Renders one persisted citation as a Markdown bullet for the exported
+    /// transcript, e.g. `- [S1] agreement.pdf — p. 3` or `- [A1] Doe v. Smith — <url>`.
+    private static func exportSourceLine(_ citation: MessageCitation) -> String {
+        let name = citation.displayName ?? (citation.kind == .authority ? "Authority" : "Document")
+        var line = "- [\(citation.label)] \(name)"
+        if citation.kind == .source, let display = citation.locator?.displayString, !display.isEmpty {
+            line += " — \(display)"
+        } else if citation.kind == .authority, let url = citation.url, !url.isEmpty {
+            line += " — \(url)"
+        }
+        return line
     }
 
     /// Re-homes a global chat into a matter (e.g. a chat that turned out to belong

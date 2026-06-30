@@ -202,7 +202,10 @@ public struct ModelRouter: Sendable {
             requiresJurisdiction = false
             systemPrompt = LegalPromptTemplates.draftingSystemPrompt
         case .generalQA:
-            role = .drafting
+            // Use the reasoning model (not the lighter instruct/drafting model) for
+            // general inquiries — they benefit from stronger reasoning. The prompt and
+            // preset stay general (no legal grounding required).
+            role = .legalReasoning
             preset = .balanced
             requiresCourtListener = false
             requiresCitations = false

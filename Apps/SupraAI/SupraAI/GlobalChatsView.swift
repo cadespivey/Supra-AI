@@ -38,9 +38,10 @@ struct GlobalChatsView: View {
     @State private var renamingChat: ChatSummary?
     @State private var renameText = ""
     @State private var pendingDeleteChat: ChatSummary?
-    /// A tapped `[S#]` matter-document citation, presented as a preview sheet at the
-    /// view root (one host, not per-row, to avoid LazyVStack sheet churn).
+    /// A tapped `[S#]` matter-document citation, shown in a trailing slide-over
+    /// preview hosted over the message area (one host, not per-row).
     @State private var citationPreview: PreviewItem?
+    @State private var citationPreviewWidth: CGFloat = 580
 
     private let attachmentLoader = ChatAttachmentLoader()
     private static let maxAttachments = 10
@@ -68,9 +69,6 @@ struct GlobalChatsView: View {
             let query = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             tagHits = query.count > 1 ? controller.tagSearch(term: query) : []
         }
-        .sheet(item: $citationPreview) { item in
-            DocumentPreviewView(model: item.model) { citationPreview = nil }
-        }
     }
 
     // The conversation fills the pane; the sidebar owns chat selection and the New
@@ -81,6 +79,15 @@ struct GlobalChatsView: View {
         // is its own visual separation.
         VStack(spacing: 0) {
             messageList
+                // The cited source slides in OVER the conversation (it doesn't displace
+                // the text), with a draggable leading edge to resize. Scoped to the
+                // message area so it never covers the composer's Send/Stop controls.
+                .overlay(alignment: .trailing) {
+                    if let item = citationPreview {
+                        PreviewSlideOver(model: item.model, width: $citationPreviewWidth) { citationPreview = nil }
+                    }
+                }
+                .animation(.snappy(duration: 0.25), value: citationPreview != nil)
             if let errorMessage = controller.errorMessage {
                 errorBanner(errorMessage)
             }
@@ -930,7 +937,7 @@ private struct MessageRow: View {
     let message: ChatMessage
     /// Opens a tapped `[A#]` authority's CourtListener page.
     var onOpenAuthority: (URL) -> Void = { _ in }
-    /// Opens a tapped `[S#]` matter-document citation in the preview sheet.
+    /// Opens a tapped `[S#]` matter-document citation in the trailing slide-over preview.
     var onOpenSource: (MessageCitation) -> Void = { _ in }
     /// nil until the user toggles. Until then the reasoning section auto-expands
     /// only while the response is still generating, and stays collapsed for
@@ -1098,6 +1105,9 @@ private struct MessageRow: View {
     /// A footnote-style, lighter-grey, indented list of the message's sources, set
     /// apart from the answer prose. Each row shares the inline marker's tap action.
     private var sourcesBlock: some View {
+        // A subtle footnote list of the cited sources — visually quiet, but each row
+        // is a link that opens the source preview at the cited chunk (with a snippet
+        // highlight where the format supports it), mirroring the inline `[S#]` marker.
         VStack(alignment: .leading, spacing: 2) {
             ForEach(message.citations) { citation in
                 Button {
@@ -1112,11 +1122,13 @@ private struct MessageRow: View {
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                // A clean labeled button leaf — deriving the label from the child
-                // Image+Text would make accessibility resolve their roles, which
-                // cycles (role↔label) like the message text above.
+                .help(citation.kind == .authority ? "Open on CourtListener" : "Open the cited source")
+                // One labeled a11y leaf (deriving the label from the child Image+Text
+                // would make accessibility resolve their roles, which cycles role↔label
+                // like the message text above).
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(Text(sourceLine(citation)))
                 .accessibilityAddTraits(.isButton)
