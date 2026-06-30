@@ -103,13 +103,14 @@ final class ResearchAuthoritiesUITests: XCTestCase {
             "Authorities empty state not shown"
         )
 
-        // Its "New Research Session" action routes back to the Research tab.
+        // Its "New Research Session" action switches to the Research tab AND opens the
+        // planner sheet directly (rather than just leaving the user on the tab).
         let authoritiesNewResearch = app.buttons["authorities.newResearch"]
         XCTAssertTrue(authoritiesNewResearch.waitForExistence(timeout: 5), "Authorities New Research action not found")
         authoritiesNewResearch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         XCTAssertTrue(
-            app.buttons["research.newSession"].waitForExistence(timeout: 10),
-            "Authorities empty-state action should switch back to the Research tab"
+            app.textFields["planner.title"].waitForExistence(timeout: 10),
+            "Authorities 'New Research Session' should open the research planner sheet"
         )
     }
 

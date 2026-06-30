@@ -81,6 +81,10 @@ private struct NewOutputSheet: View {
     @State private var selectedDocIDs: Set<String> = []
     @State private var documents: [StructuredOutputController.DocumentChoice] = []
     @State private var routingMessage: String?
+    /// The model the user picks to generate this output. Defaults to the routed
+    /// model for the output type, but any registered (non-embedding) model can be
+    /// chosen. Empty only when no models are registered.
+    @State private var selectedModelID: String = ""
 
     private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
     private var route: ModelRoute? { router.route(forStructuredOutput: type) }
@@ -152,12 +156,21 @@ private struct NewOutputSheet: View {
                     }
                 } header: {
                     Text("Source documents")
-                } footer: {
-                    Text(groundInDocuments
-                         ? "The model is given the most relevant passages from the selected documents and cites them as [S1], [S2], … Generation is blocked until the selection is fully indexed."
-                         : "Optional — ground this output in specific documents instead of only the notes above.")
                 }
-                routeStatus
+                Section {
+                    if library.models.isEmpty {
+                        Text("No models registered — add one in the Models tab to generate.")
+                            .font(.caption).foregroundStyle(.orange)
+                    } else {
+                        Picker("Model", selection: $selectedModelID) {
+                            ForEach(library.models) { model in
+                                Text(model.displayName).tag(model.id)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Model")
+                }
                 if let routingMessage {
                     Text(routingMessage).font(.caption).foregroundStyle(.orange)
                 }
@@ -173,7 +186,7 @@ private struct NewOutputSheet: View {
                 if controller.isGenerating { ProgressView().controlSize(.small) }
                 Button("Generate") { Task { await generate() } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(routeModel == nil || controller.isGenerating)
+                    .disabled(selectedModelID.isEmpty || controller.isGenerating)
             }
             .padding()
         }
@@ -181,35 +194,39 @@ private struct NewOutputSheet: View {
         .onAppear {
             library.refresh()
             documents = controller.documentChoices()
-        }
-    }
-
-    @ViewBuilder
-    private var routeStatus: some View {
-        if let route {
-            if let routeModel {
-                Text("Uses \(route.role.displayName): \(routeModel.displayName)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Assign a \(route.role.displayName) model in Models to generate this output.")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+            // Default the picker to the model routed for this output type, falling
+            // back to any registered model.
+            if selectedModelID.isEmpty || !library.models.contains(where: { $0.id == selectedModelID }) {
+                selectedModelID = routeModel?.id ?? library.models.first?.id ?? ""
             }
+        }
+        // Re-default when the output type changes the routed model (only if the user
+        // hasn't picked something still valid).
+        .onChange(of: type) { _, _ in
+            if let routed = routeModel?.id { selectedModelID = routed }
         }
     }
 
     private func generate() async {
         routingMessage = nil
         guard let route else { return }
-        let modelID: ModelID
-        switch await library.ensureLoadedRoutedModelID(for: route.role, configuration: router.configuration) {
-        case let .success(loaded):
-            modelID = loaded
-        case let .failure(issue):
-            routingMessage = issue.message
+        guard !selectedModelID.isEmpty else {
+            routingMessage = "Select a model to generate this output."
             return
         }
+        // Load exactly the model the user picked (their choice overrides the routed
+        // default).
+        await library.activateAndLoad(modelID: selectedModelID)
+        guard let chosenUUID = UUID(uuidString: selectedModelID),
+              library.loadedModelID?.rawValue == chosenUUID else {
+            if case let .failed(message) = library.loadState {
+                routingMessage = message
+            } else {
+                routingMessage = "The selected model could not be loaded."
+            }
+            return
+        }
+        let modelID = ModelID(chosenUUID)
 
         let prefix = matterContextPrefix
         let ok = await controller.createOutput(

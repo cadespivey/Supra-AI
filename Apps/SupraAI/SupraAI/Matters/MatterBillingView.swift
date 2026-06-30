@@ -47,9 +47,11 @@ struct MatterBillingView: View {
     private var ledesSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("E-billing identifiers (LEDES)").font(.headline)
-            idRow("Client ID", controller.clientID)
-            idRow("Client matter ID", controller.clientMatterID)
-            idRow("Firm matter ID", controller.firmMatterID)
+            // No leading status glyphs — those read as tappable controls. Each row
+            // states what's needed and is replaced by the value once it's filled in.
+            idRow("Client ID", controller.clientID, required: true)
+            idRow("Client matter ID", controller.clientMatterID, required: false)
+            idRow("Firm matter ID", controller.firmMatterID, required: true)
             Text(controller.ledesIdentifiersComplete
                  ? "These come from the matter's details (Edit) and are required for LEDES export."
                  : "Client ID and Firm matter ID are required for LEDES export — set them in the matter's details (the Edit button at the top of the matter).")
@@ -58,15 +60,22 @@ struct MatterBillingView: View {
         }
     }
 
-    private func idRow(_ label: String, _ value: String) -> some View {
+    @ViewBuilder
+    private func idRow(_ label: String, _ value: String, required: Bool) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: value.isEmpty ? "circle" : "checkmark.circle.fill")
-                .foregroundStyle(value.isEmpty ? Color.secondary : .green)
             Text(label).foregroundStyle(.secondary)
             Spacer()
-            Text(value.isEmpty ? "Not set" : value)
-                .foregroundStyle(value.isEmpty ? .tertiary : .primary)
-                .textSelection(.enabled)
+            if !value.isEmpty {
+                Text(value)
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+            } else if required {
+                Text("Required — add in Edit")
+                    .foregroundStyle(.orange)
+            } else {
+                Text("Optional")
+                    .foregroundStyle(.tertiary)
+            }
         }
         .font(.callout)
     }

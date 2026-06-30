@@ -14,6 +14,10 @@ struct MultilineField: View {
     /// The collapsed height, in lines of body text. The field grows beyond this to
     /// fit longer input.
     var minLines: Int = 3
+    /// Accessibility identifier applied to the underlying text view (so XCUITest can
+    /// find it as a `textView`). The SwiftUI `.accessibilityIdentifier` modifier lands
+    /// on the host group, not the AppKit text view, so it's threaded explicitly.
+    var accessibilityID: String? = nil
 
     @State private var contentHeight: CGFloat = 0
 
@@ -45,13 +49,16 @@ struct MultilineField: View {
                     .allowsHitTesting(false)
             }
 
-            TextEditor(text: $text)
-                .font(.body)
-                .scrollContentBackground(.hidden)
-                // Offsets `NSTextView`'s built-in ~5pt inset so the editor's text lines
-                // up with the placeholder/sizer above.
-                .padding(.horizontal, Self.horizontalInset - 5)
-                .frame(height: max(minHeight, contentHeight))
+            // AppKit-backed so the text origin is exact: zeroing the text container's
+            // line-fragment padding makes the insertion point, typed glyphs, AND the
+            // placeholder all start at the same inset (SwiftUI's `TextEditor` leaves a
+            // ~5pt glyph padding the empty cursor doesn't share, so they misaligned).
+            MultilineTextEditor(
+                text: $text,
+                inset: CGSize(width: Self.horizontalInset, height: Self.verticalInset),
+                accessibilityID: accessibilityID
+            )
+            .frame(height: max(minHeight, contentHeight))
         }
         .background(
             RoundedRectangle(cornerRadius: 6)
@@ -62,6 +69,65 @@ struct MultilineField: View {
                 .strokeBorder(Color(nsColor: .separatorColor))
         )
         .onPreferenceChange(HeightKey.self) { contentHeight = $0 }
+    }
+}
+
+/// A transparent, non-scrolling `NSTextView` for `MultilineField`. The SwiftUI box
+/// draws the border/background and the frame drives height (so it never scrolls);
+/// this exists only to control the text container insets exactly — `textContainerInset`
+/// supplies the padding and `lineFragmentPadding = 0` removes the glyph offset, so the
+/// cursor, typed text, and the placeholder overlay all share one origin.
+private struct MultilineTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    var inset: CGSize
+    var accessibilityID: String?
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let textView = NSTextView()
+        textView.delegate = context.coordinator
+        textView.string = text
+        textView.font = .preferredFont(forTextStyle: .body)
+        textView.isRichText = false
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.focusRingType = .none
+        textView.allowsUndo = true
+        textView.textContainerInset = inset
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.setAccessibilityIdentifier(accessibilityID)
+
+        // An enclosing scroll view top-anchors the document text within the (taller)
+        // min-height frame; scrollers stay off because the SwiftUI frame grows to fit.
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.borderType = .noBorder
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        if textView.string != text { textView.string = text }
+        textView.textContainerInset = inset
+        textView.setAccessibilityIdentifier(accessibilityID)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        private let text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+        func textDidChange(_ notification: Notification) {
+            guard let view = notification.object as? NSTextView else { return }
+            text.wrappedValue = view.string
+        }
     }
 }
 
