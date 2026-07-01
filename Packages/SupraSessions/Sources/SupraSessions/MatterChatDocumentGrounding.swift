@@ -140,6 +140,11 @@ struct GroundedChatContext: Sendable, Equatable {
     /// clickable citations that open the in-app preview at the cited page. Empty for
     /// inventory / no-match contexts.
     var sources: [GroundedSourceRef] = []
+    /// Whether every document in the answered scope was fully indexed at retrieval time.
+    /// `false` means the answer was produced from a still-indexing scope; the controller
+    /// surfaces that as an out-of-band citation-coverage warning rather than relying on a
+    /// soft in-prompt note the model may drop.
+    var scopeFullyIndexed: Bool = true
 }
 
 /// A resolvable pointer behind an inline `[S#]` matter-document citation: enough to
@@ -296,7 +301,8 @@ final class MatterChatDocumentGrounding {
         return GroundedChatContext(
             modelPrompt: prompt, systemPrompt: groundedSystemPrompt(), trailer: nil,
             sourceTexts: sources.map(\.text),
-            sources: sourceRefs
+            sources: sourceRefs,
+            scopeFullyIndexed: result?.readiness.isFullyReady ?? true
         )
     }
 
