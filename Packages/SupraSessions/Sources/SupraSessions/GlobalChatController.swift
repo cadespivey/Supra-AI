@@ -1195,7 +1195,7 @@ public final class GlobalChatController: ObservableObject {
 
         let retrieval: (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?)
         do {
-            retrieval = try await retrieveAuthorities(for: classification, matterID: scopedMatterID)
+            retrieval = try await retrieveAuthorities(for: classification, route: route, modelID: modelID, matterID: scopedMatterID)
         } catch {
             guard !statutoryLookup.provisions.isEmpty else { throw error }
             retrieval = ([], [], nil)
@@ -1488,10 +1488,17 @@ public final class GlobalChatController: ObservableObject {
 
     private func retrieveAuthorities(
         for classification: LegalQueryClassification,
+        route: ModelRoute,
+        modelID: ModelID,
         matterID: String?
     ) async throws -> (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?) {
-        let primaryRequest = courtListenerRequest(for: classification, adverse: false)
-        var requests = [(request: primaryRequest, adverse: false)]
+        // Prefer planner-generated queries (same planner the Research tab uses); fall back
+        // to the single deterministic query when the model is unavailable or returns none.
+        let plannedQueries = await planCourtListenerQueries(for: classification, route: route, modelID: modelID)
+        let primaryRequests: [CourtListenerSearchRequest] = plannedQueries.isEmpty
+            ? [courtListenerRequest(for: classification, adverse: false)]
+            : plannedQueries.prefix(Self.maxChatPlannerQueries).map { plannerRequest(query: $0, classification: classification) }
+        var requests = primaryRequests.map { (request: $0, adverse: false) }
         if classification.adverseAuthorityRequested {
             requests.append((courtListenerRequest(for: classification, adverse: true), true))
         }
@@ -1594,6 +1601,70 @@ public final class GlobalChatController: ObservableObject {
             return true
         }
         return (queryTerms, deduped, researchSession?.id)
+    }
+
+    /// The number of planner-generated CourtListener queries the chat one-shot runs,
+    /// bounded to keep latency and rate-limit pressure reasonable.
+    private static let maxChatPlannerQueries = 3
+
+    /// Uses the local model's query planner — the same one the Research tab uses — to
+    /// turn the classified issue into good CourtListener search queries instead of the
+    /// raw issue string. Returns [] on any failure so the caller falls back to the
+    /// deterministic query.
+    private func planCourtListenerQueries(
+        for classification: LegalQueryClassification,
+        route: ModelRoute,
+        modelID: ModelID
+    ) async -> [String] {
+        let planner = ResearchQueryPlanner()
+        guard let prompt = try? planner.buildPrompt(
+            issueText: classification.legalIssue,
+            jurisdiction: classification.jurisdiction ?? "Unspecified",
+            jurisdictionContext: classification.jurisdictionContext ?? "",
+            partyPerspective: "neutral",
+            preferredCourts: classification.courtIDs,
+            excludedCourts: [],
+            dateRange: Self.plannerDateRange(after: classification.dateFiledAfter, before: classification.dateFiledBefore)
+        ) else { return [] }
+
+        var options = route.options
+        options.thinkingBudget = .off
+        let request = GenerateRequest(
+            generationID: GenerationID(),
+            modelID: modelID,
+            prompt: prompt,
+            systemPrompt: defaultSystemPrompt,
+            options: options
+        )
+        guard let raw = try? await runtimeClient.collectGeneratedText(request),
+              case let .answer(answer) = ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: false) else {
+            return []
+        }
+        return planner.parseQueries(from: answer)
+    }
+
+    private static func plannerDateRange(after: String?, before: String?) -> String {
+        let a = after?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let b = before?.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch (a?.isEmpty == false ? a : nil, b?.isEmpty == false ? b : nil) {
+        case let (start?, end?): return "\(start) to \(end)"
+        case let (start?, nil): return "on or after \(start)"
+        case let (nil, end?): return "on or before \(end)"
+        default: return "Any"
+        }
+    }
+
+    /// A CourtListener request for a planner-generated query, carrying the
+    /// classification's court/date/citation filters.
+    private func plannerRequest(query: String, classification: LegalQueryClassification) -> CourtListenerSearchRequest {
+        CourtListenerSearchRequest(
+            query: query,
+            orderBy: "score desc",
+            courtIDs: classification.courtIDs,
+            dateFiledAfter: classification.dateFiledAfter,
+            dateFiledBefore: classification.dateFiledBefore,
+            citation: Self.courtListenerCitationParameter(classification.citationLookup)
+        )
     }
 
     private func courtListenerRequest(for classification: LegalQueryClassification, adverse: Bool) -> CourtListenerSearchRequest {

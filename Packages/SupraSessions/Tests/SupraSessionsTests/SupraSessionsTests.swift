@@ -864,7 +864,14 @@ final class SupraSessionsTests: XCTestCase {
             )
         )
         let stub = StubRuntimeClient { request in
-            XCTAssertTrue(request.prompt.contains("SOURCE PACKET"))
+            // The planner query-generation runs first (no SOURCE PACKET); return no
+            // parseable queries so retrieval falls back to the deterministic query.
+            guard request.prompt.contains("SOURCE PACKET") else {
+                return .events([
+                    .event(request, 1, .token, token: "no queries"),
+                    .event(request, 2, .generationCompleted)
+                ])
+            }
             return .events([
                 .event(request, 1, .token, token: "Foo v. Bar, 123 Cal. App. 5th 456 held the term unenforceable."),
                 .event(request, 2, .generationCompleted)
@@ -1026,10 +1033,12 @@ final class SupraSessionsTests: XCTestCase {
             options: researchRoute.options, route: researchRoute
         )
 
-        XCTAssertEqual(box.histories.count, 2)
-        XCTAssertTrue(box.histories[0].isEmpty, "the first legal answer has no prior turns")
+        // Each legal turn now runs a planner query-generation (no prior turns) plus the
+        // answer generation; only the follow-up answer replays the prior user turn.
+        let answersWithHistory = box.histories.filter { !$0.isEmpty }
+        XCTAssertEqual(answersWithHistory.count, 1, "only the follow-up answer carries prior turns")
         XCTAssertTrue(
-            box.histories[1].contains { $0.role == .user && $0.content.contains("indemnity clause enforceable") },
+            answersWithHistory[0].contains { $0.role == .user && $0.content.contains("indemnity clause enforceable") },
             "the follow-up should replay the prior user turn so the model can resolve \"narrow that\""
         )
     }
