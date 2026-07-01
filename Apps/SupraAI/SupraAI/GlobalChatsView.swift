@@ -59,7 +59,13 @@ struct GlobalChatsView: View {
             chatColumn
         }
         .onAppear {
-            inputFocused = true
+            // Auto-focusing the composer suits the standalone Chats screen, but inside a
+            // matter workspace it drops the message field into an editing session the moment
+            // the Chat tab appears — so the first click on another tab (Research, Documents…)
+            // is swallowed ending that session and only the second click registers. Only the
+            // standalone (.picker) chat grabs focus on appear; matter (.inline) chat waits for
+            // the user to click into it.
+            if listStyle == .picker { inputFocused = true }
             matters?.loadMatters()
             if suggestions.isEmpty { suggestions = ChatSuggestions.sample() }
         }

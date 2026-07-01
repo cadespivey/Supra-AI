@@ -84,9 +84,8 @@ struct MatterWorkspaceView: View {
             }
             Spacer()
             if controller.draftingController != nil {
-                // Draft is the one accent action on this screen.
                 Button { showDraftSheet = true } label: { Label("Draft", systemImage: "doc.badge.plus") }
-                    .buttonStyle(.ghostAccent)
+                    .buttonStyle(.ghost)
             }
             Button { showEditor = true } label: { Label("Edit", systemImage: "pencil") }
                 .buttonStyle(.ghost)
