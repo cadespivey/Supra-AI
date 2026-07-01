@@ -85,7 +85,12 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
     public var officeCity: String = ""
     public var officeState: String = ""
     public var officeZip: String = ""
+    /// The firm's main office line — used in the drafting signature block.
     public var officePhone: String = ""
+    /// The attorney's direct line.
+    public var officePhoneDirect: String = ""
+    /// The attorney's mobile / cell number.
+    public var officeCell: String = ""
     public var officeFax: String = ""
     public var primaryEmail: String = ""
     /// Up to two secondary service e-mail designations (Fla. R. Jud. Admin. 2.516).
@@ -201,6 +206,8 @@ public struct AssistantProfile: Codable, Equatable, Sendable {
         officeState = try c.decodeIfPresent(String.self, forKey: .officeState) ?? ""
         officeZip = try c.decodeIfPresent(String.self, forKey: .officeZip) ?? ""
         officePhone = try c.decodeIfPresent(String.self, forKey: .officePhone) ?? ""
+        officePhoneDirect = try c.decodeIfPresent(String.self, forKey: .officePhoneDirect) ?? ""
+        officeCell = try c.decodeIfPresent(String.self, forKey: .officeCell) ?? ""
         officeFax = try c.decodeIfPresent(String.self, forKey: .officeFax) ?? ""
         primaryEmail = try c.decodeIfPresent(String.self, forKey: .primaryEmail) ?? ""
         secondaryEmails = try c.decodeIfPresent([String].self, forKey: .secondaryEmails) ?? []

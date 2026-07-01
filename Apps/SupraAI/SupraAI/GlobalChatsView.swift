@@ -155,7 +155,9 @@ struct GlobalChatsView: View {
             }
         }
         .frame(width: 248)
-        .background(Color(nsColor: .controlBackgroundColor))
+        // Match the content pane (and the other interior columns) so the detail area
+        // reads as one continuous surface; the divider provides the separation.
+        .background(Color(nsColor: .windowBackgroundColor))
         .alert("Rename Chat", isPresented: renameAlertBinding) {
             TextField("Chat name", text: $renameText)
             Button("Cancel", role: .cancel) { renamingChat = nil }
