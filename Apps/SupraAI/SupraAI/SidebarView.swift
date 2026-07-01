@@ -7,6 +7,7 @@ struct SidebarView: View {
     var onNewMatter: () -> Void
     /// The row under the cursor, so its background can match the selection pill.
     @State private var hoveredRow: SidebarSelection?
+    @State private var recycleBinHovering = false
 
     var body: some View {
         List(selection: $selection) {
@@ -54,14 +55,24 @@ struct SidebarView: View {
                 Button {
                     selection = .recycleBin
                 } label: {
+                    // Centered and destructive-tinted, mirroring the matter view's Delete
+                    // button (red with a red hover wash) — sized as an inset pill for the bar.
                     Label("Recycle Bin", systemImage: "trash")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .contentShape(Rectangle())
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(recycleBinFill)
+                        )
                 }
                 .buttonStyle(.plain)
-                .background(selection == SidebarSelection.recycleBin ? Color.accentColor.opacity(0.15) : Color.clear)
+                .onHover { recycleBinHovering = $0 }
+                .animation(.easeOut(duration: 0.12), value: recycleBinHovering)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
                 .accessibilityIdentifier("sidebar.recycleBin")
             }
             .background(.bar)
@@ -84,5 +95,12 @@ struct SidebarView: View {
     /// match by construction. The selected row is left to the native highlight.
     private func rowHoverBackground(_ row: SidebarSelection) -> Color {
         (hoveredRow == row && selection != row) ? Color.primary.opacity(0.09) : .clear
+    }
+
+    /// Recycle Bin fill: a stronger red when it's the active view, a lighter red on
+    /// hover (matching the matter Delete button's danger wash), clear otherwise.
+    private var recycleBinFill: Color {
+        if selection == .recycleBin { return Color.red.opacity(0.18) }
+        return recycleBinHovering ? Color.red.opacity(0.14) : .clear
     }
 }
