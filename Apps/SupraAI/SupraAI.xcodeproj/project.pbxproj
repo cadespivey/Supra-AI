@@ -11,6 +11,7 @@
 		22F7DAF29E7C9ADF37A470F5 /* SparkleUpdaterController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F43C5F55C1C9D84C4CE827A /* SparkleUpdaterController.swift */; };
 		29B269CAAD0AA32A038AF808 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 45DF0346474345DA98F88B95 /* Cocoa.framework */; };
 		33C50DA123DB9228B7278A03 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 77C61A194EE2C8F5298894BC /* Sparkle */; };
+		4E4BB1F8196E2C8E3DDBF739 /* SupraTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70160F9EC6701AF74DA1E3A5 /* SupraTheme.swift */; };
 		58BC6CD3754B6B7C554C2FCF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A9C463ED2E226080392F154A /* Assets.xcassets */; };
 		5A0000000000000000000001 /* SupraAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000101 /* SupraAIApp.swift */; };
 		5A0000000000000000000002 /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000102 /* AppEnvironment.swift */; };
@@ -136,6 +137,7 @@
 		5A0000000000000000000202 /* SupraRuntimeService.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = SupraRuntimeService.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A0000000000000000000F03 /* MatterDraftingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterDraftingView.swift; sourceTree = "<group>"; };
 		6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MultilineField.swift; sourceTree = "<group>"; };
+		70160F9EC6701AF74DA1E3A5 /* SupraTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SupraTheme.swift; sourceTree = "<group>"; };
 		7F43C5F55C1C9D84C4CE827A /* SparkleUpdaterController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SparkleUpdaterController.swift; sourceTree = "<group>"; };
 		8792ADFD107281343AFEEA5C /* ScratchPadView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScratchPadView.swift; sourceTree = "<group>"; };
 		A7F52F39531ED04359DF5332 /* MatterBillingView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MatterBillingView.swift; sourceTree = "<group>"; };
@@ -227,6 +229,7 @@
 				6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */,
 				7F43C5F55C1C9D84C4CE827A /* SparkleUpdaterController.swift */,
 				AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */,
+				70160F9EC6701AF74DA1E3A5 /* SupraTheme.swift */,
 			);
 			path = SupraAI;
 			sourceTree = "<group>";
@@ -579,6 +582,7 @@
 				F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */,
 				22F7DAF29E7C9ADF37A470F5 /* SparkleUpdaterController.swift in Sources */,
 				D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */,
+				4E4BB1F8196E2C8E3DDBF739 /* SupraTheme.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

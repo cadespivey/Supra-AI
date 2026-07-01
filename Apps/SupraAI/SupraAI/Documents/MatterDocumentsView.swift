@@ -39,9 +39,9 @@ struct MatterDocumentsView: View {
             importFailureBanner
             HSplitView {
                 folderSidebar
-                    .frame(minWidth: 200, maxWidth: 280)
+                    .frame(minWidth: 160, idealWidth: 220, maxWidth: 280)
                 mainContent
-                    .frame(minWidth: 360)
+                    .frame(minWidth: 280)
             }
             // The preview slides in over the list (it doesn't displace it); clicking a
             // row populates it.
@@ -151,7 +151,7 @@ struct MatterDocumentsView: View {
         }
         .popover(isPresented: $showNewFolder) {
             VStack(alignment: .leading) {
-                Text("New Folder").font(.headline)
+                Text("New Folder").font(.supraHeadline)
                 TextField("Folder name", text: $newFolderName)
                     .frame(width: 220)
                 HStack {
@@ -213,13 +213,13 @@ struct MatterDocumentsView: View {
                 HStack(spacing: 6) {
                     statusBadge(doc.status)
                     if let summary = doc.ocrConfidenceSummary {
-                        Text(summary).font(.caption2).foregroundStyle(.orange)
+                        Text(summary).font(.supraCaption).foregroundStyle(.orange)
                     }
                     if let classification {
                         classificationChips(classification)
                     }
                     ForEach(controller.tags(forDocument: doc.id)) { tag in
-                        Text(tag.name).font(.caption2)
+                        Text(tag.name).font(.supraCaption)
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Color.accentColor.opacity(0.15), in: Capsule())
                     }
@@ -265,12 +265,14 @@ struct MatterDocumentsView: View {
             Button(role: .destructive) { controller.softDelete(documentID: doc.id) } label: {
                 Image(systemName: "trash")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.ghostDanger)
         }
-        .padding(.vertical, 2)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
         // Clicking anywhere on the row (outside the trailing action buttons) opens the
-        // preview pane.
+        // preview pane; the whole row shades on hover.
         .contentShape(Rectangle())
+        .hoverShade(cornerRadius: 6)
         .onTapGesture { showPreview(doc) }
     }
 
@@ -291,14 +293,14 @@ struct MatterDocumentsView: View {
             Image(systemName: "sparkles").font(.system(size: 8))
             Text(classification.primaryCategory.displayName)
         }
-        .font(.caption2.weight(.medium))
+        .font(.supraCaption.weight(.medium))
         .foregroundStyle(.tint)
         .padding(.horizontal, 6).padding(.vertical, 1)
         .background(Color.accentColor.opacity(0.18), in: Capsule())
         .help(classificationTooltip(classification))
 
         ForEach(classification.secondaryCategories, id: \.self) { category in
-            Text(category.displayName).font(.caption2)
+            Text(category.displayName).font(.supraCaption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 5).padding(.vertical, 1)
                 .background(Color.accentColor.opacity(0.08), in: Capsule())
@@ -330,12 +332,12 @@ struct MatterDocumentsView: View {
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
-                        Text(hit.documentName).font(.callout.weight(.medium))
-                        Text(hit.locatorDisplay).font(.caption2).foregroundStyle(.secondary)
+                        Text(hit.documentName).font(.supraHeadline)
+                        Text(hit.locatorDisplay).font(.supraCaption).foregroundStyle(.secondary)
                         Spacer()
                         Image(systemName: "arrow.up.forward.square").foregroundStyle(.secondary)
                     }
-                    Text(hit.excerpt).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                    Text(hit.excerpt).font(.supraCaption).foregroundStyle(.secondary).lineLimit(3)
                 }
             }
             .buttonStyle(.plain)
@@ -348,7 +350,7 @@ struct MatterDocumentsView: View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             Text("Document import is disabled until Document Intelligence setup is complete in Settings.")
-                .font(.callout)
+                .font(.supraCaption)
             Spacer()
         }
         .padding(8)
@@ -390,10 +392,10 @@ struct MatterDocumentsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     ProgressView().controlSize(.small)
-                    Text(phaseLabel(job.phase)).font(.caption)
+                    Text(phaseLabel(job.phase)).font(.supraCaption)
                     Spacer()
                     if job.totalUnits > 0 {
-                        Text("\(job.completedUnits)/\(job.totalUnits)").font(.caption).monospacedDigit()
+                        Text("\(job.completedUnits)/\(job.totalUnits)").font(.supraCaption).monospacedDigit()
                     }
                 }
                 if job.totalUnits > 0 {
@@ -407,7 +409,7 @@ struct MatterDocumentsView: View {
 
     private var trashSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Trash").font(.title2.weight(.semibold)).padding()
+            Text("Trash").font(.supraTitle).padding()
             Divider()
             if controller.trashedDocuments.isEmpty && controller.trashedFolders.isEmpty {
                 ContentUnavailableView("Trash is Empty", systemImage: "trash", description: Text("Soft-deleted documents and folders appear here."))
@@ -446,7 +448,7 @@ struct MatterDocumentsView: View {
     private func statusBadge(_ status: String) -> some View {
         let (label, color) = Self.statusAppearance(status)
         return Text(label)
-            .font(.caption2.weight(.medium))
+            .font(.supraCaption.weight(.medium))
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(color.opacity(0.18), in: Capsule())
             .foregroundStyle(color)
@@ -544,7 +546,7 @@ struct DocumentQASheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Ask the Documents").font(.title2.weight(.semibold))
+                Text("Ask the Documents").font(.supraTitle)
                 Spacer()
                 Button("Done", action: onClose)
             }
@@ -552,31 +554,32 @@ struct DocumentQASheet: View {
             Divider()
             Form {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Your question").font(.caption).foregroundStyle(.secondary)
+                    Text("Your question").font(.supraCaption).foregroundStyle(.secondary)
                     MultilineField(
                         placeholder: "e.g. What are the termination provisions in the lease?",
                         text: $question,
                         minLines: 3
                     )
                 }
-                Picker("Answer style", selection: $mode) {
-                    Text("Short").tag(DocumentAnswerMode.short)
-                    Text("Memo").tag(DocumentAnswerMode.memo)
+                LabeledContent("Answer style") {
+                    GhostSegmentedControl(
+                        selection: $mode,
+                        segments: [(DocumentAnswerMode.short, "Short", ""), (DocumentAnswerMode.memo, "Memo", "")]
+                    )
                 }
-                .pickerStyle(.segmented)
                 if scopeFolderID != nil {
                     Toggle("Limit to the selected folder", isOn: $scopeThisFolder)
                 }
                 if let readiness = qa.scopeReadiness(scope: scope) {
                     Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) documents indexed")
-                        .font(.caption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
+                        .font(.supraCaption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
                 }
                 routeStatus
                 if let routingMessage {
-                    Text(routingMessage).font(.caption).foregroundStyle(.orange)
+                    Text(routingMessage).font(.supraCaption).foregroundStyle(.orange)
                 }
                 if let message = qa.message {
-                    Text(message).font(.caption).foregroundStyle(.orange)
+                    Text(message).font(.supraCaption).foregroundStyle(.orange)
                 }
             }
             .formStyle(.grouped)
@@ -587,7 +590,7 @@ struct DocumentQASheet: View {
                     VStack(alignment: .leading, spacing: 6) {
                         if result.status == StructuredOutputStatus.needsReview.rawValue {
                             Label("Needs review — \(result.warnings.joined(separator: " "))", systemImage: "exclamationmark.triangle")
-                                .font(.caption).foregroundStyle(.orange)
+                                .font(.supraCaption).foregroundStyle(.orange)
                         }
                         Text(Self.markdown(result.markdown))
                             .textSelection(.enabled)
@@ -621,11 +624,11 @@ struct DocumentQASheet: View {
         if let route {
             if let routeModel {
                 Text("Uses \(route.role.displayName): \(routeModel.displayName)")
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
             } else {
                 Text("Assign a \(route.role.displayName) model in Models to ask documents.")
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.orange)
             }
         }
@@ -693,31 +696,32 @@ struct DocumentChronologySheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Fact Chronology").font(.title2.weight(.semibold))
+                Text("Fact Chronology").font(.supraTitle)
                 Spacer()
                 Button("Done", action: onClose)
             }
             .padding()
             Divider()
             Form {
-                Picker("Format", selection: $format) {
-                    Text("Table").tag(DocumentChronologyFormat.table)
-                    Text("Narrative").tag(DocumentChronologyFormat.narrative)
+                LabeledContent("Format") {
+                    GhostSegmentedControl(
+                        selection: $format,
+                        segments: [(DocumentChronologyFormat.table, "Table", ""), (DocumentChronologyFormat.narrative, "Narrative", "")]
+                    )
                 }
-                .pickerStyle(.segmented)
                 if scopeFolderID != nil {
                     Toggle("Limit to the selected folder", isOn: $scopeThisFolder)
                 }
                 if let readiness = chronology.scopeReadiness(scope: scope) {
                     Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) documents indexed")
-                        .font(.caption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
+                        .font(.supraCaption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
                 }
                 routeStatus
                 if let routingMessage {
-                    Text(routingMessage).font(.caption).foregroundStyle(.orange)
+                    Text(routingMessage).font(.supraCaption).foregroundStyle(.orange)
                 }
                 if let message = chronology.message {
-                    Text(message).font(.caption).foregroundStyle(.orange)
+                    Text(message).font(.supraCaption).foregroundStyle(.orange)
                 }
             }
             .formStyle(.grouped)
@@ -728,7 +732,7 @@ struct DocumentChronologySheet: View {
                     VStack(alignment: .leading, spacing: 6) {
                         if result.status == StructuredOutputStatus.needsReview.rawValue {
                             Label("Needs review — \(result.warnings.joined(separator: " "))", systemImage: "exclamationmark.triangle")
-                                .font(.caption).foregroundStyle(.orange)
+                                .font(.supraCaption).foregroundStyle(.orange)
                         }
                         Text((try? AttributedString(markdown: result.markdown, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(result.markdown))
                             .textSelection(.enabled)
@@ -762,11 +766,11 @@ struct DocumentChronologySheet: View {
         if let route {
             if let routeModel {
                 Text("Uses \(route.role.displayName): \(routeModel.displayName)")
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
             } else {
                 Text("Assign a \(route.role.displayName) model in Models to build a chronology.")
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.orange)
             }
         }
@@ -815,8 +819,8 @@ struct DocumentPreviewView: View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(model.documentName).font(.headline)
-                    Text(model.locatorDisplay).font(.caption).foregroundStyle(.secondary)
+                    Text(model.documentName).font(.supraTitle)
+                    Text(model.locatorDisplay).font(.supraSubheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Done", action: onClose).keyboardShortcut(.defaultAction)
@@ -825,7 +829,7 @@ struct DocumentPreviewView: View {
             if !model.warnings.isEmpty {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text(model.warnings.joined(separator: " ")).font(.caption).foregroundStyle(.orange)
+                    Text(model.warnings.joined(separator: " ")).font(.supraCaption).foregroundStyle(.orange)
                     Spacer()
                 }
                 .padding(.horizontal).padding(.bottom, 6)
@@ -852,7 +856,7 @@ struct DocumentPreviewView: View {
                     QuickLookView(url: URL(fileURLWithPath: path))
                 } else {
                     Label("Original file unavailable.", systemImage: "doc.questionmark")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.supraCaption).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
@@ -867,16 +871,18 @@ struct DocumentPreviewView: View {
         case let .text(content, start, end):
             ScrollView {
                 Text(Self.highlighted(content, start: start, end: end))
+                    .supraReadingBody()
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
             }
         case let .unavailable(reason, fallbackText):
             VStack(alignment: .leading, spacing: 8) {
-                Label(reason, systemImage: "doc.questionmark").font(.callout).foregroundStyle(.secondary)
+                Label(reason, systemImage: "doc.questionmark").font(.supraCaption).foregroundStyle(.secondary)
                 Divider()
                 ScrollView {
                     Text(fallbackText.isEmpty ? "No extracted text available." : fallbackText)
+                        .supraReadingBody()
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -902,9 +908,9 @@ struct DocumentPreviewView: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "quote.opening").font(.caption).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Cited passage").font(.caption2).foregroundStyle(.secondary)
+                Text("Cited passage").font(.supraCaption).foregroundStyle(.secondary)
                 Text(excerpt.count > 280 ? String(excerpt.prefix(280)) + "…" : excerpt)
-                    .font(.callout)
+                    .font(.supraBody)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }

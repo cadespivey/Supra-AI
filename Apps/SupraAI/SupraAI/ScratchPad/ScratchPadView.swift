@@ -122,14 +122,14 @@ struct ScratchPadView: View {
     private func searchHitRow(_ hit: ScratchPadRepository.EntryHit) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(Self.displayDate(hit.day)).font(.caption).foregroundStyle(.secondary)
+                Text(Self.displayDate(hit.day)).font(.supraCaption).foregroundStyle(.secondary)
                 Spacer()
                 Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
             }
-            Text(hit.text).font(.callout).lineLimit(3)
+            Text(hit.text).font(.supraBody).lineLimit(3)
             if !hit.tags.isEmpty {
                 Text(hit.tags.map { "#\($0)" }.joined(separator: " "))
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.supraCaption).foregroundStyle(.tertiary)
             }
         }
         .padding(.vertical, 8)
@@ -143,21 +143,18 @@ struct ScratchPadView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("ScratchPad")
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.tertiary)
                 Text(Self.displayDate(controller.displayedDate))
-                    .font(.title3.weight(.semibold))
+                    .font(.supraTitle)
             }
             Spacer()
             // Note / Billing tabs live in the header now (freeing the row they used to
             // occupy).
-            Picker("View", selection: $tab) {
-                Text("Note").tag(Tab.note)
-                Text("Billing draft").tag(Tab.draft)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
+            GhostSegmentedControl(
+                selection: $tab,
+                segments: [(.note, "Note", ""), (.draft, "Billing draft", "")]
+            )
             Spacer()
             // The search box sits directly below the day controls and spans their width.
             VStack(alignment: .trailing, spacing: 6) {
@@ -180,6 +177,7 @@ struct ScratchPadView: View {
         Button { showHistory.toggle() } label: {
             Label("History", systemImage: "calendar")
         }
+        .buttonStyle(.ghost)
         .help("Jump to another day")
         .popover(isPresented: $showHistory, arrowEdge: .bottom) {
             DatePicker(
@@ -215,6 +213,7 @@ struct ScratchPadView: View {
             } label: {
                 Label("Locked", systemImage: "lock.fill")
             }
+            .buttonStyle(.ghost)
             .help("This day is locked. Reopen to edit.")
         } else if controller.currentDay != nil {
             Button {
@@ -222,6 +221,7 @@ struct ScratchPadView: View {
             } label: {
                 Label("Lock day", systemImage: "lock.open")
             }
+            .buttonStyle(.ghost)
             .help("Finalize and lock this day (reversible).")
         }
     }
@@ -295,10 +295,10 @@ struct ScratchPadView: View {
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
                 Text(attachment.fileName)
-                    .font(.caption)
+                    .font(.supraCaption)
                     .lineLimit(1)
                 Text(subtitle(for: attachment))
-                    .font(.caption2)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -323,7 +323,7 @@ struct ScratchPadView: View {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                 Text(error)
-                    .font(.caption)
+                    .font(.supraCaption)
                 Spacer(minLength: 8)
                 Button { controller.lastAttachmentError = nil } label: {
                     Image(systemName: "xmark")
@@ -461,7 +461,7 @@ struct ScratchPadView: View {
                     ForEach(stagedFiles, id: \.self) { url in
                         HStack(spacing: 6) {
                             Image(systemName: "paperclip").font(.caption2).foregroundStyle(.secondary)
-                            Text(url.lastPathComponent).font(.caption).lineLimit(1).truncationMode(.middle)
+                            Text(url.lastPathComponent).font(.supraCaption).lineLimit(1).truncationMode(.middle)
                             Button { stagedFiles.removeAll { $0 == url } } label: {
                                 Image(systemName: "xmark.circle.fill")
                             }
@@ -480,7 +480,7 @@ struct ScratchPadView: View {
         HStack(spacing: 6) {
             Image(systemName: "nosign")
             Text("Tagged #Note — this won't be counted toward billing or time. Remove #Note to include it.")
-                .font(.caption)
+                .font(.supraCaption)
             Spacer(minLength: 8)
         }
         .foregroundStyle(.orange)
@@ -703,11 +703,12 @@ private struct ScratchPadEntryRow: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(ScratchPadFormatting.highlighted(entry.text))
+                    .supraReadingBody(measure: nil)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if entry.isNonBillable {
                     Label("Non-billable", systemImage: "nosign")
-                        .font(.caption2.weight(.medium))
+                        .font(.supraCaption.weight(.medium))
                         .foregroundStyle(.orange)
                 }
                 // Documents uploaded with this note render inline beneath it.
@@ -735,8 +736,8 @@ private struct ScratchPadEntryRow: View {
         HStack(spacing: 6) {
             Image(systemName: scratchPadAttachmentIcon(attachment.kind))
                 .font(.caption2).foregroundStyle(.secondary)
-            Text(attachment.fileName).font(.caption).lineLimit(1).truncationMode(.middle)
-            Text(attachment.summary).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            Text(attachment.fileName).font(.supraCaption).lineLimit(1).truncationMode(.middle)
+            Text(attachment.summary).font(.supraCaption).foregroundStyle(.secondary).lineLimit(1)
             if !isLocked {
                 Button { onRemoveAttachment(attachment.id) } label: {
                     Image(systemName: "xmark.circle.fill")

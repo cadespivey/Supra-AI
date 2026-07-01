@@ -45,7 +45,7 @@ struct MatterEditorSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(mode.title)
-                .font(.title2.weight(.semibold))
+                .font(.supraTitle)
                 .padding([.horizontal, .top])
 
             Form {
@@ -66,11 +66,11 @@ struct MatterEditorSheet: View {
 
                 Section("Optional") {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Client name(s)").font(.caption).foregroundStyle(.secondary)
+                        Text("Client name(s)").font(.supraCaption).foregroundStyle(.secondary)
                         MultilineField(placeholder: "Client name(s)", text: $draft.clientNames, minLines: 2)
                     }
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Matter description").font(.caption).foregroundStyle(.secondary)
+                        Text("Matter description").font(.supraCaption).foregroundStyle(.secondary)
                         MultilineField(placeholder: "Matter description", text: $draft.matterDescription, minLines: 3)
                     }
                     LabeledTextField(label: "Court", text: $draft.court)
@@ -78,7 +78,7 @@ struct MatterEditorSheet: View {
                     LabeledTextField(label: "Case number", text: $draft.docketNumber)
                     LabeledTextField(label: "Practice area", text: $draft.practiceArea)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Notes").font(.caption).foregroundStyle(.secondary)
+                        Text("Notes").font(.supraCaption).foregroundStyle(.secondary)
                         MultilineField(placeholder: "Notes", text: $draft.notes, minLines: 3)
                     }
                 }
@@ -122,7 +122,7 @@ struct MatterEditorSheet: View {
             LabeledTextField(label: label, text: text)
             if invalid {
                 Text(message)
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.red)
             }
         }
@@ -217,28 +217,28 @@ struct JurisdictionAutocompleteField: View {
     private var footer: some View {
         if invalid {
             Text("Jurisdiction is required. Choose N/A if it doesn't apply.")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.red)
         } else if let scope = selectedScope {
             VStack(alignment: .leading, spacing: 3) {
                 Text(scope.mandatoryAuthorities.joined(separator: "; "))
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if !scope.courtListenerIDs.isEmpty {
                     Text("CourtListener: \(scope.courtListenerIDs.joined(separator: ", "))")
-                        .font(.caption2)
+                        .font(.supraCaption)
                         .foregroundStyle(.tertiary)
                         .lineLimit(2)
                 }
             }
         } else if isNotApplicable {
             Text("No specific jurisdiction — authority scoping is disabled for this matter.")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.secondary)
         } else {
             Text("Type to search courts and jurisdictions, or choose N/A.")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.tertiary)
         }
     }

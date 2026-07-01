@@ -59,9 +59,9 @@ struct RecycleBinView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "trash").font(.largeTitle).foregroundStyle(.secondary)
-            Text("Recycle Bin is empty").font(.headline)
+            Text("Recycle Bin is empty").font(.supraTitle)
             Text("Deleted matters, chats, and documents appear here until you restore them or the discard policy purges them.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.supraSubheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 420)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -118,12 +118,12 @@ struct RecycleBinView: View {
                         Text("deleted \(deletedAt, format: .relative(presentation: .numeric))")
                     }
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Restore", action: restore).buttonStyle(.bordered).controlSize(.small)
+            Button("Restore", action: restore).buttonStyle(.ghost).controlSize(.small)
             Button(action: delete) { Image(systemName: "trash") }
-                .buttonStyle(.borderless).foregroundStyle(.red).help("Delete permanently")
+                .buttonStyle(.ghostDanger).help("Delete permanently")
         }
         .padding(.vertical, 2)
     }

@@ -72,24 +72,28 @@ struct MatterWorkspaceView: View {
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(matter.name).font(.title2.weight(.semibold))
+                Text(matter.name).font(.supraTitle)
                 Text(matterSubtitle)
-                    .font(.subheadline)
+                    .font(.supraSubheadline)
                     .foregroundStyle(.secondary)
                 if let detail = matterClientDetail {
                     Text(detail)
-                        .font(.caption)
+                        .font(.supraCaption)
                         .foregroundStyle(.secondary)
                 }
             }
             Spacer()
             if controller.draftingController != nil {
+                // Draft is the one accent action on this screen.
                 Button { showDraftSheet = true } label: { Label("Draft", systemImage: "doc.badge.plus") }
+                    .buttonStyle(.ghostAccent)
             }
             Button { showEditor = true } label: { Label("Edit", systemImage: "pencil") }
+                .buttonStyle(.ghost)
             Button(role: .destructive) { confirmingDelete = true } label: {
                 Label("Delete", systemImage: "trash")
             }
+            .buttonStyle(.ghostDanger)
         }
         .padding()
     }
@@ -117,18 +121,10 @@ struct MatterWorkspaceView: View {
     private var tabBar: some View {
         HStack {
             Spacer(minLength: 0)
-            Picker("Matter section", selection: $tab) {
-                ForEach(MatterTab.allCases) { item in
-                    Text(item.label)
-                        .tag(item)
-                        .accessibilityIdentifier("matterTab.\(item.rawValue)")
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            // Size to content and center it (a trailing Spacer alone left-aligned it).
-            .fixedSize()
-            .accessibilityIdentifier("matterTab.picker")
+            GhostSegmentedControl(
+                selection: $tab,
+                segments: MatterTab.allCases.map { ($0, $0.label, "matterTab.\($0.rawValue)") }
+            )
             Spacer(minLength: 0)
         }
         .padding(.horizontal)
@@ -247,13 +243,13 @@ struct MatterWorkspaceView: View {
                 List(entries) { entry in
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
-                            Text(auditEventLabel(entry.eventType)).font(.callout.weight(.medium))
+                            Text(auditEventLabel(entry.eventType)).font(.supraHeadline)
                             Spacer()
                             Text(entry.timestamp, format: .dateTime.month().day().hour().minute())
-                                .font(.caption)
+                                .font(.supraCaption)
                                 .foregroundStyle(.secondary)
                         }
-                        Text(entry.summary).font(.caption).foregroundStyle(.secondary)
+                        Text(entry.summary).font(.supraCaption).foregroundStyle(.secondary)
                     }
                 }
             }

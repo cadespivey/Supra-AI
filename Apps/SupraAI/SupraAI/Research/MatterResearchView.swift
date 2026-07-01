@@ -65,14 +65,14 @@ struct MatterResearchView: View {
                 NavigationLink(value: session.id) {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
-                            Text(session.title).font(.body.weight(.medium))
+                            Text(session.title).font(.supraHeadline)
                             Spacer()
                             Text(session.status)
-                                .font(.caption2)
+                                .font(.supraCaption)
                                 .foregroundStyle(.secondary)
                         }
                         Text(session.issueText)
-                            .font(.caption)
+                            .font(.supraCaption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }

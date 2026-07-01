@@ -18,7 +18,6 @@ struct SettingsView: View {
 
             ScratchPadBillingSection(billing: billing)
 
-
             Section("Generation Defaults") {
                 Picker("Preset", selection: $settings.preset) {
                     ForEach(GenerationPreset.userSelectableDefaults, id: \.self) { preset in
@@ -36,7 +35,7 @@ struct SettingsView: View {
                     }
                     Slider(value: $settings.temperature, in: 0...1, step: 0.05)
                     Text("Lower is more precise, deterministic, and consistent — best for legal accuracy. Higher is more varied and creative, with more risk of drift or invented detail.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.supraCaption).foregroundStyle(.secondary)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -47,13 +46,13 @@ struct SettingsView: View {
                         step: 128
                     )
                     Text("The longest a single answer can be (≈¾ of a word per token). Higher allows fuller answers but uses more memory and takes longer; it doesn't change accuracy.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.supraCaption).foregroundStyle(.secondary)
                 }
             }
 
             Section {
                 Text("Connectors that ground research in primary law and track legislative & regulatory developments. Expand a source to add and verify a key — keys are free and stored only in your Keychain. Sources marked “Free · no key required” are public APIs with no key; use Verify to confirm they’re reachable.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.supraCaption).foregroundStyle(.secondary)
                 // Case law
                 APIKeyDisclosure(
                     settings: settings, title: "CourtListener",
@@ -116,17 +115,17 @@ struct SettingsView: View {
 
             Section {
                 Text("Supra AI updates itself: new versions download in the background and install with a single restart — no browser, no drag-to-Applications. Update checks fetch only a signed version feed from supralegal.ai; no usage data is sent.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.supraCaption).foregroundStyle(.secondary)
                 Toggle("Check for updates automatically", isOn: $update.automaticallyChecksForUpdates)
                 HStack {
                     Button("Check for Updates") { update.checkForUpdates() }
                         .disabled(!update.canCheckForUpdates)
                     Spacer()
                     if let message = update.statusMessage {
-                        Text(message).font(.caption).foregroundStyle(.secondary)
+                        Text(message).font(.supraCaption).foregroundStyle(.secondary)
                     } else {
                         Text("You're on \(settings.appVersion.marketingVersion).")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.supraCaption).foregroundStyle(.secondary)
                     }
                 }
             } header: {
@@ -135,7 +134,7 @@ struct SettingsView: View {
 
             Section {
                 Text("Supra AI's research is grounded in free, public-interest data projects: CourtListener and the Free Law Project (case law), Open Legal Codes (statutes & codes), and OpenStates and LegiScan (legislation). Please consider creating a free account or otherwise supporting their work.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.supraCaption).foregroundStyle(.secondary)
                 AboutBanner(version: settings.appVersion.marketingVersion)
                 Link(destination: URL(string: "https://github.com/cadespivey/Supra-AI")!) {
                     Label("GitHub repository", systemImage: "chevron.left.forwardslash.chevron.right")
@@ -187,12 +186,12 @@ private struct AboutBanner: View {
                 .resizable()
                 .frame(width: 60, height: 60)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Supra AI").font(.title3.weight(.semibold))
+                Text("Supra AI").font(.supraHeadline)
                 Text("Secure legal AI without compromise.")
-                    .font(.caption)
+                    .font(.supraSubheadline)
                     .foregroundStyle(.secondary)
                 Text("Version \(version)")
-                    .font(.callout)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -257,7 +256,7 @@ private struct APIKeyDisclosure: View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 8) {
                 Text(description)
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.supraCaption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 controls
             }
@@ -266,9 +265,9 @@ private struct APIKeyDisclosure: View {
             HStack(spacing: 8) {
                 Image(systemName: configured ? "checkmark.seal.fill" : "key.slash")
                     .foregroundStyle(configured ? .green : .orange)
-                Text(title).font(.callout.weight(.medium))
+                Text(title).font(.supraHeadline.weight(.medium))
                 Spacer()
-                Text(statusLabel).font(.caption).foregroundStyle(.secondary)
+                Text(statusLabel).font(.supraCaption).foregroundStyle(.secondary)
             }
         }
     }
@@ -276,7 +275,7 @@ private struct APIKeyDisclosure: View {
     @ViewBuilder private var controls: some View {
         switch kind {
         case let .builtIn(sourceID):
-            Text("Free · no key required.").font(.caption).foregroundStyle(.secondary)
+            Text("Free · no key required.").font(.supraCaption).foregroundStyle(.secondary)
             HStack {
                 Button("Verify") { Task { await settings.verifyKeylessSource(sourceID) } }
                     .disabled(settings.keylessVerificationState(sourceID) == .verifying)
@@ -309,7 +308,7 @@ private struct APIKeyDisclosure: View {
         verify: @escaping () async -> Void
     ) -> some View {
         if isEnvironment {
-            Text("Provided by the environment.").font(.caption).foregroundStyle(.secondary)
+            Text("Provided by the environment.").font(.supraCaption).foregroundStyle(.secondary)
             verifyButton(verify)
             KeyVerificationStatusView(state: verificationState)
         } else if configured {
@@ -348,17 +347,17 @@ private struct KeyVerificationStatusView: View {
         case .verifying:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text("Checking…").font(.caption).foregroundStyle(.secondary)
+                Text("Checking…").font(.supraCaption).foregroundStyle(.secondary)
             }
         case .valid:
             Label("Verified", systemImage: "checkmark.circle.fill")
-                .font(.caption).foregroundStyle(.green)
+                .font(.supraCaption).foregroundStyle(.green)
         case let .invalid(message):
             Label(message, systemImage: "xmark.octagon.fill")
-                .font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                .font(.supraCaption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
         case let .unreachable(message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
-                .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                .font(.supraCaption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -376,9 +375,9 @@ private struct ScratchPadBillingSection: View {
     var body: some View {
         Section {
             Text("Standing instructions applied to every billing draft. Per-matter rules (Matter → Billing) layer on top of these. “Narrative punctuation” normalizes how every billing narrative ends at export — a matter can override it.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Global billing instructions").font(.caption).foregroundStyle(.secondary)
+                Text("Global billing instructions").font(.supraCaption).foregroundStyle(.secondary)
                 MultilineField(
                     placeholder: "e.g. No block billing; spell out abbreviations on first use; cap intra-office conferences",
                     text: $billing.globalInstructions
@@ -395,7 +394,7 @@ private struct ScratchPadBillingSection: View {
 
         Section {
             Text("Auto-timestamp records when each note is written and uses the gaps as time evidence. Turn it off to rely on written cues instead. UTBMS auto-coding proposes task/activity codes you can always edit.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
             Toggle("Auto-timestamp entries", isOn: $billing.autoTimestamp)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -406,12 +405,12 @@ private struct ScratchPadBillingSection: View {
                 Slider(value: $billing.sensitivity, in: 0...1, step: 0.05) {
                     Text("Time inference")
                 } minimumValueLabel: {
-                    Text("Precise").font(.caption2).foregroundStyle(.secondary)
+                    Text("Precise").font(.supraCaption).foregroundStyle(.secondary)
                 } maximumValueLabel: {
-                    Text("Generous").font(.caption2).foregroundStyle(.secondary)
+                    Text("Generous").font(.supraCaption).foregroundStyle(.secondary)
                 }
                 Text("How freely the engine infers durations. Precise bills only explicit, strong-evidence time; generous may infer implied workflow (e.g. research before drafting). Guardrails always apply — nothing is fabricated without a basis.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.supraCaption).foregroundStyle(.secondary)
             }
             Picker("Round time to", selection: $billing.roundingIncrement) {
                 ForEach(Self.increments, id: \.self) { value in
@@ -430,7 +429,7 @@ private struct ScratchPadBillingSection: View {
 
         Section {
             Text("Populates the timekeeper and firm fields on every fee line. LEDES export is blocked until the rate, timekeeper ID, and firm ID are set.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
             LabeledTextField(label: "Timekeeper ID", text: $billing.timekeeperID, prompt: "e.g. TK-1001")
             LabeledTextField(label: "Timekeeper name", text: $billing.timekeeperName, prompt: "e.g. H. Specter")
             LabeledTextField(label: "Classification", text: $billing.timekeeperClassification, prompt: "e.g. PARTNER, ASSOCIATE, PARALEGAL")
@@ -560,7 +559,7 @@ private struct AssistantProfileSection: View {
     var body: some View {
         Section {
             Text("Who you are and your firm details — this shapes how the assistant writes for you and fills the signature block and letterhead of documents you draft. Everything is optional; blank drafting fields are asked for rather than guessed. Notice of Appearance drafting is currently Florida-only and uses Florida service designations (Fla. R. Jud. Admin. 2.516); when several admissions are saved, the Florida admission prints on that filing.")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.secondary)
             LabeledTextField(label: "Full name", text: $profile.profile.fullName)
             LabeledTextField(label: "Role or title", text: $profile.profile.role, prompt: "e.g. Partner, Associate, Paralegal")
@@ -569,7 +568,7 @@ private struct AssistantProfileSection: View {
             LabeledTextField(label: "Practice areas", text: $profile.profile.practiceAreas, prompt: "e.g. Commercial litigation, employment")
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Bar admissions").font(.caption).foregroundStyle(.secondary)
+                Text("Bar admissions").font(.supraCaption).foregroundStyle(.secondary)
                 BarLicensesEditor(profile: $profile.profile)
             }
 
@@ -584,7 +583,7 @@ private struct AssistantProfileSection: View {
             LabeledTextField(label: "Facsimile (optional)", text: $profile.profile.officeFax)
             LabeledTextField(label: "Primary service e-mail", text: $profile.profile.primaryEmail, prompt: "e.g. hspecter@psl.com")
             VStack(alignment: .leading, spacing: 4) {
-                Text("Secondary service e-mails (one per line)").font(.caption).foregroundStyle(.secondary)
+                Text("Secondary service e-mails (one per line)").font(.supraCaption).foregroundStyle(.secondary)
                 MultilineField(
                     placeholder: "e.g. litdocket@psl.com",
                     text: secondaryEmailsBinding
@@ -596,7 +595,7 @@ private struct AssistantProfileSection: View {
 
         Section {
             Text("Shapes how the assistant writes for you — how formal, how long, and any habits you prefer.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
             Picker("Tone", selection: $profile.profile.formality) {
                 ForEach(AssistantProfile.Formality.allCases) { Text($0.label).tag($0) }
             }
@@ -604,7 +603,7 @@ private struct AssistantProfileSection: View {
                 ForEach(AssistantProfile.Length.allCases) { Text($0.label).tag($0) }
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text("Style notes").font(.caption).foregroundStyle(.secondary)
+                Text("Style notes").font(.supraCaption).foregroundStyle(.secondary)
                 MultilineField(
                     placeholder: "e.g. Lead with the bottom line, avoid legalese, use IRAC for analysis",
                     text: $profile.profile.voiceNotes
@@ -616,7 +615,7 @@ private struct AssistantProfileSection: View {
 
         Section {
             Text("How you want authorities cited. The assistant follows this when it references cases, statutes, or rules.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
             Picker("Citation style", selection: $profile.profile.citationStyle) {
                 Text("Not set").tag("")
                 Section("General") {
@@ -637,10 +636,10 @@ private struct AssistantProfileSection: View {
             }
             .pickerStyle(.menu)
             if let style = CitationStyleCatalog.style(named: profile.profile.citationStyle) {
-                Text(style.guidance).font(.caption).foregroundStyle(.secondary)
+                Text(style.guidance).font(.supraCaption).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text("Citation notes").font(.caption).foregroundStyle(.secondary)
+                Text("Citation notes").font(.supraCaption).foregroundStyle(.secondary)
                 MultilineField(
                     placeholder: "e.g. Always pin-cite; include parallel cites; short form after first reference",
                     text: $profile.profile.citationNotes
@@ -652,7 +651,7 @@ private struct AssistantProfileSection: View {
 
         Section {
             Text("Standing instructions you'd give a new associate. These apply to every response.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
             MultilineField(
                 placeholder: "e.g. Flag missing facts; caveat firm conclusions; prefer primary sources",
                 text: $profile.profile.additionalInstructions
@@ -663,9 +662,9 @@ private struct AssistantProfileSection: View {
 
         Section {
             Text("Add a brief, motion, or letter you've written. The assistant studies its voice and formatting to match your style — it won't reuse the content. Accepts PDF, Word, RTF, or text.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
             if profile.profile.writingSamples.isEmpty {
-                Text("No samples added yet.").font(.callout).foregroundStyle(.secondary)
+                Text("No samples added yet.").font(.supraCaption).foregroundStyle(.secondary)
             } else {
                 ForEach(profile.profile.writingSamples) { sample in
                     HStack {
@@ -709,9 +708,9 @@ private struct AssistantProfileSection: View {
 
         Section {
             Text("Everything above is combined into the instructions the assistant follows. Your changes save automatically as you type.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
             if let message = profile.message {
-                Text(message).font(.caption).foregroundStyle(.secondary)
+                Text(message).font(.supraCaption).foregroundStyle(.secondary)
             }
             DisclosureGroup("Preview what the assistant receives", isExpanded: $showPreview) {
                 ScrollView {
@@ -766,7 +765,7 @@ struct EmbeddingModelSetupView: View {
             step(number: 2, title: "Select for use", enabled: !setup.availableEmbeddingModels.isEmpty) {
                 if setup.availableEmbeddingModels.isEmpty {
                     Text("No embedding models downloaded yet.")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.supraCaption).foregroundStyle(.secondary)
                 } else {
                     Picker("Active embedding model", selection: activeSelection) {
                         ForEach(setup.availableEmbeddingModels) { model in
@@ -779,7 +778,7 @@ struct EmbeddingModelSetupView: View {
             }
 
             if let message = setup.message {
-                Text(message).font(.callout).foregroundStyle(.orange)
+                Text(message).font(.supraCaption).foregroundStyle(.orange)
             }
         }
     }
@@ -800,7 +799,7 @@ struct EmbeddingModelSetupView: View {
                     Text("\(selected.displayName) didn't load. Try another model.")
                 }
             }
-            .font(.callout).foregroundStyle(.secondary)
+            .font(.supraCaption).foregroundStyle(.secondary)
         }
     }
 
@@ -837,12 +836,12 @@ struct EmbeddingModelSetupView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text("\(number)")
-                    .font(.caption.weight(.semibold))
+                    .font(.supraCaption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 18, height: 18)
                     .background(Color.secondary.opacity(0.15), in: Circle())
                 Text(title)
-                    .font(.callout.weight(.semibold))
+                    .font(.supraHeadline)
                     .foregroundStyle(enabled ? .primary : .secondary)
             }
             content()
@@ -854,16 +853,16 @@ struct EmbeddingModelSetupView: View {
     @ViewBuilder private var downloadStatus: some View {
         switch downloader.state {
         case .preparing(let repo):
-            Text("Preparing \(repo)…").font(.callout).foregroundStyle(.secondary)
+            Text("Preparing \(repo)…").font(.supraCaption).foregroundStyle(.secondary)
         case let .downloading(_, completed, total, file):
             VStack(alignment: .leading, spacing: 3) {
                 ProgressView(value: Double(completed), total: Double(max(total, 1)))
-                Text("\(completed)/\(total) files — \(file)").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text("\(completed)/\(total) files — \(file)").font(.supraCaption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
         case let .finished(_, name):
-            Text("Downloaded \(name). Verifying it below…").font(.callout).foregroundStyle(.green)
+            Text("Downloaded \(name). Verifying it below…").font(.supraCaption).foregroundStyle(.green)
         case let .failed(message):
-            Text(message).font(.callout).foregroundStyle(.red)
+            Text(message).font(.supraCaption).foregroundStyle(.red)
         case .idle:
             EmptyView()
         }
