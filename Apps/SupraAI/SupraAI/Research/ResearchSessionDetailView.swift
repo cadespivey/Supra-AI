@@ -100,7 +100,7 @@ struct ResearchSessionDetailView: View {
                 Section {
                     let results = controller.resultsByQuery[query.id] ?? []
                     if results.isEmpty {
-                        Text(emptyText(for: query)).font(.caption).foregroundStyle(.secondary)
+                        Text(emptyText(for: query)).font(.supraCaption).foregroundStyle(.secondary)
                     } else {
                         ForEach(results) { resultRow($0) }
                     }
@@ -110,9 +110,9 @@ struct ResearchSessionDetailView: View {
                     }
                 } header: {
                     HStack {
-                        Text(query.text).font(.callout.weight(.medium))
+                        Text(query.text).font(.supraHeadline)
                         Spacer()
-                        Text(statusLabel(query)).font(.caption2).foregroundStyle(.secondary)
+                        Text(statusLabel(query)).font(.supraCaption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -122,7 +122,7 @@ struct ResearchSessionDetailView: View {
     private func resultRow(_ result: ResearchSessionController.SessionResult) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(result.caseName).font(.body.weight(.medium))
+                Text(result.caseName).font(.supraHeadline)
                 Spacer()
                 ReviewBadge(state: result.reviewState)
             }
@@ -131,10 +131,10 @@ struct ResearchSessionDetailView: View {
                 if let court = result.court { Text(court) }
                 if let date = result.dateFiled { Text(date, format: .dateTime.year().month().day()) }
             }
-            .font(.caption)
+            .font(.supraCaption)
             .foregroundStyle(.secondary)
             if let snippet = result.snippet, !snippet.isEmpty {
-                Text(snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(snippet).font(.supraCaption).foregroundStyle(.secondary).lineLimit(2)
             }
             HStack(spacing: 12) {
                 ResultReviewMenu(controller: controller, resultID: result.id)
@@ -183,7 +183,7 @@ struct ReviewBadge: View {
 
     var body: some View {
         Text(label)
-            .font(.caption2.weight(.medium))
+            .font(.supraCaption.weight(.medium))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(color.opacity(0.18), in: Capsule())
@@ -230,7 +230,7 @@ private struct ResultDetailSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(result.caseNameFull ?? result.caseName).font(.headline)
+                Text(result.caseNameFull ?? result.caseName).font(.supraTitle)
                 Spacer()
                 Button("Done") { dismiss() }
             }
@@ -254,12 +254,12 @@ private struct ResultDetailSheet: View {
                     }
                 }
                 if let passage = enrichedPassage {
-                    Section("Excerpt") { Text(passage).font(.callout).textSelection(.enabled) }
+                    Section("Excerpt") { Text(passage).supraReadingBody().textSelection(.enabled) }
                 } else if let snippet = result.snippet, !snippet.isEmpty {
                     Section("Snippet") {
-                        Text(snippet).font(.callout)
+                        Text(snippet).supraReadingBody()
                         if loadingOpinion {
-                            Text("Loading a longer passage…").font(.caption).foregroundStyle(.secondary)
+                            Text("Loading a longer passage…").font(.supraCaption).foregroundStyle(.secondary)
                         }
                     }
                 }

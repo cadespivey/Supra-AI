@@ -103,7 +103,7 @@ struct FirstRunOnboardingView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     Text("Supra AI runs entirely on your Mac. Pick a model for each job to get started — these are large (each reasoning/drafting model is ~17 GB), so you can start the downloads now and keep working while they finish, or set them up later.")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.supraBody).foregroundStyle(.secondary)
                     textModelStep(
                         number: 1, title: "Reasoning model",
                         blurb: "Powers legal research and analysis (the /legal and /research routes).",
@@ -117,7 +117,7 @@ struct FirstRunOnboardingView: View {
                     embeddingStep(number: 3)
                     if let error = downloadError {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption).foregroundStyle(.orange)
+                            .font(.supraCaption).foregroundStyle(.orange)
                     }
                 }
                 .padding(24)
@@ -134,8 +134,8 @@ struct FirstRunOnboardingView: View {
             Text("§").font(.system(size: 40, weight: .semibold, design: .serif))
                 .foregroundStyle(BrandColors.gold)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Welcome to Supra AI").font(.title2.weight(.semibold))
-                Text("Let's set up your local models.").font(.callout).foregroundStyle(.secondary)
+                Text("Welcome to Supra AI").font(.supraTitle)
+                Text("Let's set up your local models.").font(.supraSubheadline).foregroundStyle(.secondary)
             }
             Spacer()
         }
@@ -167,7 +167,7 @@ struct FirstRunOnboardingView: View {
     ) -> some View {
         let catalog = ModelCatalog.curated.first { $0.repoID == selection.wrappedValue }
         stepContainer(number: number, title: title) {
-            Text(blurb).font(.caption).foregroundStyle(.secondary)
+            Text(blurb).font(.supraCaption).foregroundStyle(.secondary)
             HStack {
                 Picker("Model", selection: selection) {
                     ForEach(ModelCatalog.curated) { model in
@@ -188,7 +188,7 @@ struct FirstRunOnboardingView: View {
     private func embeddingStep(number: Int) -> some View {
         let catalog = EmbeddingModelCatalog.curated.first { $0.repoID == embeddingRepo }
         stepContainer(number: number, title: "Embedding model") {
-            Text("Powers document semantic search across your matters.").font(.caption).foregroundStyle(.secondary)
+            Text("Powers document semantic search across your matters.").font(.supraCaption).foregroundStyle(.secondary)
             HStack {
                 Picker("Embedding model", selection: $embeddingRepo) {
                     ForEach(EmbeddingModelCatalog.curated) { model in
@@ -209,16 +209,16 @@ struct FirstRunOnboardingView: View {
     private func textStatus(for catalog: CatalogModel?) -> some View {
         if isDownloaded(catalog) {
             Label("Downloaded", systemImage: "checkmark.circle.fill")
-                .font(.caption).foregroundStyle(.green)
+                .font(.supraCaption).foregroundStyle(.green)
         } else if isDownloading(catalog) {
             if case let .downloading(_, completed, total, file) = downloader.state {
                 VStack(alignment: .leading, spacing: 2) {
                     ProgressView(value: Double(completed), total: Double(max(total, 1)))
-                    Text("\(completed)/\(total) — \(file)").font(.caption2)
+                    Text("\(completed)/\(total) — \(file)").font(.supraCaption)
                         .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
             } else {
-                Text("Preparing…").font(.caption).foregroundStyle(.secondary)
+                Text("Preparing…").font(.supraCaption).foregroundStyle(.secondary)
             }
         }
     }
@@ -227,15 +227,15 @@ struct FirstRunOnboardingView: View {
         if documentSetup.embeddingVerifyInFlight {
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text("Verifying…").font(.caption).foregroundStyle(.secondary)
+                Text("Verifying…").font(.supraCaption).foregroundStyle(.secondary)
             }
         } else if documentSetup.embeddingTestPassed, let model = documentSetup.selectedEmbeddingModel {
             Label("Ready — \(model.displayName)", systemImage: "checkmark.circle.fill")
-                .font(.caption).foregroundStyle(.green)
+                .font(.supraCaption).foregroundStyle(.green)
         } else if case let .downloading(_, completed, total, _) = embeddingDownloader.state {
             ProgressView(value: Double(completed), total: Double(max(total, 1)))
         } else if case .preparing = embeddingDownloader.state {
-            Text("Preparing…").font(.caption).foregroundStyle(.secondary)
+            Text("Preparing…").font(.supraCaption).foregroundStyle(.secondary)
         }
     }
 
@@ -249,7 +249,7 @@ struct FirstRunOnboardingView: View {
                 .frame(width: 26, height: 26)
                 .background(Color.accentColor, in: Circle())
             VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.headline)
+                Text(title).font(.supraHeadline)
                 content()
             }
             Spacer()

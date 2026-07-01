@@ -107,7 +107,7 @@ struct GlobalChatsView: View {
     private var chatHistorySidebar: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Chats").font(.headline)
+                Text("Chats").font(.supraHeadline)
                 Spacer()
                 Button {
                     controller.startNewChat()
@@ -135,7 +135,7 @@ struct GlobalChatsView: View {
                         .font(.title2)
                         .foregroundStyle(.tertiary)
                     Text(chatSearch.isEmpty ? "No chats yet" : "No matches")
-                        .font(.callout)
+                        .font(.supraCaption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -233,6 +233,7 @@ struct GlobalChatsView: View {
             selected ? Color.accentColor.opacity(0.15) : Color.clear,
             in: RoundedRectangle(cornerRadius: 6)
         )
+        .hoverShade(cornerRadius: 6)
         .contextMenu { chatRowMenu(chat) }
     }
 
@@ -339,12 +340,12 @@ struct GlobalChatsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Divider().padding(.vertical, 4)
             Text("Tag matches")
-                .font(.caption.weight(.semibold))
+                .font(.supraHeadline)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
             ForEach(discoveryGroups) { group in
                 Text(group.id)
-                    .font(.caption2.weight(.semibold))
+                    .font(.supraCaption.weight(.semibold))
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 8)
                     .padding(.top, 4)
@@ -364,11 +365,11 @@ struct GlobalChatsView: View {
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 1) {
                 Text(hit.title)
-                    .font(.caption.weight(.medium))
+                    .font(.supraCaption.weight(.medium))
                     .lineLimit(1)
                 if !hit.snippet.isEmpty {
                     Text(hit.snippet)
-                        .font(.caption2)
+                        .font(.supraCaption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -442,9 +443,9 @@ struct GlobalChatsView: View {
                     .font(.system(size: 44, weight: .semibold, design: .serif))
                     .foregroundStyle(.tertiary)
                 Text("How can I help with your legal work?")
-                    .font(.title3.weight(.semibold))
+                    .font(.supraTitle)
                 Text("Pick a starting point or ask anything.")
-                    .font(.callout)
+                    .font(.supraSubheadline)
                     .foregroundStyle(.secondary)
             }
 
@@ -498,12 +499,8 @@ struct GlobalChatsView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.secondary.opacity(0.15))
-            )
             .contentShape(RoundedRectangle(cornerRadius: 10))
+            .hoverShade(cornerRadius: 10)
         }
         .buttonStyle(.plain)
         .help("Use this prompt: \(suggestion.prompt)")
@@ -514,7 +511,7 @@ struct GlobalChatsView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
             Text(message)
-                .font(.callout)
+                .font(.supraBody)
                 .textSelection(.enabled)
             Spacer()
         }
@@ -629,16 +626,16 @@ struct GlobalChatsView: View {
             EmptyView()
         case let .failed(message):
             Text("Model failed to load: \(message)")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.orange)
                 .textSelection(.enabled)
         case .loading:
             Text("Loading model…")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.secondary)
         case .idle:
             Text("Task models load on demand. Assign them in Models for model answers; verification can run without one.")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.secondary)
         }
     }
@@ -681,7 +678,7 @@ struct GlobalChatsView: View {
                             .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
                         }
-                        .font(.caption)
+                        .font(.supraCaption)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(Color.secondary.opacity(0.12), in: Capsule())
@@ -692,7 +689,7 @@ struct GlobalChatsView: View {
         if let attachmentError {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                Text(attachmentError).font(.caption).foregroundStyle(.secondary)
+                Text(attachmentError).font(.supraCaption).foregroundStyle(.secondary)
                 Spacer()
                 Button { self.attachmentError = nil } label: { Image(systemName: "xmark") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -821,13 +818,13 @@ struct GlobalChatsView: View {
                     Text(controller.activeChatOptions.preset.displayName)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.ghost)
             .help("Generation settings")
             .popover(isPresented: $showGenerationSettings, arrowEdge: .bottom) {
                 generationSettings
             }
         }
-        .font(.caption)
+        .font(.supraCaption)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
     }
@@ -843,7 +840,7 @@ struct GlobalChatsView: View {
                 Text(jurisdictionLabel).lineLimit(1)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.ghost)
         .help("Bounds legal research (CourtListener) to a jurisdiction")
         .popover(isPresented: $showJurisdiction, arrowEdge: .bottom) {
             jurisdictionSettings
@@ -852,7 +849,7 @@ struct GlobalChatsView: View {
 
     private var jurisdictionSettings: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Jurisdiction").font(.headline)
+            Text("Jurisdiction").font(.supraTitle)
             Picker("Jurisdiction", selection: $controller.jurisdictionOverrideID) {
                 Text("Auto-detect from prompt").tag("")
                 Section("Federal") {
@@ -873,7 +870,7 @@ struct GlobalChatsView: View {
                 .disabled(!selectedIsState)
                 .help("For a state, also search the federal circuit and district courts that apply its law.")
             Text("Bounds CourtListener research to the selected jurisdiction. Auto-detect infers it from your prompt.")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
         }
         .padding()
         .frame(width: 320)
@@ -913,17 +910,14 @@ struct GlobalChatsView: View {
         // override that sticks with the chat. New chats start from Settings → Generation
         // Defaults.
         VStack(alignment: .leading, spacing: 14) {
-            Text("Generation").font(.headline)
-            Picker("Preset", selection: Binding(
-                get: { controller.activeChatOptions.preset },
-                set: { controller.setActiveChatPreset($0) }
-            )) {
-                ForEach(GenerationPreset.userSelectableDefaults, id: \.self) { preset in
-                    Text(preset.displayName).tag(preset)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            Text("Generation").font(.supraTitle)
+            GhostSegmentedControl(
+                selection: Binding(
+                    get: { controller.activeChatOptions.preset },
+                    set: { controller.setActiveChatPreset($0) }
+                ),
+                segments: GenerationPreset.userSelectableDefaults.map { ($0, $0.displayName, "") }
+            )
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Temperature")
@@ -948,7 +942,7 @@ struct GlobalChatsView: View {
                 in: 128...8192, step: 128
             )
             Text("Applies to this chat. New chats start from Settings → Generation Defaults.")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
         }
         .padding()
         .frame(width: 340)
@@ -1012,7 +1006,7 @@ private struct MessageRow: View {
             if showsHeader {
                 HStack(spacing: 6) {
                     if message.role == .system {
-                        Text("System").font(.caption.weight(.semibold)).foregroundStyle(.orange)
+                        Text("System").font(.supraCaption.weight(.semibold)).foregroundStyle(.orange)
                     }
                     if message.isStreaming {
                         ProgressView().controlSize(.small)
@@ -1042,6 +1036,10 @@ private struct MessageRow: View {
                 citationLabels: citationLabels,
                 onCitationTap: handleCitationTap
             )
+            // The assistant's answer is a long-form reading surface — body text with
+            // reading leading and a capped line length so long statutory lines stay
+            // comfortable to scan.
+            .supraReadingBody()
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             // Expose the rendered answer as one accessibility leaf. Markdown text
@@ -1206,7 +1204,7 @@ private struct MessageRow: View {
 
     private func badge(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.caption2.weight(.semibold))
+            .font(.supraCaption.weight(.semibold))
             .foregroundStyle(color)
     }
 }

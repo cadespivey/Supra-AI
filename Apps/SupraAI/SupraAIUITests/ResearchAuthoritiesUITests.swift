@@ -41,8 +41,8 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         XCTAssertTrue(matter.waitForExistence(timeout: 20), "Seeded matter did not appear in the sidebar")
         matter.click()
 
-        // --- Research tab ---
-        let researchTab = app.radioButtons["matterTab.Research"]
+        // --- Research tab --- (ghost segments surface as buttons, not radioButtons)
+        let researchTab = app.buttons["matterTab.Research"]
         XCTAssertTrue(researchTab.waitForExistence(timeout: 10), "Research tab not found")
         selectMatterTab("Research")
 
@@ -96,7 +96,7 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         )
 
         // --- Authorities tab ---
-        XCTAssertTrue(app.radioButtons["matterTab.Authorities"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["matterTab.Authorities"].waitForExistence(timeout: 10))
         selectMatterTab("Authorities")
         XCTAssertTrue(
             app.staticTexts["No Authorities Saved"].waitForExistence(timeout: 10),

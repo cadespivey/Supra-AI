@@ -89,7 +89,7 @@ struct MatterAuthoritiesView: View {
     private func importBannerView(_ message: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            Text(message).font(.callout)
+            Text(message).font(.supraCaption)
             Spacer()
             Button("Open Documents") { onShowDocuments() }
                 .buttonStyle(.link)
@@ -136,18 +136,18 @@ struct MatterAuthoritiesView: View {
 
     private func row(_ authority: AuthoritiesController.AuthorityItem) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(authority.caseName).font(.body.weight(.medium))
+            Text(authority.caseName).font(.supraHeadline)
             HStack(spacing: 8) {
                 if let citation = authority.preferredCitation ?? authority.citations.first { Text(citation) }
                 if let court = authority.court { Text(court) }
                 if let date = authority.dateFiled { Text(date, format: .dateTime.year().month().day()) }
             }
-            .font(.caption)
+            .font(.supraCaption)
             .foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 ReviewBadge(state: authority.reviewState)
                 Text(authority.useStatus.displayName)
-                    .font(.caption2)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
             }
         }

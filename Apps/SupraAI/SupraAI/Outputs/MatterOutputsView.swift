@@ -43,9 +43,9 @@ struct MatterOutputsView: View {
                 NavigationLink(value: output.id) {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
-                            Text(output.title).font(.body.weight(.medium))
+                            Text(output.title).font(.supraHeadline)
                             Spacer()
-                            Text(output.status).font(.caption2).foregroundStyle(.secondary)
+                            Text(output.status).font(.supraCaption).foregroundStyle(.secondary)
                         }
                         HStack(spacing: 8) {
                             Text(StructuredOutputLabels.label(output.outputType))
@@ -54,7 +54,7 @@ struct MatterOutputsView: View {
                                 Text("\(output.missingCount) missing").foregroundStyle(.orange)
                             }
                         }
-                        .font(.caption)
+                        .font(.supraCaption)
                         .foregroundStyle(.secondary)
                     }
                 }
@@ -100,9 +100,9 @@ private struct NewOutputSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("New Structured Output").font(.title2.weight(.semibold)).padding([.horizontal, .top])
+            Text("New Structured Output").font(.supraTitle).padding([.horizontal, .top])
             Text("Pick a deliverable type and give the model the issue, facts, or notes to work from. It produces a structured, reviewable draft saved to this matter's Outputs.")
-                .font(.caption)
+                .font(.supraSubheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal)
@@ -131,7 +131,7 @@ private struct NewOutputSheet: View {
                     if groundInDocuments {
                         if documents.isEmpty {
                             Text("No documents in this matter yet — import them in the Documents tab.")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.supraCaption).foregroundStyle(.secondary)
                         } else {
                             ForEach(documents) { doc in
                                 Button {
@@ -149,7 +149,7 @@ private struct NewOutputSheet: View {
                             if !selectedDocIDs.isEmpty,
                                let readiness = controller.scopeReadiness(scope: RetrievalScope(documentIDs: Array(selectedDocIDs))) {
                                 Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) selected documents indexed")
-                                    .font(.caption)
+                                    .font(.supraCaption)
                                     .foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
                             }
                         }
@@ -160,7 +160,7 @@ private struct NewOutputSheet: View {
                 Section {
                     if library.models.isEmpty {
                         Text("No models registered — add one in the Models tab to generate.")
-                            .font(.caption).foregroundStyle(.orange)
+                            .font(.supraCaption).foregroundStyle(.orange)
                     } else {
                         Picker("Model", selection: $selectedModelID) {
                             ForEach(library.models) { model in
@@ -172,10 +172,10 @@ private struct NewOutputSheet: View {
                     Text("Model")
                 }
                 if let routingMessage {
-                    Text(routingMessage).font(.caption).foregroundStyle(.orange)
+                    Text(routingMessage).font(.supraCaption).foregroundStyle(.orange)
                 }
                 if let message = controller.message {
-                    Text(message).font(.caption).foregroundStyle(.orange)
+                    Text(message).font(.supraCaption).foregroundStyle(.orange)
                 }
             }
             .formStyle(.grouped)

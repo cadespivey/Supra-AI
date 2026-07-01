@@ -168,7 +168,7 @@ struct SupraToolbarIconButton: View {
                 .frame(width: 28, height: 28)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.secondary.opacity(isHovered && isEnabled ? 0.16 : 0))
+                        .fill((role == .destructive ? Color.red : Color.primary).opacity(isHovered && isEnabled ? 0.10 : 0))
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }

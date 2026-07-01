@@ -14,7 +14,7 @@ struct MatterBillingView: View {
     var body: some View {
         MatterTabScaffold("Billing Rules", actions: {
             Button("Save") { controller.save() }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.ghostAccent)
                 .disabled(!controller.hasUnsavedChanges)
         }) {
             ScrollView {
@@ -25,7 +25,7 @@ struct MatterBillingView: View {
                     overrideSection
                     guidelinesSection
                     if let message = controller.message {
-                        Text(message).font(.caption).foregroundStyle(.secondary)
+                        Text(message).font(.supraCaption).foregroundStyle(.secondary)
                     }
                 }
                 .padding(16)
@@ -46,7 +46,7 @@ struct MatterBillingView: View {
 
     private var ledesSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("E-billing identifiers (LEDES)").font(.headline)
+            Text("E-billing identifiers (LEDES)").font(.supraHeadline)
             // No leading status glyphs — those read as tappable controls. Each row
             // states what's needed and is replaced by the value once it's filled in.
             idRow("Client ID", controller.clientID, required: true)
@@ -55,7 +55,7 @@ struct MatterBillingView: View {
             Text(controller.ledesIdentifiersComplete
                  ? "These come from the matter's details (Edit) and are required for LEDES export."
                  : "Client ID and Firm matter ID are required for LEDES export — set them in the matter's details (the Edit button at the top of the matter).")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(controller.ledesIdentifiersComplete ? Color.secondary : Color.orange)
         }
     }
@@ -84,7 +84,7 @@ struct MatterBillingView: View {
 
     private var codeSetSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("UTBMS code set").font(.headline)
+            Text("UTBMS code set").font(.supraHeadline)
             Picker("UTBMS code set", selection: codeSetBinding) {
                 ForEach(BillingCodeSet.allCases, id: \.self) { set in
                     Text(set.displayLabel).tag(set)
@@ -94,7 +94,7 @@ struct MatterBillingView: View {
             .pickerStyle(.menu)
             .fixedSize()
             Text("Governs the task codes proposed for this matter. Litigation uses UTBMS L-codes; transactional and advisory matters carry the firm's task codes; “No task codes” bills with a blank task code.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
         }
     }
 
@@ -109,7 +109,7 @@ struct MatterBillingView: View {
 
     private var narrativeTerminalSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Narrative punctuation").font(.headline)
+            Text("Narrative punctuation").font(.supraHeadline)
             Picker("Narrative punctuation", selection: narrativeTerminalBinding) {
                 Text("Use firm default").tag(BillingNarrativeTerminal?.none)
                 ForEach(BillingNarrativeTerminal.allCases) { terminal in
@@ -120,7 +120,7 @@ struct MatterBillingView: View {
             .pickerStyle(.menu)
             .fixedSize()
             Text("How this matter's billing narratives end at export — overrides the firm-wide setting (e.g. a client whose narratives must end with a semicolon).")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
         }
     }
 
@@ -135,13 +135,13 @@ struct MatterBillingView: View {
 
     private var overrideSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Override instructions").font(.headline)
+            Text("Override instructions").font(.supraHeadline)
             MultilineField(
                 placeholder: "e.g. Bill travel at 50%; no charge for filing/service tasks; this client requires task-level detail",
                 text: overrideBinding
             )
             Text("Layered on top of the firm-wide billing instructions for this matter's lines.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
         }
     }
 
@@ -157,7 +157,7 @@ struct MatterBillingView: View {
     private var guidelinesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Client billing guidelines").font(.headline)
+                Text("Client billing guidelines").font(.supraHeadline)
                 Spacer()
                 Button {
                     importing = true
@@ -170,7 +170,7 @@ struct MatterBillingView: View {
                 Text(controller.importReady
                      ? "No billing-guideline documents yet. Upload the client's guidelines so their rules shape this matter's drafts."
                      : "Finish Document Intelligence setup in Settings before uploading guidelines.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.supraCaption).foregroundStyle(.secondary)
             } else {
                 ForEach(controller.guidelineDocuments) { document in
                     guidelineRow(document)
@@ -186,7 +186,7 @@ struct MatterBillingView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(document.displayName).lineLimit(1).truncationMode(.middle)
                 Text(controller.isExtracted(document) ? "Text extracted — feeds this matter's drafts." : "Processing…")
-                    .font(.caption2)
+                    .font(.supraCaption)
                     .foregroundStyle(controller.isExtracted(document) ? .green : .secondary)
             }
             Spacer()
