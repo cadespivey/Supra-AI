@@ -376,69 +376,69 @@ struct ScratchPadView: View {
                 .padding(16)
             } else {
                 if composerIsNonBillable { nonBillableComposerBanner }
-                VStack(alignment: .leading, spacing: 8) {
-                    stagedFilesBar
-                    HStack(alignment: .bottom, spacing: 8) {
-                        Button { showingImporter = true } label: {
-                            Image(systemName: "paperclip")
-                                .font(.body)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("Attach a file to this note (work product, email, filing)")
-                        TextField("Add a note — @matter, #tag…", text: $composerText, axis: .vertical)
-                            .textFieldStyle(.plain)
-                            .lineLimit(1...5)
-                            .focused($composerFocused)
-                            .onChange(of: composerText) { _, _ in selectedSuggestion = 0 }
-                            // When the @/# dropdown is open, the arrow keys drive it and
-                            // Return/Tab accept the highlighted row. Otherwise plain Return
-                            // adds the note (Shift-Return / ⌘-Return fall through to a newline
-                            // or the send shortcut). Replaces .onSubmit so Return can't fire
-                            // twice.
-                            .onKeyPress(.downArrow) { suggestionMenuOpen ? moveSelection(1) : .ignored }
-                            .onKeyPress(.upArrow) { suggestionMenuOpen ? moveSelection(-1) : .ignored }
-                            .onKeyPress(.escape) {
-                                guard suggestionMenuOpen else { return .ignored }
-                                dismissedToken = activeToken
-                                return .handled
+                // The @/# type-ahead list is laid out directly above the input box (rather
+                // than as an overlay pushed outside the box's bounds — such content renders
+                // but can't receive mouse clicks, which is why the popup wasn't selectable).
+                // In-flow, its rows are clickable and the field's key handlers drive it, so a
+                // matter is one click, or one Return/Tab, away.
+                VStack(alignment: .leading, spacing: 6) {
+                    if suggestionMenuOpen {
+                        suggestionDropdown
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        stagedFilesBar
+                        HStack(alignment: .bottom, spacing: 8) {
+                            Button { showingImporter = true } label: {
+                                Image(systemName: "paperclip")
+                                    .font(.body)
                             }
-                            .onKeyPress(.tab) {
-                                guard suggestionMenuOpen, let item = highlightedSuggestion else { return .ignored }
-                                accept(item)
-                                return .handled
-                            }
-                            .onKeyPress(keys: [.return]) { keyPress in
-                                guard keyPress.modifiers.isEmpty else { return .ignored }
-                                if suggestionMenuOpen, let item = highlightedSuggestion {
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Attach a file to this note (work product, email, filing)")
+                            TextField("Add a note — @matter, #tag…", text: $composerText, axis: .vertical)
+                                .textFieldStyle(.plain)
+                                .lineLimit(1...5)
+                                .focused($composerFocused)
+                                .onChange(of: composerText) { _, _ in selectedSuggestion = 0 }
+                                // When the @/# list is open, the arrow keys move the highlight
+                                // and Return/Tab accept it; otherwise plain Return adds the note
+                                // (Shift-Return / ⌘-Return fall through to a newline or the send
+                                // shortcut). Replaces .onSubmit so Return can't fire twice.
+                                .onKeyPress(.downArrow) { suggestionMenuOpen ? moveSelection(1) : .ignored }
+                                .onKeyPress(.upArrow) { suggestionMenuOpen ? moveSelection(-1) : .ignored }
+                                .onKeyPress(.escape) {
+                                    guard suggestionMenuOpen else { return .ignored }
+                                    dismissedToken = activeToken
+                                    return .handled
+                                }
+                                .onKeyPress(.tab) {
+                                    guard suggestionMenuOpen, let item = highlightedSuggestion else { return .ignored }
                                     accept(item)
                                     return .handled
                                 }
-                                submit()
-                                return .handled
+                                .onKeyPress(keys: [.return]) { keyPress in
+                                    guard keyPress.modifiers.isEmpty else { return .ignored }
+                                    if suggestionMenuOpen, let item = highlightedSuggestion {
+                                        accept(item)
+                                        return .handled
+                                    }
+                                    submit()
+                                    return .handled
+                                }
+                            Button(action: submit) {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.title2)
                             }
-                        Button(action: submit) {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.title2)
+                            .buttonStyle(.plain)
+                            .keyboardShortcut(.return, modifiers: .command)
+                            .disabled(composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stagedFiles.isEmpty)
                         }
-                        .buttonStyle(.plain)
-                        .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stagedFiles.isEmpty)
                     }
-                }
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.secondary.opacity(0.25))
-                )
-                // The @/# autocomplete floats just above the input box without shifting
-                // it (the composer sits at the bottom of the pad, so it opens upward).
-                .overlay(alignment: .topLeading) {
-                    if suggestionMenuOpen {
-                        suggestionDropdown
-                            .alignmentGuide(.top) { $0[.bottom] + 6 }
-                            .padding(.leading, 12)
-                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.secondary.opacity(0.25))
+                    )
                 }
                 .padding(16)
             }
@@ -575,6 +575,12 @@ struct ScratchPadView: View {
                     .onTapGesture { accept(item) }
                     .onHover { if $0 { selectedSuggestion = index } }
             }
+            Divider().opacity(0.4).padding(.vertical, 3)
+            Text("↑↓ navigate · ↩ or ⇥ select · click to pick")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 2)
         }
         .padding(4)
         .frame(minWidth: 220, maxWidth: 340, alignment: .leading)
