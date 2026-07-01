@@ -1159,6 +1159,13 @@ public final class GlobalChatController: ObservableObject {
             prompt: prompt,
             history: history
         )
+        // A "who sued X / litigation involving X" question is a factual docket lookup, not a
+        // legal-authority question — answer it from RECAP dockets, with no jurisdiction gate
+        // and no citation verifier (dockets are filings, not authority).
+        if scopedClassification.desiredAuthorityType == .docket {
+            return await caseFinderOutput(for: scopedClassification)
+        }
+
         let sourcePlan = LegalResearchSourcePlanner.plan(
             classification: scopedClassification,
             target: legalSourceTarget(for: scopedClassification)
@@ -1601,6 +1608,76 @@ public final class GlobalChatController: ObservableObject {
             return true
         }
         return (queryTerms, deduped, researchSession?.id)
+    }
+
+    /// Answers a party/litigation-lookup question ("who has sued X") from CourtListener's
+    /// RECAP dockets — a factual case list, not legal authority, so it skips the source
+    /// packet and the citation verifier entirely.
+    private func caseFinderOutput(for classification: LegalQueryClassification) async -> LegalWorkflowResult {
+        let party = classification.partyName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasParty = (party?.isEmpty == false)
+        let request = CourtListenerSearchRequest(
+            query: hasParty ? party! : classification.legalIssue,
+            searchType: .recap,
+            orderBy: "dateFiled desc",
+            courtIDs: classification.courtIDs,
+            dateFiledAfter: classification.dateFiledAfter,
+            dateFiledBefore: classification.dateFiledBefore,
+            partyName: hasParty ? party : nil
+        )
+        let terms = [request.query]
+        do {
+            let response = try await courtListenerClient.searchDockets(request)
+            let dockets = Array(response.results.prefix(Self.maxCaseFinderResults))
+            let output = dockets.isEmpty
+                ? Self.caseFinderEmptyMessage(party: hasParty ? party : nil)
+                : Self.formatCaseList(dockets, party: hasParty ? party : nil, total: response.count)
+            return LegalWorkflowResult(output: output, queryTerms: terms, authorities: [], verification: nil, researchSessionID: nil)
+        } catch {
+            return LegalWorkflowResult(output: Self.caseFinderErrorMessage(error), queryTerms: terms, authorities: [], verification: nil, researchSessionID: nil)
+        }
+    }
+
+    private static let maxCaseFinderResults = 15
+
+    private static func formatCaseList(_ dockets: [CourtListenerSearchResultDTO], party: String?, total: Int) -> String {
+        let target = party.map { "“\($0)”" } ?? "your query"
+        var lines = [
+            "Found \(total) case\(total == 1 ? "" : "s") in CourtListener's RECAP/PACER **docket** records matching \(target). These are court **filings** — a factual record of who filed what, **not legal authority** (a filing is not precedent). Verify anything you rely on against the docket itself.",
+            ""
+        ]
+        for docket in dockets {
+            let name = docket.caseName ?? docket.caseNameFull ?? "Case"
+            var parts = ["**\(name)**"]
+            if let court = docket.court, !court.isEmpty { parts.append(court) }
+            if let filed = docket.dateFiled, !filed.isEmpty { parts.append("filed \(filed)") }
+            if let number = docket.docketNumber, !number.isEmpty { parts.append("No. \(number)") }
+            var line = "- " + parts.joined(separator: " · ")
+            if let url = docket.absoluteURL, let full = Self.courtListenerURL(url) {
+                line += " — [view](\(full))"
+            }
+            lines.append(line)
+        }
+        if total > dockets.count {
+            lines.append("")
+            lines.append("Showing the \(dockets.count) most recent of \(total). This is a docket search, not a conflicts check or a complete litigation history.")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func courtListenerURL(_ path: String) -> String? {
+        if path.lowercased().hasPrefix("http") { return path }
+        guard path.hasPrefix("/") else { return nil }
+        return "https://www.courtlistener.com" + path
+    }
+
+    private static func caseFinderEmptyMessage(party: String?) -> String {
+        let target = party.map { "“\($0)”" } ?? "that query"
+        return "I searched CourtListener's RECAP/PACER **docket** records for \(target) and found no matching federal cases. That doesn't mean none exist — RECAP covers federal filings uploaded to CourtListener, not every court and not state courts, and the party may be recorded under a different name. Try the exact entity name, or search PACER / the relevant state docket directly."
+    }
+
+    private static func caseFinderErrorMessage(_ error: Error) -> String {
+        "I couldn't reach CourtListener's docket search just now: \(error.localizedDescription). Check the CourtListener connection in Settings and try again."
     }
 
     /// The number of planner-generated CourtListener queries the chat one-shot runs,

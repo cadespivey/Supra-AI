@@ -192,6 +192,21 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertEqual(classification.proceduralPosture, "summary judgment")
     }
 
+    func testClassifierRoutesLitigationLookupToDocketWithParty() {
+        let a = LegalQueryClassifier.classify("Has anyone filed lawsuits against Posthog Inc?")
+        XCTAssertEqual(a.desiredAuthorityType, .docket)
+        XCTAssertEqual(a.partyName, "Posthog Inc")
+
+        let b = LegalQueryClassifier.classify("who has sued OpenAI")
+        XCTAssertEqual(b.desiredAuthorityType, .docket)
+        XCTAssertEqual(b.partyName, "OpenAI")
+
+        // A plain legal question is NOT treated as a docket lookup.
+        let c = LegalQueryClassifier.classify("What is the standard for a motion to dismiss?")
+        XCTAssertEqual(c.desiredAuthorityType, .case)
+        XCTAssertNil(c.partyName)
+    }
+
     func testClassifierFindsCourtIDsAndDateFilters() {
         let classification = LegalQueryClassifier.classify(
             "Find binding 9th Cir. and N.D. Cal. authority after 2020 on employee non-compete agreements."
