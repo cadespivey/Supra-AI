@@ -30,6 +30,14 @@ public struct OpenStatesSource: LegalDevelopmentSource {
     static func development(from bill: OpenStatesBill) -> LegalDevelopment? {
         let jurisdiction = bill.jurisdiction?.name ?? "Unknown"
         guard let title = bill.title else { return nil }
+        // Prefer the bill's own abstract over the bare session note when present.
+        let abstract = bill.abstracts?.compactMap(\.abstract).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary: String? = if let abstract, !abstract.isEmpty {
+            abstract.count > 400 ? String(abstract.prefix(400)) + "…" : abstract
+        } else {
+            bill.session.map { "Session \($0)" }
+        }
         return LegalDevelopment(
             sourceID: "openstates",
             sourceName: "OpenStates",
@@ -39,7 +47,7 @@ public struct OpenStatesSource: LegalDevelopmentSource {
             jurisdiction: jurisdiction,
             status: bill.latestActionDescription,
             date: bill.latestActionDate,
-            summary: bill.session.map { "Session \($0)" },
+            summary: summary,
             url: bill.openstatesUrl
         )
     }
@@ -66,8 +74,11 @@ public struct OpenStatesBill: Decodable, Sendable, Equatable {
     public let latestActionDate: String?
     public let latestActionDescription: String?
     public let openstatesUrl: String?
+    /// Present when the search requests `include=abstracts`.
+    public let abstracts: [Abstract]?
 
     public struct Jurisdiction: Decodable, Sendable, Equatable { public let name: String? }
+    public struct Abstract: Decodable, Sendable, Equatable { public let abstract: String? }
 }
 
 public final class OpenStatesClient: OpenStatesClientProtocol, @unchecked Sendable {
@@ -87,7 +98,10 @@ public final class OpenStatesClient: OpenStatesClientProtocol, @unchecked Sendab
         var items = [
             URLQueryItem(name: "q", value: term),
             URLQueryItem(name: "sort", value: "latest_action_desc"),
-            URLQueryItem(name: "per_page", value: String(max(1, min(limit, 20))))
+            URLQueryItem(name: "per_page", value: String(max(1, min(limit, 20)))),
+            // Bill abstracts ride along on the search so summaries are real bill
+            // descriptions rather than bare session notes.
+            URLQueryItem(name: "include", value: "abstracts")
         ]
         if let jurisdiction, !jurisdiction.isEmpty {
             items.append(URLQueryItem(name: "jurisdiction", value: jurisdiction))
