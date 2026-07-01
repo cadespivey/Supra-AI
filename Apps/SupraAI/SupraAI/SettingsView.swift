@@ -14,7 +14,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            AssistantProfileSection(profile: profile)
+            AssistantProfileSection(profile: profile, billing: billing)
 
             ScratchPadBillingSection(billing: billing)
 
@@ -426,27 +426,7 @@ private struct ScratchPadBillingSection: View {
         } header: {
             Text("Time & Coding")
         }
-
-        Section {
-            Text("Populates the timekeeper and firm fields on every fee line. LEDES export is blocked until the rate, timekeeper ID, and firm ID are set.")
-                .font(.supraCaption).foregroundStyle(.secondary)
-            LabeledTextField(label: "Timekeeper ID", text: $billing.timekeeperID, prompt: "e.g. TK-1001")
-            LabeledTextField(label: "Timekeeper name", text: $billing.timekeeperName, prompt: "e.g. H. Specter")
-            LabeledTextField(label: "Classification", text: $billing.timekeeperClassification, prompt: "e.g. PARTNER, ASSOCIATE, PARALEGAL")
-            HStack {
-                Text("Default rate")
-                Spacer()
-                Text("$").foregroundStyle(.secondary)
-                TextField("Rate", value: $billing.timekeeperRate, format: .number.precision(.fractionLength(0...2)))
-                    .multilineTextAlignment(.trailing)
-                    .frame(width: 90)
-                    .textFieldStyle(.roundedBorder)
-                Text("/ hr").foregroundStyle(.secondary)
-            }
-            LabeledTextField(label: "Firm ID (LAW_FIRM_ID)", text: $billing.lawFirmID, prompt: "e.g. 98-7654321")
-        } header: {
-            Text("Timekeeper & Firm")
-        }
+        // The former "Timekeeper & Firm" section now lives inside Profile & Firm Identity.
     }
 }
 
@@ -482,7 +462,7 @@ private struct BarLicensesEditor: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(maxWidth: 210)
+                    .fixedSize()
                     LeadingTextField(text: $license.barNumber, placeholder: "Bar number")
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 7)
@@ -510,18 +490,32 @@ private struct BarLicensesEditor: View {
                     }
                     .buttonStyle(.plain)
                     .help("Remove this admission")
+                    // The last row carries an inline "+" that appends a new admission,
+                    // replacing the separate Add button.
+                    if license.id == profile.barLicenses.last?.id {
+                        Button { appendLicense() } label: {
+                            Image(systemName: "plus.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Add another admission")
+                    }
                 }
             }
-            Button {
-                let license = AssistantProfile.BarLicense(jurisdictionID: "", barNumber: "")
-                profile.barLicenses.append(license)
-                if profile.primaryBarLicenseID.isEmpty { profile.primaryBarLicenseID = license.id }
-                profile.barNumber = ""
-            } label: {
-                Label("Add bar admission", systemImage: "plus")
+            // With no admissions saved yet, offer a single add affordance to start.
+            if profile.barLicenses.isEmpty {
+                Button { appendLicense() } label: {
+                    Label("Add bar admission", systemImage: "plus")
+                }
+                .controlSize(.small)
             }
-            .controlSize(.small)
         }
+    }
+
+    private func appendLicense() {
+        let license = AssistantProfile.BarLicense(jurisdictionID: "", barNumber: "")
+        profile.barLicenses.append(license)
+        if profile.primaryBarLicenseID.isEmpty { profile.primaryBarLicenseID = license.id }
+        profile.barNumber = ""
     }
 }
 
@@ -531,6 +525,7 @@ private struct BarLicensesEditor: View {
 /// audience — no machine-learning jargon.
 private struct AssistantProfileSection: View {
     @ObservedObject var profile: AssistantProfileController
+    @ObservedObject var billing: BillingSettingsController
     @State private var isImportingSample = false
     @State private var showPreview = false
 
@@ -542,56 +537,120 @@ private struct AssistantProfileSection: View {
         return types
     }()
 
-    /// Bridges the `[String]` secondary-email list to a newline-delimited text editor:
-    /// each non-empty line becomes one designation (≤2 kept, per 2.516).
+    /// Bridges the `[String]` secondary-email list to a single-line field: designations
+    /// are separated by semicolons (per 2.516, ≤2 are used).
     private var secondaryEmailsBinding: Binding<String> {
         Binding(
-            get: { profile.profile.secondaryEmails.joined(separator: "\n") },
+            get: { profile.profile.secondaryEmails.joined(separator: "; ") },
             set: { newValue in
                 profile.profile.secondaryEmails = newValue
-                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .split(separator: ";", omittingEmptySubsequences: true)
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { !$0.isEmpty }
             }
         )
     }
 
+    /// Fills the LEDES timekeeper name/classification from the profile above when they
+    /// are blank (still editable). Classification uppercases the role to match LEDES
+    /// code conventions (e.g. "Associate" -> "ASSOCIATE"). Only fills blanks, so a
+    /// value the user typed is never overwritten.
+    private func syncTimekeeperDefaults() {
+        let name = profile.profile.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if billing.timekeeperName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !name.isEmpty {
+            billing.timekeeperName = name
+        }
+        let role = profile.profile.role.trimmingCharacters(in: .whitespacesAndNewlines)
+        if billing.timekeeperClassification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !role.isEmpty {
+            billing.timekeeperClassification = role.uppercased()
+        }
+    }
+
     var body: some View {
         Section {
+            // One VStack owns the whole section so the grouped Form doesn't draw a
+            // separator between every field; spacing here controls the vertical rhythm.
+            VStack(alignment: .leading, spacing: 12) {
             Text("Who you are and your firm details — this shapes how the assistant writes for you and fills the signature block and letterhead of documents you draft. Everything is optional; blank drafting fields are asked for rather than guessed. Notice of Appearance drafting is currently Florida-only and uses Florida service designations (Fla. R. Jud. Admin. 2.516); when several admissions are saved, the Florida admission prints on that filing.")
                 .font(.supraCaption)
                 .foregroundStyle(.secondary)
-            LabeledTextField(label: "Full name", text: $profile.profile.fullName)
-            LabeledTextField(label: "Role or title", text: $profile.profile.role, prompt: "e.g. Partner, Associate, Paralegal")
-            LabeledTextField(label: "Firm or organization", text: $profile.profile.organization)
-            LabeledTextField(label: "Jurisdictions", text: $profile.profile.jurisdictions, prompt: "e.g. California state and the Ninth Circuit")
+            // Identity — paired two-up.
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Full name", text: $profile.profile.fullName)
+                LabeledTextField(label: "Firm or organization", text: $profile.profile.organization)
+            }
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Role or title", text: $profile.profile.role, prompt: "e.g. Partner, Associate, Paralegal")
+                LabeledTextField(label: "Jurisdictions", text: $profile.profile.jurisdictions, prompt: "e.g. California state and the Ninth Circuit")
+            }
             LabeledTextField(label: "Practice areas", text: $profile.profile.practiceAreas, prompt: "e.g. Commercial litigation, employment")
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Bar admissions").font(.supraCaption).foregroundStyle(.secondary)
-                BarLicensesEditor(profile: $profile.profile)
+            // Office address.
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Office street", text: $profile.profile.officeStreet, prompt: "e.g. 200 West Forsyth Street")
+                LabeledTextField(label: "Suite / floor (optional)", text: $profile.profile.officeSuite, prompt: "e.g. Suite 1400").frame(width: 180)
             }
-
-            LabeledTextField(label: "Office street", text: $profile.profile.officeStreet, prompt: "e.g. 200 West Forsyth Street")
-            LabeledTextField(label: "Suite / floor (optional)", text: $profile.profile.officeSuite, prompt: "e.g. Suite 1400")
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 12) {
                 LabeledTextField(label: "City", text: $profile.profile.officeCity)
                 LabeledTextField(label: "State", text: $profile.profile.officeState).frame(width: 72)
                 LabeledTextField(label: "ZIP", text: $profile.profile.officeZip).frame(width: 96)
             }
-            LabeledTextField(label: "Telephone", text: $profile.profile.officePhone, prompt: "e.g. (904) 555-0142")
-            LabeledTextField(label: "Facsimile (optional)", text: $profile.profile.officeFax)
-            LabeledTextField(label: "Primary service e-mail", text: $profile.profile.primaryEmail, prompt: "e.g. hspecter@psl.com")
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Secondary service e-mails (one per line)").font(.supraCaption).foregroundStyle(.secondary)
-                MultilineField(
-                    placeholder: "e.g. litdocket@psl.com",
-                    text: secondaryEmailsBinding
-                )
+            // Contact — the office line split into main / direct / cell, plus fax.
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Main", text: $profile.profile.officePhone, prompt: "e.g. (904) 555-0142")
+                LabeledTextField(label: "Direct", text: $profile.profile.officePhoneDirect, prompt: "e.g. (904) 555-0143")
+                LabeledTextField(label: "Cell", text: $profile.profile.officeCell, prompt: "e.g. (904) 555-0199")
+                LabeledTextField(label: "Facsimile", text: $profile.profile.officeFax, prompt: "e.g. (904) 555-0100")
+            }
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Primary service e-mail", text: $profile.profile.primaryEmail, prompt: "e.g. hspecter@psl.com")
+                LabeledTextField(label: "Secondary service e-mails (separate with ;)", text: secondaryEmailsBinding, prompt: "e.g. litdocket@psl.com; paralegal@psl.com")
+            }
+
+            // Bar admissions and the LEDES billing identity fill an even two-column grid
+            // so a short column never leaves a tall empty gap beside a taller one.
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Bar admissions").font(.supraCaption).foregroundStyle(.secondary)
+                    BarLicensesEditor(profile: $profile.profile)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                LabeledTextField(label: "Timekeeper name", text: $billing.timekeeperName, prompt: "e.g. H. Specter")
+            }
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Timekeeper ID", text: $billing.timekeeperID, prompt: "e.g. TK-1001")
+                LabeledTextField(label: "Firm ID (LAW_FIRM_ID)", text: $billing.lawFirmID, prompt: "e.g. 98-7654321")
+            }
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Classification", text: $billing.timekeeperClassification, prompt: "e.g. PARTNER, ASSOCIATE")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Default rate").font(.supraCaption).foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        Text("$").foregroundStyle(.secondary)
+                        TextField("Rate", value: $billing.timekeeperRate, format: .number.precision(.fractionLength(0...2)))
+                            .labelsHidden()
+                            .textFieldStyle(.plain)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 56)
+                        Text("/ hr").foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(nsColor: .separatorColor)))
+                }
+                .fixedSize()
+            }
+            Text("Timekeeper name & classification (LEDES) default from your details above (still editable); export also needs the rate, Timekeeper ID, and Firm ID.")
+                .font(.supraCaption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
             Text("Profile & Firm Identity")
         }
+        .onAppear { syncTimekeeperDefaults() }
+        .onChange(of: profile.profile.fullName) { _, _ in syncTimekeeperDefaults() }
+        .onChange(of: profile.profile.role) { _, _ in syncTimekeeperDefaults() }
 
         Section {
             Text("Shapes how the assistant writes for you — how formal, how long, and any habits you prefer.")
