@@ -95,6 +95,36 @@ final class KeyedSourceTests: XCTestCase {
         XCTAssertTrue(result.provisions.isEmpty)
         XCTAssertTrue(result.note?.contains("Settings") ?? false)
     }
+
+    func testGovInfoGranuleHitFetchesSectionTextAndBecomesCitable() async throws {
+        let json = """
+        {"results":[{"title":"11 U.S.C. Sec. 701 - Interim trustee","packageId":"USCODE-2023-title11","granuleId":"USCODE-2023-title11-chap7-subchapI-sec701","dateIssued":"2024-01-03","collectionCode":"USCODE"}]}
+        """
+        let response = try JSONDecoder().decode(GovInfoSearchResponse.self, from: Data(json.utf8))
+        let source = GovInfoStatutorySource(client: StubGovInfoClient(
+            result: .success(response),
+            granuleText: "<html><body><p>§ 701. Interim trustee. (a) Promptly after the order for relief…</p></body></html>"
+        ))
+        let result = await source.lookup(StatutoryQuery(terms: "interim trustee", jurisdiction: "Federal"))
+        let provision = try XCTUnwrap(result.provisions.first)
+        XCTAssertTrue(provision.isCitableAuthority, "fetched official section text is citable primary law")
+        XCTAssertEqual(provision.citation, "11 U.S.C. § 701")
+        XCTAssertTrue(provision.text.contains("Interim trustee"))
+        XCTAssertFalse(provision.text.contains("<p>"), "HTML is stripped")
+        XCTAssertNil(result.note, "no locator-only caveat when real section text was retrieved")
+    }
+
+    func testGovInfoUSCCitationDerivation() {
+        XCTAssertEqual(
+            GovInfoStatutorySource.uscCitation(packageId: "USCODE-2023-title11", granuleId: "USCODE-2023-title11-chap7-subchapI-sec701"),
+            "11 U.S.C. § 701"
+        )
+        XCTAssertEqual(
+            GovInfoStatutorySource.uscCitation(packageId: "USCODE-2011-title15", granuleId: "USCODE-2011-title15-chap2B-sec78j-1"),
+            "15 U.S.C. § 78j-1"
+        )
+        XCTAssertNil(GovInfoStatutorySource.uscCitation(packageId: "USCODE-2023-title11", granuleId: "USCODE-2023-title11-chap7"))
+    }
 }
 
 // MARK: - Stubs
@@ -113,7 +143,12 @@ private struct StubLegiScanClient: LegiScanClientProtocol {
 }
 private struct StubGovInfoClient: GovInfoClientProtocol {
     let result: Result<GovInfoSearchResponse, GovInfoError>
+    var granuleText: String?
     func searchUSCode(term: String, limit: Int) async throws -> GovInfoSearchResponse { try result.get() }
+    func fetchGranuleText(packageId: String, granuleId: String) async throws -> String {
+        guard let granuleText else { throw GovInfoError.invalidResponse }
+        return granuleText
+    }
 }
 
 private struct NoKeyStore: APIKeyStoreProtocol, @unchecked Sendable {
