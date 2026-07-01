@@ -23,6 +23,33 @@ final class KeyedSourceTests: XCTestCase {
         XCTAssertEqual(development.date, "2026-06-01")
     }
 
+    func testRegulationsGovDocketIDDetection() {
+        XCTAssertEqual(RegulationsGovSource.docketID(in: "status of EPA-HQ-OW-2021-0602 rulemaking"), "EPA-HQ-OW-2021-0602")
+        XCTAssertEqual(RegulationsGovSource.docketID(in: "what's new in fda-2023-n-1234?"), "FDA-2023-N-1234")
+        XCTAssertNil(RegulationsGovSource.docketID(in: "hazardous waste manifests"))
+    }
+
+    func testRegulationsGovDocketQueryReturnsDocketTimeline() async throws {
+        let documentsJSON = """
+        {"data":[{"id":"EPA-HQ-OW-2021-0602-0501","type":"documents","attributes":{"title":"Final Rule","documentType":"Rule","postedDate":"2026-05-01","docketId":"EPA-HQ-OW-2021-0602","frDocNum":"2026-09999","agencyId":"EPA"}}]}
+        """
+        let documents = try JSONDecoder().decode(RegulationsGovResponse.self, from: Data(documentsJSON.utf8))
+        let docket = RegulationsGovDocket(
+            id: "EPA-HQ-OW-2021-0602",
+            attributes: .init(title: "Clean Water Act Rulemaking", docketType: "Rulemaking", agencyId: "EPA", modifyDate: "2026-05-02")
+        )
+        let source = RegulationsGovSource(client: StubRegulationsGovClient(
+            result: .failure(.invalidResponse),   // keyword search must NOT be hit
+            docket: docket,
+            docketDocuments: documents
+        ))
+        let result = await source.lookup(LegalDevelopmentQuery(terms: "status of EPA-HQ-OW-2021-0602", jurisdiction: "Federal"))
+        XCTAssertEqual(result.developments.count, 2)
+        XCTAssertEqual(result.developments.first?.identifier, "Docket EPA-HQ-OW-2021-0602")
+        XCTAssertTrue(result.developments.first?.url?.contains("/docket/") ?? false)
+        XCTAssertTrue(result.developments[1].identifier.contains("2026-09999"))
+    }
+
     func testRegulationsGovSkipsStateQueries() async {
         let source = RegulationsGovSource(client: StubRegulationsGovClient(result: .failure(.invalidResponse)))
         let result = await source.lookup(LegalDevelopmentQuery(terms: "x", jurisdiction: "Florida"))
@@ -131,7 +158,17 @@ final class KeyedSourceTests: XCTestCase {
 
 private struct StubRegulationsGovClient: RegulationsGovClientProtocol {
     let result: Result<RegulationsGovResponse, RegulationsGovError>
+    var docket: RegulationsGovDocket?
+    var docketDocuments: RegulationsGovResponse?
     func searchDocuments(term: String, limit: Int) async throws -> RegulationsGovResponse { try result.get() }
+    func fetchDocket(id: String) async throws -> RegulationsGovDocket {
+        guard let docket else { throw RegulationsGovError.invalidResponse }
+        return docket
+    }
+    func documentsForDocket(id: String, limit: Int) async throws -> RegulationsGovResponse {
+        guard let docketDocuments else { throw RegulationsGovError.invalidResponse }
+        return docketDocuments
+    }
 }
 private struct StubOpenStatesClient: OpenStatesClientProtocol {
     let result: Result<OpenStatesResponse, OpenStatesError>
