@@ -5,11 +5,17 @@ struct SidebarView: View {
     @Binding var selection: SidebarSelection?
     @ObservedObject var matters: MattersController
     var onNewMatter: () -> Void
+    /// The row under the cursor, so its background can match the selection pill.
+    @State private var hoveredRow: SidebarSelection?
 
     var body: some View {
         List(selection: $selection) {
             ForEach(AppRoute.allCases) { route in
                 Label(route.title, systemImage: route.systemImage)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onHover { setRowHover($0, .route(route)) }
+                    .listRowBackground(rowHoverBackground(.route(route)))
                     .tag(SidebarSelection.route(route))
             }
 
@@ -18,6 +24,10 @@ struct SidebarView: View {
             Section {
                 ForEach(matters.matters) { matter in
                     Label(matter.name, systemImage: "folder")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onHover { setRowHover($0, .matter(matter.id)) }
+                        .listRowBackground(rowHoverBackground(.matter(matter.id)))
                         .tag(SidebarSelection.matter(matter.id))
                         .accessibilityElement(children: .combine)
                         .accessibilityLabel(matter.name)
@@ -59,5 +69,20 @@ struct SidebarView: View {
         .onAppear {
             Task { @MainActor in matters.loadMatters() }
         }
+    }
+
+    private func setRowHover(_ inside: Bool, _ row: SidebarSelection) {
+        if inside {
+            hoveredRow = row
+        } else if hoveredRow == row {
+            hoveredRow = nil
+        }
+    }
+
+    /// A row's hover wash, driven through `listRowBackground` so the system gives it the
+    /// exact inset + rounding of the native selection pill — hover and selection then
+    /// match by construction. The selected row is left to the native highlight.
+    private func rowHoverBackground(_ row: SidebarSelection) -> Color {
+        (hoveredRow == row && selection != row) ? Color.primary.opacity(0.09) : .clear
     }
 }
