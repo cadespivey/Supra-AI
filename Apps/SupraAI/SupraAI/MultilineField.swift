@@ -150,7 +150,7 @@ struct LabeledTextField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(.subheadline).foregroundStyle(.secondary)
             LeadingTextField(text: $text, placeholder: prompt ?? "")
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 7)
