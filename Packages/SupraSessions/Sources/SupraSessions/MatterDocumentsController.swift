@@ -292,14 +292,27 @@ public final class MatterDocumentsController: ObservableObject {
     }
 
     public func permanentlyDelete(documentID: String) {
+        var orphanedBlobCount = 0
         if let result = try? store.documentLibrary.permanentlyDeleteDocument(id: documentID) {
             for path in result.removedBlobPaths {
-                try? FileManager.default.removeItem(at: storage.url(forManagedRelativePath: path))
+                let fileURL = storage.url(forManagedRelativePath: path)
+                do {
+                    try FileManager.default.removeItem(at: fileURL)
+                } catch {
+                    // The DB rows (document + blob) are already gone inside the repo's
+                    // transaction. If the file is still on disk we've orphaned a blob —
+                    // count it for the audit trail rather than losing the signal. Never
+                    // fail the delete over a stuck file.
+                    if FileManager.default.fileExists(atPath: fileURL.path) { orphanedBlobCount += 1 }
+                }
             }
         }
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "document_permanently_deleted", actor: "user",
-            summary: "Permanently deleted a document", relatedTable: "matter_documents", relatedID: documentID
+            summary: orphanedBlobCount == 0
+                ? "Permanently deleted a document"
+                : "Permanently deleted a document; \(orphanedBlobCount) blob file(s) could not be removed and were left for cleanup",
+            relatedTable: "matter_documents", relatedID: documentID
         )
         reload()
     }
@@ -309,7 +322,16 @@ public final class MatterDocumentsController: ObservableObject {
     public func runSearch() {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { searchHits = []; return }
-        let chunks = (try? store.documentIndex.searchChunks(matterID: matterID, query: trimmed, limit: 40)) ?? []
+        let chunks: [DocumentChunkRecord]
+        do {
+            chunks = try store.documentIndex.searchChunks(matterID: matterID, query: trimmed, limit: 40)
+        } catch {
+            // Distinguish a failed search from a genuinely empty one, so the user isn't
+            // shown "no results" when the index actually errored.
+            searchHits = []
+            message = "Search failed: \(error.localizedDescription)"
+            return
+        }
         let nameByID = Dictionary(documents.map { ($0.id, $0.displayName) }, uniquingKeysWith: { a, _ in a })
         var seenText = Set<String>()
         searchHits = chunks.compactMap { chunk in
