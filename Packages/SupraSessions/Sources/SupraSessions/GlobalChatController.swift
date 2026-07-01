@@ -1235,10 +1235,12 @@ public final class GlobalChatController: ObservableObject {
         lastLegalPacketsByChatID[chatID] = packet
         guard !authorities.isEmpty else {
             let message = """
-            CourtListener did not return authorities for this query. I cannot provide a source-grounded legal answer from model memory alone.
+            I searched CourtListener's published **opinions** (case law) and didn't find authority matching this query, so I can't give a source-grounded legal answer from model memory alone. This means no matching *opinion* was found — not that no law or litigation on the topic exists.
 
             Search terms used:
             \(retrieval.queryTerms.map { "- \($0)" }.joined(separator: "\n"))
+
+            You can try: rephrasing or narrowing the issue; naming the jurisdiction or court; or — if you're looking for *filed cases* involving a person or company — asking "who has sued [name]" to search the dockets instead.
             """
             return LegalWorkflowResult(
                 output: message,
@@ -1502,9 +1504,22 @@ public final class GlobalChatController: ObservableObject {
         // Prefer planner-generated queries (same planner the Research tab uses); fall back
         // to the single deterministic query when the model is unavailable or returns none.
         let plannedQueries = await planCourtListenerQueries(for: classification, route: route, modelID: modelID)
-        let primaryRequests: [CourtListenerSearchRequest] = plannedQueries.isEmpty
-            ? [courtListenerRequest(for: classification, adverse: false)]
-            : plannedQueries.prefix(Self.maxChatPlannerQueries).map { plannerRequest(query: $0, classification: classification) }
+        var primaryRequests: [CourtListenerSearchRequest] = []
+        // Citation-first: when the prompt cites a specific authority, look it up directly
+        // (via CourtListener's citation filter) so the cited case is retrieved even if the
+        // planner's keyword queries wouldn't surface it.
+        if let citation = classification.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines), !citation.isEmpty {
+            primaryRequests.append(courtListenerRequest(for: classification, adverse: false))
+        }
+        if plannedQueries.isEmpty {
+            if primaryRequests.isEmpty {
+                primaryRequests.append(courtListenerRequest(for: classification, adverse: false))
+            }
+        } else {
+            primaryRequests.append(contentsOf: plannedQueries.prefix(Self.maxChatPlannerQueries).map {
+                plannerRequest(query: $0, classification: classification)
+            })
+        }
         var requests = primaryRequests.map { (request: $0, adverse: false) }
         if classification.adverseAuthorityRequested {
             requests.append((courtListenerRequest(for: classification, adverse: true), true))
@@ -1731,16 +1746,16 @@ public final class GlobalChatController: ObservableObject {
         }
     }
 
-    /// A CourtListener request for a planner-generated query, carrying the
-    /// classification's court/date/citation filters.
+    /// A CourtListener request for a planner-generated query, carrying the classification's
+    /// court/date filters. No citation filter: planner queries find RELATED authority; the
+    /// dedicated citation-first request (above) retrieves the specifically-cited case.
     private func plannerRequest(query: String, classification: LegalQueryClassification) -> CourtListenerSearchRequest {
         CourtListenerSearchRequest(
             query: query,
             orderBy: "score desc",
             courtIDs: classification.courtIDs,
             dateFiledAfter: classification.dateFiledAfter,
-            dateFiledBefore: classification.dateFiledBefore,
-            citation: Self.courtListenerCitationParameter(classification.citationLookup)
+            dateFiledBefore: classification.dateFiledBefore
         )
     }
 
