@@ -644,6 +644,26 @@ public final class GlobalChatController: ObservableObject {
         return "\n" + lines.joined(separator: "\n")
     }
 
+    /// A warning footer for a grounded answer whose citations don't clear the coverage
+    /// bar — no inline `[S#]`, a label that doesn't resolve, or a still-indexing scope —
+    /// or nil when coverage is clean. Like the entity banner, the answer is always shown;
+    /// this only marks what the reader must verify.
+    nonisolated static func citationCoverageBanner(_ check: CitationCheckResult) -> String? {
+        guard check.requiresReview else { return nil }
+        let warnings = check.warnings
+        guard !warnings.isEmpty else { return nil }
+        var lines = [
+            "",
+            "---",
+            "",
+            "⚠️ **Citation check — verify before relying on this answer.**"
+        ]
+        for warning in warnings {
+            lines.append("- \(warning)")
+        }
+        return "\n" + lines.joined(separator: "\n")
+    }
+
     /// Requests cancellation of the active generation. The runtime emits a
     /// `generationCancelled` event which the stream loop persists.
     public func cancel() {
@@ -716,6 +736,7 @@ public final class GlobalChatController: ObservableObject {
             let groundingTrailer = grounded?.trailer
             let groundingSourceTexts = grounded?.sourceTexts ?? []
             let groundingSources = grounded?.sources ?? []
+            let groundingScopeFullyIndexed = grounded?.scopeFullyIndexed ?? true
 
             guard let modelID else {
                 errorMessage = "Load or register a local MLX model in the Models tab."
@@ -814,6 +835,22 @@ public final class GlobalChatController: ObservableObject {
                             sourceText: groundingSourceTexts.joined(separator: "\n\n")
                         )
                         if let banner = Self.entityGroundingBanner(entityIssues) {
+                            try? store.chats.appendToken(to: variant.id, token: banner)
+                            streamedContent += banner
+                        }
+                    }
+                    // Citation-coverage check — the same bar the Documents-tab Q&A
+                    // enforces: a grounded answer with no inline [S#] citation, an
+                    // unresolved label, or one produced from a still-indexing scope is
+                    // flagged for review out-of-band, so the warning can't be dropped by
+                    // the model the way a soft in-prompt note can.
+                    if !groundingSources.isEmpty {
+                        let coverage = CitationCoverage.check(
+                            answer: answerText,
+                            availableLabels: groundingSources.map(\.label),
+                            scopeFullyIndexed: groundingScopeFullyIndexed
+                        )
+                        if let banner = Self.citationCoverageBanner(coverage) {
                             try? store.chats.appendToken(to: variant.id, token: banner)
                             streamedContent += banner
                         }
