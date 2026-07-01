@@ -1058,8 +1058,9 @@ public final class GlobalChatController: ObservableObject {
             let preface = packet.authorities.isEmpty
                 ? "No source packet is available for this chat. Run `/research` in a matter chat first, or paste source-supported text with citations for a limited citation check.\n\n"
                 : "Verified against the latest source packet\(packet.researchSessionID.map { " (research session \($0))" } ?? "").\n\n"
+            let resolution = await citationResolutionSection(for: answerToVerify)
             return LegalWorkflowResult(
-                output: preface + LegalCitationVerifier.markdownReport(report),
+                output: preface + LegalCitationVerifier.markdownReport(report) + resolution,
                 queryTerms: packet.queryTerms,
                 authorities: packet.authorities,
                 verification: report,
@@ -1654,6 +1655,46 @@ public final class GlobalChatController: ObservableObject {
     }
 
     private static let maxCaseFinderResults = 15
+
+    /// ADDITIVE live-resolution check for `/verify`: extracts citation strings locally
+    /// and asks CourtListener whether each resolves to a real, published opinion.
+    /// PRIVACY: only the extracted cite strings leave the device — never the answer or
+    /// prompt text. Failures degrade to a short unavailable note; the offline packet
+    /// verifier above remains the gate.
+    private func citationResolutionSection(for answer: String) async -> String {
+        let citations = Array(Set(LegalCitationVerifier.extractCitationLikeStrings(from: answer))).sorted()
+        guard !citations.isEmpty else { return "" }
+        let capped = Array(citations.prefix(Self.maxCitationResolutionLookups))
+        do {
+            let results = try await courtListenerClient.resolveCitations(capped)
+            guard !results.isEmpty else { return "" }
+            var lines = [
+                "",
+                "---",
+                "",
+                "**Citation resolution (CourtListener).** Whether each cite resolves to a real, published opinion. A resolved cite is not necessarily good law; an unresolved one may be fabricated, mistyped, or outside CourtListener's corpus:"
+            ]
+            for result in results {
+                let cite = result.citation.isEmpty ? "(unparsed citation)" : result.citation
+                if result.resolved {
+                    let cluster = result.clusters.first
+                    let name = cluster?.caseName ?? "matching opinion"
+                    if let path = cluster?.absoluteURL, let url = Self.courtListenerURL(path) {
+                        lines.append("- ✅ \(cite) → [\(name)](\(url))")
+                    } else {
+                        lines.append("- ✅ \(cite) → \(name)")
+                    }
+                } else {
+                    lines.append("- ⚠️ \(cite) — did not resolve to a published opinion")
+                }
+            }
+            return "\n" + lines.joined(separator: "\n")
+        } catch {
+            return "\n\n_Live citation resolution unavailable (\(error.localizedDescription))._"
+        }
+    }
+
+    private static let maxCitationResolutionLookups = 20
 
     private static func formatCaseList(_ dockets: [CourtListenerSearchResultDTO], party: String?, total: Int) -> String {
         let target = party.map { "“\($0)”" } ?? "your query"
