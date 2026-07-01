@@ -14,6 +14,9 @@ public struct LegalQueryClassification: Codable, Hashable, Sendable {
     public var adverseAuthorityRequested: Bool
     public var citationLookup: String?
     public var jurisdictionContext: String?
+    /// The party/entity to search for when this is a litigation-lookup ("who sued X")
+    /// question — used for a RECAP docket party search rather than opinion full-text.
+    public var partyName: String?
 
     public init(
         jurisdiction: String? = nil,
@@ -28,7 +31,8 @@ public struct LegalQueryClassification: Codable, Hashable, Sendable {
         bindingAuthorityRequired: Bool = false,
         adverseAuthorityRequested: Bool = false,
         citationLookup: String? = nil,
-        jurisdictionContext: String? = nil
+        jurisdictionContext: String? = nil,
+        partyName: String? = nil
     ) {
         self.jurisdiction = jurisdiction
         self.courtLevel = courtLevel
@@ -43,6 +47,7 @@ public struct LegalQueryClassification: Codable, Hashable, Sendable {
         self.adverseAuthorityRequested = adverseAuthorityRequested
         self.citationLookup = citationLookup
         self.jurisdictionContext = jurisdictionContext
+        self.partyName = partyName
     }
 
     public var needsJurisdictionForAuthority: Bool {
@@ -57,8 +62,19 @@ public enum LegalQueryClassifier {
         let jurisdictionMatch = firstJurisdiction(in: prompt)
         let courtIDs = firstCourtIDs(in: prompt)
         let dateRange = dateRange(in: prompt)
+        // Litigation-lookup ("who sued X / lawsuits against X / has X been sued") is a
+        // factual docket question, not a legal-authority question — route it to RECAP.
+        let docketIntent = lower.contains("docket")
+            || lower.contains("who sued") || lower.contains("who has sued") || lower.contains("who is suing")
+            || lower.contains("sued by") || lower.contains("been sued")
+            || lower.contains("lawsuit against") || lower.contains("lawsuits against")
+            || lower.contains("suit against") || lower.contains("suits against")
+            || lower.contains("litigation involving") || lower.contains("litigation against")
+            || lower.contains("cases against") || lower.contains("case against")
+            || lower.contains("complaints against") || lower.contains("filed suit against")
+            || lower.contains("filed a lawsuit") || lower.contains("filed lawsuits")
         let desiredType: LegalAuthorityType
-        if lower.contains("docket") {
+        if docketIntent {
             desiredType = .docket
         } else if lower.contains("statute") || lower.contains("code section") || lower.contains("§")
             || lower.contains("u.s.c") || lower.contains("c.f.r") || lower.contains("limitations period")
@@ -80,8 +96,34 @@ public enum LegalQueryClassifier {
             dateFiledBefore: dateRange.before,
             bindingAuthorityRequired: lower.contains("binding") || lower.contains("controlling"),
             adverseAuthorityRequested: lower.contains("adverse") || lower.contains("limiting authority") || lower.contains("red flag"),
-            citationLookup: citation
+            citationLookup: citation,
+            partyName: docketIntent ? partyEntity(in: prompt) : nil
         )
+    }
+
+    /// Best-effort extraction of the party/entity in a "who sued X / lawsuits against X"
+    /// question, for a RECAP party search. Nil when no clear entity is found (the
+    /// case-finder then falls back to a full-text docket search).
+    public static func partyEntity(in prompt: String) -> String? {
+        let patterns = [
+            #"(?i)\b(?:lawsuits?|suits?|litigation|complaints?|claims?|cases?)\s+(?:filed\s+)?against\s+(.+?)(?:\?|\.|,|;|$|\bin\b|\bfor\b|\bover\b|\brelated\b)"#,
+            #"(?i)\b(?:litigation|cases?)\s+involving\s+(.+?)(?:\?|\.|,|;|$|\bin\b|\bfor\b)"#,
+            #"(?i)\bhas\s+(.+?)\s+been\s+sued\b"#,
+            #"(?i)\bwho\s+(?:has\s+|is\s+)?su(?:ed|ing)\s+(.+?)(?:\?|\.|,|;|$)"#,
+            #"(?i)\bsued\s+(.+?)(?:\?|\.|,|;|$|\bin\b|\bfor\b|\bover\b)"#
+        ]
+        for pattern in patterns {
+            guard let match = firstMatch(pattern, in: prompt), match.count >= 2 else { continue }
+            let entity = match[1].trimmingCharacters(
+                in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".,;:?\"'"))
+            )
+            let lowerEntity = entity.lowercased()
+            if entity.count >= 2, entity.count <= 80,
+               !lowerEntity.hasPrefix("anyone"), !lowerEntity.hasPrefix("someone"), lowerEntity != "them" {
+                return entity
+            }
+        }
+        return nil
     }
 
     public static func firstCitation(in text: String) -> String? {
