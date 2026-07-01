@@ -21,6 +21,18 @@ public extension CourtListenerClientProtocol {
         try await searchOpinions(request, relatedResearchSessionID: nil)
     }
 
+    /// Searches RECAP dockets (PACER case filings) instead of published opinions — for
+    /// "who has sued X / litigation involving X" questions. Forces the RECAP corpus and
+    /// reuses the same request/decode path; each result populates the docket fields
+    /// (caseName, court, dateFiled, docketNumber, docketID, suitNature). These are
+    /// factual filings, NOT citable legal authority.
+    func searchDockets(
+        _ request: CourtListenerSearchRequest,
+        relatedResearchSessionID: String? = nil
+    ) async throws -> CourtListenerSearchResponse {
+        try await searchOpinions(request.withSearchType(.recap), relatedResearchSessionID: relatedResearchSessionID)
+    }
+
     /// Default so stubs/conformers that don't fetch opinion detail still compile.
     func fetchOpinion(id: Int) async throws -> CourtListenerOpinionDetailDTO {
         throw CourtListenerError.invalidResponse

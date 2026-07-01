@@ -51,7 +51,7 @@ public enum CourtListenerEndpoint {
         }
         var queryItems = [
             URLQueryItem(name: "q", value: request.query),
-            URLQueryItem(name: "type", value: "o")
+            URLQueryItem(name: "type", value: request.searchType.rawValue)
         ]
         if let orderBy = request.orderBy {
             queryItems.append(URLQueryItem(name: "order_by", value: orderBy))
@@ -73,6 +73,14 @@ public enum CourtListenerEndpoint {
         if let citation = request.citation?.trimmingCharacters(in: .whitespacesAndNewlines),
            !citation.isEmpty {
             queryItems.append(URLQueryItem(name: "citation", value: citation))
+        }
+        if let partyName = request.partyName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !partyName.isEmpty {
+            queryItems.append(URLQueryItem(name: "party_name", value: partyName))
+        }
+        if let caseName = request.caseName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !caseName.isEmpty {
+            queryItems.append(URLQueryItem(name: "case_name", value: caseName))
         }
         components.queryItems = queryItems
         guard let url = components.url else {
