@@ -42,7 +42,9 @@ need an explicit, documented justification.
 - Model **generation**, document **processing/OCR/embeddings**, **search**, and **source
   selection** run locally. No prompt, document, or query leaves the device for generation.
 - The **only** network egress is explicit and user-initiated:
-  - **CourtListener** legal research (allow-listed; see below).
+  - **Legal research / legal-data lookups** against a fixed allow-list — CourtListener,
+    plus free government sources (eCFR, Federal Register, Open Legal Codes) and key'd APIs
+    (GovInfo, OpenStates, LegiScan, Regulations.gov); see the allow-list below.
   - **Opinion PDF downloads** from CourtListener's public storage CDN
     (`storage.courtlistener.com`), only when you click Download PDF on an authority.
     The API token is **never** sent to the CDN.
@@ -52,10 +54,17 @@ need an explicit, documented justification.
 
 ### Default-deny networking
 
-- Every request passes through a network policy that **denies by default**. Only
-  `courtlistener.com` / `www.courtlistener.com` (API, token-authenticated) and
-  `storage.courtlistener.com` (public asset CDN, used token-free for opinion PDF
-  downloads) are allow-listed.
+- Every request passes through a network policy that **denies by default**. The
+  allow-list is limited to explicit, user-initiated legal-data sources:
+  - `courtlistener.com` / `www.courtlistener.com` — CourtListener API (token-authenticated) —
+    and `storage.courtlistener.com` — its public asset CDN (token-free opinion PDF downloads).
+  - Free, key-less official sources: `openlegalcodes.org` (statutes), `ecfr.gov`
+    (Code of Federal Regulations), `federalregister.gov` (regulatory developments).
+  - Key'd legal-data APIs (the key is read from the Keychain): `api.govinfo.gov`
+    (U.S. Code), `v3.openstates.org` and `api.legiscan.com` (bills), `api.regulations.gov`
+    (federal rulemaking dockets).
+  - The CourtListener token is gated to the CourtListener hosts and is **never** sent to
+    any other allow-listed host.
 - Plain `http`, embedded credentials, and non-allow-listed hosts are rejected.
 - Every request — approved or blocked — is logged (path only, never the `Authorization`
   header or token). Local rolling rate-limit counters block requests at CourtListener's

@@ -10,8 +10,9 @@ orders, see [`Docs/Milestones/`](Docs/Milestones/).
 
 - **Local-first.** Model generation, document processing, OCR, embeddings, search, and
   source selection all run on the user's Mac. The only network egress is explicit,
-  user-initiated: CourtListener legal research, token-free opinion PDF downloads from
-  CourtListener's storage CDN, and model/embedding downloads.
+  user-initiated: legal research / legal-data lookups against a fixed allow-list
+  (CourtListener plus a few official government legal-data sources), token-free opinion
+  PDF downloads from CourtListener's storage CDN, and model/embedding downloads.
 - **Source-grounded, verifiable output.** Legal answers are constrained to retrieved
   authority; document answers and chronologies are constrained to selected sources. A
   citation verifier flags unsupported or unresolved claims rather than presenting them as
@@ -41,7 +42,7 @@ orders, see [`Docs/Milestones/`](Docs/Milestones/).
 │   (sandboxed)           │   └──────────────────────────────────┘
 └────────────────────────┘
         ▲
-        │ allow-listed HTTPS (CourtListener only)
+        │ allow-listed HTTPS (legal-data allow-list)
         ▼
    www.courtlistener.com
 ```
@@ -103,7 +104,7 @@ are recorded in [`Docs/Architecture/RuntimeFileAccess.md`](Docs/Architecture/Run
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list (`v001` … `v048` as of 1.5.1). Each feature area adds migrations and a
+migration list (`v001` … `v049`). Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -153,9 +154,9 @@ existing convention where a repository owns several related tables.
 
 ## Security & privacy posture
 
-- **On-device generation**; default-deny network with only CourtListener allowlisted
-  (API host token-authenticated; `storage.courtlistener.com` CDN used token-free for
-  opinion PDF downloads).
+- **On-device generation**; default-deny network with a fixed legal-data allow-list
+  (CourtListener API token-authenticated; its `storage.courtlistener.com` CDN and a few
+  official government legal-data sources used token-free). See [SECURITY.md](SECURITY.md).
 - **Secrets in the Keychain** (CourtListener token), never in SQLite, logs, diagnostics, or
   exports.
 - **Privilege-aware logging** — query terms are stored as stable fingerprints unless the user

@@ -55,6 +55,13 @@ public final class DocumentMaintenance: @unchecked Sendable {
                 )
                 purged += 1
             } catch {
+                // A document that can't be purged stays in the trash; record it so the
+                // failure is visible in the audit trail rather than silently skipped.
+                _ = try? store.auditEvents.recordEvent(
+                    matterID: document.matterID, eventType: "document_permanent_delete_failed", actor: "system",
+                    summary: "Auto-purge could not delete a document deleted over \(days) days ago: \(error.localizedDescription)",
+                    relatedTable: "matter_documents", relatedID: document.id
+                )
                 continue
             }
         }
@@ -85,6 +92,16 @@ public final class DocumentMaintenance: @unchecked Sendable {
                 }
                 purged += 1
             } catch {
+                // Matter chats get a failure audit; global chats have no matter to log
+                // under (mirrors the success path), but a matter chat that won't purge
+                // must not vanish silently.
+                if let matterID = chat.matterID {
+                    _ = try? store.auditEvents.recordEvent(
+                        matterID: matterID, eventType: "chat_permanent_delete_failed", actor: "system",
+                        summary: "Auto-purge could not delete a chat deleted over \(days) days ago: \(error.localizedDescription)",
+                        relatedTable: "chats", relatedID: chat.id
+                    )
+                }
                 continue
             }
         }

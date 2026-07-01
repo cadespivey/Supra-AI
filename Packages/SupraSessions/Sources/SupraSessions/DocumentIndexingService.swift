@@ -88,6 +88,9 @@ public final class DocumentIndexingService: @unchecked Sendable {
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
         var indexed = 0
         for document in documents where Self.needsIndexing(document, embedderAvailable: embedder != nil) {
+            // Honor cancellation between documents so stopping a large re-index (or an
+            // app quit) doesn't keep churning through the remaining queue.
+            try Task.checkCancellation()
             _ = try await indexDocument(documentID: document.id)
             indexed += 1
         }
