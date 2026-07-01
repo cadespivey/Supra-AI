@@ -117,6 +117,15 @@ public final class MatterDocumentsController: ObservableObject {
         previewLoader.loadDocument(documentID: documentID)
     }
 
+    /// The managed file URL of a document's original blob, for opening in the user's
+    /// default app or sharing the original file. Nil if the blob is missing on disk.
+    public func fileURL(forDocument documentID: String) -> URL? {
+        guard let document = try? store.documentLibrary.fetchDocument(id: documentID),
+              let blob = try? store.documentLibrary.fetchBlob(id: document.blobID) else { return nil }
+        let url = storage.url(forManagedRelativePath: blob.managedRelativePath)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     public var setupReady: Bool { isImportReady() }
 
     /// File-importer content types: every supported document type plus folders.
