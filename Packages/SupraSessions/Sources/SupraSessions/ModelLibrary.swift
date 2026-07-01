@@ -23,6 +23,11 @@ public final class ModelLibrary: ObservableObject {
     @Published public private(set) var models: [ModelSummary] = []
     @Published public private(set) var loadState: LoadState = .idle
     @Published public private(set) var roleAssignments: ModelRoleAssignments
+    /// A user-pinned model that overrides per-route Autoselect for chat generation.
+    /// `nil` means Autoselect — resolve each request via the Models-tab role
+    /// preference. App-wide and persisted across launches.
+    @Published public private(set) var forcedModelID: ModelID?
+    static let forcedChatModelSettingsKey = "chat.forced_model_id"
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
@@ -40,6 +45,12 @@ public final class ModelLibrary: ObservableObject {
         } else {
             self.roleAssignments = ModelRoleAssignments()
             self.hasPersistedRoleAssignments = false
+        }
+        if let storedForced = try? store.appSettings.getSetting(Self.forcedChatModelSettingsKey, as: String.self),
+           let uuid = UUID(uuidString: storedForced) {
+            self.forcedModelID = ModelID(uuid)
+        } else {
+            self.forcedModelID = nil
         }
     }
 
@@ -140,6 +151,49 @@ public final class ModelLibrary: ObservableObject {
         configuration: LegalModelConfiguration = .fromEnvironment()
     ) -> ModelSummary? {
         resolvedModelWithIssue(for: role, configuration: configuration).model
+    }
+
+    /// Pins a specific model for chat generation (overriding per-route Autoselect), or
+    /// clears the pin with `nil` to return to Autoselect. The choice is app-wide and
+    /// persisted; the pinned model is loaded on the next request (the selector shows the
+    /// chosen name immediately).
+    public func setForcedModel(_ modelID: ModelID?) {
+        guard forcedModelID?.rawValue != modelID?.rawValue else { return }
+        forcedModelID = modelID
+        try? store.appSettings.setSetting(
+            Self.forcedChatModelSettingsKey, value: modelID?.rawValue.uuidString ?? ""
+        )
+    }
+
+    /// Chat model resolution honoring the user's forced-model pin: if a model is
+    /// pinned, ensure THAT model is loaded; otherwise fall back to the route's role
+    /// preference (Autoselect). A pin that no longer exists reverts to Autoselect.
+    public func ensureLoadedChatModelID(
+        for role: ModelRole,
+        configuration: LegalModelConfiguration = .fromEnvironment()
+    ) async -> Result<ModelID, ModelRouteResolutionIssue> {
+        guard let forced = forcedModelID else {
+            return await ensureLoadedRoutedModelID(for: role, configuration: configuration)
+        }
+        refresh()
+        guard let model = models.first(where: { $0.id == forced.rawValue.uuidString }) else {
+            setForcedModel(nil)
+            return await ensureLoadedRoutedModelID(for: role, configuration: configuration)
+        }
+        if loadedModelID?.rawValue == forced.rawValue {
+            return .success(forced)
+        }
+        await activateAndLoad(modelID: model.id)
+        if loadedModelID?.rawValue == forced.rawValue {
+            return .success(forced)
+        }
+        let message: String
+        if case let .failed(failureMessage) = loadState {
+            message = failureMessage
+        } else {
+            message = "The runtime did not confirm that the selected model is loaded."
+        }
+        return .failure(.assignedModelLoadFailed(role: role, displayName: model.displayName, message: message))
     }
 
     /// A suggested model for a role given what is currently registered: the plan's
@@ -299,6 +353,11 @@ public final class ModelLibrary: ObservableObject {
         if changed {
             roleAssignments = updated
             persistRoleAssignments()
+        }
+
+        // Drop the forced-model pin if it referenced the deleted model.
+        if forcedModelID?.rawValue.uuidString == modelID {
+            setForcedModel(nil)
         }
 
         refresh()

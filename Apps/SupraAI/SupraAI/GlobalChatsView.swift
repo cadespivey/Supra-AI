@@ -771,7 +771,7 @@ struct GlobalChatsView: View {
         Task { @MainActor in
             var modelID: ModelID?
             if controller.requiresRuntimeModel(for: routed) {
-                switch await library.ensureLoadedRoutedModelID(
+                switch await library.ensureLoadedChatModelID(
                     for: routed.route.role,
                     configuration: router.configuration
                 ) {
@@ -805,10 +805,7 @@ struct GlobalChatsView: View {
     /// quick generation-settings switcher (the same defaults as Settings).
     private var chatStatusBar: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 5) {
-                Circle().fill(modelStatusColor).frame(width: 7, height: 7)
-                Text(modelStatusText).foregroundStyle(.secondary).lineLimit(1)
-            }
+            modelSelector
             if controller.isGenerating {
                 HStack(spacing: 4) {
                     ProgressView().controlSize(.mini)
@@ -895,12 +892,60 @@ struct GlobalChatsView: View {
         JurisdictionCatalog.shared.option(id: controller.jurisdictionOverrideID)?.system == .state
     }
 
-    private var modelStatusText: String {
+    /// The model readout doubles as a picker: Autoselect (per-route Models-tab
+    /// preference) by default, or force a specific model for every request. The choice
+    /// is app-wide and shared by all chats; "Autoselect" is shown when nothing is pinned.
+    private var modelSelector: some View {
+        Menu {
+            Button {
+                library.setForcedModel(nil)
+            } label: {
+                Label(
+                    "Autoselect (Models preferences)",
+                    systemImage: library.forcedModelID == nil ? "checkmark" : "wand.and.stars"
+                )
+            }
+            if !library.models.isEmpty {
+                Section("Force a model") {
+                    ForEach(library.models) { model in
+                        Button {
+                            library.setForcedModel(UUID(uuidString: model.id).map(ModelID.init))
+                        } label: {
+                            if library.forcedModelID?.rawValue.uuidString == model.id {
+                                Label(model.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(model.displayName)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Circle().fill(modelStatusColor).frame(width: 7, height: 7)
+                Text(modelSelectorLabel).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(library.models.isEmpty ? .hidden : .visible)
+        .fixedSize()
+        .help(library.forcedModelID == nil
+            ? "Autoselect picks the model from your Models-tab preference for each request. Choose a model to force it for every request."
+            : "Forcing a specific model for every request. Choose Autoselect to return to your Models-tab preferences.")
+    }
+
+    /// The selector's caption: the pinned model's name when forced, otherwise an
+    /// "Auto ·" prefix over the loaded model so Autoselect is always identifiable.
+    private var modelSelectorLabel: String {
+        if let forced = library.forcedModelID,
+           let model = library.models.first(where: { $0.id == forced.rawValue.uuidString }) {
+            return model.displayName
+        }
         switch library.loadState {
-        case .loaded: library.loadedModel?.displayName ?? "Model loaded"
-        case .loading: "Loading model…"
-        case .failed: "Model failed to load"
-        case .idle: "Runtime idle"
+        case .loaded: return "Auto · \(library.loadedModel?.displayName ?? "model")"
+        case .loading: return "Loading model…"
+        case .failed: return "Model failed to load"
+        case .idle: return "Autoselect"
         }
     }
 
