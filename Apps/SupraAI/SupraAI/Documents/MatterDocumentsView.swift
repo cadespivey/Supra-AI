@@ -27,6 +27,10 @@ struct MatterDocumentsView: View {
     @State private var preview: PreviewItem?
     @State private var previewWidth: CGFloat = 580
     @State private var dismissedImportFailureID: String?
+    /// The single row whose action buttons (move/preview/open/delete) are revealed.
+    @State private var selectedDocID: String?
+    /// Documents ticked for multi-select sharing.
+    @State private var checkedDocIDs: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,11 +41,15 @@ struct MatterDocumentsView: View {
             Divider()
             jobProgress
             importFailureBanner
-            HSplitView {
+            // A fixed-width folder rail (not a resizable split): HSplitView rebalanced its
+            // panes to their ideal widths whenever the document list changed on folder
+            // selection, so the panes visibly jumped. A stable rail avoids that.
+            HStack(spacing: 0) {
                 folderSidebar
-                    .frame(minWidth: 160, idealWidth: 220, maxWidth: 280)
+                    .frame(width: 220)
+                Divider()
                 mainContent
-                    .frame(minWidth: 280)
+                    .frame(maxWidth: .infinity)
             }
             // The preview slides in over the list (it doesn't displace it); clicking a
             // row populates it.
@@ -139,10 +147,13 @@ struct MatterDocumentsView: View {
 
     private var folderSidebar: some View {
         List(selection: $controller.selectedSidebarID) {
-            Label("All Documents", systemImage: "tray.full").tag(MatterDocumentsController.allDocumentsTag)
+            Label("All Documents", systemImage: "tray.full")
+                .tag(MatterDocumentsController.allDocumentsTag)
+                .dropDestination(for: String.self) { ids, _ in moveDropped(ids, toFolderID: nil); return true }
             Section("Folders") {
                 ForEach(controller.folders) { folder in
                     Label(folder.name, systemImage: "folder").tag(folder.id)
+                        .dropDestination(for: String.self) { ids, _ in moveDropped(ids, toFolderID: folder.id); return true }
                         .contextMenu {
                             Button("Delete Folder", role: .destructive) { controller.deleteFolder(id: folder.id) }
                         }
@@ -188,11 +199,15 @@ struct MatterDocumentsView: View {
                     description: Text(controller.setupReady ? "Import files or drag them here." : "Complete Document Intelligence setup to import.")
                 )
             } else {
-                List {
-                    ForEach(controller.visibleDocuments) { doc in
-                        documentRow(doc)
-                        ForEach(controller.childAttachments(of: doc.id)) { child in
-                            documentRow(child).padding(.leading, 20)
+                VStack(spacing: 0) {
+                    selectionBar
+                    Divider()
+                    List {
+                        ForEach(controller.visibleDocuments) { doc in
+                            documentRow(doc)
+                            ForEach(controller.childAttachments(of: doc.id)) { child in
+                                documentRow(child).padding(.leading, 20)
+                            }
                         }
                     }
                 }
@@ -202,10 +217,20 @@ struct MatterDocumentsView: View {
     }
 
     private func documentRow(_ doc: MatterDocumentRecord) -> some View {
-        // The suggestion chips come from the stored classification metadata; the
-        // user's own tags are shown separately (the classifier creates no tags).
+        // The row itself is just identity: a multi-select tick, the name, its readiness
+        // status, and the tags applied on import. The move/preview/open/delete actions
+        // appear on the right only once the row is selected.
         let classification = controller.classification(forDocument: doc.id)
-        return HStack {
+        let isSelected = selectedDocID == doc.id
+        let isChecked = checkedDocIDs.contains(doc.id)
+        return HStack(spacing: 8) {
+            Button { toggleChecked(doc.id) } label: {
+                Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isChecked ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(isChecked ? "Deselect" : "Select for sharing")
+
             Image(systemName: doc.parentDocumentID == nil ? "doc.text" : "paperclip")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
@@ -225,55 +250,128 @@ struct MatterDocumentsView: View {
                     }
                 }
             }
-            Spacer()
-            Menu {
-                ForEach(controller.tags) { tag in
-                    Button {
-                        controller.toggleTag(tag.id, on: doc.id)
-                    } label: {
-                        Label(tag.name, systemImage: controller.tags(forDocument: doc.id).contains { $0.id == tag.id } ? "checkmark" : "")
-                    }
-                }
-                if controller.tags.isEmpty { Text("No tags yet").foregroundStyle(.secondary) }
-            } label: {
-                Image(systemName: "tag")
+            Spacer(minLength: 8)
+            if isSelected {
+                rowActions(doc)
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            if doc.parentDocumentID == nil {
-                Menu {
-                    Button { controller.moveDocument(id: doc.id, toFolderID: nil) } label: {
-                        Label("All Documents", systemImage: doc.folderID == nil ? "checkmark" : "tray")
-                    }
-                    if controller.folders.isEmpty {
-                        Text("Add a folder from the sidebar to organize documents")
-                    } else {
-                        Divider()
-                        ForEach(controller.folders) { folder in
-                            Button { controller.moveDocument(id: doc.id, toFolderID: folder.id) } label: {
-                                Label(folder.name, systemImage: doc.folderID == folder.id ? "checkmark" : "folder")
-                            }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "folder")
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Move to folder")
-            }
-            Button(role: .destructive) { controller.softDelete(documentID: doc.id) } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.ghostDanger)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 5)
-        // Clicking anywhere on the row (outside the trailing action buttons) opens the
-        // preview pane; the whole row shades on hover.
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : .clear)
+        )
         .contentShape(Rectangle())
-        .hoverShade(cornerRadius: 6)
-        .onTapGesture { showPreview(doc) }
+        // Double-click opens the file in the default app (suppressed while 2+ files are
+        // ticked for a batch action); a single click selects the row to reveal its
+        // actions; dragging it onto a folder moves it.
+        .onTapGesture(count: 2) { if checkedDocIDs.count <= 1 { openInDefaultApp(doc) } }
+        .onTapGesture { selectedDocID = isSelected ? nil : doc.id }
+        .draggable(doc.id)
+    }
+
+    /// The trailing action cluster shown on the selected document row: preview, open in
+    /// the default app, tag, move, and delete.
+    @ViewBuilder
+    private func rowActions(_ doc: MatterDocumentRecord) -> some View {
+        Button { showPreview(doc) } label: { Image(systemName: "eye") }
+            .buttonStyle(.plain).help("Preview")
+        Button { openInDefaultApp(doc) } label: { Image(systemName: "arrow.up.forward.app") }
+            .buttonStyle(.plain).help("Open & edit in your default app")
+        Menu {
+            ForEach(controller.tags) { tag in
+                Button { controller.toggleTag(tag.id, on: doc.id) } label: {
+                    Label(tag.name, systemImage: controller.tags(forDocument: doc.id).contains { $0.id == tag.id } ? "checkmark" : "")
+                }
+            }
+            if controller.tags.isEmpty { Text("No tags yet").foregroundStyle(.secondary) }
+        } label: {
+            Image(systemName: "tag")
+        }
+        .menuStyle(.borderlessButton).fixedSize().help("Tags")
+        if doc.parentDocumentID == nil {
+            Menu {
+                Button { controller.moveDocument(id: doc.id, toFolderID: nil) } label: {
+                    Label("All Documents", systemImage: doc.folderID == nil ? "checkmark" : "tray")
+                }
+                if controller.folders.isEmpty {
+                    Text("Add a folder from the sidebar to organize documents")
+                } else {
+                    Divider()
+                    ForEach(controller.folders) { folder in
+                        Button { controller.moveDocument(id: doc.id, toFolderID: folder.id) } label: {
+                            Label(folder.name, systemImage: doc.folderID == folder.id ? "checkmark" : "folder")
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "folder")
+            }
+            .menuStyle(.borderlessButton).fixedSize().help("Move to folder")
+        }
+        Button(role: .destructive) {
+            controller.softDelete(documentID: doc.id)
+            checkedDocIDs.remove(doc.id)
+            if selectedDocID == doc.id { selectedDocID = nil }
+        } label: {
+            Image(systemName: "trash")
+        }
+        .buttonStyle(.ghostDanger).help("Move to trash")
+    }
+
+    private func toggleChecked(_ id: String) {
+        if checkedDocIDs.contains(id) { checkedDocIDs.remove(id) } else { checkedDocIDs.insert(id) }
+    }
+
+    /// Opens the managed original in the user's default app. Because it opens the file
+    /// Supra manages, saving in that app writes straight back to Supra's copy.
+    private func openInDefaultApp(_ doc: MatterDocumentRecord) {
+        guard let url = controller.fileURL(forDocument: doc.id) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Select-all + share bar above the document list.
+    private var selectionBar: some View {
+        let ids = controller.visibleDocuments.map(\.id)
+        let allChecked = !ids.isEmpty && ids.allSatisfy { checkedDocIDs.contains($0) }
+        let hasSelection = !checkedDocIDs.isEmpty
+        return HStack(spacing: 8) {
+            Button {
+                if allChecked { ids.forEach { checkedDocIDs.remove($0) } }
+                else { checkedDocIDs.formUnion(ids) }
+            } label: {
+                Label(allChecked ? "Deselect All" : "Select All",
+                      systemImage: allChecked ? "checkmark.circle.fill" : "circle")
+            }
+            .buttonStyle(.ghost)
+            if hasSelection {
+                Text("\(checkedDocIDs.count) selected").foregroundStyle(.secondary)
+            }
+            Spacer()
+            // Always laid out (only active once something is ticked) so the bar keeps a
+            // constant height sized for the Share button instead of growing when it appears.
+            ShareLink(items: sharedFileURLs) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(.ghost)
+            .disabled(!hasSelection)
+            .opacity(hasSelection ? 1 : 0)
+            .allowsHitTesting(hasSelection)
+        }
+        .font(.supraCaption)
+        .padding(.horizontal, 10).padding(.vertical, 4)
+    }
+
+    /// Managed file URLs for the ticked documents, for the Share sheet.
+    private var sharedFileURLs: [URL] {
+        checkedDocIDs.compactMap { controller.fileURL(forDocument: $0) }
+    }
+
+    /// Moves dropped documents to a folder (nil = All Documents). Dropping any member of
+    /// the multi-select set moves the whole set.
+    private func moveDropped(_ ids: [String], toFolderID: String?) {
+        let expanded = Set(ids.flatMap { checkedDocIDs.contains($0) ? Array(checkedDocIDs) : [$0] })
+        for id in expanded { controller.moveDocument(id: id, toFolderID: toFolderID) }
     }
 
     /// Opens (or refreshes) the preview pane for a document.
