@@ -21,6 +21,14 @@ public enum CourtListenerEndpoint {
             ?? base.appendingPathComponent("opinions").appendingPathComponent(String(id))
     }
 
+    /// The citation-lookup endpoint `/api/rest/v4/citation-lookup/` — POST citation
+    /// strings, get back whether each resolves to a real opinion (and which).
+    static func citationLookupURL(baseURLOverride: String? = nil) -> URL {
+        let base = apiBaseURL(baseURLOverride)
+        return URL(string: base.absoluteString + "/citation-lookup/")
+            ?? base.appendingPathComponent("citation-lookup")
+    }
+
     private static func apiBaseURL(_ override: String? = nil) -> URL {
         let fallback = URL(string: "https://www.courtlistener.com/api/rest/v4")!
         let rawBaseURL = override ?? ProcessInfo.processInfo.environment["SUPRA_COURTLISTENER_BASE_URL"]

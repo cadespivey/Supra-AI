@@ -13,6 +13,12 @@ public protocol CourtListenerClientProtocol: Sendable {
 
     /// Downloads an opinion PDF from CourtListener's storage CDN (no token sent).
     func downloadOpinionPDF(from url: URL) async throws -> Data
+
+    /// Resolves citation STRINGS against CourtListener's citation-lookup endpoint,
+    /// returning whether each cite matches a real opinion (and which). PRIVACY: pass
+    /// only extracted citation strings (public case cites) — never answer or prompt
+    /// text, which may carry privileged matter content.
+    func resolveCitations(_ citations: [String]) async throws -> [CourtListenerCitationLookupDTO]
 }
 
 public extension CourtListenerClientProtocol {
@@ -41,6 +47,12 @@ public extension CourtListenerClientProtocol {
     /// Default so conformers that don't download PDFs still compile.
     func downloadOpinionPDF(from url: URL) async throws -> Data {
         throw CourtListenerError.invalidResponse
+    }
+
+    /// Default so stubs/conformers that don't resolve citations still compile; an
+    /// empty result reads as "no resolution data", never a fabricated verdict.
+    func resolveCitations(_ citations: [String]) async throws -> [CourtListenerCitationLookupDTO] {
+        []
     }
 }
 
@@ -145,6 +157,65 @@ public final class CourtListenerClient: CourtListenerClientProtocol, @unchecked 
             case .tokenHostNotAllowed:
                 // An authenticated request was aimed at a non-API host — a programming
                 // error, surfaced as a network-policy block rather than leaking a token.
+                throw CourtListenerError.blockedByNetworkPolicy
+            }
+        } catch {
+            throw CourtListenerError.transportFailed(error.localizedDescription)
+        }
+    }
+
+    public func resolveCitations(_ citations: [String]) async throws -> [CourtListenerCitationLookupDTO] {
+        let cleaned = citations
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !cleaned.isEmpty else { return [] }
+        // PRIVACY: the posted body is ONLY the extracted citation strings (public case
+        // cites), joined by newlines — never the surrounding answer/prompt text.
+        let text = cleaned.joined(separator: "\n")
+
+        var urlRequest = URLRequest(url: CourtListenerEndpoint.citationLookupURL(baseURLOverride: baseURLOverride))
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._* ")
+        let encoded = (text.addingPercentEncoding(withAllowedCharacters: allowed) ?? text)
+            .replacingOccurrences(of: " ", with: "+")
+        urlRequest.httpBody = Data("text=\(encoded)".utf8)
+
+        do {
+            let (data, response) = try await httpClient.send(urlRequest, relatedResearchSessionID: nil)
+            switch response.statusCode {
+            case 200..<300:
+                do {
+                    return try JSONDecoder().decode([CourtListenerCitationLookupDTO].self, from: data)
+                } catch {
+                    throw CourtListenerError.decodingFailed
+                }
+            case 401, 403:
+                throw CourtListenerError.authenticationFailed
+            case 429:
+                throw CourtListenerError.throttled(retryAfter: Self.retryAfterSeconds(from: response))
+            case 500...599:
+                throw CourtListenerError.serverError(statusCode: response.statusCode)
+            default:
+                throw CourtListenerError.invalidResponse
+            }
+        } catch let error as CourtListenerError {
+            throw error
+        } catch let error as NetworkPolicyError {
+            switch error {
+            case .localRateLimitExceeded:
+                throw CourtListenerError.localRateLimitExceeded
+            default:
+                throw CourtListenerError.blockedByNetworkPolicy
+            }
+        } catch let error as AuthorizedHTTPClientError {
+            switch error {
+            case .missingToken:
+                throw CourtListenerError.missingToken
+            case .invalidResponse:
+                throw CourtListenerError.invalidResponse
+            case .tokenHostNotAllowed:
                 throw CourtListenerError.blockedByNetworkPolicy
             }
         } catch {
