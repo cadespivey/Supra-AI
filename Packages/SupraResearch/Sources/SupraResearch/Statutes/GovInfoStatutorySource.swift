@@ -55,8 +55,9 @@ public struct GovInfoStatutorySource: StatutorySource {
         }
     }
 
-    /// The most section-text fetches per lookup, bounding added latency.
-    static let maxSectionTextFetches = 3
+    /// The most section-text fetches per lookup — bounds latency AND keeps a lookup
+    /// (search + fetches) comfortably inside the client's local per-minute rate budget.
+    static let maxSectionTextFetches = 2
     /// Cap stored section text (some sections run very long).
     static let maxSectionTextLength = 8_000
 
