@@ -85,10 +85,12 @@ struct AuthorityDetailView: View {
                 if allowed.isEmpty {
                     Text("No further transitions available.").font(.supraCaption).foregroundStyle(.secondary)
                 } else {
-                    Menu("Change Use Status") {
+                    Menu {
                         ForEach(allowed, id: \.self) { target in
                             Button(target.displayName) { controller.changeUseStatus(authorityID: authorityID, to: target) }
                         }
+                    } label: {
+                        Label("Change Use Status", systemImage: "arrow.triangle.2.circlepath")
                     }
                 }
             }

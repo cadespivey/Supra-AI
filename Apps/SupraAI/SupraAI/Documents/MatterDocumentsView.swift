@@ -155,7 +155,9 @@ struct MatterDocumentsView: View {
                     Label(folder.name, systemImage: "folder").tag(folder.id)
                         .dropDestination(for: String.self) { ids, _ in moveDropped(ids, toFolderID: folder.id); return true }
                         .contextMenu {
-                            Button("Delete Folder", role: .destructive) { controller.deleteFolder(id: folder.id) }
+                            Button(role: .destructive) { controller.deleteFolder(id: folder.id) } label: {
+                                Label("Delete Folder", systemImage: "trash")
+                            }
                         }
                 }
             }

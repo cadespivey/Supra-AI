@@ -105,10 +105,12 @@ struct OutputDetailView: View {
             }
             Spacer()
             Menu {
-                ForEach(DocumentExportFormat.allCases, id: \.self) { format in
-                    Button(format.fileExtension.uppercased()) {
-                        if let url = controller.exportOutput(outputID: outputID, format: format) {
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                Section("Format") {
+                    ForEach(DocumentExportFormat.allCases, id: \.self) { format in
+                        Button(format.fileExtension.uppercased()) {
+                            if let url = controller.exportOutput(outputID: outputID, format: format) {
+                                NSWorkspace.shared.activateFileViewerSelecting([url])
+                            }
                         }
                     }
                 }
