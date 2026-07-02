@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import SupraCore
@@ -149,6 +150,9 @@ final class AppEnvironment: ObservableObject {
         // immediately while the rest of bootstrap finishes.
         if Self.isUITestMode { seedUITestFixturesIfNeeded() }
         if Self.isDemoMode { seedDemoFixturesIfNeeded() }
+        #if DEBUG
+        dumpStoreToPasteboardIfRequested()
+        #endif
         await refreshRuntimeStatus()
         // If the runtime already holds a model from a previous session, re-enable
         // chat without forcing the user to re-load it (the chat gate keys on
@@ -293,6 +297,62 @@ final class AppEnvironment: ObservableObject {
             // Best-effort fixture seeding — a failure just means the demo chat is absent.
         }
     }
+
+    #if DEBUG
+    /// Debug-only (`-dumpChats`): serializes every chat, message, citation, and
+    /// saved authority to JSON on the general pasteboard, so store contents can be
+    /// inspected from outside the sandbox without Full Disk Access. Reads only —
+    /// never mutates the store.
+    func dumpStoreToPasteboardIfRequested() {
+        guard ProcessInfo.processInfo.arguments.contains("-dumpChats") else { return }
+        var dump: [String: Any] = [:]
+        var chatDumps: [[String: Any]] = []
+        let matters = (try? store.matters.fetchMatters()) ?? []
+        var chats = (try? store.chats.fetchGlobalChats()) ?? []
+        for matter in matters {
+            chats += (try? store.chats.fetchMatterChats(matterID: matter.id)) ?? []
+        }
+        for chat in chats {
+            let messages = (try? store.chats.fetchMessages(chatID: chat.id)) ?? []
+            chatDumps.append([
+                "id": chat.id,
+                "title": chat.title,
+                "scope": chat.scope,
+                "messages": messages.map { message -> [String: Any] in
+                    let citations = (try? store.chats.fetchCitations(messageID: message.id)) ?? []
+                    return [
+                        "role": message.role,
+                        "status": message.status,
+                        "createdAt": "\(message.createdAt)",
+                        "content": message.content,
+                        "citations": citations.map { c in
+                            ["label": c.label, "kind": c.kind, "display": c.displayName ?? "", "url": c.url ?? "", "locator": c.locatorJSON ?? "", "match": c.matchText ?? ""]
+                        },
+                    ]
+                },
+            ])
+        }
+        dump["chats"] = chatDumps
+        dump["matters"] = matters.map { ["id": $0.id, "name": $0.name, "jurisdiction": $0.jurisdiction] }
+        dump["authorities"] = matters.flatMap { matter -> [[String: Any]] in
+            ((try? store.authorities.fetchAuthorities(matterID: matter.id)) ?? []).map { a in
+                [
+                    "caseName": a.caseName,
+                    "citationJSON": a.citationJSON,
+                    "opinionID": a.opinionID ?? "",
+                    "reviewState": a.reviewState,
+                    "useStatus": a.useStatus,
+                    "opinionTextChars": a.opinionText?.count ?? 0,
+                ]
+            }
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: dump, options: [.prettyPrinted, .sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+        }
+    }
+    #endif
 
     // MARK: - Demo mode (marketing screenshots)
 

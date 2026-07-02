@@ -143,6 +143,50 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertTrue(report.issues.contains { $0.excerpt?.contains("999 F.3d 1234") ?? false })
     }
 
+    func testVerifierNeverFlagsSupremeCourtAuthorityAsJurisdictionMismatch() {
+        // The Rush v. Savchuk bug: a SCOTUS holding cited in an Eleventh Circuit
+        // matter was blocked as a "jurisdiction mismatch". SCOTUS binds everywhere.
+        let scotus = LegalAuthority(
+            id: "courtlistener:opinion:2",
+            authorityType: .case,
+            caseName: "Rush v. Savchuk",
+            citation: "444 U.S. 320",
+            citations: ["444 U.S. 320"],
+            court: "Supreme Court of the United States",
+            courtID: "scotus",
+            text: "The Court held that a defendant's insurer's obligation is not an attachable contact for quasi in rem jurisdiction."
+        )
+        let answer = "Rush v. Savchuk, 444 U.S. 320, held that quasi in rem jurisdiction cannot rest on the insurer's obligation [A1]."
+
+        let report = LegalCitationVerifier.verify(
+            answer: answer,
+            authorities: [scotus],
+            expectedJurisdiction: "United States Court of Appeals for the Eleventh Circuit"
+        )
+        XCTAssertFalse(
+            report.issues.contains { $0.kind == .jurisdictionMismatch },
+            report.issues.map(\.message).joined(separator: "; ")
+        )
+
+        // A sister-state intermediate court is still a mismatch for that forum.
+        let stateCase = LegalAuthority(
+            id: "courtlistener:opinion:3",
+            authorityType: .case,
+            caseName: "Other v. State",
+            citation: "123 Cal. App. 5th 456",
+            citations: ["123 Cal. App. 5th 456"],
+            court: "California Court of Appeal",
+            jurisdiction: "California",
+            text: "State-specific holding."
+        )
+        let stateReport = LegalCitationVerifier.verify(
+            answer: "Other v. State, 123 Cal. App. 5th 456, so holds.",
+            authorities: [stateCase],
+            expectedJurisdiction: "United States Court of Appeals for the Eleventh Circuit"
+        )
+        XCTAssertTrue(stateReport.issues.contains { $0.kind == .jurisdictionMismatch })
+    }
+
     func testVerifierRejectsWrongReporterAttachedToKnownCaseName() {
         let authority = LegalAuthority(
             id: "courtlistener:opinion:1",

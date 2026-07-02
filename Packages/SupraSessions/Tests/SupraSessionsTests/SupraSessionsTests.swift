@@ -2215,6 +2215,46 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertNil(controller.deeperSearchOffer)
     }
 
+    func testHoldingQuestionAboutSavedSupremeCourtCaseIsNotJurisdictionBlocked() async throws {
+        // Regression: "What is the holding of Rush v. Savchuk?" in a Florida matter
+        // was quarantined as a jurisdiction mismatch — SCOTUS binds everywhere, and a
+        // question that names its case is about that case wherever it sits.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Adams", jurisdiction: "Florida")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "Rush v. Savchuk"))
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id,
+            caseName: "Rush v. Savchuk",
+            citationJSON: #"["444 U.S. 320"]"#,
+            preferredCitation: "444 U.S. 320",
+            court: "Supreme Court of the United States", courtID: "scotus",
+            opinionText: "The Court held that a defendant's insurer's obligation to defend and indemnify is not a contact of the defendant for quasi in rem jurisdiction purposes."
+        ))
+
+        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Rush v. Savchuk held that quasi in rem jurisdiction cannot rest on the defendant's insurer's obligation [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What is the holding of Rush v. Savchuk?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertFalse(answer.contains("I cannot provide a source-grounded legal answer"), answer)
+        XCTAssertFalse(answer.contains("jurisdiction_mismatch"), answer)
+        XCTAssertTrue(answer.contains("quasi in rem"), answer)
+        XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
     func testLocalFirstSkippedWhenSavedAuthoritiesHaveNoText() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "Florida")

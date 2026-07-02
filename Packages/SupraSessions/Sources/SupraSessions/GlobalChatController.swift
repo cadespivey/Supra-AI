@@ -1318,11 +1318,14 @@ public final class GlobalChatController: ObservableObject {
             options: options
         )
         var output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
+        // A question that NAMES its authority ("What is the holding of X?") is about
+        // that case wherever it sits — the matter's forum must not veto quoting it.
+        let verificationJurisdiction = classification.citationLookup == nil ? classification.jurisdiction : nil
         var verification = legalConfiguration.verifyCitations
             ? LegalCitationVerifier.verify(
                 answer: output,
                 authorities: authorities,
-                expectedJurisdiction: classification.jurisdiction
+                expectedJurisdiction: verificationJurisdiction
             )
             : nil
 
@@ -1345,7 +1348,7 @@ public final class GlobalChatController: ObservableObject {
             if let revisedRaw = try? await runtimeClient.collectGeneratedText(revisionRequest) {
                 let revised = ReasoningContent.answer(from: revisedRaw)
                 let revisedVerification = LegalCitationVerifier.verify(
-                    answer: revised, authorities: authorities, expectedJurisdiction: classification.jurisdiction
+                    answer: revised, authorities: authorities, expectedJurisdiction: verificationJurisdiction
                 )
                 // Keep the revision only if it is genuinely cleaner: never accept MORE
                 // hard failures (a soft-for-hard trade is a regression), and use the

@@ -141,6 +141,9 @@ public enum LegalCitationVerifier {
             var flaggedExcerpts = Set<String>()
             for citation in extracted {
                 guard let authority = supportingAuthority(for: citation, among: authorities) else { continue }
+                // U.S. Supreme Court authority binds every U.S. jurisdiction — it can
+                // never be a jurisdiction mismatch, whatever the matter's forum.
+                guard !isNationallyBinding(authority) else { continue }
                 let jurisdictionStrings = [authority.jurisdiction, authority.court, authority.courtID].compactMap { $0 }
                 let matchesJurisdiction = jurisdictionStrings.contains { jurisdictionMatches(expectedJurisdiction, $0) }
                 if !matchesJurisdiction, flaggedExcerpts.insert(citation).inserted {
@@ -554,6 +557,21 @@ public enum LegalCitationVerifier {
     /// Fuzzy jurisdiction comparison: exact normalized match, or substring overlap
     /// only when both sides are long enough to be meaningful (avoids spurious
     /// 1–3 character matches like "ca" matching "California").
+    /// Whether the authority binds nationwide (the U.S. Supreme Court), making any
+    /// forum-specific jurisdiction expectation moot for it.
+    static func isNationallyBinding(_ authority: LegalAuthority) -> Bool {
+        if authority.courtID?.lowercased() == "scotus" { return true }
+        let court = normalized(authority.court ?? "")
+        if court.contains("supreme court of the united states")
+            || court == "united states supreme court"
+            || court == "us supreme court" {
+            return true
+        }
+        let jurisdiction = normalized(authority.jurisdiction ?? "")
+        return jurisdiction.contains("united states supreme court")
+            || jurisdiction.contains("supreme court of the united states")
+    }
+
     private static func jurisdictionMatches(_ lhs: String, _ rhs: String) -> Bool {
         let a = normalized(lhs)
         let b = normalized(rhs)
