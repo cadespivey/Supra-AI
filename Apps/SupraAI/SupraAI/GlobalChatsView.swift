@@ -423,11 +423,18 @@ struct GlobalChatsView: View {
                     // for the same question (spec §3.2).
                     if let offer = controller.deeperSearchOffer, offer.chatID == controller.selectedChatID {
                         HStack(spacing: 8) {
-                            Label("Preliminary — searched the most relevant passages.", systemImage: "hare")
-                                .font(.supraCaption).foregroundStyle(.secondary)
-                            Button("Search All Documents (slower)") { searchAllDocuments(offer) }
-                                .buttonStyle(.ghost)
-                                .disabled(controller.isGenerating)
+                            Label(
+                                offer.kind == .documents
+                                    ? "Preliminary — searched the most relevant passages."
+                                    : "Preliminary — answered from this matter's saved authorities.",
+                                systemImage: "hare"
+                            )
+                            .font(.supraCaption).foregroundStyle(.secondary)
+                            Button(offer.kind == .documents ? "Search All Documents (slower)" : "Search CourtListener (network)") {
+                                searchDeeper(offer)
+                            }
+                            .buttonStyle(.ghost)
+                            .disabled(controller.isGenerating)
                         }
                         .padding(.top, 2)
                     }
@@ -811,8 +818,10 @@ struct GlobalChatsView: View {
         }
     }
 
-    /// Re-runs the offered question with deep document grounding (the full pass).
-    private func searchAllDocuments(_ offer: GlobalChatController.DeeperSearchOffer) {
+    /// Re-runs the offered question at the deeper tier: the full document pass for
+    /// doc-grounded answers, or the CourtListener network search after a local-first
+    /// research answer.
+    private func searchDeeper(_ offer: GlobalChatController.DeeperSearchOffer) {
         guard !controller.isGenerating else { return }
         let router = ModelRouter(configuration: .fromEnvironment())
         let routed = router.routePrompt(offer.question)
@@ -836,7 +845,8 @@ struct GlobalChatsView: View {
                 options: controller.activeChatOptions,
                 route: routed.route,
                 displayPrompt: offer.question,
-                documentDepth: .deep
+                documentDepth: offer.kind == .documents ? .deep : .fast,
+                researchDepth: offer.kind == .research ? .deep : .fast
             )
         }
     }

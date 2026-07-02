@@ -239,6 +239,28 @@ final class SupraStoreTests: XCTestCase {
         XCTAssertEqual(try store.auditEvents.fetchEvents(matterID: matter.id).single?.eventType, "authority_saved")
     }
 
+    func testCountAuthoritiesAndOpinionTextPersistence() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        XCTAssertEqual(try store.authorities.countAuthorities(matterID: matter.id), 0)
+
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "Roe"))
+        let authority = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id, caseName: "Roe"
+        ))
+        XCTAssertEqual(try store.authorities.countAuthorities(matterID: matter.id), 1)
+        XCTAssertNil(try store.authorities.fetchAuthorities(matterID: matter.id).first?.opinionText)
+
+        try store.authorities.updateOpinionText(authorityID: authority.id, text: "The opinion body.")
+        XCTAssertEqual(try store.authorities.fetchAuthorities(matterID: matter.id).first?.opinionText, "The opinion body.")
+
+        // Soft-deleted authorities leave the count (the local-first gate).
+        _ = try store.authorities.softDeleteAuthority(id: authority.id)
+        XCTAssertEqual(try store.authorities.countAuthorities(matterID: matter.id), 0)
+    }
+
     func testSettingsRoundTripCodableValues() throws {
         let store = try makeStore()
 

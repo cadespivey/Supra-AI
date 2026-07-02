@@ -618,6 +618,9 @@ public final class ResearchSessionController: ObservableObject {
             if existing.deletedAt != nil {
                 try? store.authorities.reviveAuthority(id: existing.id)
             }
+            if existing.opinionText == nil {
+                persistOpinionText(authorityID: existing.id, opinionID: existing.opinionID)
+            }
             // The review classification (review_state) always reflects the latest
             // action. Use-status, however, is library-managed: on an existing
             // authority it may only change along the §11.4 transition graph, so a
@@ -656,7 +659,26 @@ public final class ResearchSessionController: ObservableObject {
             useStatus: useStatus.rawValue,
             rawMetadataJSON: result.rawResultJSON
         )
-        _ = try? store.authorities.insertAuthority(authority)
+        if let inserted = try? store.authorities.insertAuthority(authority) {
+            persistOpinionText(authorityID: inserted.id, opinionID: inserted.opinionID)
+        }
+    }
+
+    /// Hydrates and persists the full opinion text for a user-SAVED authority (spec
+    /// §4.3, locked §8.3: saved authorities only) so local-first research and the
+    /// offline [A#] reader can ground from it. Best-effort and asynchronous — a
+    /// hydration failure leaves the authority saved with metadata only.
+    private func persistOpinionText(authorityID: String, opinionID: String?) {
+        guard let opinionID, hasCourtListenerToken else { return }
+        Task { [store, courtListenerClient] in
+            guard
+                let id = Int(opinionID),
+                let detail = try? await courtListenerClient.fetchOpinion(id: id),
+                let body = detail.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !body.isEmpty
+            else { return }
+            try? store.authorities.updateOpinionText(authorityID: authorityID, text: body)
+        }
     }
 
     private func recordReviewAudit(_ eventType: String, result: ResearchResultRecord, summary: String) {

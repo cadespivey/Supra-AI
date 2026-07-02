@@ -906,6 +906,14 @@ public enum SupraMigrator {
             }
         }
 
+        migrator.registerMigration("v051_add_authority_opinion_text") { db in
+            // Hydrated opinion text persisted for user-SAVED authorities only (spec
+            // §4.3/§8.3): grounds local-first research and the offline [A#] reader.
+            try db.alter(table: "authorities") { table in
+                table.add(column: "opinion_text", .text)
+            }
+        }
+
         return migrator
     }
 
