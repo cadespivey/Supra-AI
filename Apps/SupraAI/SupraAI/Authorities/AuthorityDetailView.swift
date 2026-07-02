@@ -204,16 +204,12 @@ struct OpinionHTMLSheet: View {
     @State private var exporting = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(title).font(.supraTitle).lineLimit(1)
-                Spacer()
-                Button { exporting = true } label: { Label("Download HTML…", systemImage: "arrow.down.circle") }
-                Button("Done") { dismiss() }
-            }
-            .padding(12)
-            Divider()
+        SupraSheetScaffold(title, onClose: { dismiss() }) {
             OpinionWebView(html: html)
+        } footer: {
+            Spacer()
+            Button { exporting = true } label: { Label("Download HTML…", systemImage: "arrow.down.circle") }
+                .buttonStyle(.ghost)
         }
         .frame(minWidth: 680, minHeight: 560)
         // .fileExporter presents reliably from within a sheet (NSSavePanel.runModal

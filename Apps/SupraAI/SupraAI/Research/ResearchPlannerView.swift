@@ -37,17 +37,13 @@ struct ResearchPlannerView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Text("New Research Session")
-                .font(.supraTitle)
-                .padding([.horizontal, .top])
-
+        SupraSheetScaffold("New Research Session", doneLabel: "Cancel", onClose: { controller.resetPlan(); dismiss() }) {
             Form {
                 Section("Issue") {
                     TextField("Title", text: $draft.title)
                         .accessibilityIdentifier("planner.title")
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Legal issue or question").font(.supraCaption).foregroundStyle(.secondary)
+                        Text("Legal issue or question").font(.subheadline).foregroundStyle(.secondary)
                         MultilineField(
                             placeholder: "e.g. Does the UCC govern a sale of goods under $500?",
                             text: $draft.issueText,
@@ -119,25 +115,18 @@ struct ResearchPlannerView: View {
                 }
             }
             .formStyle(.grouped)
-
-            Divider()
-            HStack {
-                Button("Cancel", role: .cancel) {
-                    controller.resetPlan()
-                    dismiss()
-                }
-                Spacer()
-                if !controller.plannedQueries.isEmpty {
-                    Text("\(controller.approvedQueryCount) approved")
-                        .font(.supraCaption)
-                        .foregroundStyle(.secondary)
-                }
-                Button("Save Plan") { save() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!controller.canSavePlan)
-                    .accessibilityIdentifier("planner.save")
+        } footer: {
+            Spacer()
+            if !controller.plannedQueries.isEmpty {
+                Text("\(controller.approvedQueryCount) approved")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
             }
-            .padding()
+            Button("Save Plan") { save() }
+                .buttonStyle(.ghost)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!controller.canSavePlan)
+                .accessibilityIdentifier("planner.save")
         }
         .frame(minWidth: 560, idealWidth: 680, maxWidth: .infinity, minHeight: 640, idealHeight: 780, maxHeight: .infinity)
         .onAppear {

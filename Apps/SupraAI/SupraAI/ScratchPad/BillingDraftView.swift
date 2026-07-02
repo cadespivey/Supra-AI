@@ -320,41 +320,42 @@ private struct EditLineSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Edit line").font(.supraTitle)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Narrative").font(.supraCaption).foregroundStyle(.secondary)
-                MultilineField(placeholder: "Narrative", text: $narrative, minLines: 3)
-            }
-            HStack(alignment: .top, spacing: 12) {
-                field("Hours", text: $hoursText, width: 80)
-                taskCodeField
-                activityCodeField
-            }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                Button("Save") {
-                    let hours = Double(hoursText.trimmingCharacters(in: .whitespaces)) ?? line.hours
-                    onSave(
-                        narrative.trimmingCharacters(in: .whitespacesAndNewlines),
-                        hours,
-                        taskCode.isEmpty ? nil : taskCode,
-                        activityCode.isEmpty ? nil : activityCode
-                    )
+        SupraSheetScaffold("Edit line", doneLabel: "Cancel", onClose: { dismiss() }) {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Narrative").font(.subheadline).foregroundStyle(.secondary)
+                    MultilineField(placeholder: "Narrative", text: $narrative, minLines: 3)
                 }
-                .keyboardShortcut(.defaultAction)
+                HStack(alignment: .top, spacing: 12) {
+                    field("Hours", text: $hoursText, width: 80)
+                    taskCodeField
+                    activityCodeField
+                }
+                Spacer(minLength: 0)
             }
+            .padding(20)
+        } footer: {
+            Spacer()
+            Button("Save") {
+                let hours = Double(hoursText.trimmingCharacters(in: .whitespaces)) ?? line.hours
+                onSave(
+                    narrative.trimmingCharacters(in: .whitespacesAndNewlines),
+                    hours,
+                    taskCode.isEmpty ? nil : taskCode,
+                    activityCode.isEmpty ? nil : activityCode
+                )
+            }
+            .buttonStyle(.ghost)
+            .keyboardShortcut(.defaultAction)
         }
-        .padding(20)
-        .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity)
+        .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, minHeight: 320, idealHeight: 400)
     }
 
     @ViewBuilder
     private var taskCodeField: some View {
         let options = UTBMSCodes.taskCodes(for: codeSet)
         VStack(alignment: .leading, spacing: 4) {
-            Text("Task code").font(.supraCaption).foregroundStyle(.secondary)
+            Text("Task code").font(.subheadline).foregroundStyle(.secondary)
             if options.isEmpty {
                 // .none → no task code; transactional/advisory → firm-specific free text.
                 if codeSet == .none {
@@ -370,7 +371,7 @@ private struct EditLineSheet: View {
 
     private var activityCodeField: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Activity").font(.supraCaption).foregroundStyle(.secondary)
+            Text("Activity").font(.subheadline).foregroundStyle(.secondary)
             codePicker(selection: $activityCode, options: UTBMSCodes.activity)
         }
     }
@@ -392,7 +393,7 @@ private struct EditLineSheet: View {
 
     private func field(_ label: String, text: Binding<String>, width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.supraCaption).foregroundStyle(.secondary)
+            Text(label).font(.subheadline).foregroundStyle(.secondary)
             TextField(label, text: text).textFieldStyle(.roundedBorder).frame(width: width)
         }
     }

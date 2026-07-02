@@ -228,14 +228,7 @@ private struct ResultDetailSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(result.caseNameFull ?? result.caseName).font(.supraTitle)
-                Spacer()
-                Button("Done") { dismiss() }
-            }
-            .padding()
-            Divider()
+        SupraSheetScaffold(result.caseNameFull ?? result.caseName, onClose: { dismiss() }) {
             Form {
                 Section {
                     if let citation = result.citation { LabeledContent("Citation", value: citation) }
