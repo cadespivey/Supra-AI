@@ -43,8 +43,9 @@ struct RecycleBinView: View {
         .navigationTitle("Recycle Bin")
         .onAppear { controller.reload() }
         .confirmationDialog(
-            "Delete permanently?",
+            pendingDelete.map { "Delete “\($0.name)” permanently?" } ?? "Delete permanently?",
             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+            titleVisibility: .visible,
             presenting: pendingDelete
         ) { item in
             Button("Delete Permanently", role: .destructive) { performDelete(item) }
