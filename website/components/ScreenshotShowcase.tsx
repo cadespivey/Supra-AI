@@ -8,11 +8,20 @@ type ShotProps = {
   title: string;
   image: string;
   alt: string;
+  caption?: string;
   flip?: boolean;
   children: ReactNode;
 };
 
-function Shot({ label, title, image, alt, flip = false, children }: ShotProps) {
+function Shot({
+  label,
+  title,
+  image,
+  alt,
+  caption = "Actual app — no client data",
+  flip = false,
+  children,
+}: ShotProps) {
   return (
     <div
       className={`grid items-center gap-10 lg:grid-cols-[0.8fr_1.2fr] ${
@@ -36,7 +45,7 @@ function Shot({ label, title, image, alt, flip = false, children }: ShotProps) {
           />
         </div>
         <figcaption className="mt-3 text-center font-caps text-[11px] uppercase tracking-wide text-supra-muted">
-          Actual app · fictitious demonstration matter — no client data
+          {caption}
         </figcaption>
       </figure>
     </div>
@@ -54,9 +63,9 @@ export function ScreenshotShowcase() {
           See what&rsquo;s behind the curtain before you download.
         </h2>
         <p className="mt-6 text-lg leading-[1.5] text-supra-muted">
-          Every screenshot below is the real application working a{" "}
-          <span className="italic">fictitious</span> demonstration matter. The
-          case law is real; the parties, clients, and documents are invented.
+          Every screenshot below is the real application working a demonstration
+          matter built from <span className="italic">public court records</span>{" "}
+          and real case law — no client data anywhere.
         </p>
       </div>
 
@@ -65,61 +74,23 @@ export function ScreenshotShowcase() {
           label="Grounded answers"
           title="Every assertion carries a clickable citation."
           image="/screenshots/hero-grounded-chat.png"
-          alt="A matter chat answer citing [S1]–[S3] document sources, with the cited Master Services Agreement open in a side panel and the indemnification clause highlighted."
+          alt="A matter chat answering who the parties are, citing [S2] and [S3] document sources, with the cited court filing open beside the conversation at the supporting page."
+          caption="Actual app · public court records — no client data"
         >
           <p>
             Ask about your matter&rsquo;s documents and the answer is built only
             from retrieved passages — each one cited inline as{" "}
-            <span className="text-supra-gold">[S1]</span>,{" "}
-            <span className="text-supra-gold">[S2]</span>, and so on. Click a
-            citation and the source opens beside the conversation, jumped to the
-            exact passage with the supporting language highlighted.
+            <span className="text-supra-gold">[S2]</span>,{" "}
+            <span className="text-supra-gold">[S3]</span>, and so on. Click a
+            citation and the filing itself opens beside the conversation at the
+            cited page.
           </p>
           <p>
-            If the documents don&rsquo;t support an answer, Supra AI says so
-            instead of improvising one.
-          </p>
-        </Shot>
-
-        <Shot
-          label="Legal research"
-          title="Read the opinion without leaving the app."
-          image="/screenshots/opinion-reader.png"
-          alt="A research answer citing [A1], with the full text of Winter v. Natural Resources Defense Council open in the reader panel and the cited holding highlighted."
-          flip
-        >
-          <p>
-            Research answers cite retrieved authority as{" "}
-            <span className="text-supra-gold">[A1]</span>,{" "}
-            <span className="text-supra-gold">[A2]</span> — never model memory.
-            Click a cite to read the full opinion in place, with the cited
-            passage highlighted and a one-click path to the case on
-            CourtListener.
-          </p>
-          <p>
-            Authorities you save to a matter keep their full text on your Mac,
-            so the reader — and follow-up research — work offline. New questions
-            answer from your saved library first and only reach for the network
-            when you ask for a wider search.
-          </p>
-        </Shot>
-
-        <Shot
-          label="Document intelligence"
-          title="Your matter file, indexed and ready to answer."
-          image="/screenshots/documents.png"
-          alt="The Documents tab showing folders, tagged documents with processing status, and row actions for preview, open, move, and share."
-        >
-          <p>
-            Import the file and Supra AI extracts, indexes, and classifies each
-            document on your machine. Organize with folders and tags, preview
-            with the cited page in view, open and edit in your default apps, and
-            share or export in bulk when production calls for it.
-          </p>
-          <p>
-            Answers arrive fast from the most relevant passages first, with an
-            explicit full-file search one click away — the app tells you which
-            pass produced what.
+            Answers are honest about their depth, too: a fast pass over the most
+            relevant passages comes back in seconds, labeled{" "}
+            <span className="italic">Preliminary</span>, with a full search of
+            every document one click away. If the documents don&rsquo;t support
+            an answer, Supra AI says so instead of improvising one.
           </p>
         </Shot>
 
@@ -127,19 +98,61 @@ export function ScreenshotShowcase() {
           label="Research workflow"
           title="Plan the search. Review every result. Keep what holds up."
           image="/screenshots/research-session.png"
-          alt="A research session showing model-planned search queries and retrieved cases with review actions: save as authority, mark potentially adverse, skip."
+          alt="A research session showing search queries and retrieved Supreme Court cases with review status badges, and a detail card for one case showing its citation, court, docket number, and excerpt."
+          caption="Actual app · real case law"
           flip
         >
           <p>
-            Research runs as an auditable session: the local model proposes real
-            search queries, you approve them, and every result gets an explicit
-            review decision — saved to the matter&rsquo;s authority library,
-            flagged potentially adverse, or skipped.
+            Research runs as an auditable session: real search queries you
+            approve, and an explicit review decision on every result — saved to
+            the matter&rsquo;s authority library, marked potentially adverse, or
+            skipped. Each case carries its citation, court, date, docket, and
+            the matching excerpt.
           </p>
           <p>
-            Generated answers are then verified against that packet. A cite the
-            sources don&rsquo;t support is flagged — or the answer is blocked
-            outright — before you ever rely on it.
+            Authorities you save keep their full text on your Mac, so follow-up
+            research answers from your own library first — offline — and only
+            reaches for the network when you ask for a wider search.
+          </p>
+        </Shot>
+
+        <Shot
+          label="Legal research"
+          title="Read the opinion without leaving the app."
+          image="/screenshots/opinion-reader.png"
+          alt="The full text of a Supreme Court opinion open inside the app, with a Download HTML option."
+          caption="Actual app · real case law"
+        >
+          <p>
+            Any retrieved case — and any{" "}
+            <span className="text-supra-gold">[A#]</span> citation in a research
+            answer — opens as the full opinion inside the app: the court&rsquo;s
+            own text, the cited passage highlighted, a download option, and a
+            one-click path to the case on CourtListener.
+          </p>
+          <p>
+            Cited answers are verified against this same retrieved text. A cite
+            the sources don&rsquo;t support is flagged — or the answer is
+            blocked outright — before you ever rely on it.
+          </p>
+        </Shot>
+
+        <Shot
+          label="Local models"
+          title="The models live on your Mac — and you're in charge of them."
+          image="/screenshots/models.png"
+          alt="The Models tab showing registered local MLX models assigned to legal reasoning, drafting, and critique tasks, with a loaded runtime."
+          flip
+        >
+          <p>
+            Download open-weight MLX models once and assign them per task —
+            deep reasoning for research, an instruct model for drafting, a
+            critic for review. The runtime loads them on your Apple Silicon; no
+            prompt or document ever leaves for a cloud model.
+          </p>
+          <p>
+            That&rsquo;s the whole subscription story: hardware you own running
+            models you chose, with nothing metered and no account behind it.
           </p>
         </Shot>
       </div>

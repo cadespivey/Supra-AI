@@ -23,7 +23,7 @@ const capabilities = [
   },
   {
     title: "Legislative & regulatory tracking",
-    body: "Pending bills and rulemaking relevant to a question appear as clearly-labeled tracking context — sourced from the Federal Register, Regulations.gov, OpenStates, and LegiScan — and are never passed off as citable authority.",
+    body: "Pending bills and rulemaking relevant to a question appear as clearly-labeled tracking context — sourced from the Federal Register, Regulations.gov, and OpenStates — and are never passed off as citable authority.",
   },
   {
     title: "Document drafting",

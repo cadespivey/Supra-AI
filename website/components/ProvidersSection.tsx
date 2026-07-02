@@ -28,12 +28,6 @@ const nonprofits: Provider[] = [
     role: "State legislation and bill tracking",
     note: "Open data on legislators, bills, and votes across every state legislature, powering Supra AI's state legislative-developments tracking.",
   },
-  {
-    name: "LegiScan",
-    url: "https://legiscan.com",
-    role: "Nationwide bill status and legislative detail",
-    note: "Bill tracking across all 50 states and Congress, with a free API tier that powers named-bill detail — sponsors, status, and official text links.",
-  },
 ];
 
 const official: Provider[] = [
@@ -89,6 +83,21 @@ export function ProvidersSection() {
           </span>
         </p>
       </div>
+
+      <figure className="mt-12">
+        <div className="mx-auto max-w-3xl overflow-hidden rounded-xl border border-supra-border bg-supra-navyDeep shadow-[0_24px_60px_-24px_rgba(0,0,0,0.7)]">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/screenshots/settings-sources.png"
+            alt="The app's Legal Data Sources settings listing each connector with its key status — several marked 'Free · no key' — with keys stored in the macOS Keychain."
+            loading="lazy"
+            className="block h-auto w-full"
+          />
+        </div>
+        <figcaption className="mt-3 text-center font-caps text-[11px] uppercase tracking-wide text-supra-muted">
+          Every source, its cost, and its key status — inside the app
+        </figcaption>
+      </figure>
 
       <div className="mt-14 grid gap-x-10 gap-y-8 lg:grid-cols-2">
         {nonprofits.map((provider) => (
