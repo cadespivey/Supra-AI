@@ -86,6 +86,15 @@ struct SupraSheetScaffold<Content: View, Footer: View>: View {
                 Button(doneLabel, action: onClose)
                     .buttonStyle(.ghost)
                     .keyboardShortcut(.cancelAction)
+                // With no footer there is no competing primary action, so Return
+                // closes the sheet too (several pre-scaffold sheets bound Return).
+                if !hasFooter {
+                    Button("", action: onClose)
+                        .keyboardShortcut(.defaultAction)
+                        .hidden()
+                        .frame(width: 0, height: 0)
+                        .accessibilityHidden(true)
+                }
             }
             .padding()
             Divider()
