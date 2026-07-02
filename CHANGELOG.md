@@ -9,6 +9,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.0.0] - 2026-07-02
+
+Grounded answers become interactive and tiered: citations you can click, sources and
+opinions that open inside the app, fast preliminary answers with explicit deeper
+passes, research that starts from the matter's own authority library, a deeper
+legal-data stack, and one unified visual chrome.
+
+### Added
+
+- **Clickable citations with an in-app source panel.** Inline `[S#]` markers in
+  grounded chat answers open a right-edge preview of the cited document, jumped to
+  and highlighting the exact cited passage. One shared, resizable panel serves chat,
+  Q&A, and the Documents tab, and remembers its width.
+- **In-app opinion reader.** `[A#]` legal citations open the full court opinion
+  inside the app — case header, the cited passage highlighted and scrolled into
+  view, and an "Open on CourtListener" link. Saved authorities read offline.
+- **Tiered document retrieval.** Document Q&A and matter-chat answers run a fast
+  pass first (seconds, the most relevant passages) and label the result
+  *Preliminary*, with an explicit "Search All Documents (slower)" full pass. An
+  empty fast pass escalates automatically; the preliminary answer is never
+  discarded.
+- **Local-first legal research.** A matter with saved authorities answers research
+  questions from its own library first — same ranking and citation verification as
+  network results — with "Search CourtListener (network)" as the wider tier.
+  Opinion text is stored when you save an authority, so this works offline.
+- **Docket case-finder.** "Who has sued X?" now searches CourtListener's
+  RECAP/PACER dockets by party and returns a linked case list, clearly labeled as
+  filings (not authority) — instead of a false "no results."
+- **Live citation resolution in `/verify`.** Every cite in a checked answer is
+  resolved against CourtListener's citation-lookup: real opinions link to the case;
+  unresolved cites are flagged as possibly fabricated. Only the citation strings
+  ever leave the device.
+- **Official statute text as citable law.** U.S. Code sections (govinfo) and CFR
+  sections (eCFR) are now retrieved as full official text with derived citations —
+  real primary law in the source packet, not locator stubs.
+- **Deeper legal-data connectors.** Naming a Regulations.gov docket returns that
+  rulemaking's timeline; naming a bill ("HB 123") returns its description, sponsors,
+  and official text link; Federal Register searches honor date ranges and document
+  types ("proposed rules since 2024").
+- **Documents tab rework.** Select-to-act rows (preview, open & edit in your
+  default app, tag, move, delete), multi-select share/export, drag-and-drop between
+  folders, and double-click to open.
+- **Chat model selector.** Pick a model per chat or leave it on Autoselect
+  (your Models-tab preferences), plus per-chat generation settings.
+
+### Changed
+
+- **Chat legal research quality.** Chat questions now use the same model query
+  planner as the Research tab, retrieve cited cases directly (citation-first), and
+  say honestly what corpus was searched when nothing matches.
+- **One visual chrome.** Every sheet, popover, menu, and confirmation shares the
+  same scaffold: ghost buttons, a semantic type scale, consistent iconography, and
+  uniform "Delete “Name”?" confirmations.
+- **Per-provider network budgets.** Each legal-data source has its own local rate
+  budget, so one provider's lookups can no longer starve the others.
+
+### Fixed
+
+- **Research misrouting.** Legal-concept phrasings ("cases against piercing the
+  veil") no longer route to the docket finder; statute questions containing
+  "lawsuit against…" stay statutory; one failed search no longer abandons the
+  remaining queries.
+- **Statute text fidelity.** HTML entities decode (§ instead of `&#167;`), page
+  chrome is stripped from fetched sections, and empty fetches can never be marked
+  citable.
+- **Esc closes the source panel** no matter where keyboard focus sits, and
+  footer-less sheets close on Return again.
+
 ## [1.8.0] - 2026-06-28
 
 Legal research gets a source-grounded authority stack, stricter guardrails, and safer
