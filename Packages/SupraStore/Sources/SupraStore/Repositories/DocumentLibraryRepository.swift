@@ -373,6 +373,23 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
         }
     }
 
+    /// All individually soft-deleted documents whose matter is still live — documents
+    /// trashed as part of a matter delete are restored with the matter, so they aren't
+    /// listed separately. Powers the global Recycle Bin.
+    public func fetchAllSoftDeletedDocuments() throws -> [MatterDocumentRecord] {
+        try writer.read { db in
+            try MatterDocumentRecord.fetchAll(
+                db,
+                sql: """
+                SELECT d.* FROM matter_documents d
+                JOIN matters m ON m.id = d.matter_id
+                WHERE d.deleted_at IS NOT NULL AND m.deleted_at IS NULL
+                ORDER BY d.deleted_at DESC
+                """
+            )
+        }
+    }
+
     public func fetchSoftDeletedDocuments(matterID: String) throws -> [MatterDocumentRecord] {
         try writer.read { db in
             try MatterDocumentRecord.fetchAll(

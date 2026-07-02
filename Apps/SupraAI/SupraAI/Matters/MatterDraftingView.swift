@@ -93,7 +93,7 @@ struct MatterDraftingView: View {
                     Section {
                         Label(errorText, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                            .font(.callout)
+                            .font(.supraCaption)
                     }
                 }
                 if let result {
@@ -122,8 +122,8 @@ struct MatterDraftingView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Draft").font(.headline)
-                Text(matterName).font(.caption).foregroundStyle(.secondary)
+                Text("Draft").font(.supraTitle)
+                Text(matterName).font(.supraSubheadline).foregroundStyle(.secondary)
             }
             Spacer()
             Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
@@ -173,7 +173,7 @@ struct MatterDraftingView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).foregroundStyle(enabled ? .primary : .secondary)
                 if let subtitle {
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                    Text(subtitle).font(.supraCaption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -213,7 +213,7 @@ struct MatterDraftingView: View {
         Section {
             LabeledTextField(label: "Re: (subject)", text: $letterReSubject, prompt: "e.g. Unpaid invoice #4471")
             VStack(alignment: .leading, spacing: 4) {
-                Text("Claim / dispute").font(.caption).foregroundStyle(.secondary)
+                Text("Claim / dispute").font(.supraCaption).foregroundStyle(.secondary)
                 MultilineField(
                     placeholder: "What is owed and why — the only facts the model may use.",
                     text: $letterClaim,
@@ -230,7 +230,7 @@ struct MatterDraftingView: View {
             LabeledTextField(label: "Delivery notation (optional)", text: $letterDelivery, prompt: "e.g. Via Certified Mail, RRR")
             routeStatus
             if let routingMessage {
-                Text(routingMessage).font(.caption).foregroundStyle(.orange)
+                Text(routingMessage).font(.supraCaption).foregroundStyle(.orange)
             }
         } header: {
             Text("Demand")
@@ -243,10 +243,10 @@ struct MatterDraftingView: View {
     private var routeStatus: some View {
         if let routeModel {
             Text("Uses \(draftRoute.role.displayName): \(routeModel.displayName)")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
         } else {
             Text("Assign a \(draftRoute.role.displayName) model in Models to generate a letter.")
-                .font(.caption).foregroundStyle(.orange)
+                .font(.supraCaption).foregroundStyle(.orange)
         }
     }
 
@@ -254,7 +254,7 @@ struct MatterDraftingView: View {
         Section {
             TextField("Title (e.g. Reply brief outline)", text: $customTitle)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Describe the work product").font(.caption).foregroundStyle(.secondary)
+                Text("Describe the work product").font(.supraCaption).foregroundStyle(.secondary)
                 MultilineField(
                     placeholder: "Describe what you want in plain language…",
                     text: $customDescription,
@@ -262,7 +262,7 @@ struct MatterDraftingView: View {
                 )
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text("Instructions / notes (optional)").font(.caption).foregroundStyle(.secondary)
+                Text("Instructions / notes (optional)").font(.supraCaption).foregroundStyle(.secondary)
                 MultilineField(
                     placeholder: "Tone, length, must-include points…",
                     text: $customInstructions,
@@ -346,11 +346,11 @@ struct MatterDraftingView: View {
     private func resultSection(_ artifact: MatterDraftingController.DraftArtifact) -> some View {
         Section {
             Label("Draft generated: \(artifact.fileURL.lastPathComponent)", systemImage: "doc.fill")
-                .font(.callout)
+                .font(.supraCaption)
             if !artifact.reviewNotes.isEmpty {
                 ForEach(artifact.reviewNotes, id: \.self) { note in
                     Label(note, systemImage: "flag.fill")
-                        .font(.caption)
+                        .font(.supraCaption)
                         .foregroundStyle(artifact.hasBlocking ? .orange : .secondary)
                 }
             }
@@ -380,7 +380,7 @@ struct MatterDraftingView: View {
         HStack {
             if controller.isGenerating { ProgressView().controlSize(.small) }
             if let validationHint {
-                Text(validationHint).font(.caption).foregroundStyle(.secondary)
+                Text(validationHint).font(.supraCaption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()

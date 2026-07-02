@@ -60,6 +60,12 @@ public final class DocumentProcessingQueue: ObservableObject {
         self.notifier = notifier
     }
 
+    deinit {
+        // Stop the background pump if the queue is ever released, so a detached
+        // runLoop can't keep running after its owner is gone.
+        runTask?.cancel()
+    }
+
     /// Relaunch reconciliation: any job left active is treated as interrupted and
     /// moved to paused for the user to resume (plan §5.4).
     public func bootstrap() {

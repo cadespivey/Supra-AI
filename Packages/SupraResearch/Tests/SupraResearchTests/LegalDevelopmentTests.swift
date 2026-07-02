@@ -26,6 +26,27 @@ final class LegalDevelopmentTests: XCTestCase {
         XCTAssertTrue(development.identifier.contains("2026-12993"))
     }
 
+    func testFederalRegisterDocumentTypeDerivation() {
+        XCTAssertEqual(FederalRegisterSource.documentType(in: "EPA proposed rule on PFAS"), "PRORULE")
+        XCTAssertEqual(FederalRegisterSource.documentType(in: "final rule effective dates"), "RULE")
+        XCTAssertEqual(FederalRegisterSource.documentType(in: "recent executive orders on AI"), "PRESDOCU")
+        XCTAssertEqual(FederalRegisterSource.documentType(in: "public notices on water permits"), "NOTICE")
+        XCTAssertNil(FederalRegisterSource.documentType(in: "clean water act developments"))
+    }
+
+    func testFederalRegisterPassesDateAndTypeFiltersToClient() async throws {
+        let recorder = RecordingFRClient()
+        let source = FederalRegisterSource(client: recorder)
+        _ = await source.lookup(LegalDevelopmentQuery(
+            terms: "PFAS proposed rule", jurisdiction: "Federal",
+            dateAfter: "2024-01-01", dateBefore: "2026-06-30"
+        ))
+        let call = try XCTUnwrap(recorder.box.lastCall)
+        XCTAssertEqual(call.publishedAfter, "2024-01-01")
+        XCTAssertEqual(call.publishedBefore, "2026-06-30")
+        XCTAssertEqual(call.documentType, "PRORULE")
+    }
+
     func testFederalRegisterSkipsStateSpecificQueries() async {
         let source = FederalRegisterSource(client: StubFRClient(result: .failure(.invalidResponse)))
         let result = await source.lookup(LegalDevelopmentQuery(terms: "x", jurisdiction: "Florida"))
@@ -116,6 +137,21 @@ final class LegalDevelopmentTests: XCTestCase {
         LegalDevelopment(sourceID: "fr", sourceName: "FR", kind: .regulatory, identifier: id,
                          title: "Title \(id)", jurisdiction: "Federal", status: "Proposed Rule",
                          date: date, url: "https://x/\(id)")
+    }
+}
+
+/// Records the filtered-search arguments so tests can assert pass-through.
+private struct RecordingFRClient: FederalRegisterClientProtocol {
+    final class Box: @unchecked Sendable {
+        var lastCall: (publishedAfter: String?, publishedBefore: String?, documentType: String?)?
+    }
+    let box = Box()
+    func search(query: String, limit: Int) async throws -> FederalRegisterResponse {
+        try await search(query: query, limit: limit, publishedAfter: nil, publishedBefore: nil, documentType: nil)
+    }
+    func search(query: String, limit: Int, publishedAfter: String?, publishedBefore: String?, documentType: String?) async throws -> FederalRegisterResponse {
+        box.lastCall = (publishedAfter, publishedBefore, documentType)
+        return try JSONDecoder().decode(FederalRegisterResponse.self, from: Data(#"{"count":0,"results":[]}"#.utf8))
     }
 }
 

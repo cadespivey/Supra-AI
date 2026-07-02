@@ -72,6 +72,31 @@ final class SupraStoreTests: XCTestCase {
         XCTAssertEqual(try store.chats.fetchMessages(chatID: chat.id).single?.content, "Preserve me")
     }
 
+    func testMessageCitationsRoundTripAndReplace() throws {
+        let store = try makeStore()
+        let chat = try store.chats.createGlobalChat(title: "Global")
+        let assistant = try store.chats.createAssistantMessageShell(chatID: chat.id)
+
+        let initial = [
+            MessageCitationRecord(messageID: assistant.id, label: "A1", kind: "authority", url: "https://courtlistener.com/x", displayName: "Foo v. Bar", rank: 0),
+            MessageCitationRecord(messageID: assistant.id, label: "S1", kind: "source", documentID: "doc-1", locatorJSON: "{}", displayName: "agreement.pdf", rank: 1)
+        ]
+        try store.chats.replaceCitations(messageID: assistant.id, initial)
+
+        let fetched = try store.chats.fetchCitations(messageID: assistant.id)
+        XCTAssertEqual(fetched.map(\.label), ["A1", "S1"])  // ordered by rank
+        XCTAssertEqual(fetched.first?.url, "https://courtlistener.com/x")
+        XCTAssertEqual(fetched.last?.documentID, "doc-1")
+
+        // Replace is delete-then-insert: no orphan rows from the prior set.
+        try store.chats.replaceCitations(messageID: assistant.id, [
+            MessageCitationRecord(messageID: assistant.id, label: "A1", kind: "authority", url: "https://courtlistener.com/y", rank: 0)
+        ])
+        let replaced = try store.chats.fetchCitations(messageID: assistant.id)
+        XCTAssertEqual(replaced.map(\.label), ["A1"])
+        XCTAssertEqual(replaced.first?.url, "https://courtlistener.com/y")
+    }
+
     func testMoveGlobalChatToMatterRetainsConversationAndValidatesTargets() throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")

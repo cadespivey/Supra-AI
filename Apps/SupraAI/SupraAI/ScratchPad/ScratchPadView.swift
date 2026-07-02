@@ -21,24 +21,18 @@ struct ScratchPadView: View {
     @State private var stagedFiles: [URL] = []
     @State private var showingImporter = false
     @State private var showHistory = false
+    /// Highlighted row in the @/# autocomplete dropdown (keyboard navigation).
+    @State private var selectedSuggestion = 0
+    /// The token the user dismissed with Esc; the menu stays closed until the token
+    /// changes (so typing more re-opens it).
+    @State private var dismissedToken: String?
+    /// Cross-day note search term, shown below the day controls in the header.
+    @State private var searchTerm = ""
     @FocusState private var composerFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
-            HStack {
-                Spacer()
-                Picker("View", selection: $tab) {
-                    Text("Note").tag(Tab.note)
-                    Text("Billing draft").tag(Tab.draft)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                Spacer()
-            }
-            .padding(.vertical, 8)
             Divider()
             switch tab {
             case .note:
@@ -70,34 +64,107 @@ struct ScratchPadView: View {
 
     @ViewBuilder
     private var noteContent: some View {
-        entryList
-            .dropDestination(for: URL.self) { urls, _ in
-                // A file dropped on the timeline (not on a specific note) creates a
-                // minimal note carrying it, so it's never orphaned in a day-level tray.
-                guard !controller.isCurrentDayLocked, !urls.isEmpty else { return false }
-                Task { await controller.addEntry("", attachmentURLs: urls) }
-                return true
+        if isSearching {
+            searchResultsList
+        } else {
+            entryList
+                .dropDestination(for: URL.self) { urls, _ in
+                    // A file dropped on the timeline (not on a specific note) creates a
+                    // minimal note carrying it, so it's never orphaned in a day-level tray.
+                    guard !controller.isCurrentDayLocked, !urls.isEmpty else { return false }
+                    Task { await controller.addEntry("", attachmentURLs: urls) }
+                    return true
+                }
+            attachmentBar
+            errorBanner
+            Divider()
+            composer
+        }
+    }
+
+    private var isSearching: Bool {
+        searchTerm.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2
+    }
+
+    private var scratchSearchField: some View {
+        TextField("Search notes", text: $searchTerm)
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .onChange(of: searchTerm) { _, term in controller.search(term) }
+            .accessibilityIdentifier("scratchpad.search")
+    }
+
+    /// Cross-day note search results; tapping a hit opens that day.
+    private var searchResultsList: some View {
+        ScrollView {
+            if controller.searchResults.isEmpty {
+                ContentUnavailableView.search(text: searchTerm)
+                    .padding(.top, 60)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(controller.searchResults, id: \.entryID) { hit in
+                        Button {
+                            controller.openDay(dayString: hit.day)
+                            searchTerm = ""
+                        } label: {
+                            searchHitRow(hit)
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                    }
+                }
+                .padding(.horizontal, 16)
             }
-        attachmentBar
-        errorBanner
-        Divider()
-        composer
+        }
+    }
+
+    @ViewBuilder
+    private func searchHitRow(_ hit: ScratchPadRepository.EntryHit) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(Self.displayDate(hit.day)).font(.supraCaption).foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+            Text(hit.text).font(.supraBody).lineLimit(3)
+            if !hit.tags.isEmpty {
+                Text(hit.tags.map { "#\($0)" }.joined(separator: " "))
+                    .font(.supraCaption).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("ScratchPad")
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.tertiary)
                 Text(Self.displayDate(controller.displayedDate))
-                    .font(.title3.weight(.semibold))
+                    .font(.supraTitle)
             }
             Spacer()
-            historyButton
-            lockButton
+            // Note / Billing tabs live in the header now (freeing the row they used to
+            // occupy).
+            GhostSegmentedControl(
+                selection: $tab,
+                segments: [(.note, "Note", ""), (.draft, "Billing draft", "")]
+            )
+            Spacer()
+            // The search box sits directly below the day controls and spans their width.
+            VStack(alignment: .trailing, spacing: 6) {
+                HStack(spacing: 8) {
+                    historyButton
+                    lockButton
+                }
+                scratchSearchField
+                    .frame(width: 200)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -110,18 +177,19 @@ struct ScratchPadView: View {
         Button { showHistory.toggle() } label: {
             Label("History", systemImage: "calendar")
         }
+        .buttonStyle(.ghost)
         .help("Jump to another day")
         .popover(isPresented: $showHistory, arrowEdge: .bottom) {
-            DatePicker(
-                "Day",
-                selection: calendarSelection,
-                in: ...Date(),
-                displayedComponents: .date
-            )
-            .datePickerStyle(.graphical)
-            .labelsHidden()
-            .padding()
-            .frame(width: 320)
+            SupraPopoverFrame("History") {
+                DatePicker(
+                    "Day",
+                    selection: calendarSelection,
+                    in: ...Date(),
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                .labelsHidden()
+            }
         }
     }
 
@@ -145,6 +213,7 @@ struct ScratchPadView: View {
             } label: {
                 Label("Locked", systemImage: "lock.fill")
             }
+            .buttonStyle(.ghost)
             .help("This day is locked. Reopen to edit.")
         } else if controller.currentDay != nil {
             Button {
@@ -152,6 +221,7 @@ struct ScratchPadView: View {
             } label: {
                 Label("Lock day", systemImage: "lock.open")
             }
+            .buttonStyle(.ghost)
             .help("Finalize and lock this day (reversible).")
         }
     }
@@ -225,10 +295,10 @@ struct ScratchPadView: View {
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
                 Text(attachment.fileName)
-                    .font(.caption)
+                    .font(.supraCaption)
                     .lineLimit(1)
                 Text(subtitle(for: attachment))
-                    .font(.caption2)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -253,7 +323,7 @@ struct ScratchPadView: View {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                 Text(error)
-                    .font(.caption)
+                    .font(.supraCaption)
                 Spacer(minLength: 8)
                 Button { controller.lastAttachmentError = nil } label: {
                     Image(systemName: "xmark")
@@ -306,43 +376,70 @@ struct ScratchPadView: View {
                 .padding(16)
             } else {
                 if composerIsNonBillable { nonBillableComposerBanner }
-                suggestionsBar
-                VStack(alignment: .leading, spacing: 8) {
-                    stagedFilesBar
-                    HStack(alignment: .bottom, spacing: 8) {
-                        Button { showingImporter = true } label: {
-                            Image(systemName: "paperclip")
-                                .font(.body)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("Attach a file to this note (work product, email, filing)")
-                        TextField("Add a note — @matter, #tag…", text: $composerText, axis: .vertical)
-                            .textFieldStyle(.plain)
-                            .lineLimit(1...5)
-                            .focused($composerFocused)
-                            // Plain Return adds the note; Shift-Return (and ⌘-Return) fall
-                            // through so the field inserts a newline / the button shortcut
-                            // fires. Replaces .onSubmit so Return cannot fire twice.
-                            .onKeyPress(keys: [.return]) { keyPress in
-                                guard keyPress.modifiers.isEmpty else { return .ignored }
-                                submit()
-                                return .handled
-                            }
-                        Button(action: submit) {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.title2)
-                        }
-                        .buttonStyle(.plain)
-                        .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stagedFiles.isEmpty)
+                // The @/# type-ahead list is laid out directly above the input box (rather
+                // than as an overlay pushed outside the box's bounds — such content renders
+                // but can't receive mouse clicks, which is why the popup wasn't selectable).
+                // In-flow, its rows are clickable and the field's key handlers drive it, so a
+                // matter is one click, or one Return/Tab, away.
+                VStack(alignment: .leading, spacing: 6) {
+                    if suggestionMenuOpen {
+                        suggestionDropdown
                     }
+                    VStack(alignment: .leading, spacing: 8) {
+                        stagedFilesBar
+                        HStack(alignment: .bottom, spacing: 8) {
+                            Button { showingImporter = true } label: {
+                                Image(systemName: "paperclip")
+                                    .font(.body)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Attach a file to this note (work product, email, filing)")
+                            TextField("Add a note — @matter, #tag…", text: $composerText, axis: .vertical)
+                                .textFieldStyle(.plain)
+                                .lineLimit(1...5)
+                                .focused($composerFocused)
+                                .onChange(of: composerText) { _, _ in selectedSuggestion = 0 }
+                                // When the @/# list is open, the arrow keys move the highlight
+                                // and Return/Tab accept it; otherwise plain Return adds the note
+                                // (Shift-Return / ⌘-Return fall through to a newline or the send
+                                // shortcut). Replaces .onSubmit so Return can't fire twice.
+                                .onKeyPress(.downArrow) { suggestionMenuOpen ? moveSelection(1) : .ignored }
+                                .onKeyPress(.upArrow) { suggestionMenuOpen ? moveSelection(-1) : .ignored }
+                                .onKeyPress(.escape) {
+                                    guard suggestionMenuOpen else { return .ignored }
+                                    dismissedToken = activeToken
+                                    return .handled
+                                }
+                                .onKeyPress(.tab) {
+                                    guard suggestionMenuOpen, let item = highlightedSuggestion else { return .ignored }
+                                    accept(item)
+                                    return .handled
+                                }
+                                .onKeyPress(keys: [.return]) { keyPress in
+                                    guard keyPress.modifiers.isEmpty else { return .ignored }
+                                    if suggestionMenuOpen, let item = highlightedSuggestion {
+                                        accept(item)
+                                        return .handled
+                                    }
+                                    submit()
+                                    return .handled
+                                }
+                            Button(action: submit) {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.title2)
+                            }
+                            .buttonStyle(.plain)
+                            .keyboardShortcut(.return, modifiers: .command)
+                            .disabled(composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stagedFiles.isEmpty)
+                        }
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.secondary.opacity(0.25))
+                    )
                 }
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.secondary.opacity(0.25))
-                )
                 .padding(16)
             }
         }
@@ -364,7 +461,7 @@ struct ScratchPadView: View {
                     ForEach(stagedFiles, id: \.self) { url in
                         HStack(spacing: 6) {
                             Image(systemName: "paperclip").font(.caption2).foregroundStyle(.secondary)
-                            Text(url.lastPathComponent).font(.caption).lineLimit(1).truncationMode(.middle)
+                            Text(url.lastPathComponent).font(.supraCaption).lineLimit(1).truncationMode(.middle)
                             Button { stagedFiles.removeAll { $0 == url } } label: {
                                 Image(systemName: "xmark.circle.fill")
                             }
@@ -383,7 +480,7 @@ struct ScratchPadView: View {
         HStack(spacing: 6) {
             Image(systemName: "nosign")
             Text("Tagged #Note — this won't be counted toward billing or time. Remove #Note to include it.")
-                .font(.caption)
+                .font(.supraCaption)
             Spacer(minLength: 8)
         }
         .foregroundStyle(.orange)
@@ -391,42 +488,29 @@ struct ScratchPadView: View {
         .padding(.bottom, 4)
     }
 
-    @ViewBuilder
-    private var suggestionsBar: some View {
-        let matters = matterSuggestions
-        let tags = tagSuggestions
-        if !matters.isEmpty || !tags.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(matters) { chip in
-                        Button { pickMatter(chip) } label: {
-                            Label(chip.name, systemImage: "folder")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                    ForEach(tags, id: \.self) { tag in
-                        Button { pickTag(tag) } label: {
-                            Text("#\(tag)")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-                .padding(.horizontal, 16)
+    // MARK: - @/# autocomplete
+
+    /// A row in the autocomplete dropdown.
+    private enum SuggestionItem: Identifiable, Equatable {
+        case matter(MatterChip)
+        case tag(String)
+        case createTag(String)
+
+        var id: String {
+            switch self {
+            case let .matter(chip): return "m:\(chip.id)"
+            case let .tag(tag): return "t:\(tag.lowercased())"
+            case let .createTag(tag): return "new:\(tag.lowercased())"
             }
-            .padding(.bottom, 4)
         }
     }
 
-    // MARK: - Autocomplete logic
-
-    /// The trailing whitespace-delimited token currently being typed, if it is an
-    /// `@`/`#` token with at least one character after the sigil.
+    /// The trailing whitespace-delimited token being typed, if it starts with `@`/`#`.
+    /// The bare sigil counts, so `@` alone opens the full matter list.
     private var activeToken: String? {
         guard let last = composerText.split(whereSeparator: { $0.isWhitespace }).last else { return nil }
         let token = String(last)
-        guard token.count > 1, let first = token.first, first == "@" || first == "#" else { return nil }
+        guard let first = token.first, first == "@" || first == "#" else { return nil }
         return token
     }
 
@@ -437,7 +521,107 @@ struct ScratchPadView: View {
 
     private var tagSuggestions: [String] {
         guard let token = activeToken, token.hasPrefix("#") else { return [] }
-        return ScratchPadTagResolver.tagSuggestions(prefix: String(token.dropFirst()), knownTags: controller.knownTags)
+        return ScratchPadTagResolver.tagSuggestions(prefix: String(token.dropFirst()), knownTags: controller.tagVocabulary)
+    }
+
+    /// The dropdown rows for the active token: matters for `@`; tags for `#`, plus a
+    /// "Create #tag" row when the typed tag isn't already in the vocabulary.
+    private var suggestionItems: [SuggestionItem] {
+        guard let token = activeToken, token != dismissedToken else { return [] }
+        if token.hasPrefix("@") {
+            return matterSuggestions.map(SuggestionItem.matter)
+        }
+        var items = tagSuggestions.map(SuggestionItem.tag)
+        let typed = String(token.dropFirst()).trimmingCharacters(in: .whitespaces)
+        if !typed.isEmpty,
+           !tagSuggestions.contains(where: { $0.caseInsensitiveCompare(typed) == .orderedSame }) {
+            items.append(.createTag(typed))
+        }
+        return items
+    }
+
+    private var suggestionMenuOpen: Bool { !suggestionItems.isEmpty }
+
+    private var highlightedSuggestion: SuggestionItem? {
+        let items = suggestionItems
+        guard items.indices.contains(selectedSuggestion) else { return items.first }
+        return items[selectedSuggestion]
+    }
+
+    private func moveSelection(_ delta: Int) -> KeyPress.Result {
+        let count = suggestionItems.count
+        guard count > 0 else { return .ignored }
+        selectedSuggestion = (selectedSuggestion + delta + count) % count
+        return .handled
+    }
+
+    private func accept(_ item: SuggestionItem) {
+        switch item {
+        case let .matter(chip): pickMatter(chip)
+        case let .tag(tag): pickTag(tag)
+        case let .createTag(tag): pickTag(tag)
+        }
+        selectedSuggestion = 0
+        dismissedToken = nil
+    }
+
+    @ViewBuilder
+    private var suggestionDropdown: some View {
+        let items = suggestionItems
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                suggestionRow(item, selected: index == selectedSuggestion)
+                    .contentShape(Rectangle())
+                    .onTapGesture { accept(item) }
+                    .onHover { if $0 { selectedSuggestion = index } }
+            }
+            Divider().opacity(0.4).padding(.vertical, 3)
+            Text("↑↓ navigate · ↩ or ⇥ select · click to pick")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 2)
+        }
+        .padding(4)
+        .frame(minWidth: 220, maxWidth: 340, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.secondary.opacity(0.25))
+        )
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+    }
+
+    @ViewBuilder
+    private func suggestionRow(_ item: SuggestionItem, selected: Bool) -> some View {
+        HStack(spacing: 8) {
+            switch item {
+            case let .matter(chip):
+                Image(systemName: "folder").foregroundStyle(.secondary).frame(width: 16)
+                Text(chip.name).lineLimit(1)
+            case let .tag(tag):
+                Image(systemName: "number").foregroundStyle(.secondary).frame(width: 16)
+                Text(tag).lineLimit(1)
+                if tag.caseInsensitiveCompare(ScratchPadEntryRecord.nonBillableTag) == .orderedSame {
+                    Text("non-billable").font(.caption2).foregroundStyle(.tertiary)
+                }
+            case let .createTag(tag):
+                Image(systemName: "plus.circle").foregroundStyle(.secondary).frame(width: 16)
+                Text("Create #\(tag)").lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.callout)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(selected ? Color.accentColor.opacity(0.18) : Color.clear)
+        )
     }
 
     private func pickMatter(_ chip: MatterChip) {
@@ -525,11 +709,12 @@ private struct ScratchPadEntryRow: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(ScratchPadFormatting.highlighted(entry.text))
+                    .supraReadingBody(measure: nil)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if entry.isNonBillable {
                     Label("Non-billable", systemImage: "nosign")
-                        .font(.caption2.weight(.medium))
+                        .font(.supraCaption.weight(.medium))
                         .foregroundStyle(.orange)
                 }
                 // Documents uploaded with this note render inline beneath it.
@@ -557,8 +742,8 @@ private struct ScratchPadEntryRow: View {
         HStack(spacing: 6) {
             Image(systemName: scratchPadAttachmentIcon(attachment.kind))
                 .font(.caption2).foregroundStyle(.secondary)
-            Text(attachment.fileName).font(.caption).lineLimit(1).truncationMode(.middle)
-            Text(attachment.summary).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            Text(attachment.fileName).font(.supraCaption).lineLimit(1).truncationMode(.middle)
+            Text(attachment.summary).font(.supraCaption).foregroundStyle(.secondary).lineLimit(1)
             if !isLocked {
                 Button { onRemoveAttachment(attachment.id) } label: {
                     Image(systemName: "xmark.circle.fill")

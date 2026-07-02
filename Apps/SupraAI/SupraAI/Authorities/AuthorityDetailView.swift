@@ -38,7 +38,7 @@ struct AuthorityDetailView: View {
     private func form(_ authority: AuthoritiesController.AuthorityItem) -> some View {
         Form {
             Section {
-                Text(authority.caseNameFull ?? authority.caseName).font(.headline)
+                Text(authority.caseNameFull ?? authority.caseName).font(.supraTitle)
                 if let court = authority.court { LabeledContent("Court", value: court) }
                 if let date = authority.dateFiled {
                     LabeledContent("Date filed") { Text(date, format: .dateTime.year().month().day()) }
@@ -64,7 +64,7 @@ struct AuthorityDetailView: View {
             if loadingOpinion || opinionPassage != nil {
                 Section("Opinion text") {
                     if let passage = opinionPassage {
-                        Text(passage).font(.callout).textSelection(.enabled)
+                        Text(passage).supraReadingBody().textSelection(.enabled)
                     } else {
                         Text("Loading…").foregroundStyle(.secondary)
                     }
@@ -72,7 +72,7 @@ struct AuthorityDetailView: View {
             }
 
             Section("Citations") {
-                ForEach(authority.citations, id: \.self) { Text($0).font(.callout) }
+                ForEach(authority.citations, id: \.self) { Text($0).font(.supraBody) }
                 TextField("Preferred citation", text: $citation)
                 Button("Save Citation") { controller.updatePreferredCitation(authorityID: authorityID, citation) }
                     .disabled(citation.trimmingCharacters(in: .whitespacesAndNewlines) == (authority.preferredCitation ?? ""))
@@ -83,7 +83,7 @@ struct AuthorityDetailView: View {
                 LabeledContent("Use status", value: authority.useStatus.displayName)
                 let allowed = authority.useStatus.allowedTransitions
                 if allowed.isEmpty {
-                    Text("No further transitions available.").font(.caption).foregroundStyle(.secondary)
+                    Text("No further transitions available.").font(.supraCaption).foregroundStyle(.secondary)
                 } else {
                     Menu("Change Use Status") {
                         ForEach(allowed, id: \.self) { target in
@@ -204,16 +204,12 @@ struct OpinionHTMLSheet: View {
     @State private var exporting = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(title).font(.headline).lineLimit(1)
-                Spacer()
-                Button { exporting = true } label: { Label("Download HTML…", systemImage: "arrow.down.circle") }
-                Button("Done") { dismiss() }
-            }
-            .padding(12)
-            Divider()
+        SupraSheetScaffold(title, onClose: { dismiss() }) {
             OpinionWebView(html: html)
+        } footer: {
+            Spacer()
+            Button { exporting = true } label: { Label("Download HTML…", systemImage: "arrow.down.circle") }
+                .buttonStyle(.ghost)
         }
         .frame(minWidth: 680, minHeight: 560)
         // .fileExporter presents reliably from within a sheet (NSSavePanel.runModal

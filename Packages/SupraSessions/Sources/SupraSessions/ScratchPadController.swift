@@ -76,6 +76,11 @@ public final class ScratchPadController: ObservableObject {
     @Published public private(set) var matterChips: [MatterChip] = []
     /// Distinct `#tags` seen so far, for the `#` autocomplete.
     @Published public private(set) var knownTags: [String] = []
+    /// Cross-day note search results (text/tag match); empty when not searching.
+    @Published public private(set) var searchResults: [ScratchPadRepository.EntryHit] = []
+    /// The `#` autocomplete vocabulary: used tags merged with the curated litigation
+    /// starter set, so `#` is useful before the user has built up their own tags.
+    @Published public private(set) var tagVocabulary: [String] = ScratchPadTagResolver.mergedTagVocabulary(used: [])
     /// Day-level attachments (evidence) for the current day.
     @Published public private(set) var attachments: [ScratchPadAttachmentView] = []
     /// Set when an attachment can't be ingested (e.g. `.msg`); the view surfaces it.
@@ -131,6 +136,24 @@ public final class ScratchPadController: ObservableObject {
             reloadEntries()       // entries empty, but #tag suggestions stay all-time
             reloadAttachments()
         }
+    }
+
+    /// Runs a cross-day note search. Matches entry text (which includes inline `#tags`
+    /// and `@mentions`), newest day first. Needs at least 2 characters; shorter terms
+    /// clear the results so the normal day view returns.
+    public func search(_ term: String) {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else { searchResults = []; return }
+        searchResults = (try? store.scratchPad.searchEntries(term: trimmed)) ?? []
+    }
+
+    public func clearSearch() { searchResults = [] }
+
+    /// Opens the day a search hit belongs to and clears the search.
+    public func openDay(dayString: String) {
+        guard let record = try? store.scratchPad.fetchDay(day: dayString) else { return }
+        searchResults = []
+        setCurrentDay(record)
     }
 
     /// Appends a new, freshly-timestamped entry. `explicitMentions` maps a typed
@@ -322,6 +345,7 @@ public final class ScratchPadController: ObservableObject {
         entries = records.map(ScratchPadEntryView.init)
         // Suggest #tags from every day, not just the one on screen (spec §3).
         knownTags = (try? store.scratchPad.distinctTags()) ?? []
+        tagVocabulary = ScratchPadTagResolver.mergedTagVocabulary(used: knownTags)
     }
 
     private func reloadRecentDays() {

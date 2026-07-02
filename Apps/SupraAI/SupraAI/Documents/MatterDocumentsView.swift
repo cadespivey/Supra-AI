@@ -1,4 +1,5 @@
 import PDFKit
+import Quartz
 import SupraCore
 import SupraDesignSystem
 import SupraSessions
@@ -24,7 +25,12 @@ struct MatterDocumentsView: View {
     @State private var showChronology = false
     @State private var dropTargeted = false
     @State private var preview: PreviewItem?
+    @State private var previewWidth: CGFloat = 580
     @State private var dismissedImportFailureID: String?
+    /// The single row whose action buttons (move/preview/open/delete) are revealed.
+    @State private var selectedDocID: String?
+    /// Documents ticked for multi-select sharing.
+    @State private var checkedDocIDs: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -35,12 +41,24 @@ struct MatterDocumentsView: View {
             Divider()
             jobProgress
             importFailureBanner
-            HSplitView {
+            // A fixed-width folder rail (not a resizable split): HSplitView rebalanced its
+            // panes to their ideal widths whenever the document list changed on folder
+            // selection, so the panes visibly jumped. A stable rail avoids that.
+            HStack(spacing: 0) {
                 folderSidebar
-                    .frame(minWidth: 200, maxWidth: 280)
+                    .frame(width: 220)
+                Divider()
                 mainContent
-                    .frame(minWidth: 360)
+                    .frame(maxWidth: .infinity)
+            }
+            // The preview slides in over the list (it doesn't displace it); clicking a
+            // row populates it.
+            .overlay(alignment: .trailing) {
+                if let item = preview {
+                    PreviewSlideOver(model: item.model, width: $previewWidth) { preview = nil }
                 }
+            }
+            .animation(.snappy(duration: 0.25), value: preview != nil)
         }
         .fileImporter(
             isPresented: $showImporter,
@@ -76,9 +94,6 @@ struct MatterDocumentsView: View {
                     library: library
                 ) { showChronology = false }
             }
-        }
-        .sheet(item: $preview) { item in
-            DocumentPreviewView(model: item.model) { preview = nil }
         }
         .onAppear { controller.reload() }
     }
@@ -132,10 +147,13 @@ struct MatterDocumentsView: View {
 
     private var folderSidebar: some View {
         List(selection: $controller.selectedSidebarID) {
-            Label("All Documents", systemImage: "tray.full").tag(MatterDocumentsController.allDocumentsTag)
+            Label("All Documents", systemImage: "tray.full")
+                .tag(MatterDocumentsController.allDocumentsTag)
+                .dropDestination(for: String.self) { ids, _ in moveDropped(ids, toFolderID: nil); return true }
             Section("Folders") {
                 ForEach(controller.folders) { folder in
                     Label(folder.name, systemImage: "folder").tag(folder.id)
+                        .dropDestination(for: String.self) { ids, _ in moveDropped(ids, toFolderID: folder.id); return true }
                         .contextMenu {
                             Button("Delete Folder", role: .destructive) { controller.deleteFolder(id: folder.id) }
                         }
@@ -143,10 +161,8 @@ struct MatterDocumentsView: View {
             }
         }
         .popover(isPresented: $showNewFolder) {
-            VStack(alignment: .leading) {
-                Text("New Folder").font(.headline)
+            SupraPopoverFrame("New Folder", width: 260) {
                 TextField("Folder name", text: $newFolderName)
-                    .frame(width: 220)
                 HStack {
                     Spacer()
                     Button("Create") {
@@ -154,10 +170,10 @@ struct MatterDocumentsView: View {
                         newFolderName = ""
                         showNewFolder = false
                     }
+                    .buttonStyle(.ghost)
                     .disabled(newFolderName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-            .padding()
         }
     }
 
@@ -181,11 +197,15 @@ struct MatterDocumentsView: View {
                     description: Text(controller.setupReady ? "Import files or drag them here." : "Complete Document Intelligence setup to import.")
                 )
             } else {
-                List {
-                    ForEach(controller.visibleDocuments) { doc in
-                        documentRow(doc)
-                        ForEach(controller.childAttachments(of: doc.id)) { child in
-                            documentRow(child).padding(.leading, 20)
+                VStack(spacing: 0) {
+                    selectionBar
+                    Divider()
+                    List {
+                        ForEach(controller.visibleDocuments) { doc in
+                            documentRow(doc)
+                            ForEach(controller.childAttachments(of: doc.id)) { child in
+                                documentRow(child).padding(.leading, 20)
+                            }
                         }
                     }
                 }
@@ -195,10 +215,20 @@ struct MatterDocumentsView: View {
     }
 
     private func documentRow(_ doc: MatterDocumentRecord) -> some View {
-        // The suggestion chips come from the stored classification metadata; the
-        // user's own tags are shown separately (the classifier creates no tags).
+        // The row itself is just identity: a multi-select tick, the name, its readiness
+        // status, and the tags applied on import. The move/preview/open/delete actions
+        // appear on the right only once the row is selected.
         let classification = controller.classification(forDocument: doc.id)
-        return HStack {
+        let isSelected = selectedDocID == doc.id
+        let isChecked = checkedDocIDs.contains(doc.id)
+        return HStack(spacing: 8) {
+            Button { toggleChecked(doc.id) } label: {
+                Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isChecked ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(isChecked ? "Deselect" : "Select for sharing")
+
             Image(systemName: doc.parentDocumentID == nil ? "doc.text" : "paperclip")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
@@ -206,68 +236,147 @@ struct MatterDocumentsView: View {
                 HStack(spacing: 6) {
                     statusBadge(doc.status)
                     if let summary = doc.ocrConfidenceSummary {
-                        Text(summary).font(.caption2).foregroundStyle(.orange)
+                        Text(summary).font(.supraCaption).foregroundStyle(.orange)
                     }
                     if let classification {
                         classificationChips(classification)
                     }
                     ForEach(controller.tags(forDocument: doc.id)) { tag in
-                        Text(tag.name).font(.caption2)
+                        Text(tag.name).font(.supraCaption)
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Color.accentColor.opacity(0.15), in: Capsule())
                     }
                 }
             }
-            Spacer()
-            Button {
-                if let model = controller.preview(documentID: doc.id) { preview = PreviewItem(model: model) }
-            } label: {
-                Image(systemName: "eye")
+            Spacer(minLength: 8)
+            if isSelected {
+                rowActions(doc)
             }
-            .buttonStyle(.borderless)
-            .help("Preview")
-            Menu {
-                ForEach(controller.tags) { tag in
-                    Button {
-                        controller.toggleTag(tag.id, on: doc.id)
-                    } label: {
-                        Label(tag.name, systemImage: controller.tags(forDocument: doc.id).contains { $0.id == tag.id } ? "checkmark" : "")
-                    }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : .clear)
+        )
+        .contentShape(Rectangle())
+        // Double-click opens the file in the default app (suppressed while 2+ files are
+        // ticked for a batch action); a single click selects the row to reveal its
+        // actions; dragging it onto a folder moves it.
+        .onTapGesture(count: 2) { if checkedDocIDs.count <= 1 { openInDefaultApp(doc) } }
+        .onTapGesture { selectedDocID = isSelected ? nil : doc.id }
+        .draggable(doc.id)
+    }
+
+    /// The trailing action cluster shown on the selected document row: preview, open in
+    /// the default app, tag, move, and delete.
+    @ViewBuilder
+    private func rowActions(_ doc: MatterDocumentRecord) -> some View {
+        Button { showPreview(doc) } label: { Image(systemName: "eye") }
+            .buttonStyle(.plain).help("Preview")
+        Button { openInDefaultApp(doc) } label: { Image(systemName: "arrow.up.forward.app") }
+            .buttonStyle(.plain).help("Open & edit in your default app")
+        Menu {
+            ForEach(controller.tags) { tag in
+                Button { controller.toggleTag(tag.id, on: doc.id) } label: {
+                    Label(tag.name, systemImage: controller.tags(forDocument: doc.id).contains { $0.id == tag.id } ? "checkmark" : "")
                 }
-                if controller.tags.isEmpty { Text("No tags yet").foregroundStyle(.secondary) }
-            } label: {
-                Image(systemName: "tag")
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            if doc.parentDocumentID == nil {
-                Menu {
-                    Button { controller.moveDocument(id: doc.id, toFolderID: nil) } label: {
-                        Label("All Documents", systemImage: doc.folderID == nil ? "checkmark" : "tray")
-                    }
-                    if controller.folders.isEmpty {
-                        Text("Add a folder from the sidebar to organize documents")
-                    } else {
-                        Divider()
-                        ForEach(controller.folders) { folder in
-                            Button { controller.moveDocument(id: doc.id, toFolderID: folder.id) } label: {
-                                Label(folder.name, systemImage: doc.folderID == folder.id ? "checkmark" : "folder")
-                            }
+            if controller.tags.isEmpty { Text("No tags yet").foregroundStyle(.secondary) }
+        } label: {
+            Image(systemName: "tag")
+        }
+        .menuStyle(.borderlessButton).fixedSize().help("Tags")
+        if doc.parentDocumentID == nil {
+            Menu {
+                Button { controller.moveDocument(id: doc.id, toFolderID: nil) } label: {
+                    Label("All Documents", systemImage: doc.folderID == nil ? "checkmark" : "tray")
+                }
+                if controller.folders.isEmpty {
+                    Text("Add a folder from the sidebar to organize documents")
+                } else {
+                    Divider()
+                    ForEach(controller.folders) { folder in
+                        Button { controller.moveDocument(id: doc.id, toFolderID: folder.id) } label: {
+                            Label(folder.name, systemImage: doc.folderID == folder.id ? "checkmark" : "folder")
                         }
                     }
-                } label: {
-                    Image(systemName: "folder")
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Move to folder")
+            } label: {
+                Image(systemName: "folder")
             }
-            Button(role: .destructive) { controller.softDelete(documentID: doc.id) } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
+            .menuStyle(.borderlessButton).fixedSize().help("Move to folder")
         }
-        .padding(.vertical, 2)
+        Button(role: .destructive) {
+            controller.softDelete(documentID: doc.id)
+            checkedDocIDs.remove(doc.id)
+            if selectedDocID == doc.id { selectedDocID = nil }
+        } label: {
+            Image(systemName: "trash")
+        }
+        .buttonStyle(.ghostDanger).help("Move to trash")
+    }
+
+    private func toggleChecked(_ id: String) {
+        if checkedDocIDs.contains(id) { checkedDocIDs.remove(id) } else { checkedDocIDs.insert(id) }
+    }
+
+    /// Opens the managed original in the user's default app. Because it opens the file
+    /// Supra manages, saving in that app writes straight back to Supra's copy.
+    private func openInDefaultApp(_ doc: MatterDocumentRecord) {
+        guard let url = controller.fileURL(forDocument: doc.id) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Select-all + share bar above the document list.
+    private var selectionBar: some View {
+        let ids = controller.visibleDocuments.map(\.id)
+        let allChecked = !ids.isEmpty && ids.allSatisfy { checkedDocIDs.contains($0) }
+        let hasSelection = !checkedDocIDs.isEmpty
+        return HStack(spacing: 8) {
+            Button {
+                if allChecked { ids.forEach { checkedDocIDs.remove($0) } }
+                else { checkedDocIDs.formUnion(ids) }
+            } label: {
+                Label(allChecked ? "Deselect All" : "Select All",
+                      systemImage: allChecked ? "checkmark.circle.fill" : "circle")
+            }
+            .buttonStyle(.ghost)
+            if hasSelection {
+                Text("\(checkedDocIDs.count) selected").foregroundStyle(.secondary)
+            }
+            Spacer()
+            // Always laid out (only active once something is ticked) so the bar keeps a
+            // constant height sized for the Share button instead of growing when it appears.
+            ShareLink(items: sharedFileURLs) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(.ghost)
+            .disabled(!hasSelection)
+            .opacity(hasSelection ? 1 : 0)
+            .allowsHitTesting(hasSelection)
+        }
+        .font(.supraCaption)
+        .padding(.horizontal, 10).padding(.vertical, 4)
+    }
+
+    /// Managed file URLs for the ticked documents, for the Share sheet.
+    private var sharedFileURLs: [URL] {
+        checkedDocIDs.compactMap { controller.fileURL(forDocument: $0) }
+    }
+
+    /// Moves dropped documents to a folder (nil = All Documents). Dropping any member of
+    /// the multi-select set moves the whole set.
+    private func moveDropped(_ ids: [String], toFolderID: String?) {
+        let expanded = Set(ids.flatMap { checkedDocIDs.contains($0) ? Array(checkedDocIDs) : [$0] })
+        for id in expanded { controller.moveDocument(id: id, toFolderID: toFolderID) }
+    }
+
+    /// Opens (or refreshes) the preview pane for a document.
+    private func showPreview(_ doc: MatterDocumentRecord) {
+        if let model = controller.preview(documentID: doc.id) {
+            preview = PreviewItem(model: model)
+        }
     }
 
     /// The classifier's suggested categorization, shown inline on a document row:
@@ -280,14 +389,14 @@ struct MatterDocumentsView: View {
             Image(systemName: "sparkles").font(.system(size: 8))
             Text(classification.primaryCategory.displayName)
         }
-        .font(.caption2.weight(.medium))
+        .font(.supraCaption.weight(.medium))
         .foregroundStyle(.tint)
         .padding(.horizontal, 6).padding(.vertical, 1)
         .background(Color.accentColor.opacity(0.18), in: Capsule())
         .help(classificationTooltip(classification))
 
         ForEach(classification.secondaryCategories, id: \.self) { category in
-            Text(category.displayName).font(.caption2)
+            Text(category.displayName).font(.supraCaption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 5).padding(.vertical, 1)
                 .background(Color.accentColor.opacity(0.08), in: Capsule())
@@ -319,12 +428,12 @@ struct MatterDocumentsView: View {
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
-                        Text(hit.documentName).font(.callout.weight(.medium))
-                        Text(hit.locatorDisplay).font(.caption2).foregroundStyle(.secondary)
+                        Text(hit.documentName).font(.supraHeadline)
+                        Text(hit.locatorDisplay).font(.supraCaption).foregroundStyle(.secondary)
                         Spacer()
                         Image(systemName: "arrow.up.forward.square").foregroundStyle(.secondary)
                     }
-                    Text(hit.excerpt).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                    Text(hit.excerpt).font(.supraCaption).foregroundStyle(.secondary).lineLimit(3)
                 }
             }
             .buttonStyle(.plain)
@@ -337,7 +446,7 @@ struct MatterDocumentsView: View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             Text("Document import is disabled until Document Intelligence setup is complete in Settings.")
-                .font(.callout)
+                .font(.supraCaption)
             Spacer()
         }
         .padding(8)
@@ -379,10 +488,10 @@ struct MatterDocumentsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     ProgressView().controlSize(.small)
-                    Text(phaseLabel(job.phase)).font(.caption)
+                    Text(phaseLabel(job.phase)).font(.supraCaption)
                     Spacer()
                     if job.totalUnits > 0 {
-                        Text("\(job.completedUnits)/\(job.totalUnits)").font(.caption).monospacedDigit()
+                        Text("\(job.completedUnits)/\(job.totalUnits)").font(.supraCaption).monospacedDigit()
                     }
                 }
                 if job.totalUnits > 0 {
@@ -395,9 +504,7 @@ struct MatterDocumentsView: View {
     }
 
     private var trashSheet: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Trash").font(.title2.weight(.semibold)).padding()
-            Divider()
+        SupraSheetScaffold("Trash", onClose: { showTrash = false }) {
             if controller.trashedDocuments.isEmpty && controller.trashedFolders.isEmpty {
                 ContentUnavailableView("Trash is Empty", systemImage: "trash", description: Text("Soft-deleted documents and folders appear here."))
                     .frame(minWidth: 460, minHeight: 240)
@@ -410,6 +517,7 @@ struct MatterDocumentsView: View {
                                     Label(folder.name, systemImage: "folder")
                                     Spacer()
                                     Button("Restore") { controller.restoreFolder(id: folder.id) }
+                                        .buttonStyle(.ghost)
                                 }
                             }
                         }
@@ -420,22 +528,22 @@ struct MatterDocumentsView: View {
                                 Text(doc.displayName)
                                 Spacer()
                                 Button("Restore") { controller.restore(documentID: doc.id) }
+                                    .buttonStyle(.ghost)
                                 Button("Delete Permanently", role: .destructive) { controller.permanentlyDelete(documentID: doc.id) }
+                                    .buttonStyle(.ghostDanger)
                             }
                         }
                     }
                 }
                 .frame(minWidth: 480, minHeight: 320)
             }
-            Divider()
-            HStack { Spacer(); Button("Done") { showTrash = false }.keyboardShortcut(.defaultAction) }.padding()
         }
     }
 
     private func statusBadge(_ status: String) -> some View {
         let (label, color) = Self.statusAppearance(status)
         return Text(label)
-            .font(.caption2.weight(.medium))
+            .font(.supraCaption.weight(.medium))
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(color.opacity(0.18), in: Capsule())
             .foregroundStyle(color)
@@ -531,41 +639,55 @@ struct DocumentQASheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Ask the Documents").font(.title2.weight(.semibold))
-                Spacer()
-                Button("Done", action: onClose)
+        SupraSheetScaffold("Ask the Documents", onClose: onClose) {
+            qaContent
+        } footer: {
+            if let result = qa.lastResult {
+                Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
+                    .buttonStyle(.ghost)
+                    .disabled(qa.isGenerating || routeModel == nil)
             }
-            .padding()
-            Divider()
+            Spacer()
+            if qa.isGenerating { ProgressView().controlSize(.small) }
+            Button("Ask") { Task { await ask() } }
+                .buttonStyle(.ghost)
+                .keyboardShortcut(.defaultAction)
+                .disabled(qa.isGenerating || routeModel == nil || question.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .frame(minWidth: 520, idealWidth: 620, maxWidth: .infinity, minHeight: 460, idealHeight: 600, maxHeight: .infinity)
+        .onAppear { library.refresh() }
+    }
+
+    private var qaContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
             Form {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Your question").font(.caption).foregroundStyle(.secondary)
+                    Text("Your question").font(.subheadline).foregroundStyle(.secondary)
                     MultilineField(
                         placeholder: "e.g. What are the termination provisions in the lease?",
                         text: $question,
                         minLines: 3
                     )
                 }
-                Picker("Answer style", selection: $mode) {
-                    Text("Short").tag(DocumentAnswerMode.short)
-                    Text("Memo").tag(DocumentAnswerMode.memo)
+                LabeledContent("Answer style") {
+                    GhostSegmentedControl(
+                        selection: $mode,
+                        segments: [(DocumentAnswerMode.short, "Short", ""), (DocumentAnswerMode.memo, "Memo", "")]
+                    )
                 }
-                .pickerStyle(.segmented)
                 if scopeFolderID != nil {
                     Toggle("Limit to the selected folder", isOn: $scopeThisFolder)
                 }
                 if let readiness = qa.scopeReadiness(scope: scope) {
                     Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) documents indexed")
-                        .font(.caption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
+                        .font(.supraCaption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
                 }
                 routeStatus
                 if let routingMessage {
-                    Text(routingMessage).font(.caption).foregroundStyle(.orange)
+                    Text(routingMessage).font(.supraCaption).foregroundStyle(.orange)
                 }
                 if let message = qa.message {
-                    Text(message).font(.caption).foregroundStyle(.orange)
+                    Text(message).font(.supraCaption).foregroundStyle(.orange)
                 }
             }
             .formStyle(.grouped)
@@ -576,7 +698,7 @@ struct DocumentQASheet: View {
                     VStack(alignment: .leading, spacing: 6) {
                         if result.status == StructuredOutputStatus.needsReview.rawValue {
                             Label("Needs review — \(result.warnings.joined(separator: " "))", systemImage: "exclamationmark.triangle")
-                                .font(.caption).foregroundStyle(.orange)
+                                .font(.supraCaption).foregroundStyle(.orange)
                         }
                         Text(Self.markdown(result.markdown))
                             .textSelection(.enabled)
@@ -586,23 +708,7 @@ struct DocumentQASheet: View {
                 }
                 .frame(minHeight: 200)
             }
-
-            Divider()
-            HStack {
-                if let result = qa.lastResult {
-                    Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
-                        .disabled(qa.isGenerating || routeModel == nil)
-                }
-                Spacer()
-                if qa.isGenerating { ProgressView().controlSize(.small) }
-                Button("Ask") { Task { await ask() } }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(qa.isGenerating || routeModel == nil || question.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .padding()
         }
-        .frame(minWidth: 520, idealWidth: 620, maxWidth: .infinity, minHeight: 460, idealHeight: 600, maxHeight: .infinity)
-        .onAppear { library.refresh() }
     }
 
     @ViewBuilder
@@ -610,11 +716,11 @@ struct DocumentQASheet: View {
         if let route {
             if let routeModel {
                 Text("Uses \(route.role.displayName): \(routeModel.displayName)")
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
             } else {
                 Text("Assign a \(route.role.displayName) model in Models to ask documents.")
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.orange)
             }
         }
@@ -680,33 +786,47 @@ struct DocumentChronologySheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Fact Chronology").font(.title2.weight(.semibold))
-                Spacer()
-                Button("Done", action: onClose)
+        SupraSheetScaffold("Fact Chronology", onClose: onClose) {
+            chronologyContent
+        } footer: {
+            if let result = chronology.lastResult {
+                Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
+                    .buttonStyle(.ghost)
+                    .disabled(chronology.isGenerating || routeModel == nil)
             }
-            .padding()
-            Divider()
+            Spacer()
+            if chronology.isGenerating { ProgressView().controlSize(.small) }
+            Button("Generate") { Task { await generate() } }
+                .buttonStyle(.ghost)
+                .keyboardShortcut(.defaultAction)
+                .disabled(chronology.isGenerating || routeModel == nil)
+        }
+        .frame(minWidth: 540, idealWidth: 640, maxWidth: .infinity, minHeight: 480, idealHeight: 620, maxHeight: .infinity)
+        .onAppear { library.refresh() }
+    }
+
+    private var chronologyContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
             Form {
-                Picker("Format", selection: $format) {
-                    Text("Table").tag(DocumentChronologyFormat.table)
-                    Text("Narrative").tag(DocumentChronologyFormat.narrative)
+                LabeledContent("Format") {
+                    GhostSegmentedControl(
+                        selection: $format,
+                        segments: [(DocumentChronologyFormat.table, "Table", ""), (DocumentChronologyFormat.narrative, "Narrative", "")]
+                    )
                 }
-                .pickerStyle(.segmented)
                 if scopeFolderID != nil {
                     Toggle("Limit to the selected folder", isOn: $scopeThisFolder)
                 }
                 if let readiness = chronology.scopeReadiness(scope: scope) {
                     Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) documents indexed")
-                        .font(.caption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
+                        .font(.supraCaption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
                 }
                 routeStatus
                 if let routingMessage {
-                    Text(routingMessage).font(.caption).foregroundStyle(.orange)
+                    Text(routingMessage).font(.supraCaption).foregroundStyle(.orange)
                 }
                 if let message = chronology.message {
-                    Text(message).font(.caption).foregroundStyle(.orange)
+                    Text(message).font(.supraCaption).foregroundStyle(.orange)
                 }
             }
             .formStyle(.grouped)
@@ -717,7 +837,7 @@ struct DocumentChronologySheet: View {
                     VStack(alignment: .leading, spacing: 6) {
                         if result.status == StructuredOutputStatus.needsReview.rawValue {
                             Label("Needs review — \(result.warnings.joined(separator: " "))", systemImage: "exclamationmark.triangle")
-                                .font(.caption).foregroundStyle(.orange)
+                                .font(.supraCaption).foregroundStyle(.orange)
                         }
                         Text((try? AttributedString(markdown: result.markdown, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(result.markdown))
                             .textSelection(.enabled)
@@ -727,23 +847,7 @@ struct DocumentChronologySheet: View {
                 }
                 .frame(minHeight: 220)
             }
-
-            Divider()
-            HStack {
-                if let result = chronology.lastResult {
-                    Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
-                        .disabled(chronology.isGenerating || routeModel == nil)
-                }
-                Spacer()
-                if chronology.isGenerating { ProgressView().controlSize(.small) }
-                Button("Generate") { Task { await generate() } }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(chronology.isGenerating || routeModel == nil)
-            }
-            .padding()
         }
-        .frame(minWidth: 540, idealWidth: 640, maxWidth: .infinity, minHeight: 480, idealHeight: 620, maxHeight: .infinity)
-        .onAppear { library.refresh() }
     }
 
     @ViewBuilder
@@ -751,11 +855,11 @@ struct DocumentChronologySheet: View {
         if let route {
             if let routeModel {
                 Text("Uses \(route.role.displayName): \(routeModel.displayName)")
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
             } else {
                 Text("Assign a \(route.role.displayName) model in Models to build a chronology.")
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.orange)
             }
         }
@@ -792,9 +896,10 @@ struct DocumentChronologySheet: View {
     }
 }
 
-/// In-app source preview (WO 40): PDF page, image, or normalized text with a
-/// best-effort highlight, plus source metadata/warnings. Never fails silently —
-/// an unavailable visual falls back to normalized text (plan §11.2).
+/// In-app source preview (WO 40): PDF page, image, QuickLook-rendered original
+/// file, or normalized text with a best-effort highlight, plus source
+/// metadata/warnings. Never fails silently — an unavailable visual falls back to
+/// normalized text (plan §11.2).
 struct DocumentPreviewView: View {
     let model: DocumentPreviewModel
     let onClose: () -> Void
@@ -803,8 +908,8 @@ struct DocumentPreviewView: View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(model.documentName).font(.headline)
-                    Text(model.locatorDisplay).font(.caption).foregroundStyle(.secondary)
+                    Text(model.documentName).font(.supraTitle)
+                    Text(model.locatorDisplay).font(.supraSubheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Done", action: onClose).keyboardShortcut(.defaultAction)
@@ -813,7 +918,7 @@ struct DocumentPreviewView: View {
             if !model.warnings.isEmpty {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text(model.warnings.joined(separator: " ")).font(.caption).foregroundStyle(.orange)
+                    Text(model.warnings.joined(separator: " ")).font(.supraCaption).foregroundStyle(.orange)
                     Spacer()
                 }
                 .padding(.horizontal).padding(.bottom, 6)
@@ -822,6 +927,7 @@ struct DocumentPreviewView: View {
             body(for: model.kind)
                 .frame(minWidth: 560, minHeight: 460)
         }
+        .accessibilityIdentifier("documentPreview")
     }
 
     @ViewBuilder
@@ -829,6 +935,20 @@ struct DocumentPreviewView: View {
         switch kind {
         case let .pdf(path, pageIndex, highlightText):
             PDFKitView(url: URL(fileURLWithPath: path), pageIndex: pageIndex, highlightText: highlightText)
+        case let .quickLook(path, excerpt):
+            VStack(spacing: 0) {
+                if let excerpt, !excerpt.isEmpty {
+                    citedPassageBanner(excerpt)
+                    Divider()
+                }
+                if FileManager.default.fileExists(atPath: path) {
+                    QuickLookView(url: URL(fileURLWithPath: path))
+                } else {
+                    Label("Original file unavailable.", systemImage: "doc.questionmark")
+                        .font(.supraCaption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
         case let .image(path, _):
             ScrollView([.horizontal, .vertical]) {
                 if let image = NSImage(contentsOf: URL(fileURLWithPath: path)) {
@@ -840,16 +960,18 @@ struct DocumentPreviewView: View {
         case let .text(content, start, end):
             ScrollView {
                 Text(Self.highlighted(content, start: start, end: end))
+                    .supraReadingBody()
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
             }
         case let .unavailable(reason, fallbackText):
             VStack(alignment: .leading, spacing: 8) {
-                Label(reason, systemImage: "doc.questionmark").font(.callout).foregroundStyle(.secondary)
+                Label(reason, systemImage: "doc.questionmark").font(.supraCaption).foregroundStyle(.secondary)
                 Divider()
                 ScrollView {
                     Text(fallbackText.isEmpty ? "No extracted text available." : fallbackText)
+                        .supraReadingBody()
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -865,6 +987,34 @@ struct DocumentPreviewView: View {
         let upper = attributed.index(attributed.startIndex, offsetByCharacters: end)
         attributed[lower..<upper].backgroundColor = .yellow.opacity(0.4)
         return attributed
+    }
+
+    /// QuickLook renders the real file but can't paint the cited range inside it, so
+    /// this banner surfaces the cited passage above the preview (with a copy button)
+    /// — the closest stand-in for the in-document highlight PDFs/text get.
+    @ViewBuilder
+    private func citedPassageBanner(_ excerpt: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "quote.opening").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Cited passage").font(.supraCaption).foregroundStyle(.secondary)
+                Text(excerpt.count > 280 ? String(excerpt.prefix(280)) + "…" : excerpt)
+                    .font(.supraBody)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(excerpt, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .help("Copy cited passage")
+        }
+        .padding(.horizontal).padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.12))
     }
 }
 
@@ -897,5 +1047,98 @@ struct PDFKitView: NSViewRepresentable {
                 view.go(to: selection)
             }
         }
+    }
+}
+
+/// Renders the original document file with QuickLook (the same engine as Finder's
+/// preview pane), so Word/RTF/spreadsheet/email files look like their real selves
+/// instead of stripped plain text.
+struct QuickLookView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> QLPreviewView {
+        let view = QLPreviewView(frame: .zero, style: .normal) ?? QLPreviewView()
+        view.autostarts = true
+        view.previewItem = url as NSURL
+        return view
+    }
+
+    func updateNSView(_ view: QLPreviewView, context: Context) {
+        if (view.previewItem as? URL) != url {
+            view.previewItem = url as NSURL
+        }
+    }
+}
+
+/// A right-anchored document preview that slides in OVER the content (it does not
+/// displace the list/conversation underneath). A leading drag handle resizes it; a
+/// border + shadow set it apart. Use via `.overlay(alignment: .trailing)`.
+struct PreviewSlideOver: View {
+    let model: DocumentPreviewModel
+    @Binding var width: CGFloat
+    let onClose: () -> Void
+
+    // Floor matches DocumentPreviewView's intrinsic content minWidth (560) so the
+    // panel can never be dragged narrower than the content can render (which would
+    // overflow the fixed-width frame).
+    static let minWidth: CGFloat = 560
+    static let maxWidth: CGFloat = 1100
+
+    var body: some View {
+        HStack(spacing: 0) {
+            PreviewResizeHandle(width: $width, minWidth: Self.minWidth, maxWidth: Self.maxWidth)
+            DocumentPreviewView(model: model, onClose: onClose)
+                .frame(width: width)
+        }
+        .frame(maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Color(nsColor: .separatorColor)).frame(width: 1)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 10, x: -3, y: 0)
+        .transition(.move(edge: .trailing))
+        // Restore the Escape-to-close that the prior sheet/inspector gave for free.
+        .onExitCommand { onClose() }
+    }
+}
+
+/// The thin draggable strip on the leading edge of the slide-over; dragging it left
+/// widens the panel (covering more), right narrows it — the content underneath never
+/// moves. Shows a horizontal-resize cursor on hover.
+private struct PreviewResizeHandle: View {
+    @Binding var width: CGFloat
+    let minWidth: CGFloat
+    let maxWidth: CGFloat
+    @State private var dragStartWidth: CGFloat?
+    // NSCursor.push()/pop() share a process-wide stack and must balance exactly. This
+    // flag guarantees we only pop a cursor we actually pushed — otherwise an exit
+    // hover with no prior enter (common during the slide transition) would pop a
+    // cursor belonging to other UI, and a teardown mid-hover would leak ours.
+    @State private var pushed = false
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: 8)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside {
+                    if !pushed { NSCursor.resizeLeftRight.push(); pushed = true }
+                } else if pushed {
+                    NSCursor.pop(); pushed = false
+                }
+            }
+            .onDisappear {
+                if pushed { NSCursor.pop(); pushed = false }
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        let start = dragStartWidth ?? width
+                        if dragStartWidth == nil { dragStartWidth = width }
+                        width = min(maxWidth, max(minWidth, start - value.translation.width))
+                    }
+                    .onEnded { _ in dragStartWidth = nil }
+            )
     }
 }

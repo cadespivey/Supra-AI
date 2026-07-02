@@ -43,7 +43,7 @@ struct OutputDetailView: View {
             Divider()
             if let message = controller.message {
                 Text(message)
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
@@ -58,7 +58,11 @@ struct OutputDetailView: View {
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         } else {
+                            // Rendered work product is a long-form reading surface —
+                            // body text with reading leading and a capped measure. (Raw
+                            // markdown above stays monospaced.)
                             MarkdownPreview(markdown: selected.markdown)
+                                .supraReadingBody()
                         }
                     }
                     .padding()
@@ -97,7 +101,7 @@ struct OutputDetailView: View {
             Toggle("Raw", isOn: $showRaw).toggleStyle(.button)
             if let sessionID = controller.outputs.first(where: { $0.id == outputID })?.researchSessionID, !sessionID.isEmpty {
                 Label("Linked to research session", systemImage: "link")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.supraCaption).foregroundStyle(.secondary)
             }
             Spacer()
             Menu {
@@ -131,18 +135,18 @@ struct OutputDetailView: View {
         if let repairRoute {
             if let repairModel {
                 Text("\(repairRoute.role.shortDisplayName): \(repairModel.displayName)")
-                    .font(.caption2)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             } else {
                 Text("Assign \(repairRoute.role.displayName) model")
-                    .font(.caption2)
+                    .font(.supraCaption)
                     .foregroundStyle(.orange)
             }
         }
         if let routingMessage {
             Text(routingMessage)
-                .font(.caption2)
+                .font(.supraCaption)
                 .foregroundStyle(.orange)
                 .lineLimit(2)
         }
@@ -165,9 +169,9 @@ struct OutputDetailView: View {
     private func missingBar(_ version: StructuredOutputController.VersionItem) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Missing sections (\(version.missingSections.count))")
-                .font(.caption.weight(.semibold)).foregroundStyle(.orange)
+                .font(.supraHeadline).foregroundStyle(.orange)
             Text(version.missingSections.joined(separator: ", "))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
@@ -177,10 +181,10 @@ struct OutputDetailView: View {
     private func sourcesBar(_ sources: [StructuredOutputController.SourceItem]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Label("Grounded in \(sources.count) document source\(sources.count == 1 ? "" : "s")", systemImage: "doc.text.magnifyingglass")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .font(.supraHeadline).foregroundStyle(.secondary)
             ForEach(sources) { source in
                 Text("[\(source.label)] \(source.documentName)\(source.locatorDisplay.isEmpty ? "" : " — \(source.locatorDisplay)")")
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.supraCaption).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

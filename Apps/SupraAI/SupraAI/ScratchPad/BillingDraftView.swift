@@ -73,7 +73,7 @@ struct BillingDraftView: View {
             }
             .disabled(billing.isGenerating || dayID == nil || isLocked)
             if let version = billing.draftVersion {
-                Text("v\(version)").font(.caption).foregroundStyle(.tertiary)
+                Text("v\(version)").font(.supraCaption).foregroundStyle(.tertiary)
             }
             Spacer()
             if billing.hasDraft {
@@ -94,7 +94,7 @@ struct BillingDraftView: View {
     private func statusRow(_ message: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "info.circle")
-            Text(message).font(.caption)
+            Text(message).font(.supraCaption)
         }
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -116,13 +116,13 @@ struct BillingDraftView: View {
             if !reconciliation.flags.isEmpty {
                 ForEach(reconciliation.flags.prefix(4), id: \.self) { flag in
                     Label(flag, systemImage: "exclamationmark.triangle")
-                        .font(.caption2)
+                        .font(.supraCaption)
                         .foregroundStyle(.orange)
                 }
             }
             if let excluded = reconciliation.nonBillableExcluded {
                 Label(excluded, systemImage: "nosign")
-                    .font(.caption2)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -132,7 +132,7 @@ struct BillingDraftView: View {
 
     private func metric(_ label: String, _ value: String, warning: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(label).font(.supraCaption).foregroundStyle(.secondary)
             Text(value).font(.callout.weight(.medium)).foregroundStyle(warning ? Color.orange : .primary)
         }
     }
@@ -165,9 +165,9 @@ struct BillingDraftView: View {
 
     private func matterHeader(_ group: MatterGroup) -> some View {
         HStack {
-            Text(group.name).font(.callout.weight(.medium))
+            Text(group.name).font(.supraHeadline)
             Spacer()
-            Text("\(BillingExporter.hoursString(group.hours)) h").font(.caption).foregroundStyle(.secondary)
+            Text("\(BillingExporter.hoursString(group.hours)) h").font(.supraCaption).foregroundStyle(.secondary)
         }
         .padding(.vertical, 6)
         .padding(.top, 4)
@@ -176,13 +176,13 @@ struct BillingDraftView: View {
     private func lineRow(_ line: BillingLineItemRecord) -> some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(line.narrative).font(.callout)
+                Text(line.narrative).font(.supraBody)
                 HStack(spacing: 6) {
                     codeChip(line.utbmsTaskCode, fallback: "—")
                     codeChip(line.utbmsActivityCode, fallback: "A—")
                     confidencePill(line.confidence)
                     if line.userEdited {
-                        Label("edited", systemImage: "pencil").font(.caption2).foregroundStyle(goldAccent)
+                        Label("edited", systemImage: "pencil").font(.supraCaption).foregroundStyle(goldAccent)
                     }
                 }
             }
@@ -232,7 +232,7 @@ struct BillingDraftView: View {
         let confidence = BillingConfidence(rawValue: raw) ?? .medium
         let color: Color = confidence == .high ? .green : (confidence == .low ? .red : .orange)
         return Text(confidence.rawValue)
-            .font(.caption2)
+            .font(.supraCaption)
             .foregroundStyle(color)
             .padding(.horizontal, 7).padding(.vertical, 2)
             .background(Capsule().fill(color.opacity(0.14)))
@@ -320,41 +320,42 @@ private struct EditLineSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Edit line").font(.headline)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Narrative").font(.caption).foregroundStyle(.secondary)
-                MultilineField(placeholder: "Narrative", text: $narrative, minLines: 3)
-            }
-            HStack(alignment: .top, spacing: 12) {
-                field("Hours", text: $hoursText, width: 80)
-                taskCodeField
-                activityCodeField
-            }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                Button("Save") {
-                    let hours = Double(hoursText.trimmingCharacters(in: .whitespaces)) ?? line.hours
-                    onSave(
-                        narrative.trimmingCharacters(in: .whitespacesAndNewlines),
-                        hours,
-                        taskCode.isEmpty ? nil : taskCode,
-                        activityCode.isEmpty ? nil : activityCode
-                    )
+        SupraSheetScaffold("Edit line", doneLabel: "Cancel", onClose: { dismiss() }) {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Narrative").font(.subheadline).foregroundStyle(.secondary)
+                    MultilineField(placeholder: "Narrative", text: $narrative, minLines: 3)
                 }
-                .keyboardShortcut(.defaultAction)
+                HStack(alignment: .top, spacing: 12) {
+                    field("Hours", text: $hoursText, width: 80)
+                    taskCodeField
+                    activityCodeField
+                }
+                Spacer(minLength: 0)
             }
+            .padding(20)
+        } footer: {
+            Spacer()
+            Button("Save") {
+                let hours = Double(hoursText.trimmingCharacters(in: .whitespaces)) ?? line.hours
+                onSave(
+                    narrative.trimmingCharacters(in: .whitespacesAndNewlines),
+                    hours,
+                    taskCode.isEmpty ? nil : taskCode,
+                    activityCode.isEmpty ? nil : activityCode
+                )
+            }
+            .buttonStyle(.ghost)
+            .keyboardShortcut(.defaultAction)
         }
-        .padding(20)
-        .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity)
+        .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, minHeight: 320, idealHeight: 400)
     }
 
     @ViewBuilder
     private var taskCodeField: some View {
         let options = UTBMSCodes.taskCodes(for: codeSet)
         VStack(alignment: .leading, spacing: 4) {
-            Text("Task code").font(.caption).foregroundStyle(.secondary)
+            Text("Task code").font(.subheadline).foregroundStyle(.secondary)
             if options.isEmpty {
                 // .none → no task code; transactional/advisory → firm-specific free text.
                 if codeSet == .none {
@@ -370,7 +371,7 @@ private struct EditLineSheet: View {
 
     private var activityCodeField: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Activity").font(.caption).foregroundStyle(.secondary)
+            Text("Activity").font(.subheadline).foregroundStyle(.secondary)
             codePicker(selection: $activityCode, options: UTBMSCodes.activity)
         }
     }
@@ -392,7 +393,7 @@ private struct EditLineSheet: View {
 
     private func field(_ label: String, text: Binding<String>, width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(.subheadline).foregroundStyle(.secondary)
             TextField(label, text: text).textFieldStyle(.roundedBorder).frame(width: width)
         }
     }

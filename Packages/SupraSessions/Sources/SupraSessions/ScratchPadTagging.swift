@@ -101,4 +101,32 @@ public enum ScratchPadTagResolver {
         guard !p.isEmpty else { return Array(knownTags.prefix(limit)) }
         return Array(knownTags.filter { $0.lowercased().hasPrefix(p) }.prefix(limit))
     }
+
+    /// A starter vocabulary for litigation timekeeping, so `#` is useful before the
+    /// user has built up their own tags. `note` (the reserved non-billable tag) is
+    /// last so it doesn't crowd out billable activities. These are merged with the
+    /// user's actually-used tags by `mergedTagVocabulary`.
+    public static let defaultLitigationTags: [String] = [
+        "call", "email", "conference", "research", "draft", "review", "revise",
+        "court", "hearing", "deposition", "discovery", "filing", "travel", "note",
+    ]
+
+    /// The `#` autocomplete vocabulary: the user's used tags first (their real
+    /// working set, in the order the store returns them), then any curated defaults
+    /// they haven't used yet. De-duplicated case-insensitively, preferring the used
+    /// spelling so "Draft" and "draft" don't both appear.
+    public static func mergedTagVocabulary(
+        used: [String],
+        curated: [String] = defaultLitigationTags
+    ) -> [String] {
+        var result: [String] = []
+        var seen = Set<String>()
+        for tag in used + curated {
+            let key = tag.lowercased()
+            guard !key.isEmpty, !seen.contains(key) else { continue }
+            seen.insert(key)
+            result.append(tag)
+        }
+        return result
+    }
 }

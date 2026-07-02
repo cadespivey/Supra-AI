@@ -37,21 +37,18 @@ struct ResearchPlannerView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Text("New Research Session")
-                .font(.title2.weight(.semibold))
-                .padding([.horizontal, .top])
-
+        SupraSheetScaffold("New Research Session", doneLabel: "Cancel", onClose: { controller.resetPlan(); dismiss() }) {
             Form {
                 Section("Issue") {
                     TextField("Title", text: $draft.title)
                         .accessibilityIdentifier("planner.title")
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Legal issue or question").font(.caption).foregroundStyle(.secondary)
+                        Text("Legal issue or question").font(.subheadline).foregroundStyle(.secondary)
                         MultilineField(
                             placeholder: "e.g. Does the UCC govern a sale of goods under $500?",
                             text: $draft.issueText,
-                            minLines: 4
+                            minLines: 4,
+                            accessibilityID: "planner.issue"
                         )
                         .accessibilityIdentifier("planner.issue")
                     }
@@ -85,10 +82,10 @@ struct ResearchPlannerView: View {
                     .accessibilityIdentifier("planner.generate")
                     routeStatus
                     if let routingMessage {
-                        Text(routingMessage).font(.caption).foregroundStyle(.orange)
+                        Text(routingMessage).font(.supraCaption).foregroundStyle(.orange)
                     }
                     if let message = planMessage {
-                        Text(message).font(.caption).foregroundStyle(.secondary)
+                        Text(message).font(.supraCaption).foregroundStyle(.secondary)
                     }
                 } footer: {
                     Text("The assigned legal-research model proposes queries locally. No network request is made until you run the plan. You can add queries manually if no model is assigned.")
@@ -118,25 +115,18 @@ struct ResearchPlannerView: View {
                 }
             }
             .formStyle(.grouped)
-
-            Divider()
-            HStack {
-                Button("Cancel", role: .cancel) {
-                    controller.resetPlan()
-                    dismiss()
-                }
-                Spacer()
-                if !controller.plannedQueries.isEmpty {
-                    Text("\(controller.approvedQueryCount) approved")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Button("Save Plan") { save() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!controller.canSavePlan)
-                    .accessibilityIdentifier("planner.save")
+        } footer: {
+            Spacer()
+            if !controller.plannedQueries.isEmpty {
+                Text("\(controller.approvedQueryCount) approved")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
             }
-            .padding()
+            Button("Save Plan") { save() }
+                .buttonStyle(.ghost)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!controller.canSavePlan)
+                .accessibilityIdentifier("planner.save")
         }
         .frame(minWidth: 560, idealWidth: 680, maxWidth: .infinity, minHeight: 640, idealHeight: 780, maxHeight: .infinity)
         .onAppear {
@@ -183,11 +173,11 @@ struct ResearchPlannerView: View {
     private var routeStatus: some View {
         if let routeModel {
             Text("Uses \(route.role.displayName): \(routeModel.displayName)")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.secondary)
         } else {
             Text("Assign a \(route.role.displayName) model in Models to generate a search plan, or add queries manually.")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.orange)
         }
     }

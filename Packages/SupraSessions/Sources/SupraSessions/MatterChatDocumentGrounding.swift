@@ -136,6 +136,25 @@ struct GroundedChatContext: Sendable, Equatable {
     /// run a post-generation entity-grounding check (catch names absent from the record).
     /// Empty for inventory / no-match contexts, where there is nothing to extract.
     var sourceTexts: [String] = []
+    /// Resolvable references behind each `[S#]` passage, so the controller can persist
+    /// clickable citations that open the in-app preview at the cited page. Empty for
+    /// inventory / no-match contexts.
+    var sources: [GroundedSourceRef] = []
+    /// Whether every document in the answered scope was fully indexed at retrieval time.
+    /// `false` means the answer was produced from a still-indexing scope; the controller
+    /// surfaces that as an out-of-band citation-coverage warning rather than relying on a
+    /// soft in-prompt note the model may drop.
+    var scopeFullyIndexed: Bool = true
+}
+
+/// A resolvable pointer behind an inline `[S#]` matter-document citation: enough to
+/// open the in-app preview at the right page and highlight the cited passage.
+struct GroundedSourceRef: Sendable, Equatable {
+    var label: String          // "S1", "S2", …
+    var documentID: String
+    var documentName: String
+    var locator: DocumentSourceLocator
+    var excerpt: String
 }
 
 /// Grounds a matter chat in the matter's OWN documents. Inventory questions ("what's
@@ -239,7 +258,8 @@ final class MatterChatDocumentGrounding {
         let result = try? await retrieval.retrieve(
             matterID: matterID, query: question, scope: scope, limit: Self.packedSourceLimit
         )
-        let sources: [GroundingSource] = (result?.sources ?? []).enumerated().map { index, retrieved in
+        let retrieved = result?.sources ?? []
+        let sources: [GroundingSource] = retrieved.enumerated().map { index, retrieved in
             let low = retrieved.ocrConfidence.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false
             return GroundingSource(
                 label: "S\(index + 1)",
@@ -249,6 +269,15 @@ final class MatterChatDocumentGrounding {
                 excerpt: retrieved.excerpt,
                 lowConfidence: low,
                 metadata: retrieved.metadata
+            )
+        }
+        let sourceRefs: [GroundedSourceRef] = retrieved.enumerated().map { index, retrieved in
+            GroundedSourceRef(
+                label: "S\(index + 1)",
+                documentID: retrieved.documentID,
+                documentName: retrieved.documentName,
+                locator: retrieved.locator,
+                excerpt: retrieved.excerpt
             )
         }
 
@@ -266,16 +295,14 @@ final class MatterChatDocumentGrounding {
                 + "indexed so far; content from the rest may be missing.)\n\n" + prompt
         }
 
-        let appendix = SourceAppendix(entries: sources.map {
-            SourceAppendix.Entry(
-                label: $0.label, documentName: $0.documentName,
-                locatorDisplay: $0.locatorDisplay, excerpt: $0.excerpt,
-                warnings: $0.lowConfidence ? ["low OCR confidence"] : []
-            )
-        })
+        // No source excerpts appended to the answer text: the clickable inline `[S#]`
+        // markers plus the subtle sources list under the message carry the citations
+        // now, so the verbose excerpt block would just duplicate them.
         return GroundedChatContext(
-            modelPrompt: prompt, systemPrompt: groundedSystemPrompt(), trailer: "\n" + appendix.markdown(),
-            sourceTexts: sources.map(\.text)
+            modelPrompt: prompt, systemPrompt: groundedSystemPrompt(), trailer: nil,
+            sourceTexts: sources.map(\.text),
+            sources: sourceRefs,
+            scopeFullyIndexed: result?.readiness.isFullyReady ?? true
         )
     }
 

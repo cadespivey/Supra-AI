@@ -29,8 +29,25 @@ public struct GovInfoStatutorySource: StatutorySource {
         }
         do {
             let response = try await client.searchUSCode(term: query.terms, limit: query.limit)
-            let provisions = response.results.prefix(query.limit).compactMap(Self.provision(from:))
-            let note = provisions.isEmpty
+            var provisions: [StatutoryProvision] = []
+            var fetchedText = 0
+            for result in response.results.prefix(query.limit) {
+                // Section-level (granule) hits: fetch the official section text so the
+                // provision is real, citable primary law — capped to bound latency.
+                // The emptiness gate runs on the STRIPPED text: a 200 page that reduces
+                // to nothing (tags only) must not be promoted to citable law.
+                if let packageId = result.packageId, let granuleId = result.granuleId,
+                   fetchedText < Self.maxSectionTextFetches,
+                   let raw = try? await client.fetchGranuleText(packageId: packageId, granuleId: granuleId),
+                   case let cleaned = ECFRStatutorySource.stripHTML(raw),
+                   !cleaned.isEmpty {
+                    fetchedText += 1
+                    provisions.append(Self.sectionProvision(from: result, packageId: packageId, granuleId: granuleId, cleanedText: cleaned))
+                } else if let provision = Self.provision(from: result) {
+                    provisions.append(provision)
+                }
+            }
+            let note = (provisions.isEmpty || fetchedText > 0)
                 ? nil
                 : "govinfo returned official U.S. Code package-level locators only; section text was not retrieved, so those locators were not used as citable primary law."
             return StatutoryLookupResult(provisions: provisions, note: note)
@@ -39,6 +56,51 @@ public struct GovInfoStatutorySource: StatutorySource {
         } catch {
             return StatutoryLookupResult(note: "govinfo lookup was unavailable for this query.")
         }
+    }
+
+    /// The most section-text fetches per lookup — bounds latency AND keeps a lookup
+    /// (search + fetches) comfortably inside the client's local per-minute rate budget.
+    static let maxSectionTextFetches = 2
+    /// Cap stored section text (some sections run very long).
+    static let maxSectionTextLength = 8_000
+
+    /// A citable provision from a granule-level (section) hit whose text has already
+    /// been stripped (and verified non-empty) by the caller.
+    static func sectionProvision(from result: GovInfoResult, packageId: String, granuleId: String, cleanedText: String) -> StatutoryProvision {
+        let capped = cleanedText.count > maxSectionTextLength
+            ? String(cleanedText.prefix(maxSectionTextLength)) + "…"
+            : cleanedText
+        let citation = Self.uscCitation(packageId: packageId, granuleId: granuleId) ?? result.title ?? granuleId
+        return StatutoryProvision(
+            sourceID: "govinfo",
+            sourceName: "govinfo",
+            weightTier: .currencyVerifiable,
+            jurisdictionID: packageId,
+            jurisdictionName: "United States Code",
+            citation: citation,
+            heading: result.title,
+            snippet: String(capped.prefix(280)),
+            text: capped,
+            url: "https://www.govinfo.gov/app/details/\(packageId)/\(granuleId)",
+            locatorPath: "\(packageId)/\(granuleId)",
+            effectiveDate: result.dateIssued,
+            currencyCaveat: nil,
+            isCitableAuthority: true   // real official section text retrieved
+        )
+    }
+
+    /// Derives a "11 U.S.C. § 701"-style citation from USCODE package/granule ids
+    /// (`USCODE-2023-title11` / `…-sec701`). Nil when the ids don't carry both parts.
+    /// Dash continuations must be numeric (§ 78j-1) so an alphabetic granule suffix
+    /// like `…-sec78j-1-note` doesn't fold "-note" into the citation.
+    public static func uscCitation(packageId: String, granuleId: String) -> String? {
+        guard let titleRange = packageId.range(of: #"title(\d+[A-Za-z]?)"#, options: .regularExpression),
+              let secRange = granuleId.range(of: #"\bsec[0-9][0-9A-Za-z.]*(?:-\d+[a-z]?)*"#, options: .regularExpression) else {
+            return nil
+        }
+        let title = packageId[titleRange].dropFirst("title".count)
+        let section = granuleId[secRange].dropFirst("sec".count)
+        return "\(title) U.S.C. § \(section)"
     }
 
     static func provision(from result: GovInfoResult) -> StatutoryProvision? {
@@ -68,6 +130,17 @@ public enum GovInfoError: Error, Equatable, Sendable {
 
 public protocol GovInfoClientProtocol: Sendable {
     func searchUSCode(term: String, limit: Int) async throws -> GovInfoSearchResponse
+
+    /// Fetches a granule's (U.S. Code section's) rendered text. Throwing conformers
+    /// degrade to locator-only results.
+    func fetchGranuleText(packageId: String, granuleId: String) async throws -> String
+}
+
+public extension GovInfoClientProtocol {
+    /// Default so stubs/conformers that don't fetch section text still compile.
+    func fetchGranuleText(packageId: String, granuleId: String) async throws -> String {
+        throw GovInfoError.invalidResponse
+    }
 }
 
 public struct GovInfoSearchResponse: Decodable, Sendable, Equatable {
@@ -77,8 +150,19 @@ public struct GovInfoSearchResponse: Decodable, Sendable, Equatable {
 public struct GovInfoResult: Decodable, Sendable, Equatable {
     public let title: String?
     public let packageId: String?
+    /// Present on granule-level (section-level) hits, e.g.
+    /// `USCODE-2023-title11-chap7-subchapI-sec701`; nil on package-level hits.
+    public let granuleId: String?
     public let dateIssued: String?
     public let collectionCode: String?
+
+    public init(title: String?, packageId: String?, granuleId: String? = nil, dateIssued: String?, collectionCode: String?) {
+        self.title = title
+        self.packageId = packageId
+        self.granuleId = granuleId
+        self.dateIssued = dateIssued
+        self.collectionCode = collectionCode
+    }
 }
 
 public final class GovInfoClient: GovInfoClientProtocol, @unchecked Sendable {
@@ -118,6 +202,35 @@ public final class GovInfoClient: GovInfoClientProtocol, @unchecked Sendable {
         case 200..<300:
             do { return try JSONDecoder().decode(GovInfoSearchResponse.self, from: data) }
             catch { throw GovInfoError.decodingFailed }
+        case 500...599: throw GovInfoError.serverError(statusCode: response.statusCode)
+        default: throw GovInfoError.invalidResponse
+        }
+    }
+
+    public func fetchGranuleText(packageId: String, granuleId: String) async throws -> String {
+        guard let key = (try? tokenStore.loadAPIKey(for: .govInfo)) ?? nil, !key.isEmpty else {
+            throw GovInfoError.missingKey
+        }
+        // Rendered HTML of the section from the official content endpoint.
+        guard let encodedPackage = packageId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let encodedGranule = granuleId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://api.govinfo.gov/packages/\(encodedPackage)/granules/\(encodedGranule)/htm") else {
+            throw GovInfoError.invalidResponse
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(key, forHTTPHeaderField: "X-Api-Key")
+
+        let (data, response): (Data, HTTPURLResponse)
+        do { (data, response) = try await httpClient.sendUnauthenticated(request, relatedResearchSessionID: nil) }
+        catch { throw GovInfoError.transportFailed(error.localizedDescription) }
+
+        switch response.statusCode {
+        case 200..<300:
+            guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+                throw GovInfoError.decodingFailed
+            }
+            return text
         case 500...599: throw GovInfoError.serverError(statusCode: response.statusCode)
         default: throw GovInfoError.invalidResponse
         }

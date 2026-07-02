@@ -15,6 +15,18 @@ public enum ECFRError: Error, Equatable, Sendable {
 
 public protocol ECFRClientProtocol: Sendable {
     func search(query: String, limit: Int) async throws -> ECFRSearchResponse
+
+    /// Fetches one CFR section's full text from the versioner API, as of `date`
+    /// (the search hit's effective date). Throwing conformers degrade to the
+    /// search excerpt.
+    func fetchSectionText(title: String, part: String?, section: String, date: String) async throws -> String
+}
+
+public extension ECFRClientProtocol {
+    /// Default so stubs/conformers that don't fetch section text still compile.
+    func fetchSectionText(title: String, part: String?, section: String, date: String) async throws -> String {
+        throw ECFRError.invalidResponse
+    }
 }
 
 public struct ECFRSearchResponse: Decodable, Sendable, Equatable {
@@ -72,6 +84,47 @@ public final class ECFRClient: ECFRClientProtocol, @unchecked Sendable {
                 decoder.keyDecodingStrategy = .convertFromSnakeCase
                 do { return try decoder.decode(ECFRSearchResponse.self, from: data) }
                 catch { throw ECFRError.decodingFailed }
+            case 500...599:
+                throw ECFRError.serverError(statusCode: response.statusCode)
+            default:
+                throw ECFRError.invalidResponse
+            }
+        } catch let error as ECFRError {
+            throw error
+        } catch let error as NetworkPolicyError {
+            if case .localRateLimitExceeded = error { throw ECFRError.transportFailed("rate limited") }
+            throw ECFRError.blockedByNetworkPolicy
+        } catch is AuthorizedHTTPClientError {
+            throw ECFRError.invalidResponse
+        } catch {
+            throw ECFRError.transportFailed(error.localizedDescription)
+        }
+    }
+
+    public func fetchSectionText(title: String, part: String?, section: String, date: String) async throws -> String {
+        // The versioner returns just the requested section's XML when filtered.
+        let base = Self.apiBaseURL(baseURLOverride)
+            .appendingPathComponent("versioner/v1/full/\(date)/title-\(title).xml")
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            throw ECFRError.invalidResponse
+        }
+        var items = [URLQueryItem(name: "section", value: section)]
+        if let part, !part.isEmpty {
+            items.insert(URLQueryItem(name: "part", value: part), at: 0)
+        }
+        components.queryItems = items
+        guard let url = components.url else { throw ECFRError.invalidResponse }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        do {
+            let (data, response) = try await httpClient.sendUnauthenticated(request, relatedResearchSessionID: nil)
+            switch response.statusCode {
+            case 200..<300:
+                guard let xml = String(data: data, encoding: .utf8), !xml.isEmpty else {
+                    throw ECFRError.decodingFailed
+                }
+                return xml
             case 500...599:
                 throw ECFRError.serverError(statusCode: response.statusCode)
             default:

@@ -61,7 +61,8 @@ public enum CourtListenerText {
         return best
     }
 
-    private static func decodeEntities(_ input: String) -> String {
+    /// Internal so the statutory sources' HTML/XML stripping shares one decoder.
+    static func decodeEntities(_ input: String) -> String {
         var output = input
         // `&amp;` is decoded last so decoding can't synthesize a new entity.
         let entities: [(String, String)] = [
@@ -78,6 +79,35 @@ public enum CourtListenerText {
         for (entity, replacement) in entities {
             output = output.replacingOccurrences(of: entity, with: replacement)
         }
+        output = decodeNumericEntities(output)
         return output.replacingOccurrences(of: "&amp;", with: "&")
+    }
+
+    /// General numeric character references — decimal (`&#167;`) and hex (`&#xA7;`) —
+    /// beyond the common-entity table. The ampersand codepoint itself (38) is left
+    /// for the final `&amp;` step so decoding can't synthesize a new entity.
+    private static func decodeNumericEntities(_ input: String) -> String {
+        guard input.contains("&#"),
+              let regex = try? NSRegularExpression(pattern: "&#(x[0-9a-fA-F]{1,6}|[0-9]{1,7});") else {
+            return input
+        }
+        let source = input as NSString
+        var result = ""
+        var cursor = 0
+        for match in regex.matches(in: input, range: NSRange(location: 0, length: source.length)) {
+            result += source.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+            let token = source.substring(with: match.range(at: 1))
+            let value = token.lowercased().hasPrefix("x")
+                ? UInt32(token.dropFirst(), radix: 16)
+                : UInt32(token)
+            if let value, value != 38, let scalar = Unicode.Scalar(value) {
+                result.unicodeScalars.append(scalar)
+            } else {
+                result += source.substring(with: match.range)
+            }
+            cursor = match.range.location + match.range.length
+        }
+        result += source.substring(from: cursor)
+        return result
     }
 }
