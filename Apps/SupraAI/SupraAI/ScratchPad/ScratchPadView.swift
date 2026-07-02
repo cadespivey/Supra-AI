@@ -180,16 +180,16 @@ struct ScratchPadView: View {
         .buttonStyle(.ghost)
         .help("Jump to another day")
         .popover(isPresented: $showHistory, arrowEdge: .bottom) {
-            DatePicker(
-                "Day",
-                selection: calendarSelection,
-                in: ...Date(),
-                displayedComponents: .date
-            )
-            .datePickerStyle(.graphical)
-            .labelsHidden()
-            .padding()
-            .frame(width: 320)
+            SupraPopoverFrame("History") {
+                DatePicker(
+                    "Day",
+                    selection: calendarSelection,
+                    in: ...Date(),
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                .labelsHidden()
+            }
         }
     }
 

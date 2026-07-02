@@ -853,8 +853,7 @@ struct GlobalChatsView: View {
     }
 
     private var jurisdictionSettings: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Jurisdiction").font(.supraTitle)
+        SupraPopoverFrame("Jurisdiction") {
             Picker("Jurisdiction", selection: $controller.jurisdictionOverrideID) {
                 Text("Auto-detect from prompt").tag("")
                 Section("Federal") {
@@ -877,8 +876,6 @@ struct GlobalChatsView: View {
             Text("Bounds CourtListener research to the selected jurisdiction. Auto-detect infers it from your prompt.")
                 .font(.supraCaption).foregroundStyle(.secondary)
         }
-        .padding()
-        .frame(width: 320)
     }
 
     private var jurisdictionLabel: String {
@@ -962,8 +959,7 @@ struct GlobalChatsView: View {
         // Scoped to THIS chat (not the app-wide default): edits here become a per-chat
         // override that sticks with the chat. New chats start from Settings → Generation
         // Defaults.
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Generation").font(.supraTitle)
+        SupraPopoverFrame("Generation", width: 340) {
             GhostSegmentedControl(
                 selection: Binding(
                     get: { controller.activeChatOptions.preset },
@@ -997,8 +993,6 @@ struct GlobalChatsView: View {
             Text("Applies to this chat. New chats start from Settings → Generation Defaults.")
                 .font(.supraCaption).foregroundStyle(.secondary)
         }
-        .padding()
-        .frame(width: 340)
     }
 }
 

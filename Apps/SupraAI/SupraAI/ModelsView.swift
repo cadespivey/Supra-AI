@@ -540,52 +540,49 @@ private struct ModelDownloadSheet: View {
     @State private var customRepoID = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Download a Model")
-                    .font(.supraTitle)
-                Spacer()
-                Button("Done") { dismiss() }
-            }
+        SupraSheetScaffold("Download a Model", onClose: { dismiss() }) {
+            VStack(alignment: .leading, spacing: 16) {
+                statusView
 
-            statusView
+                Divider()
 
-            Divider()
-
-            Text("Curated · Hugging Face MLX 4-bit")
-                .font(.supraHeadline)
-            ForEach(ModelCatalog.curated) { model in
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(model.displayName)
-                        Text("\(model.repoID) · ~\(sizeText(model.approxSizeGB)) GB")
-                            .font(.supraCaption)
-                            .foregroundStyle(.secondary)
-                        Text(model.notes)
-                            .font(.supraCaption)
-                            .foregroundStyle(.secondary)
+                Text("Curated · Hugging Face MLX 4-bit")
+                    .font(.supraHeadline)
+                ForEach(ModelCatalog.curated) { model in
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(model.displayName)
+                            Text("\(model.repoID) · ~\(sizeText(model.approxSizeGB)) GB")
+                                .font(.supraCaption)
+                                .foregroundStyle(.secondary)
+                            Text(model.notes)
+                                .font(.supraCaption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Download") { downloader.downloadCatalogModel(model) }
+                            .buttonStyle(.ghost)
+                            .disabled(downloader.isBusy)
                     }
-                    Spacer()
-                    Button("Download") { downloader.downloadCatalogModel(model) }
-                        .disabled(downloader.isBusy)
+                }
+
+                Divider()
+
+                Text("Custom repo ID")
+                    .font(.supraHeadline)
+                HStack {
+                    TextField("e.g. mlx-community/Qwen2.5-32B-Instruct-4bit", text: $customRepoID)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Download") {
+                        downloader.download(repoID: customRepoID)
+                        customRepoID = ""
+                    }
+                    .buttonStyle(.ghost)
+                    .disabled(downloader.isBusy || customRepoID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-
-            Divider()
-
-            Text("Custom repo ID")
-                .font(.supraHeadline)
-            HStack {
-                TextField("e.g. mlx-community/Qwen2.5-32B-Instruct-4bit", text: $customRepoID)
-                    .textFieldStyle(.roundedBorder)
-                Button("Download") {
-                    downloader.download(repoID: customRepoID)
-                    customRepoID = ""
-                }
-                .disabled(downloader.isBusy || customRepoID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
+            .padding(20)
         }
-        .padding(20)
         .frame(minWidth: 480, idealWidth: 580, maxWidth: .infinity)
     }
 
