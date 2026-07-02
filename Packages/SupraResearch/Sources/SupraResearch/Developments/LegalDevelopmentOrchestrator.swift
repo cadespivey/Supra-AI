@@ -1,7 +1,7 @@
 import Foundation
 
 /// Queries the registered development sources in parallel, dedupes, and sorts most-recent-first.
-/// Provider-agnostic — adding OpenStates / LegiScan / Regulations.gov is a one-line registry change.
+/// Provider-agnostic — adding a provider (OpenStates / Regulations.gov / …) is a one-line registry change.
 public struct LegalDevelopmentOrchestrator: Sendable {
     public let sources: [any LegalDevelopmentSource]
 

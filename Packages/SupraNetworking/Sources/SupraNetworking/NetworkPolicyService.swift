@@ -28,7 +28,6 @@ public final class NetworkPolicyService: NetworkPolicyServiceProtocol, @unchecke
             // Key'd legal-data sources (the key is read from the Keychain, not the URL where avoidable).
             "api.govinfo.gov",        // official U.S. Code (USCODE)
             "v3.openstates.org",      // state/federal bills
-            "api.legiscan.com",       // bills (50 states + Congress)
             "api.regulations.gov"     // federal rulemaking dockets
         ]
     ) {

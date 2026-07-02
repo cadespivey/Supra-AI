@@ -5,7 +5,6 @@ import Foundation
 /// optional environment-variable fallback, mirroring the CourtListener token.
 public enum APIKeyService: String, Sendable, CaseIterable, Codable {
     case openStates
-    case legiScan
     case regulationsGov
     case govInfo
 
@@ -16,7 +15,6 @@ public enum APIKeyService: String, Sendable, CaseIterable, Codable {
     public var environmentVariable: String {
         switch self {
         case .openStates: return "SUPRA_OPENSTATES_API_KEY"
-        case .legiScan: return "SUPRA_LEGISCAN_API_KEY"
         case .regulationsGov: return "SUPRA_REGULATIONS_GOV_API_KEY"
         case .govInfo: return "SUPRA_GOVINFO_API_KEY"
         }

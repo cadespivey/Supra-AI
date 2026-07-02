@@ -189,13 +189,13 @@ final class SupraNetworkingTests: XCTestCase {
             redactsQueryValues: false,
             transport: { request in await spy.respond(to: request, statusCode: 200) }
         )
-        let url = try XCTUnwrap(URL(string: "https://api.legiscan.com/?key=legiscan-secret&op=getSearch&query=noncompete&X-Api-Key=second-secret"))
+        let url = try XCTUnwrap(URL(string: "https://api.govinfo.gov/search?key=queryparam-secret&op=getSearch&query=noncompete&X-Api-Key=second-secret"))
 
         _ = try await client.sendUnauthenticated(URLRequest(url: url))
 
         let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
         let metadata = try XCTUnwrap(record.requestMetadataJSON)
-        XCTAssertFalse(metadata.contains("legiscan-secret"), "query-string API keys must never be persisted")
+        XCTAssertFalse(metadata.contains("queryparam-secret"), "query-string API keys must never be persisted")
         XCTAssertFalse(metadata.contains("second-secret"), "query-string API keys must never be persisted")
         XCTAssertTrue(metadata.contains("key=#redacted"))
         XCTAssertTrue(metadata.contains("X-Api-Key=#redacted"))

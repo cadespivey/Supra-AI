@@ -49,7 +49,7 @@ final class SettingsControllerTests: XCTestCase {
         settings.saveAPIKey("os-key", for: .openStates)
         XCTAssertTrue(settings.hasAPIKey(.openStates))
         XCTAssertTrue(settings.configuredAPIKeys.contains(.openStates))
-        XCTAssertFalse(settings.hasAPIKey(.legiScan))
+        XCTAssertFalse(settings.hasAPIKey(.regulationsGov))
 
         settings.clearAPIKey(for: .openStates)
         XCTAssertFalse(settings.hasAPIKey(.openStates))

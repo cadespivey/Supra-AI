@@ -42,22 +42,11 @@ final class LegalDataKeyVerifierTests: XCTestCase {
 
     func testMissingKeyShortCircuits() async {
         let verifier = LegalDataKeyVerifier(httpClient: StubHTTP(status: 500), tokenStore: KeyStore(key: nil))
-        let result = await verifier.verify(.legiScan)
+        let result = await verifier.verify(.openStates)
         XCTAssertEqual(result, .missingKey)
     }
 
-    func testLegiScanBodyErrorIsInvalidDespiteHTTP200() async {
-        let body = #"{"status":"ERROR","alert":{"message":"Invalid API Key"}}"#
-        let verifier = LegalDataKeyVerifier(httpClient: StubHTTP(status: 200, body: body), tokenStore: KeyStore(key: "k"))
-        guard case let .invalid(message) = await verifier.verify(.legiScan) else { return XCTFail("expected invalid") }
-        XCTAssertTrue(message.contains("Invalid API Key"))
-    }
 
-    func testLegiScanOkBodyIsValid() async {
-        let verifier = LegalDataKeyVerifier(httpClient: StubHTTP(status: 200, body: #"{"status":"OK"}"#), tokenStore: KeyStore(key: "k"))
-        let result = await verifier.verify(.legiScan)
-        XCTAssertEqual(result, .valid)
-    }
 
     func testKeylessSourceReachableIsValid() async {
         let verifier = LegalDataKeyVerifier(httpClient: StubHTTP(status: 200), tokenStore: KeyStore())

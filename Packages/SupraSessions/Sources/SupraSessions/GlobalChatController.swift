@@ -55,7 +55,7 @@ public final class GlobalChatController: ObservableObject {
     private let statutoryOrchestrator: StatutorySourceOrchestrator
     /// Provisions to request from the statutory tier per query.
     private static let maxStatutoryProvisions = 4
-    /// Pluggable legal-developments tracking (Federal Register today; OpenStates / LegiScan /
+    /// Pluggable legal-developments tracking (Federal Register today; OpenStates /
     /// Regulations.gov next). NON-citable — surfaced as a separate "Developments" section.
     private let developmentsOrchestrator: LegalDevelopmentOrchestrator
     private static let maxDevelopments = 5
@@ -158,7 +158,6 @@ public final class GlobalChatController: ObservableObject {
         self.developmentsOrchestrator = developmentsOrchestrator ?? LegalDevelopmentOrchestrator(sources: [
             FederalRegisterSource(client: FederalRegisterClient(httpClient: makeLegalDataHTTPClient())),
             OpenStatesSource(httpClient: makeLegalDataHTTPClient(), tokenStore: resolvedTokenStore),
-            LegiScanSource(httpClient: makeLegalDataHTTPClient(), tokenStore: resolvedTokenStore),
             RegulationsGovSource(httpClient: makeLegalDataHTTPClient(), tokenStore: resolvedTokenStore)
         ])
         self.topLevelJurisdictions = Self.makeTopLevelJurisdictions()

@@ -5,7 +5,7 @@ import XCTest
 final class APIKeyServiceTests: XCTestCase {
 
     func testServicesHaveDistinctAccountsAndEnvVars() {
-        XCTAssertNotEqual(APIKeyService.openStates.keychainAccount, APIKeyService.legiScan.keychainAccount)
+        XCTAssertNotEqual(APIKeyService.openStates.keychainAccount, APIKeyService.govInfo.keychainAccount)
         XCTAssertEqual(APIKeyService.govInfo.environmentVariable, "SUPRA_GOVINFO_API_KEY")
         XCTAssertEqual(APIKeyService.regulationsGov.keychainAccount, "supra.apikey.regulationsGov")
     }
@@ -18,7 +18,7 @@ final class APIKeyServiceTests: XCTestCase {
         XCTAssertEqual(try store.loadAPIKey(for: .openStates), "env-key")
         XCTAssertTrue(try store.hasAPIKey(for: .openStates))
         XCTAssertTrue(store.hasEnvironmentAPIKey(for: .openStates))
-        XCTAssertFalse(store.hasEnvironmentAPIKey(for: .legiScan))
+        XCTAssertFalse(store.hasEnvironmentAPIKey(for: .regulationsGov))
     }
 
     func testEnvironmentBackedStorePrefersEnvKeyOverPrimaryKey() throws {
@@ -35,20 +35,20 @@ final class APIKeyServiceTests: XCTestCase {
 
     func testEnvironmentBackedStoreDelegatesToPrimaryWhenNoEnvKey() throws {
         let store = EnvironmentBackedTokenStore(primary: MultiKeyStore(), environment: [:])
-        XCTAssertNil(try store.loadAPIKey(for: .legiScan))
-        try store.saveAPIKey("kc-key", for: .legiScan)
-        XCTAssertEqual(try store.loadAPIKey(for: .legiScan), "kc-key")
-        XCTAssertTrue(try store.hasAPIKey(for: .legiScan))
-        try store.deleteAPIKey(for: .legiScan)
-        XCTAssertFalse(try store.hasAPIKey(for: .legiScan))
+        XCTAssertNil(try store.loadAPIKey(for: .govInfo))
+        try store.saveAPIKey("kc-key", for: .govInfo)
+        XCTAssertEqual(try store.loadAPIKey(for: .govInfo), "kc-key")
+        XCTAssertTrue(try store.hasAPIKey(for: .govInfo))
+        try store.deleteAPIKey(for: .govInfo)
+        XCTAssertFalse(try store.hasAPIKey(for: .govInfo))
     }
 
     func testKeysAreIsolatedPerService() throws {
         let store = MultiKeyStore()
         try store.saveAPIKey("a", for: .openStates)
-        try store.saveAPIKey("b", for: .legiScan)
+        try store.saveAPIKey("b", for: .govInfo)
         XCTAssertEqual(try store.loadAPIKey(for: .openStates), "a")
-        XCTAssertEqual(try store.loadAPIKey(for: .legiScan), "b")
+        XCTAssertEqual(try store.loadAPIKey(for: .govInfo), "b")
         XCTAssertNil(try store.loadAPIKey(for: .regulationsGov))
     }
 }

@@ -10,7 +10,7 @@ import SupraStore
 /// Hermetic test wiring for `GlobalChatController`.
 ///
 /// The controller's default init wires REAL statutory/developments sources (GovInfo,
-/// eCFR, Open Legal Codes, Federal Register, OpenStates, LegiScan, Regulations.gov)
+/// eCFR, Open Legal Codes, Federal Register, OpenStates, Regulations.gov)
 /// through live `URLSession` clients and reads API keys from the user's Keychain.
 /// Unit tests must never do either, so every test constructs the controller through
 /// `makeGlobalChatController(...)`, which substitutes offline defaults for every

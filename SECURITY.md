@@ -44,7 +44,7 @@ need an explicit, documented justification.
 - The **only** network egress is explicit and user-initiated:
   - **Legal research / legal-data lookups** against a fixed allow-list — CourtListener,
     plus free government sources (eCFR, Federal Register, Open Legal Codes) and key'd APIs
-    (GovInfo, OpenStates, LegiScan, Regulations.gov); see the allow-list below.
+    (GovInfo, OpenStates, Regulations.gov); see the allow-list below.
   - **Opinion PDF downloads** from CourtListener's public storage CDN
     (`storage.courtlistener.com`), only when you click Download PDF on an authority.
     The API token is **never** sent to the CDN.
@@ -61,7 +61,7 @@ need an explicit, documented justification.
   - Free, key-less official sources: `openlegalcodes.org` (statutes), `ecfr.gov`
     (Code of Federal Regulations), `federalregister.gov` (regulatory developments).
   - Key'd legal-data APIs (the key is read from the Keychain): `api.govinfo.gov`
-    (U.S. Code), `v3.openstates.org` and `api.legiscan.com` (bills), `api.regulations.gov`
+    (U.S. Code), `v3.openstates.org` (bills), `api.regulations.gov`
     (federal rulemaking dockets).
   - The CourtListener token is gated to the CourtListener hosts and is **never** sent to
     any other allow-listed host.

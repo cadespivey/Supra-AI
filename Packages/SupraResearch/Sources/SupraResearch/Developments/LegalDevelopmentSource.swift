@@ -4,10 +4,10 @@ import Foundation
 /// the citable-authority packet. Developments are *what's pending or changing* (bills, proposed
 /// rules, notices), surfaced to the attorney as context — never cited as authority for a legal
 /// proposition (that would corrupt the firewall). Conform a provider (Federal Register today;
-/// OpenStates / LegiScan / Regulations.gov next) by implementing `lookup` over its transport.
+/// OpenStates / Regulations.gov next) by implementing `lookup` over its transport.
 
 public enum LegalDevelopmentKind: String, Sendable, Equatable, Codable {
-    case legislative   // a bill (OpenStates / LegiScan)
+    case legislative   // a bill (OpenStates)
     case regulatory    // a rulemaking / proposed rule / notice (Federal Register / Regulations.gov)
 }
 

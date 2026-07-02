@@ -87,11 +87,6 @@ struct SettingsView: View {
                     kind: .service(.openStates, prompt: "OpenStates API key", signupURL: URL(string: "https://openstates.org/accounts/profile/")!)
                 )
                 APIKeyDisclosure(
-                    settings: settings, title: "LegiScan",
-                    description: "Bills across all 50 states and Congress. Status is refreshed continuously, typically within a day of legislative action.",
-                    kind: .service(.legiScan, prompt: "LegiScan API key", signupURL: URL(string: "https://legiscan.com/legiscan")!)
-                )
-                APIKeyDisclosure(
                     settings: settings, title: "Regulations.gov",
                     description: "Federal rulemaking dockets and public comments. Updated each federal business day. Tracked as developments — not cited as authority.",
                     kind: .service(.regulationsGov, prompt: "Regulations.gov API key", signupURL: URL(string: "https://api.data.gov/signup/")!)
@@ -133,7 +128,7 @@ struct SettingsView: View {
             }
 
             Section {
-                Text("Supra AI's research is grounded in free, public-interest data projects: CourtListener and the Free Law Project (case law), Open Legal Codes (statutes & codes), and OpenStates and LegiScan (legislation). Please consider creating a free account or otherwise supporting their work.")
+                Text("Supra AI's research is grounded in free, public-interest data projects: CourtListener and the Free Law Project (case law), Open Legal Codes (statutes & codes), and OpenStates (legislation). Please consider creating a free account or otherwise supporting their work.")
                     .font(.callout).foregroundStyle(.secondary)
                 AboutBanner(version: settings.appVersion.marketingVersion)
                 Link(destination: URL(string: "https://github.com/cadespivey/Supra-AI")!) {
@@ -150,9 +145,6 @@ struct SettingsView: View {
                 }
                 Link(destination: URL(string: "https://openstates.org")!) {
                     Label("OpenStates", systemImage: "building.2")
-                }
-                Link(destination: URL(string: "https://legiscan.com")!) {
-                    Label("LegiScan", systemImage: "doc.text.magnifyingglass")
                 }
             } header: {
                 Text("About")

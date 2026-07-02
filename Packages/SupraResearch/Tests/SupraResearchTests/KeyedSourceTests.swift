@@ -3,7 +3,7 @@ import SupraNetworking
 import SupraResearch
 import XCTest
 
-/// Covers the key'd legal-data sources (govinfo, OpenStates, LegiScan, Regulations.gov): result
+/// Covers the key'd legal-data sources (govinfo, OpenStates, Regulations.gov): result
 /// mapping via stub clients, and the missing-key degradation path (no key → empty + a note).
 final class KeyedSourceTests: XCTestCase {
 
@@ -83,63 +83,6 @@ final class KeyedSourceTests: XCTestCase {
         XCTAssertEqual(development.jurisdiction, "Florida")
         XCTAssertTrue(development.identifier.contains("HB 123"))
         XCTAssertEqual(development.status, "Passed House")
-    }
-
-    // MARK: - LegiScan (developments, legislative; quirky numeric-keyed response)
-
-    func testLegiScanDecodesNumericKeyedResultsSkippingSummary() async throws {
-        let json = """
-        {"status":"OK","searchresult":{"summary":{"count":1,"page":"1"},"0":{"bill_id":12345,"bill_number":"HB123","state":"FL","title":"Sales Act","last_action":"Passed House","last_action_date":"2026-03-04","url":"https://legiscan.com/FL/bill/HB123"}}}
-        """
-        let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let response = try decoder.decode(LegiScanResponse.self, from: Data(json.utf8))
-        XCTAssertEqual(response.results.count, 1, "the 'summary' entry is skipped, the bill is kept")
-        let source = LegiScanSource(client: StubLegiScanClient(result: .success(response)))
-        let lookup = await source.lookup(LegalDevelopmentQuery(terms: "sales", jurisdiction: "Florida"))
-        let development = try XCTUnwrap(lookup.developments.first)
-        XCTAssertEqual(development.kind, .legislative)
-        XCTAssertTrue(development.identifier.contains("HB123"))
-        XCTAssertEqual(development.date, "2026-03-04")
-    }
-
-    func testBillReferenceDetection() {
-        XCTAssertEqual(BillReference.billNumber(in: "what is the status of HB 123 in Florida"), "HB 123")
-        XCTAssertEqual(BillReference.billNumber(in: "track h.r. 40 reparations"), "HR 40")
-        XCTAssertEqual(BillReference.billNumber(in: "sb-456 amendments"), "SB 456")
-        XCTAssertNil(BillReference.billNumber(in: "new privacy legislation this session"))
-    }
-
-    func testLegiScanNamedBillIsEnrichedWithDetail() async throws {
-        let json = """
-        {"status":"OK","searchresult":{"summary":{"count":1},"0":{"bill_id":12345,"bill_number":"HB123","state":"FL","title":"Sales Act","last_action":"Passed House","last_action_date":"2026-03-04","url":"https://legiscan.com/FL/bill/HB123"}}}
-        """
-        let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let response = try decoder.decode(LegiScanResponse.self, from: Data(json.utf8))
-        let detail = LegiScanBillDetail(
-            description: "Revises Florida's sales-tax remittance schedule for small sellers.",
-            statusDate: "2026-03-05",
-            sponsors: [.init(name: "Rep. Smith"), .init(name: "Rep. Jones")],
-            texts: [.init(stateLink: "https://flsenate.gov/HB123/text", url: nil)]
-        )
-        let source = LegiScanSource(client: StubLegiScanClient(result: .success(response), billDetail: detail))
-        let lookup = await source.lookup(LegalDevelopmentQuery(terms: "status of HB 123", jurisdiction: "Florida"))
-        let development = try XCTUnwrap(lookup.developments.first)
-        XCTAssertTrue(development.summary?.contains("sales-tax remittance") ?? false)
-        XCTAssertTrue(development.summary?.contains("Rep. Smith") ?? false)
-        XCTAssertEqual(development.date, "2026-03-05")
-        XCTAssertEqual(development.url, "https://flsenate.gov/HB123/text")
-    }
-
-    func testOpenStatesAbstractBecomesSummary() async throws {
-        let json = """
-        {"results":[{"id":"ocd-bill/1","identifier":"HB 123","title":"An Act relating to sales","session":"2026","jurisdiction":{"name":"Florida"},"latest_action_date":"2026-03-04","latest_action_description":"Passed House","openstates_url":"https://openstates.org/fl/bills/2026/HB123/","abstracts":[{"abstract":"Revises the sales-tax remittance schedule for small sellers."}]}]}
-        """
-        let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let response = try decoder.decode(OpenStatesResponse.self, from: Data(json.utf8))
-        let source = OpenStatesSource(client: StubOpenStatesClient(result: .success(response)))
-        let result = await source.lookup(LegalDevelopmentQuery(terms: "sales", jurisdiction: "Florida"))
-        let development = try XCTUnwrap(result.developments.first)
-        XCTAssertTrue(development.summary?.contains("remittance schedule") ?? false, "abstract outranks the bare session note")
     }
 
     // MARK: - govinfo (statutory, currency-verifiable)
@@ -222,15 +165,6 @@ private struct StubRegulationsGovClient: RegulationsGovClientProtocol {
 private struct StubOpenStatesClient: OpenStatesClientProtocol {
     let result: Result<OpenStatesResponse, OpenStatesError>
     func searchBills(term: String, jurisdiction: String?, limit: Int) async throws -> OpenStatesResponse { try result.get() }
-}
-private struct StubLegiScanClient: LegiScanClientProtocol {
-    let result: Result<LegiScanResponse, LegiScanError>
-    var billDetail: LegiScanBillDetail?
-    func search(term: String, state: String, limit: Int) async throws -> LegiScanResponse { try result.get() }
-    func getBill(id: Int) async throws -> LegiScanBillDetail {
-        guard let billDetail else { throw LegiScanError.invalidResponse }
-        return billDetail
-    }
 }
 private struct StubGovInfoClient: GovInfoClientProtocol {
     let result: Result<GovInfoSearchResponse, GovInfoError>

@@ -4,7 +4,7 @@ import SupraNetworking
 /// Outcome of a live "does this key work?" round-trip.
 public enum KeyVerificationResult: Sendable, Equatable {
     case valid
-    case invalid(String)      // the service rejected the key (e.g. HTTP 401/403, or LegiScan body error)
+    case invalid(String)      // the service rejected the key (e.g. HTTP 401/403)
     case unreachable(String)  // a network / unexpected error — the key may still be fine
     case missingKey
 }
@@ -121,17 +121,6 @@ public struct LegalDataKeyVerifier: Sendable {
             return headerKeyedRequest("https://v3.openstates.org/jurisdictions", query: [("per_page", "1")], header: "X-API-Key", key: key)
         case .regulationsGov:
             return headerKeyedRequest("https://api.regulations.gov/v4/documents", query: [("page[size]", "5")], header: "X-Api-Key", key: key)
-        case .legiScan:
-            guard var components = URLComponents(string: "https://api.legiscan.com/") else { return nil }
-            components.queryItems = [
-                URLQueryItem(name: "key", value: key),
-                URLQueryItem(name: "op", value: "getSessionList"),
-                URLQueryItem(name: "state", value: "CA")
-            ]
-            guard let url = components.url else { return nil }
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
-            return request
         }
     }
 
@@ -152,13 +141,6 @@ public struct LegalDataKeyVerifier: Sendable {
         case 401, 403:
             return .invalid("The key was rejected (HTTP \(status)).")
         case 200..<300, 429:   // 429 = accepted but throttled → the key is valid
-            // LegiScan returns HTTP 200 even for a bad key; the real status is in the body.
-            if service == .legiScan,
-               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               (object["status"] as? String)?.uppercased() == "ERROR" {
-                let message = ((object["alert"] as? [String: Any])?["message"] as? String) ?? "The key was rejected."
-                return .invalid(message)
-            }
             return .valid
         default:
             return .unreachable("Unexpected response (HTTP \(status)).")
