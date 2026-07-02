@@ -81,7 +81,7 @@ struct SupraSheetScaffold<Content: View, Footer: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
-                Text(title).font(.supraTitle)
+                Text(title).font(.supraTitle).lineLimit(1)
                 Spacer()
                 Button(doneLabel, action: onClose)
                     .buttonStyle(.ghost)
