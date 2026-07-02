@@ -25,7 +25,11 @@ struct MatterDocumentsView: View {
     @State private var showChronology = false
     @State private var dropTargeted = false
     @State private var preview: PreviewItem?
-    @State private var previewWidth: CGFloat = 580
+    // Shared inspector-panel width, persisted across launches (same key as chat).
+    @AppStorage("supra.slideOverWidth") private var previewWidthRaw: Double = 580
+    private var previewWidth: Binding<CGFloat> {
+        Binding(get: { CGFloat(previewWidthRaw) }, set: { previewWidthRaw = Double($0) })
+    }
     @State private var dismissedImportFailureID: String?
     /// The single row whose action buttons (move/preview/open/delete) are revealed.
     @State private var selectedDocID: String?
@@ -55,7 +59,7 @@ struct MatterDocumentsView: View {
             // row populates it.
             .overlay(alignment: .trailing) {
                 if let item = preview {
-                    PreviewSlideOver(model: item.model, width: $previewWidth) { preview = nil }
+                    PreviewSlideOver(model: item.model, width: previewWidth) { preview = nil }
                 }
             }
             .animation(.snappy(duration: 0.25), value: preview != nil)

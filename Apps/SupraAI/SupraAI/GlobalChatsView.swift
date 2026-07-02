@@ -44,7 +44,11 @@ struct GlobalChatsView: View {
     /// A tapped `[S#]` matter-document citation, shown in a trailing slide-over
     /// preview hosted over the message area (one host, not per-row).
     @State private var citationPreview: PreviewItem?
-    @State private var citationPreviewWidth: CGFloat = 580
+    // Shared inspector-panel width, persisted across launches (spec Phase 5 polish).
+    @AppStorage("supra.slideOverWidth") private var slideOverWidthRaw: Double = 580
+    private var citationPreviewWidth: Binding<CGFloat> {
+        Binding(get: { CGFloat(slideOverWidthRaw) }, set: { slideOverWidthRaw = Double($0) })
+    }
     @State private var authorityReader: GlobalChatController.AuthorityReaderModel?
 
     private let attachmentLoader = ChatAttachmentLoader()
@@ -94,11 +98,11 @@ struct GlobalChatsView: View {
                 // message area so it never covers the composer's Send/Stop controls.
                 .overlay(alignment: .trailing) {
                     if let item = citationPreview {
-                        PreviewSlideOver(model: item.model, width: $citationPreviewWidth) { citationPreview = nil }
+                        PreviewSlideOver(model: item.model, width: citationPreviewWidth) { citationPreview = nil }
                     } else if let reader = authorityReader {
                         // The [A#] opinion reader shares the single inspector panel
                         // (locked §8.1) — opening one kind closes the other.
-                        SlideOverPanel(width: $citationPreviewWidth, onClose: { authorityReader = nil }) {
+                        SlideOverPanel(width: citationPreviewWidth, onClose: { authorityReader = nil }) {
                             AuthorityReaderView(
                                 model: reader,
                                 loadText: { await controller.authorityOpinionText(opinionID: reader.opinionID) },
