@@ -14,6 +14,9 @@ public struct DocumentSourceSetRecord: Codable, FetchableRecord, PersistableReco
     public var mode: String
     public var scopeJSON: String
     public var retrievalQuery: String?
+    /// Which retrieval tier produced this set — "fast" (preliminary, no rerank) or
+    /// "deep" (wide pool + rerank). Nil for pre-tier rows (all were deep-equivalent).
+    public var retrievalDepth: String?
     public var createdAt: Date
 
     public init(
@@ -24,6 +27,7 @@ public struct DocumentSourceSetRecord: Codable, FetchableRecord, PersistableReco
         mode: String = DocumentSourceSetMode.autoSource.rawValue,
         scopeJSON: String = "{}",
         retrievalQuery: String? = nil,
+        retrievalDepth: String? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -33,6 +37,7 @@ public struct DocumentSourceSetRecord: Codable, FetchableRecord, PersistableReco
         self.mode = mode
         self.scopeJSON = scopeJSON
         self.retrievalQuery = retrievalQuery
+        self.retrievalDepth = retrievalDepth
         self.createdAt = createdAt
     }
 
@@ -44,6 +49,7 @@ public struct DocumentSourceSetRecord: Codable, FetchableRecord, PersistableReco
         case mode
         case scopeJSON = "scope_json"
         case retrievalQuery = "retrieval_query"
+        case retrievalDepth = "retrieval_depth"
         case createdAt = "created_at"
     }
 }

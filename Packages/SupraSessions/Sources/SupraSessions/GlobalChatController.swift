@@ -34,6 +34,18 @@ public final class GlobalChatController: ObservableObject {
     /// Grounds matter chats in the matter's own documents (folder inventories +
     /// retrieval). nil for global chats, which have no document collection.
     private let documentGrounding: MatterChatDocumentGrounding?
+
+    /// After a fast-tier grounded answer, offers the deeper pass for the same
+    /// question (spec §3.2/§5): the full document pass for doc-grounded answers, or
+    /// the CourtListener network search after a local-first research answer.
+    /// Transient: cleared on the next send or chat switch.
+    public struct DeeperSearchOffer: Equatable, Sendable {
+        public enum Kind: Equatable, Sendable { case documents, research }
+        public let kind: Kind
+        public let chatID: String
+        public let question: String
+    }
+    @Published public private(set) var deeperSearchOffer: DeeperSearchOffer?
     private let router: ModelRouter
     private let legalConfiguration: LegalModelConfiguration
     private let courtListenerClient: any CourtListenerClientProtocol
@@ -203,6 +215,8 @@ public final class GlobalChatController: ObservableObject {
     public func select(chatID: String?) {
         selectedChatID = chatID
         activeChatOptions = chatID.flatMap(loadChatOptions(for:)) ?? storedDefaultOptions()
+        // The deeper-search offer belongs to the conversation it was made in.
+        if deeperSearchOffer?.chatID != chatID { deeperSearchOffer = nil }
         reloadMessages()
     }
 
@@ -465,7 +479,9 @@ public final class GlobalChatController: ObservableObject {
         systemPrompt: String? = nil,
         options: GenerationOptions? = nil,
         route: ModelRoute? = nil,
-        displayPrompt: String? = nil
+        displayPrompt: String? = nil,
+        documentDepth: RetrievalDepth = .fast,
+        researchDepth: RetrievalDepth = .fast
     ) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowsEmptyPrompt = route?.mode == .legalCritique && latestAssistantDraft() != nil
@@ -496,7 +512,9 @@ public final class GlobalChatController: ObservableObject {
                 systemPrompt: effectiveSystemPrompt,
                 options: effectiveOptions,
                 route: route,
-                displayPrompt: displayPrompt
+                displayPrompt: displayPrompt,
+                documentDepth: documentDepth,
+                researchDepth: researchDepth
             )
         }
     }
@@ -685,10 +703,13 @@ public final class GlobalChatController: ObservableObject {
         systemPrompt: String?,
         options: GenerationOptions,
         route: ModelRoute? = nil,
-        displayPrompt: String? = nil
+        displayPrompt: String? = nil,
+        documentDepth: RetrievalDepth = .fast,
+        researchDepth: RetrievalDepth = .fast
     ) async {
         isGenerating = true
         errorMessage = nil
+        deeperSearchOffer = nil
         defer {
             isGenerating = false
             activeGenerationID = nil
@@ -716,7 +737,7 @@ public final class GlobalChatController: ObservableObject {
             // Gated on a loaded model so a no-model send doesn't pay for retrieval it
             // will discard at the guard below.
             let grounded: GroundedChatContext? = (attachments.isEmpty && modelID != nil)
-                ? await documentGrounding?.groundedContext(forQuestion: prompt)
+                ? await documentGrounding?.groundedContext(forQuestion: prompt, depth: documentDepth)
                 : nil
 
             if grounded == nil, let route, route.usesOneShotLegalWorkflow {
@@ -727,7 +748,8 @@ public final class GlobalChatController: ObservableObject {
                     modelID: modelID,
                     route: route,
                     systemPrompt: systemPrompt,
-                    options: options
+                    options: options,
+                    researchDepth: researchDepth
                 )
                 return
             }
@@ -872,6 +894,12 @@ public final class GlobalChatController: ObservableObject {
                     )
                     updateMessage(id: assistant.id, content: streamedContent, status: .completed)
                     attachCitations(citations, toMessage: assistant.id)
+                    // A fast-tier grounded answer is preliminary: offer the deep pass
+                    // for the same question (spec §3.2). Auto-escalated or deep passes
+                    // carry .deep and offer nothing.
+                    if grounded?.depth == .fast, !groundingSources.isEmpty {
+                        deeperSearchOffer = DeeperSearchOffer(kind: .documents, chatID: chatID, question: prompt)
+                    }
 
                 case .generationCancelled:
                     sawTerminal = true
@@ -934,7 +962,8 @@ public final class GlobalChatController: ObservableObject {
         modelID: ModelID?,
         route: ModelRoute,
         systemPrompt: String?,
-        options: GenerationOptions
+        options: GenerationOptions,
+        researchDepth: RetrievalDepth = .fast
     ) async throws {
         let chatID = try ensureSelectedChat(titleHint: prompt).id
         let priorAssistantDraft = latestAssistantDraft()
@@ -974,7 +1003,8 @@ public final class GlobalChatController: ObservableObject {
                 systemPrompt: systemPrompt,
                 options: options,
                 history: history,
-                priorAssistantDraft: priorAssistantDraft
+                priorAssistantDraft: priorAssistantDraft,
+                researchDepth: researchDepth
             )
             try store.chats.appendToken(to: variant.id, token: result.output)
             try store.chats.completeVariant(variant.id)
@@ -1030,7 +1060,8 @@ public final class GlobalChatController: ObservableObject {
         systemPrompt: String?,
         options: GenerationOptions,
         history: [GenerateRequest.Turn],
-        priorAssistantDraft: String?
+        priorAssistantDraft: String?,
+        researchDepth: RetrievalDepth = .fast
     ) async throws -> LegalWorkflowResult {
         switch route.mode {
         case .legalVerify:
@@ -1081,7 +1112,8 @@ public final class GlobalChatController: ObservableObject {
                 route: route,
                 systemPrompt: systemPrompt,
                 options: options,
-                history: history
+                history: history,
+                researchDepth: researchDepth
             )
 
         case .legalCritique:
@@ -1158,7 +1190,8 @@ public final class GlobalChatController: ObservableObject {
         route: ModelRoute,
         systemPrompt: String?,
         options: GenerationOptions,
-        history: [GenerateRequest.Turn]
+        history: [GenerateRequest.Turn],
+        researchDepth: RetrievalDepth = .fast
     ) async throws -> LegalWorkflowResult {
         let scopedClassification = classificationApplyingChatJurisdiction(
             classificationApplyingMatterScope(LegalQueryClassifier.classify(prompt)),
@@ -1206,14 +1239,28 @@ public final class GlobalChatController: ObservableObject {
             return LegalWorkflowResult(output: output, queryTerms: terms, authorities: [], verification: nil, researchSessionID: nil)
         }
 
+        // Local-first research (spec §4.1/§4.4, locked §8.5): with ≥1 saved authority,
+        // answer preliminarily from the matter's own library before any network call —
+        // preserving CourtListener quota and mirroring the document fast/deep shape.
+        // The deep tier (researchDepth == .deep, the "Search CourtListener" offer)
+        // skips this branch and searches the network.
         let retrieval: (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?)
-        do {
-            retrieval = try await retrieveAuthorities(for: classification, route: route, modelID: modelID, matterID: scopedMatterID)
-        } catch {
-            guard !statutoryLookup.provisions.isEmpty else { throw error }
-            retrieval = ([], [], nil)
+        var answeredFromSavedAuthorities = false
+        if researchDepth == .fast, let local = localAuthorityRetrieval(for: classification) {
+            retrieval = local
+            answeredFromSavedAuthorities = true
+        } else {
+            do {
+                retrieval = try await retrieveAuthorities(for: classification, route: route, modelID: modelID, matterID: scopedMatterID)
+            } catch {
+                guard !statutoryLookup.provisions.isEmpty else { throw error }
+                retrieval = ([], [], nil)
+            }
         }
-        let rankedAll = await hydrateTopAuthorities(LegalAuthorityRanker.rank(retrieval.authorities, for: classification))
+        // Saved authorities already carry their persisted opinion text — hydrating
+        // them again would defeat the local tier's no-network promise.
+        let rankedBase = LegalAuthorityRanker.rank(retrieval.authorities, for: classification)
+        let rankedAll = answeredFromSavedAuthorities ? rankedBase : await hydrateTopAuthorities(rankedBase)
         // Cap to exactly the packet the model is shown. buildAnswerPrompt caps the
         // SOURCE PACKET at maxPacketAuthorities, so the model only ever sees
         // [A1]…[A maxPacketAuthorities]. The verifier and the stored packet (used by
@@ -1340,6 +1387,14 @@ public final class GlobalChatController: ObservableObject {
             output += "\n\n---\n\n" + developments
         }
 
+        // A local-first answer is preliminary (spec §5): label it honestly and offer
+        // the network search — never silently pass saved-library coverage off as a
+        // full CourtListener pass.
+        if answeredFromSavedAuthorities {
+            output += "\n\n_Preliminary — answered from this matter's saved authorities. Use “Search CourtListener” below for a wider search._"
+            deeperSearchOffer = DeeperSearchOffer(kind: .research, chatID: chatID, question: prompt)
+        }
+
         return LegalWorkflowResult(
             output: output,
             queryTerms: queryTerms,
@@ -1444,8 +1499,19 @@ public final class GlobalChatController: ObservableObject {
                 !body.isEmpty
             else { continue }
             result[index].authority.text = body
+            // Already-fetched text is free to keep: persist it on a matching SAVED
+            // authority (spec §4.3, §8.3 — saved only) so future local-first answers
+            // and the offline reader don't re-fetch.
+            persistHydratedTextIfSaved(opinionID: result[index].authority.opinionId, body: body)
         }
         return result
+    }
+
+    private func persistHydratedTextIfSaved(opinionID: String?, body: String) {
+        guard let opinionID, let matterID = scopedMatterID else { return }
+        guard let saved = (try? store.authorities.fetchAuthorities(matterID: matterID))?
+            .first(where: { $0.opinionID == opinionID && $0.opinionText == nil }) else { return }
+        try? store.authorities.updateOpinionText(authorityID: saved.id, text: body)
     }
 
     private func statutoryProvisions(
@@ -1746,6 +1812,72 @@ public final class GlobalChatController: ObservableObject {
     private static func caseFinderErrorMessage(_ error: Error) -> String {
         "I couldn't reach CourtListener's docket search just now: \(error.localizedDescription). Check the CourtListener connection in Settings and try again."
     }
+
+    /// Builds a research retrieval from the matter's SAVED authorities (spec §4.2):
+    /// project each saved record to a `LegalAuthority` and rank with the same ranker
+    /// as network results. Returns nil — falling through to CourtListener — when the
+    /// chat has no matter, the library is empty, nothing ranked has persisted opinion
+    /// text to ground from ("locals strong enough", §4.4), or the prompt cites a
+    /// specific authority the library doesn't hold.
+    private func localAuthorityRetrieval(
+        for classification: LegalQueryClassification
+    ) -> (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?)? {
+        guard let matterID = scopedMatterID,
+              ((try? store.authorities.countAuthorities(matterID: matterID)) ?? 0) >= 1 else { return nil }
+        let saved = (try? store.authorities.fetchAuthorities(matterID: matterID)) ?? []
+        let locals = saved.map(Self.savedLegalAuthority)
+        // A cited case the library doesn't hold must go to the network — a local
+        // answer that misses the very authority the user named would be wrong.
+        if let cite = classification.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines), !cite.isEmpty {
+            let holdsCite = locals.contains { authority in
+                authority.citations.contains { $0.localizedCaseInsensitiveContains(cite) }
+                    || (authority.citation?.localizedCaseInsensitiveContains(cite) ?? false)
+                    || (authority.caseName?.localizedCaseInsensitiveContains(cite) ?? false)
+            }
+            guard holdsCite else { return nil }
+        }
+        let ranked = LegalAuthorityRanker.rank(locals, for: classification)
+        let grounded = ranked.filter { !($0.authority.text ?? "").isEmpty }
+        guard !grounded.isEmpty else { return nil }
+        return (
+            queryTerms: [classification.legalIssue],
+            authorities: grounded.map(\.authority),
+            researchSessionID: nil
+        )
+    }
+
+    /// A saved `AuthorityRecord` projected back to a `LegalAuthority` so local
+    /// results flow through the same ranking/packet/verifier machinery as network
+    /// results (spec §4.2).
+    static func savedLegalAuthority(_ record: AuthorityRecord) -> LegalAuthority {
+        let citations = (try? JSONDecoder().decode([String].self, from: Data(record.citationJSON.utf8))) ?? []
+        return LegalAuthority(
+            id: record.clusterID ?? record.id,
+            source: .courtlistener,
+            authorityType: .case,
+            caseName: record.caseNameFull ?? record.caseName,
+            citation: record.preferredCitation ?? citations.first,
+            citations: citations,
+            court: record.court,
+            courtID: record.courtID,
+            dateFiled: record.dateFiled.map { Self.isoDayFormatter.string(from: $0) },
+            precedentialStatus: record.precedentialStatus,
+            url: record.absoluteURL.flatMap(Self.courtListenerURL),
+            snippet: record.opinionText.map { String($0.prefix(280)) },
+            text: record.opinionText,
+            clusterId: record.clusterID,
+            opinionId: record.opinionID,
+            docketNumber: record.docketNumber
+        )
+    }
+
+    private static let isoDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter
+    }()
 
     /// The number of planner-generated CourtListener queries the chat one-shot runs,
     /// bounded to keep latency and rate-limit pressure reasonable.
@@ -2458,6 +2590,52 @@ public final class GlobalChatController: ObservableObject {
         messages[index].citations = citations
     }
 
+    // MARK: - Authority reader ([A#], spec §2.5)
+
+    /// Everything the in-app opinion reader shows before the text loads: the case
+    /// header, the passage to highlight, and the hydration key.
+    public struct AuthorityReaderModel: Identifiable, Sendable, Equatable {
+        public let id: String
+        public let caseName: String
+        public let citationText: String?
+        public let court: String?
+        public let dateFiled: String?
+        public let url: String?
+        public let highlight: String?
+        public let opinionID: String?
+    }
+
+    public func authorityReaderModel(for citation: MessageCitation) -> AuthorityReaderModel {
+        AuthorityReaderModel(
+            id: citation.id,
+            caseName: citation.displayName ?? citation.authorityRef?.citation ?? "Authority",
+            citationText: citation.authorityRef?.citation,
+            court: citation.authorityRef?.court,
+            dateFiled: citation.authorityRef?.dateFiled,
+            url: citation.url,
+            highlight: citation.matchText,
+            opinionID: citation.authorityRef?.opinionID
+        )
+    }
+
+    /// The reader's opinion text: the persisted copy on a SAVED authority first
+    /// (offline, locked §8.3), else a one-shot CourtListener hydration. Nil when
+    /// neither is available — the reader then offers the CourtListener link only.
+    public func authorityOpinionText(opinionID: String?) async -> String? {
+        guard let opinionID else { return nil }
+        if let matterID = scopedMatterID,
+           let saved = (try? store.authorities.fetchAuthorities(matterID: matterID))?
+               .first(where: { $0.opinionID == opinionID }),
+           let text = saved.opinionText, !text.isEmpty {
+            return text
+        }
+        guard let id = Int(opinionID),
+              let detail = try? await courtListenerClient.fetchOpinion(id: id),
+              let body = detail.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !body.isEmpty else { return nil }
+        return body
+    }
+
     /// Persists `[A#]` legal-research authorities for a finalized message. The ranked
     /// `authorities` are the same capped, ordered packet the model saw, so `[A1]` =
     /// `authorities[0]`. Only labels that actually appear in the answer are stored, so
@@ -2474,13 +2652,24 @@ public final class GlobalChatController: ObservableObject {
         for (index, authority) in authorities.enumerated() {
             let label = "A\(index + 1)"
             guard present.contains(label), let url = authority.url, !url.isEmpty else { continue }
+            // The reader pointer (spec §2.5): hydration keys + case header in the
+            // locator column; the search snippet anchors the passage highlight.
+            let ref = AuthorityCitationRef(
+                opinionID: authority.opinionId,
+                clusterID: authority.clusterId,
+                citation: authority.citation ?? authority.citations.first,
+                court: authority.court,
+                dateFiled: authority.dateFiled
+            )
             records.append(
                 MessageCitationRecord(
                     messageID: messageID,
                     label: label,
                     kind: MessageCitation.Kind.authority.rawValue,
                     url: url,
+                    locatorJSON: (try? JSONEncoder.encodeToString(ref)),
                     displayName: authority.caseName ?? authority.citation,
+                    matchText: authority.snippet.map { String($0.prefix(280)) },
                     rank: index
                 )
             )

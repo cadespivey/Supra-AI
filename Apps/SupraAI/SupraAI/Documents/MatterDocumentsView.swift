@@ -25,7 +25,11 @@ struct MatterDocumentsView: View {
     @State private var showChronology = false
     @State private var dropTargeted = false
     @State private var preview: PreviewItem?
-    @State private var previewWidth: CGFloat = 580
+    // Shared inspector-panel width, persisted across launches (same key as chat).
+    @AppStorage("supra.slideOverWidth") private var previewWidthRaw: Double = 580
+    private var previewWidth: Binding<CGFloat> {
+        Binding(get: { CGFloat(previewWidthRaw) }, set: { previewWidthRaw = Double($0) })
+    }
     @State private var dismissedImportFailureID: String?
     /// The single row whose action buttons (move/preview/open/delete) are revealed.
     @State private var selectedDocID: String?
@@ -55,7 +59,7 @@ struct MatterDocumentsView: View {
             // row populates it.
             .overlay(alignment: .trailing) {
                 if let item = preview {
-                    PreviewSlideOver(model: item.model, width: $previewWidth) { preview = nil }
+                    PreviewSlideOver(model: item.model, width: previewWidth) { preview = nil }
                 }
             }
             .animation(.snappy(duration: 0.25), value: preview != nil)
@@ -645,9 +649,14 @@ struct DocumentQASheet: View {
             qaContent
         } footer: {
             if let result = qa.lastResult {
-                Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
-                    .buttonStyle(.ghost)
-                    .disabled(qa.isGenerating || routeModel == nil)
+                Button(result.depth == .fast ? "Search All Documents (slower)" : "Regenerate") {
+                    Task { await regenerate(outputID: result.outputID) }
+                }
+                .buttonStyle(.ghost)
+                .disabled(qa.isGenerating || routeModel == nil)
+                .help(result.depth == .fast
+                    ? "The preliminary answer searched the most relevant passages. Run the full pass across every document in scope."
+                    : "Run the full pass again.")
             }
             Spacer()
             if qa.isGenerating { ProgressView().controlSize(.small) }
@@ -698,6 +707,10 @@ struct DocumentQASheet: View {
                 Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
+                        if result.depth == .fast {
+                            Label("Preliminary — searched the most relevant passages. “Search All Documents” runs the full pass.", systemImage: "hare")
+                                .font(.supraCaption).foregroundStyle(.secondary)
+                        }
                         if result.status == StructuredOutputStatus.needsReview.rawValue {
                             Label("Needs review — \(result.warnings.joined(separator: " "))", systemImage: "exclamationmark.triangle")
                                 .font(.supraCaption).foregroundStyle(.orange)
@@ -1087,27 +1100,16 @@ struct PreviewSlideOver: View {
     static let maxWidth: CGFloat = 1100
 
     var body: some View {
-        HStack(spacing: 0) {
-            PreviewResizeHandle(width: $width, minWidth: Self.minWidth, maxWidth: Self.maxWidth)
+        SlideOverPanel(width: $width, minWidth: Self.minWidth, maxWidth: Self.maxWidth, onClose: onClose) {
             DocumentPreviewView(model: model, onClose: onClose)
-                .frame(width: width)
         }
-        .frame(maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .overlay(alignment: .leading) {
-            Rectangle().fill(Color(nsColor: .separatorColor)).frame(width: 1)
-        }
-        .shadow(color: .black.opacity(0.18), radius: 10, x: -3, y: 0)
-        .transition(.move(edge: .trailing))
-        // Restore the Escape-to-close that the prior sheet/inspector gave for free.
-        .onExitCommand { onClose() }
     }
 }
 
 /// The thin draggable strip on the leading edge of the slide-over; dragging it left
 /// widens the panel (covering more), right narrows it — the content underneath never
 /// moves. Shows a horizontal-resize cursor on hover.
-private struct PreviewResizeHandle: View {
+struct PreviewResizeHandle: View {
     @Binding var width: CGFloat
     let minWidth: CGFloat
     let maxWidth: CGFloat

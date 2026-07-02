@@ -62,6 +62,14 @@ public struct RetrievalResult: Sendable {
     public var scopeDocumentIDs: [String]
 }
 
+/// How hard a retrieval pass works (spec §3.1). `.fast` keeps the candidate pool
+/// small, raises the semantic floor for precision, and callers skip the LLM rerank —
+/// a preliminary answer in seconds. `.deep` is the full pass: wide pool + rerank.
+public enum RetrievalDepth: String, Sendable, Equatable {
+    case fast
+    case deep
+}
+
 /// Hybrid retrieval over a matter's indexed chunks: FTS keyword ranking +
 /// (optional) local semantic similarity, with folder/tag/date/document filters,
 /// duplicate collapse, and source diversity (plan §7.4).
@@ -103,7 +111,10 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         )
     }
 
-    public func retrieve(matterID: String, query: String, scope: RetrievalScope, limit: Int = 12) async throws -> RetrievalResult {
+    public func retrieve(matterID: String, query: String, scope: RetrievalScope, limit: Int = 12, depth: RetrievalDepth = .deep) async throws -> RetrievalResult {
+        // The fast tier trades recall for precision: a higher semantic floor keeps
+        // marginally-similar chunks out of the small preliminary packet (spec §3.1).
+        let semanticFloor = depth == .fast ? max(minSemanticSimilarity, 0.25) : minSemanticSimilarity
         let scopeIDs = try resolveScope(matterID: matterID, scope: scope)
         let readiness = try scopeReadiness(matterID: matterID, scope: scope)
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
@@ -138,7 +149,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 let similarity = Double(VectorMath.dot(queryVector, VectorMath.decode(embedding.vector)))
                 // Only relevant chunks count; this keeps off-topic documents out of
                 // scope-restricted answers.
-                if similarity >= minSemanticSimilarity {
+                if similarity >= semanticFloor {
                     ranked.append((embedding.chunkID, similarity))
                 }
             }

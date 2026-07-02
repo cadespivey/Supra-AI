@@ -44,7 +44,12 @@ struct GlobalChatsView: View {
     /// A tapped `[S#]` matter-document citation, shown in a trailing slide-over
     /// preview hosted over the message area (one host, not per-row).
     @State private var citationPreview: PreviewItem?
-    @State private var citationPreviewWidth: CGFloat = 580
+    // Shared inspector-panel width, persisted across launches (spec Phase 5 polish).
+    @AppStorage("supra.slideOverWidth") private var slideOverWidthRaw: Double = 580
+    private var citationPreviewWidth: Binding<CGFloat> {
+        Binding(get: { CGFloat(slideOverWidthRaw) }, set: { slideOverWidthRaw = Double($0) })
+    }
+    @State private var authorityReader: GlobalChatController.AuthorityReaderModel?
 
     private let attachmentLoader = ChatAttachmentLoader()
     private static let maxAttachments = 10
@@ -93,10 +98,21 @@ struct GlobalChatsView: View {
                 // message area so it never covers the composer's Send/Stop controls.
                 .overlay(alignment: .trailing) {
                     if let item = citationPreview {
-                        PreviewSlideOver(model: item.model, width: $citationPreviewWidth) { citationPreview = nil }
+                        PreviewSlideOver(model: item.model, width: citationPreviewWidth) { citationPreview = nil }
+                    } else if let reader = authorityReader {
+                        // The [A#] opinion reader shares the single inspector panel
+                        // (locked §8.1) — opening one kind closes the other.
+                        SlideOverPanel(width: citationPreviewWidth, onClose: { authorityReader = nil }) {
+                            AuthorityReaderView(
+                                model: reader,
+                                loadText: { await controller.authorityOpinionText(opinionID: reader.opinionID) },
+                                onClose: { authorityReader = nil }
+                            )
+                        }
                     }
                 }
                 .animation(.snappy(duration: 0.25), value: citationPreview != nil)
+                .animation(.snappy(duration: 0.25), value: authorityReader != nil)
             if let errorMessage = controller.errorMessage {
                 errorBanner(errorMessage)
             }
@@ -405,7 +421,16 @@ struct GlobalChatsView: View {
                     ForEach(controller.messages) { message in
                         MessageRow(
                             message: message,
-                            onOpenAuthority: { NSWorkspace.shared.open($0) },
+                            onOpenAuthority: { citation in
+                                // In-app reader when the citation carries a reader ref
+                                // (spec §2.5); legacy citations fall back to the browser.
+                                if citation.authorityRef != nil {
+                                    citationPreview = nil
+                                    authorityReader = controller.authorityReaderModel(for: citation)
+                                } else if let urlString = citation.url, let url = URL(string: urlString) {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            },
                             onOpenSource: { citation in
                                 guard let documentID = citation.documentID,
                                       let locator = citation.locator else { return }
@@ -414,10 +439,30 @@ struct GlobalChatsView: View {
                                     locator: locator,
                                     matchText: citation.matchText
                                 )
+                                authorityReader = nil
                                 citationPreview = PreviewItem(model: model)
                             }
                         )
                         .id(message.id)
+                    }
+                    // A fast-tier grounded answer is preliminary; offer the full pass
+                    // for the same question (spec §3.2).
+                    if let offer = controller.deeperSearchOffer, offer.chatID == controller.selectedChatID {
+                        HStack(spacing: 8) {
+                            Label(
+                                offer.kind == .documents
+                                    ? "Preliminary — searched the most relevant passages."
+                                    : "Preliminary — answered from this matter's saved authorities.",
+                                systemImage: "hare"
+                            )
+                            .font(.supraCaption).foregroundStyle(.secondary)
+                            Button(offer.kind == .documents ? "Search All Documents (slower)" : "Search CourtListener (network)") {
+                                searchDeeper(offer)
+                            }
+                            .buttonStyle(.ghost)
+                            .disabled(controller.isGenerating)
+                        }
+                        .padding(.top, 2)
                     }
                 }
                 .padding(16)
@@ -799,6 +844,39 @@ struct GlobalChatsView: View {
         }
     }
 
+    /// Re-runs the offered question at the deeper tier: the full document pass for
+    /// doc-grounded answers, or the CourtListener network search after a local-first
+    /// research answer.
+    private func searchDeeper(_ offer: GlobalChatController.DeeperSearchOffer) {
+        guard !controller.isGenerating else { return }
+        let router = ModelRouter(configuration: .fromEnvironment())
+        let routed = router.routePrompt(offer.question)
+        Task { @MainActor in
+            var modelID: ModelID?
+            if controller.requiresRuntimeModel(for: routed) {
+                switch await library.ensureLoadedChatModelID(
+                    for: routed.route.role,
+                    configuration: router.configuration
+                ) {
+                case let .success(loaded):
+                    modelID = loaded
+                case let .failure(issue):
+                    attachmentError = issue.message
+                    return
+                }
+            }
+            controller.send(
+                prompt: routed.prompt,
+                modelID: modelID,
+                options: controller.activeChatOptions,
+                route: routed.route,
+                displayPrompt: offer.question,
+                documentDepth: offer.kind == .documents ? .deep : .fast,
+                researchDepth: offer.kind == .research ? .deep : .fast
+            )
+        }
+    }
+
     // MARK: - Status bar
 
     /// Below the composer: which model is loaded, whether it's generating, and a
@@ -999,7 +1077,7 @@ struct GlobalChatsView: View {
 private struct MessageRow: View {
     let message: ChatMessage
     /// Opens a tapped `[A#]` authority's CourtListener page.
-    var onOpenAuthority: (URL) -> Void = { _ in }
+    var onOpenAuthority: (MessageCitation) -> Void = { _ in }
     /// Opens a tapped `[S#]` matter-document citation in the trailing slide-over preview.
     var onOpenSource: (MessageCitation) -> Void = { _ in }
     /// nil until the user toggles. Until then the reasoning section auto-expands
@@ -1161,9 +1239,7 @@ private struct MessageRow: View {
         guard let citation = message.citations.first(where: { $0.label == label }) else { return }
         switch citation.kind {
         case .authority:
-            if let urlString = citation.url, let url = URL(string: urlString) {
-                onOpenAuthority(url)
-            }
+            onOpenAuthority(citation)
         case .source:
             onOpenSource(citation)
         }
@@ -1181,7 +1257,7 @@ private struct MessageRow: View {
                     handleCitationTap(citation.label)
                 } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Image(systemName: citation.kind == .authority ? "link" : "doc.text.magnifyingglass")
+                        Image(systemName: citation.kind == .authority ? "text.book.closed" : "doc.text.magnifyingglass")
                             .font(.caption2)
                             .accessibilityHidden(true)
                         Text(sourceLine(citation))
@@ -1192,7 +1268,7 @@ private struct MessageRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(citation.kind == .authority ? "Open on CourtListener" : "Open the cited source")
+                .help(citation.kind == .authority ? "Read the opinion" : "Open the cited source")
                 // One labeled a11y leaf (deriving the label from the child Image+Text
                 // would make accessibility resolve their roles, which cycles role↔label
                 // like the message text above).

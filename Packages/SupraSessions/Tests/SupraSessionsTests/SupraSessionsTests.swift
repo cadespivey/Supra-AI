@@ -816,6 +816,14 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(citations.map(\.label), ["A1"])
         XCTAssertEqual(citations.first?.kind, .authority)
         XCTAssertNotNil(citations.first?.url)
+
+        // The citation carries the in-app reader's pointer (spec §2.5): hydration key,
+        // case header, and the snippet that anchors the passage highlight.
+        let ref = try XCTUnwrap(citations.first?.authorityRef)
+        XCTAssertEqual(ref.opinionID, "99")
+        XCTAssertEqual(ref.citation, "1 F.4th 1")
+        XCTAssertTrue(ref.court?.contains("Ninth Circuit") ?? false)
+        XCTAssertTrue(citations.first?.matchText?.contains("A claim was recognized") ?? false)
     }
 
     private static let singleResultResponse = CourtListenerSearchResponse(
@@ -2152,6 +2160,90 @@ final class SupraSessionsTests: XCTestCase {
         }
         XCTAssertTrue(try store.authorities.fetchAuthorities(matterID: matter.id).isEmpty)
         XCTAssertTrue(controller.canCompleteSession)
+    }
+
+    // MARK: - Local-first research (tiered retrieval spec §4)
+
+    func testLocalFirstResearchAnswersFromSavedAuthoritiesAndOffersNetwork() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "Florida")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "Smith v. Jones"))
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id,
+            caseName: "Smith v. Jones",
+            citationJSON: #"["100 So. 3d 200"]"#,
+            court: "Florida Supreme Court", courtID: "fla",
+            opinionText: "A liquidated damages clause is enforceable in Florida unless it operates as a penalty."
+        ))
+
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        final class PromptBox: @unchecked Sendable { var prompt = "" }
+        let box = PromptBox()
+        let runtime = StubRuntimeClient { request in
+            if request.prompt.contains("SOURCE PACKET") { box.prompt = request.prompt }
+            return .events([
+                .event(request, 1, .token, token: "Liquidated damages are enforceable unless a penalty [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        // The offline CourtListener client returns nothing — a grounded [A1] answer
+        // proves the packet came from the saved library, with no network search.
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Are liquidated damages clauses enforceable in Florida?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+
+        XCTAssertTrue(box.prompt.contains("Smith v. Jones"), "the saved authority grounds the packet")
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertTrue(answer.contains("Preliminary — answered from this matter's saved authorities"), answer)
+        XCTAssertEqual(controller.deeperSearchOffer?.kind, .research)
+
+        // The deeper tier skips the local pass and searches CourtListener (which is
+        // empty here), and the offer is retired by the new send.
+        await controller.performSend(
+            prompt: "Are liquidated damages clauses enforceable in Florida?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route,
+            researchDepth: .deep
+        )
+        let deepAnswer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertFalse(deepAnswer.contains("Preliminary — answered from this matter's saved authorities"), deepAnswer)
+        XCTAssertNil(controller.deeperSearchOffer)
+    }
+
+    func testLocalFirstSkippedWhenSavedAuthoritiesHaveNoText() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "Florida")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "Smith v. Jones"))
+        // Saved but metadata-only (no persisted opinion text) — too thin to ground a
+        // local answer (spec §4.4), so research falls through to the network.
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id,
+            caseName: "Smith v. Jones"
+        ))
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Answer."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Are liquidated damages clauses enforceable in Florida?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertFalse(answer.contains("answered from this matter's saved authorities"), answer)
+        XCTAssertNil(controller.deeperSearchOffer)
     }
 
     // MARK: - Authority library (WO 27)

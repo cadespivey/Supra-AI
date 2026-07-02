@@ -24,6 +24,9 @@ public final class DocumentQAController: ObservableObject {
         public var warnings: [String]
         public var citationLabels: [String]
         public var unsupported: Bool
+        /// Which retrieval tier grounded this answer — `.fast` answers are
+        /// preliminary and the UI offers "search all documents" (spec §3.2).
+        public var depth: RetrievalDepth = .deep
     }
 
     public let matterID: String
@@ -53,6 +56,10 @@ public final class DocumentQAController: ObservableObject {
 
     /// Runs a Q&A: retrieves sources (auto or guided), generates a cited answer,
     /// checks citations, and saves it. Returns the result or nil on failure.
+    ///
+    /// Fast-by-default (spec §3.2): the preliminary pass skips the rerank; when it
+    /// finds nothing usable the controller auto-escalates to `.deep` once, silently
+    /// (§8.2). The UI offers "search all documents" on `.fast` results.
     @discardableResult
     public func generate(
         question: String,
@@ -60,7 +67,8 @@ public final class DocumentQAController: ObservableObject {
         mode: DocumentAnswerMode = .short,
         guidedChunkIDs: [String]? = nil,
         modelID: ModelID?,
-        route: ModelRoute? = nil
+        route: ModelRoute? = nil,
+        depth: RetrievalDepth = .fast
     ) async -> QAResult? {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { message = "Enter a question."; return nil }
@@ -91,7 +99,14 @@ public final class DocumentQAController: ObservableObject {
 
         let isGuided = (guidedChunkIDs?.isEmpty == false)
         do {
-            let prepared = try await prepareSources(question: trimmed, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute)
+            var effectiveDepth = depth
+            var prepared = try await prepareSources(question: trimmed, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute, depth: effectiveDepth)
+            // Empty fast packet → run the deep pass once, silently (§8.2). Never
+            // auto-escalate merely on low confidence — the fast tier stays predictable.
+            if prepared.isEmpty, effectiveDepth == .fast {
+                effectiveDepth = .deep
+                prepared = try await prepareSources(question: trimmed, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute, depth: .deep)
+            }
             guard !prepared.isEmpty else {
                 message = "No matching sources were found in the selected scope."
                 return nil
@@ -114,7 +129,7 @@ public final class DocumentQAController: ObservableObject {
             let result = try persist(
                 question: trimmed, scope: scope, mode: mode, markdown: markdown,
                 prepared: prepared, status: status, check: check,
-                sourceMode: isGuided ? .guided : .autoSource
+                sourceMode: isGuided ? .guided : .autoSource, depth: effectiveDepth
             )
             lastResult = result
             return result
@@ -125,9 +140,12 @@ public final class DocumentQAController: ObservableObject {
     }
 
     /// Regenerates an output using its saved scope + question, creating a new
-    /// version with a fresh source set (plan §10.1).
+    /// version with a fresh source set (plan §10.1). Defaults to `.deep`: an
+    /// explicit regenerate (or "search all documents" on a preliminary answer) is a
+    /// request for the full pass. The prior version is retained, so a preliminary
+    /// answer is never silently discarded (spec §5).
     @discardableResult
-    public func regenerate(outputID: String, modelID: ModelID?, route: ModelRoute? = nil) async -> QAResult? {
+    public func regenerate(outputID: String, modelID: ModelID?, route: ModelRoute? = nil, depth: RetrievalDepth = .deep) async -> QAResult? {
         guard let output = try? store.structuredOutputs.fetchOutputs(matterID: matterID).first(where: { $0.id == outputID }),
               let activeVersionID = output.activeVersionID,
               let sourceSet = try? store.documentSources.fetchSourceSet(structuredOutputVersionID: activeVersionID) else {
@@ -154,7 +172,8 @@ public final class DocumentQAController: ObservableObject {
             mode: mode,
             guidedChunkIDs: guidedChunkIDs,
             modelID: modelID,
-            route: route ?? ModelRouter().route(forStructuredOutput: mode.outputType)
+            route: route ?? ModelRouter().route(forStructuredOutput: mode.outputType),
+            depth: depth
         )
     }
 
@@ -169,18 +188,21 @@ public final class DocumentQAController: ObservableObject {
         var warnings: [String]
     }
 
-    /// Wider candidate pool retrieved before reranking, and the count actually packed
-    /// into the answer prompt.
-    static let candidatePoolSize = 30
+    /// Tier tuning (spec §3.1). Deep: wider candidate pool, LLM-reranked down to the
+    /// packed set (today's behavior, widened — 40 keeps the rerank prompt inside
+    /// small local-model contexts). Fast: small pool, no rerank, packs the RRF top —
+    /// a preliminary answer in seconds.
+    static let candidatePoolSize = 40
     static let packedSourceLimit = 10
+    static let fastCandidatePoolSize = 12
+    static let fastPackedSourceLimit = 8
 
-    private func prepareSources(question: String, scope: RetrievalScope, guidedChunkIDs: [String]?, modelID: ModelID?, route: ModelRoute?) async throws -> [PreparedSource] {
+    private func prepareSources(question: String, scope: RetrievalScope, guidedChunkIDs: [String]?, modelID: ModelID?, route: ModelRoute?, depth: RetrievalDepth) async throws -> [PreparedSource] {
         if let guidedChunkIDs, !guidedChunkIDs.isEmpty {
             return prepareGuided(chunkIDs: guidedChunkIDs)
         }
-        // Retrieve a wider candidate pool, then LLM-rerank down to the packed set so
-        // the single most on-point passage lands at S1.
-        let result = try await retrieval.retrieve(matterID: matterID, query: question, scope: scope, limit: Self.candidatePoolSize)
+        let pool = depth == .fast ? Self.fastCandidatePoolSize : Self.candidatePoolSize
+        let result = try await retrieval.retrieve(matterID: matterID, query: question, scope: scope, limit: pool, depth: depth)
         let candidates = result.sources.enumerated().map { index, retrieved -> PreparedSource in
             let low = (retrieved.ocrConfidence.map { $0 < lowConfidenceThreshold } ?? false)
             return PreparedSource(
@@ -193,6 +215,10 @@ public final class DocumentQAController: ObservableObject {
                 locatorJSON: retrieved.locator.encodedJSON(), rank: index,
                 warnings: low ? ["low OCR confidence"] : []
             )
+        }
+        // Fast tier: pack the RRF top directly — the rerank IS the slow part.
+        if depth == .fast {
+            return relabeled(Array(candidates.prefix(Self.fastPackedSourceLimit)))
         }
         guard let modelID else { return relabeled(Array(candidates.prefix(Self.packedSourceLimit))) }
         return await rerankSources(candidates, question: question, modelID: modelID, route: route)
@@ -323,7 +349,7 @@ public final class DocumentQAController: ObservableObject {
     private func persist(
         question: String, scope: RetrievalScope, mode: DocumentAnswerMode, markdown: String,
         prepared: [PreparedSource], status: StructuredOutputStatus, check: CitationCheckResult,
-        sourceMode: DocumentSourceSetMode
+        sourceMode: DocumentSourceSetMode, depth: RetrievalDepth
     ) throws -> QAResult {
         let title = "Q&A: \(question.prefix(60))"
         let output = try store.structuredOutputs.createOutput(matterID: matterID, title: String(title), outputType: mode.outputType, status: status)
@@ -331,14 +357,15 @@ public final class DocumentQAController: ObservableObject {
             structuredOutputID: output.id, contentMarkdown: markdown,
             requiredSections: [], presentSections: [], missingSections: []
         )
-        try attachSources(prepared: prepared, scope: scope, question: question, mode: sourceMode, versionID: version.id)
+        try attachSources(prepared: prepared, scope: scope, question: question, mode: sourceMode, versionID: version.id, depth: depth)
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "qa_generated", actor: "runtime",
             summary: "Generated document Q&A", relatedTable: "structured_outputs", relatedID: output.id
         )
         return QAResult(
             outputID: output.id, versionID: version.id, markdown: markdown, status: status.rawValue,
-            warnings: check.warnings, citationLabels: check.usedLabels, unsupported: check.appearsUnsupported
+            warnings: check.warnings, citationLabels: check.usedLabels, unsupported: check.appearsUnsupported,
+            depth: depth
         )
     }
 
@@ -349,7 +376,8 @@ public final class DocumentQAController: ObservableObject {
         mode: DocumentAnswerMode,
         guidedChunkIDs: [String]?,
         modelID: ModelID?,
-        route: ModelRoute?
+        route: ModelRoute?,
+        depth: RetrievalDepth = .deep
     ) async -> QAResult? {
         let effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: mode.outputType)
         guard let modelID else {
@@ -370,7 +398,7 @@ public final class DocumentQAController: ObservableObject {
         let isGuided = (guidedChunkIDs?.isEmpty == false)
         do {
             let readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope)) ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
-            let prepared = try await prepareSources(question: question, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute)
+            let prepared = try await prepareSources(question: question, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute, depth: depth)
             guard !prepared.isEmpty else { message = "No matching sources were found."; return nil }
             let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: question, sources: prepared.map(\.source), mode: mode)
             let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
@@ -387,12 +415,12 @@ public final class DocumentQAController: ObservableObject {
                 parentVersionID: parentVersionID
             )
             try? store.structuredOutputs.updateStatus(outputID: outputID, status: status)
-            try attachSources(prepared: prepared, scope: scope, question: question, mode: isGuided ? .guided : .autoSource, versionID: version.id)
+            try attachSources(prepared: prepared, scope: scope, question: question, mode: isGuided ? .guided : .autoSource, versionID: version.id, depth: depth)
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "qa_generated", actor: "runtime",
                 summary: "Regenerated document Q&A", relatedTable: "structured_outputs", relatedID: outputID
             )
-            let result = QAResult(outputID: outputID, versionID: version.id, markdown: markdown, status: status.rawValue, warnings: check.warnings, citationLabels: check.usedLabels, unsupported: check.appearsUnsupported)
+            let result = QAResult(outputID: outputID, versionID: version.id, markdown: markdown, status: status.rawValue, warnings: check.warnings, citationLabels: check.usedLabels, unsupported: check.appearsUnsupported, depth: depth)
             lastResult = result
             return result
         } catch {
@@ -401,10 +429,11 @@ public final class DocumentQAController: ObservableObject {
         }
     }
 
-    private func attachSources(prepared: [PreparedSource], scope: RetrievalScope, question: String, mode: DocumentSourceSetMode, versionID: String) throws {
+    private func attachSources(prepared: [PreparedSource], scope: RetrievalScope, question: String, mode: DocumentSourceSetMode, versionID: String, depth: RetrievalDepth) throws {
         let scopeJSON = (try? JSONEncoder().encode(scope)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let sourceSet = try store.documentSources.createSourceSet(
-            matterID: matterID, mode: mode, scopeJSON: scopeJSON, retrievalQuery: question
+            matterID: matterID, mode: mode, scopeJSON: scopeJSON, retrievalQuery: question,
+            retrievalDepth: depth.rawValue
         )
         let rows = prepared.map { source in
             DocumentOutputSourceRecord(

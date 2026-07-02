@@ -124,6 +124,29 @@ public final class AuthorityRepository: @unchecked Sendable {
         }
     }
 
+    /// The matter's saved-authority count — the local-first research gate (spec
+    /// §4.1/§8.5: any saved authority makes the matter eligible to answer locally).
+    public func countAuthorities(matterID: String) throws -> Int {
+        try writer.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM authorities WHERE matter_id = ? AND deleted_at IS NULL",
+                arguments: [matterID]
+            ) ?? 0
+        }
+    }
+
+    /// Persists hydrated opinion text on a saved authority (spec §4.3): grounds
+    /// local-first research and the offline [A#] reader.
+    public func updateOpinionText(authorityID: String, text: String) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE authorities SET opinion_text = ?, updated_at = ? WHERE id = ?",
+                arguments: [text, Date(), authorityID]
+            )
+        }
+    }
+
     public func fetchAuthorities(matterID: String) throws -> [AuthorityRecord] {
         try writer.read { db in
             try AuthorityRecord.fetchAll(

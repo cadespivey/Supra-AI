@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		096A3B8C77F46429416E8442 /* MatterBillingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F52F39531ED04359DF5332 /* MatterBillingView.swift */; };
 		22F7DAF29E7C9ADF37A470F5 /* SparkleUpdaterController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F43C5F55C1C9D84C4CE827A /* SparkleUpdaterController.swift */; };
+		265DA3D6D17CF88EBFE1C27A /* AuthorityReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B62717C4DE41E3BD73B219C /* AuthorityReaderView.swift */; };
 		29B269CAAD0AA32A038AF808 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 45DF0346474345DA98F88B95 /* Cocoa.framework */; };
 		33C50DA123DB9228B7278A03 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 77C61A194EE2C8F5298894BC /* Sparkle */; };
 		4E4BB1F8196E2C8E3DDBF739 /* SupraTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70160F9EC6701AF74DA1E3A5 /* SupraTheme.swift */; };
@@ -140,6 +141,7 @@
 		70160F9EC6701AF74DA1E3A5 /* SupraTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SupraTheme.swift; sourceTree = "<group>"; };
 		7F43C5F55C1C9D84C4CE827A /* SparkleUpdaterController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SparkleUpdaterController.swift; sourceTree = "<group>"; };
 		8792ADFD107281343AFEEA5C /* ScratchPadView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScratchPadView.swift; sourceTree = "<group>"; };
+		9B62717C4DE41E3BD73B219C /* AuthorityReaderView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthorityReaderView.swift; sourceTree = "<group>"; };
 		A7F52F39531ED04359DF5332 /* MatterBillingView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MatterBillingView.swift; sourceTree = "<group>"; };
 		A9C463ED2E226080392F154A /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RecycleBinView.swift; sourceTree = "<group>"; };
@@ -302,6 +304,7 @@
 			children = (
 				5A000000000000000000011C /* MatterAuthoritiesView.swift */,
 				5A000000000000000000011D /* AuthorityDetailView.swift */,
+				9B62717C4DE41E3BD73B219C /* AuthorityReaderView.swift */,
 			);
 			path = Authorities;
 			sourceTree = "<group>";
@@ -583,6 +586,7 @@
 				22F7DAF29E7C9ADF37A470F5 /* SparkleUpdaterController.swift in Sources */,
 				D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */,
 				4E4BB1F8196E2C8E3DDBF739 /* SupraTheme.swift in Sources */,
+				265DA3D6D17CF88EBFE1C27A /* AuthorityReaderView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

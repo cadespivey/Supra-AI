@@ -113,6 +113,34 @@ struct SupraSheetScaffold<Content: View, Footer: View>: View {
     }
 }
 
+/// Right-edge inspector slide-over chrome (locked spec §8.1): resizable leading
+/// edge, separator + shadow, slides in from the trailing edge, Esc closes. One
+/// shared panel chrome for the document preview and the authority reader.
+struct SlideOverPanel<Content: View>: View {
+    @Binding var width: CGFloat
+    var minWidth: CGFloat = 560
+    var maxWidth: CGFloat = 1100
+    let onClose: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(spacing: 0) {
+            PreviewResizeHandle(width: $width, minWidth: minWidth, maxWidth: maxWidth)
+            content()
+                .frame(width: width)
+        }
+        .frame(maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Color(nsColor: .separatorColor)).frame(width: 1)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 10, x: -3, y: 0)
+        .transition(.move(edge: .trailing))
+        // Restore the Escape-to-close that a sheet/inspector gives for free.
+        .onExitCommand { onClose() }
+    }
+}
+
 /// Uniform chrome for an anchored popover: a `supraTitle` heading over the content,
 /// standard padding, and a fixed width — matching the generation-settings popover
 /// that set the pattern.

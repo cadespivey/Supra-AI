@@ -62,6 +62,35 @@ final class DocumentQATests: XCTestCase {
         XCTAssertNotNil(sources.first?.chunkID)
     }
 
+    func testTieredDepthPersistsOnSourceSetAndKeepsPreliminaryVersion() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
+        try await indexDoc(store, matter.id, "agreement.txt", "The service agreement was signed on March 3, 2024 by both parties.")
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "Signed March 3, 2024 [S1]."),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: nil)
+
+        // Default pass is the fast tier and records it on the source set.
+        let generated = await qa.generate(question: "When was the agreement signed?", modelID: ModelID())
+        let preliminary = try XCTUnwrap(generated)
+        XCTAssertEqual(preliminary.depth, .fast)
+        let fastSet = try store.documentSources.fetchSourceSet(structuredOutputVersionID: preliminary.versionID)
+        XCTAssertEqual(fastSet?.retrievalDepth, RetrievalDepth.fast.rawValue)
+
+        // "Search all documents" = regenerate at .deep: a NEW version (the
+        // preliminary answer is retained) whose source set records the deep pass.
+        let regenerated = await qa.regenerate(outputID: preliminary.outputID, modelID: ModelID())
+        let deeper = try XCTUnwrap(regenerated)
+        XCTAssertEqual(deeper.depth, .deep)
+        XCTAssertNotEqual(deeper.versionID, preliminary.versionID, "the preliminary version is never discarded")
+        let deepSet = try store.documentSources.fetchSourceSet(structuredOutputVersionID: deeper.versionID)
+        XCTAssertEqual(deepSet?.retrievalDepth, RetrievalDepth.deep.rawValue)
+    }
+
     func testUnsupportedQuestionDoesNotInventAnswer() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors")
@@ -130,6 +159,38 @@ final class DocumentQATests: XCTestCase {
         let result = await qa.generate(question: "anything?", modelID: ModelID())
         XCTAssertNil(result)
         XCTAssertNotNil(qa.message)
+    }
+
+    func testFastGroundedChatOffersDeeperSearchAndDeepPassClearsIt() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
+        try await indexDoc(store, matter.id, "agreement.txt", "The service agreement was signed on March 3, 2024 by both parties.")
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "Signed March 3, 2024 [S1]."),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        controller.loadChats()
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .generalQA)
+
+        // A fast (default) grounded answer offers the deep pass for the same question.
+        await controller.performSend(
+            prompt: "What do my documents say about the agreement?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+        let offer = try XCTUnwrap(controller.deeperSearchOffer)
+        XCTAssertEqual(offer.question, "What do my documents say about the agreement?")
+
+        // Running the deep pass answers again and retires the offer.
+        await controller.performSend(
+            prompt: offer.question,
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route,
+            documentDepth: .deep
+        )
+        XCTAssertNil(controller.deeperSearchOffer)
+        XCTAssertEqual(controller.messages.last?.status, .completed)
     }
 
     // MARK: - Helpers

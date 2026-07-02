@@ -898,6 +898,22 @@ public enum SupraMigrator {
             try db.create(index: "idx_message_citations_message", on: "message_citations", columns: ["message_id", "rank"], ifNotExists: true)
         }
 
+        migrator.registerMigration("v050_add_source_set_retrieval_depth") { db in
+            // Which retrieval tier produced this source set ("fast" preliminary vs
+            // "deep" full pass) — nil for pre-tier rows (all were deep-equivalent).
+            try db.alter(table: "document_source_sets") { table in
+                table.add(column: "retrieval_depth", .text)
+            }
+        }
+
+        migrator.registerMigration("v051_add_authority_opinion_text") { db in
+            // Hydrated opinion text persisted for user-SAVED authorities only (spec
+            // §4.3/§8.3): grounds local-first research and the offline [A#] reader.
+            try db.alter(table: "authorities") { table in
+                table.add(column: "opinion_text", .text)
+            }
+        }
+
         return migrator
     }
 
