@@ -169,11 +169,21 @@ struct ResultReviewMenu: View {
 
     var body: some View {
         Menu("Review") {
-            Button("Save as Authority") { controller.reviewResult(resultID, as: .saveAsAuthority) }
-            Button("Skip") { controller.reviewResult(resultID, as: .skip) }
-            Button("Mark Potentially Adverse") { controller.reviewResult(resultID, as: .potentiallyAdverse) }
-            Button("Mark Not Adverse") { controller.reviewResult(resultID, as: .notAdverse) }
-            Button("Needs Later Review") { controller.reviewResult(resultID, as: .needsLaterReview) }
+            Button { controller.reviewResult(resultID, as: .saveAsAuthority) } label: {
+                Label("Save as Authority", systemImage: "bookmark")
+            }
+            Button { controller.reviewResult(resultID, as: .skip) } label: {
+                Label("Skip", systemImage: "forward")
+            }
+            Button { controller.reviewResult(resultID, as: .potentiallyAdverse) } label: {
+                Label("Mark Potentially Adverse", systemImage: "exclamationmark.triangle")
+            }
+            Button { controller.reviewResult(resultID, as: .notAdverse) } label: {
+                Label("Mark Not Adverse", systemImage: "checkmark.shield")
+            }
+            Button { controller.reviewResult(resultID, as: .needsLaterReview) } label: {
+                Label("Needs Later Review", systemImage: "clock")
+            }
         }
     }
 }

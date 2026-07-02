@@ -78,8 +78,10 @@ struct BillingDraftView: View {
             Spacer()
             if billing.hasDraft {
                 Menu {
-                    ForEach(BillingExportFormat.allCases) { format in
-                        Button(format.label) { export(format) }
+                    Section("Format") {
+                        ForEach(BillingExportFormat.allCases) { format in
+                            Button(format.label) { export(format) }
+                        }
                     }
                 } label: {
                     Label("Export", systemImage: "square.and.arrow.up")
@@ -200,12 +202,14 @@ struct BillingDraftView: View {
     private func rowMenu(_ line: BillingLineItemRecord) -> some View {
         Menu {
             Button { editing = line } label: { Label("Edit…", systemImage: "pencil") }
-            Menu("Reassign matter") {
+            Menu {
                 Button("Unassigned") { billing.reassignMatter(lineID: line.id, to: nil) }
                 Divider()
                 ForEach(billing.availableMatters()) { option in
                     Button(option.name) { billing.reassignMatter(lineID: line.id, to: option.id) }
                 }
+            } label: {
+                Label("Reassign matter", systemImage: "folder")
             }
             Divider()
             Button(role: .destructive) { billing.deleteLine(id: line.id) } label: {
