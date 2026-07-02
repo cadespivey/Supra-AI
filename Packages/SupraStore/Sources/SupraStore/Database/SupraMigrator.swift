@@ -898,6 +898,14 @@ public enum SupraMigrator {
             try db.create(index: "idx_message_citations_message", on: "message_citations", columns: ["message_id", "rank"], ifNotExists: true)
         }
 
+        migrator.registerMigration("v050_add_source_set_retrieval_depth") { db in
+            // Which retrieval tier produced this source set ("fast" preliminary vs
+            // "deep" full pass) — nil for pre-tier rows (all were deep-equivalent).
+            try db.alter(table: "document_source_sets") { table in
+                table.add(column: "retrieval_depth", .text)
+            }
+        }
+
         return migrator
     }
 

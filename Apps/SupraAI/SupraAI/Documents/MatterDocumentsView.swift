@@ -645,9 +645,14 @@ struct DocumentQASheet: View {
             qaContent
         } footer: {
             if let result = qa.lastResult {
-                Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
-                    .buttonStyle(.ghost)
-                    .disabled(qa.isGenerating || routeModel == nil)
+                Button(result.depth == .fast ? "Search All Documents (slower)" : "Regenerate") {
+                    Task { await regenerate(outputID: result.outputID) }
+                }
+                .buttonStyle(.ghost)
+                .disabled(qa.isGenerating || routeModel == nil)
+                .help(result.depth == .fast
+                    ? "The preliminary answer searched the most relevant passages. Run the full pass across every document in scope."
+                    : "Run the full pass again.")
             }
             Spacer()
             if qa.isGenerating { ProgressView().controlSize(.small) }
@@ -698,6 +703,10 @@ struct DocumentQASheet: View {
                 Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
+                        if result.depth == .fast {
+                            Label("Preliminary — searched the most relevant passages. “Search All Documents” runs the full pass.", systemImage: "hare")
+                                .font(.supraCaption).foregroundStyle(.secondary)
+                        }
                         if result.status == StructuredOutputStatus.needsReview.rawValue {
                             Label("Needs review — \(result.warnings.joined(separator: " "))", systemImage: "exclamationmark.triangle")
                                 .font(.supraCaption).foregroundStyle(.orange)

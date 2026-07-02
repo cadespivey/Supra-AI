@@ -20,6 +20,7 @@ public final class DocumentSourceRepository: @unchecked Sendable {
         mode: DocumentSourceSetMode,
         scopeJSON: String = "{}",
         retrievalQuery: String? = nil,
+        retrievalDepth: String? = nil,
         structuredOutputVersionID: String? = nil,
         status: DocumentSourceSetStatus = .pending
     ) throws -> DocumentSourceSetRecord {
@@ -30,7 +31,8 @@ public final class DocumentSourceRepository: @unchecked Sendable {
                 status: status.rawValue,
                 mode: mode.rawValue,
                 scopeJSON: scopeJSON,
-                retrievalQuery: retrievalQuery
+                retrievalQuery: retrievalQuery,
+                retrievalDepth: retrievalDepth
             )
             try record.insert(db)
             return record
