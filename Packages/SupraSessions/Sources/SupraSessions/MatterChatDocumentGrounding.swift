@@ -145,6 +145,10 @@ struct GroundedChatContext: Sendable, Equatable {
     /// surfaces that as an out-of-band citation-coverage warning rather than relying on a
     /// soft in-prompt note the model may drop.
     var scopeFullyIndexed: Bool = true
+    /// Which retrieval tier packed the sources — `.fast` answers are preliminary and
+    /// the controller offers "search all documents" (spec §3.2). Inventory/no-match
+    /// contexts are `.deep` (there is no deeper tier for them).
+    var depth: RetrievalDepth = .deep
 }
 
 /// A resolvable pointer behind an inline `[S#]` matter-document citation: enough to
@@ -172,7 +176,11 @@ final class MatterChatDocumentGrounding {
     private let defaultSystemPrompt: String?
 
     /// How many retrieved passages to pack into a content answer.
-    private static let packedSourceLimit = 8
+    /// Tier packing (spec §3.2.3): chat grounding has no rerank stage, so the fast
+    /// tier is today's packet and the deep tier widens it (with the lower semantic
+    /// floor) rather than reranking.
+    private static let fastPackedSourceLimit = 8
+    private static let deepPackedSourceLimit = 12
 
     init(
         store: SupraStore,
@@ -188,7 +196,7 @@ final class MatterChatDocumentGrounding {
 
     /// A grounded context for a matter-chat message, or nil when the message is not
     /// about the matter's own documents (the caller then uses its normal path).
-    func groundedContext(forQuestion question: String) async -> GroundedChatContext? {
+    func groundedContext(forQuestion question: String, depth: RetrievalDepth = .fast) async -> GroundedChatContext? {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -199,7 +207,7 @@ final class MatterChatDocumentGrounding {
         case let .inventory(folderHint):
             return inventoryContext(question: trimmed, folders: folders, folderHint: folderHint)
         case let .content(folderHint):
-            return await contentContext(question: trimmed, folders: folders, folderHint: folderHint)
+            return await contentContext(question: trimmed, folders: folders, folderHint: folderHint, depth: depth)
         }
     }
 
@@ -237,7 +245,8 @@ final class MatterChatDocumentGrounding {
     private func contentContext(
         question: String,
         folders: [DocumentFolderRecord],
-        folderHint: String?
+        folderHint: String?,
+        depth: RetrievalDepth
     ) async -> GroundedChatContext {
         let folder = resolveFolder(folders: folders, folderHint: folderHint)
 
@@ -255,9 +264,21 @@ final class MatterChatDocumentGrounding {
         let scope: RetrievalScope = folder
             .map { RetrievalScope(folderIDs: folderAndDescendantIDs(of: $0, in: folders)) }
             ?? .wholeMatter
-        let result = try? await retrieval.retrieve(
-            matterID: matterID, query: question, scope: scope, limit: Self.packedSourceLimit
+        var effectiveDepth = depth
+        var result = try? await retrieval.retrieve(
+            matterID: matterID, query: question, scope: scope,
+            limit: depth == .fast ? Self.fastPackedSourceLimit : Self.deepPackedSourceLimit,
+            depth: depth
         )
+        // Empty fast packet -> run the deep pass once, silently (spec §8.2), before
+        // concluding nothing matches.
+        if result?.sources.isEmpty ?? true, depth == .fast {
+            effectiveDepth = .deep
+            result = try? await retrieval.retrieve(
+                matterID: matterID, query: question, scope: scope,
+                limit: Self.deepPackedSourceLimit, depth: .deep
+            )
+        }
         let retrieved = result?.sources ?? []
         let sources: [GroundingSource] = retrieved.enumerated().map { index, retrieved in
             let low = retrieved.ocrConfidence.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false
@@ -302,7 +323,8 @@ final class MatterChatDocumentGrounding {
             modelPrompt: prompt, systemPrompt: groundedSystemPrompt(), trailer: nil,
             sourceTexts: sources.map(\.text),
             sources: sourceRefs,
-            scopeFullyIndexed: result?.readiness.isFullyReady ?? true
+            scopeFullyIndexed: result?.readiness.isFullyReady ?? true,
+            depth: effectiveDepth
         )
     }
 

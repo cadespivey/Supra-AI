@@ -161,6 +161,38 @@ final class DocumentQATests: XCTestCase {
         XCTAssertNotNil(qa.message)
     }
 
+    func testFastGroundedChatOffersDeeperSearchAndDeepPassClearsIt() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
+        try await indexDoc(store, matter.id, "agreement.txt", "The service agreement was signed on March 3, 2024 by both parties.")
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "Signed March 3, 2024 [S1]."),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        controller.loadChats()
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .generalQA)
+
+        // A fast (default) grounded answer offers the deep pass for the same question.
+        await controller.performSend(
+            prompt: "What do my documents say about the agreement?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+        let offer = try XCTUnwrap(controller.deeperSearchOffer)
+        XCTAssertEqual(offer.question, "What do my documents say about the agreement?")
+
+        // Running the deep pass answers again and retires the offer.
+        await controller.performSend(
+            prompt: offer.question,
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route,
+            documentDepth: .deep
+        )
+        XCTAssertNil(controller.deeperSearchOffer)
+        XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
     // MARK: - Helpers
 
     private func indexDoc(_ store: SupraStore, _ matterID: String, _ name: String, _ text: String) async throws {

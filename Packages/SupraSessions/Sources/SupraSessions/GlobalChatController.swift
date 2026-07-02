@@ -34,6 +34,14 @@ public final class GlobalChatController: ObservableObject {
     /// Grounds matter chats in the matter's own documents (folder inventories +
     /// retrieval). nil for global chats, which have no document collection.
     private let documentGrounding: MatterChatDocumentGrounding?
+
+    /// After a fast-tier document-grounded answer, offers the deep pass for the same
+    /// question (spec §3.2). Transient: cleared on the next send or chat switch.
+    public struct DeeperSearchOffer: Equatable, Sendable {
+        public let chatID: String
+        public let question: String
+    }
+    @Published public private(set) var deeperSearchOffer: DeeperSearchOffer?
     private let router: ModelRouter
     private let legalConfiguration: LegalModelConfiguration
     private let courtListenerClient: any CourtListenerClientProtocol
@@ -203,6 +211,8 @@ public final class GlobalChatController: ObservableObject {
     public func select(chatID: String?) {
         selectedChatID = chatID
         activeChatOptions = chatID.flatMap(loadChatOptions(for:)) ?? storedDefaultOptions()
+        // The deeper-search offer belongs to the conversation it was made in.
+        if deeperSearchOffer?.chatID != chatID { deeperSearchOffer = nil }
         reloadMessages()
     }
 
@@ -465,7 +475,8 @@ public final class GlobalChatController: ObservableObject {
         systemPrompt: String? = nil,
         options: GenerationOptions? = nil,
         route: ModelRoute? = nil,
-        displayPrompt: String? = nil
+        displayPrompt: String? = nil,
+        documentDepth: RetrievalDepth = .fast
     ) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowsEmptyPrompt = route?.mode == .legalCritique && latestAssistantDraft() != nil
@@ -496,7 +507,8 @@ public final class GlobalChatController: ObservableObject {
                 systemPrompt: effectiveSystemPrompt,
                 options: effectiveOptions,
                 route: route,
-                displayPrompt: displayPrompt
+                displayPrompt: displayPrompt,
+                documentDepth: documentDepth
             )
         }
     }
@@ -685,10 +697,12 @@ public final class GlobalChatController: ObservableObject {
         systemPrompt: String?,
         options: GenerationOptions,
         route: ModelRoute? = nil,
-        displayPrompt: String? = nil
+        displayPrompt: String? = nil,
+        documentDepth: RetrievalDepth = .fast
     ) async {
         isGenerating = true
         errorMessage = nil
+        deeperSearchOffer = nil
         defer {
             isGenerating = false
             activeGenerationID = nil
@@ -716,7 +730,7 @@ public final class GlobalChatController: ObservableObject {
             // Gated on a loaded model so a no-model send doesn't pay for retrieval it
             // will discard at the guard below.
             let grounded: GroundedChatContext? = (attachments.isEmpty && modelID != nil)
-                ? await documentGrounding?.groundedContext(forQuestion: prompt)
+                ? await documentGrounding?.groundedContext(forQuestion: prompt, depth: documentDepth)
                 : nil
 
             if grounded == nil, let route, route.usesOneShotLegalWorkflow {
@@ -872,6 +886,12 @@ public final class GlobalChatController: ObservableObject {
                     )
                     updateMessage(id: assistant.id, content: streamedContent, status: .completed)
                     attachCitations(citations, toMessage: assistant.id)
+                    // A fast-tier grounded answer is preliminary: offer the deep pass
+                    // for the same question (spec §3.2). Auto-escalated or deep passes
+                    // carry .deep and offer nothing.
+                    if grounded?.depth == .fast, !groundingSources.isEmpty {
+                        deeperSearchOffer = DeeperSearchOffer(chatID: chatID, question: prompt)
+                    }
 
                 case .generationCancelled:
                     sawTerminal = true

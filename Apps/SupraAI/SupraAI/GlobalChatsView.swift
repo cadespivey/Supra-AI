@@ -419,6 +419,18 @@ struct GlobalChatsView: View {
                         )
                         .id(message.id)
                     }
+                    // A fast-tier grounded answer is preliminary; offer the full pass
+                    // for the same question (spec §3.2).
+                    if let offer = controller.deeperSearchOffer, offer.chatID == controller.selectedChatID {
+                        HStack(spacing: 8) {
+                            Label("Preliminary — searched the most relevant passages.", systemImage: "hare")
+                                .font(.supraCaption).foregroundStyle(.secondary)
+                            Button("Search All Documents (slower)") { searchAllDocuments(offer) }
+                                .buttonStyle(.ghost)
+                                .disabled(controller.isGenerating)
+                        }
+                        .padding(.top, 2)
+                    }
                 }
                 .padding(16)
             }
@@ -795,6 +807,36 @@ struct GlobalChatsView: View {
                 options: controller.activeChatOptions,
                 route: routed.route,
                 displayPrompt: rawPrompt
+            )
+        }
+    }
+
+    /// Re-runs the offered question with deep document grounding (the full pass).
+    private func searchAllDocuments(_ offer: GlobalChatController.DeeperSearchOffer) {
+        guard !controller.isGenerating else { return }
+        let router = ModelRouter(configuration: .fromEnvironment())
+        let routed = router.routePrompt(offer.question)
+        Task { @MainActor in
+            var modelID: ModelID?
+            if controller.requiresRuntimeModel(for: routed) {
+                switch await library.ensureLoadedChatModelID(
+                    for: routed.route.role,
+                    configuration: router.configuration
+                ) {
+                case let .success(loaded):
+                    modelID = loaded
+                case let .failure(issue):
+                    attachmentError = issue.message
+                    return
+                }
+            }
+            controller.send(
+                prompt: routed.prompt,
+                modelID: modelID,
+                options: controller.activeChatOptions,
+                route: routed.route,
+                displayPrompt: offer.question,
+                documentDepth: .deep
             )
         }
     }
