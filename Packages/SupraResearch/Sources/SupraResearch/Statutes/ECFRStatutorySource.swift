@@ -24,18 +24,49 @@ public struct ECFRStatutorySource: StatutorySource {
         }
         do {
             let response = try await client.search(query: query.terms, limit: query.limit)
-            let provisions = response.results.prefix(query.limit).compactMap(Self.provision(from:))
-            return StatutoryLookupResult(provisions: Array(provisions))
+            var provisions: [StatutoryProvision] = []
+            var fetchedText = 0
+            for result in response.results.prefix(query.limit) {
+                // Fetch the full official section text for the top hits (capped to stay
+                // inside the client's local rate budget); ground from the excerpt only
+                // when the fetch is unavailable.
+                var fullText: String?
+                if fetchedText < Self.maxSectionTextFetches,
+                   let title = result.hierarchy.title, let section = result.hierarchy.section,
+                   let date = result.startsOn,
+                   let xml = try? await client.fetchSectionText(
+                       title: title, part: result.hierarchy.part, section: section, date: date
+                   ) {
+                    let cleaned = Self.stripHTML(xml)
+                    if !cleaned.isEmpty {
+                        fetchedText += 1
+                        fullText = cleaned.count > Self.maxSectionTextLength
+                            ? String(cleaned.prefix(Self.maxSectionTextLength)) + "…"
+                            : cleaned
+                    }
+                }
+                if let provision = Self.provision(from: result, fullText: fullText) {
+                    provisions.append(provision)
+                }
+            }
+            return StatutoryLookupResult(provisions: provisions)
         } catch {
             return StatutoryLookupResult(note: "eCFR lookup was unavailable for this query.")
         }
     }
 
-    static func provision(from result: ECFRSearchResult) -> StatutoryProvision? {
+    /// The most section-text fetches per lookup — bounds latency AND keeps a lookup
+    /// (search + fetches) inside the client's local per-minute rate budget.
+    static let maxSectionTextFetches = 2
+    /// Cap stored section text (some sections run very long).
+    static let maxSectionTextLength = 8_000
+
+    static func provision(from result: ECFRSearchResult, fullText: String? = nil) -> StatutoryProvision? {
         guard let titleNumber = result.hierarchy.title, let section = result.hierarchy.section else { return nil }
         let citation = "\(titleNumber) CFR § \(section)"
         let heading = result.headings.section.map(stripHTML)
-        let body = result.fullTextExcerpt.map(stripHTML) ?? heading ?? ""
+        let excerpt = result.fullTextExcerpt.map(stripHTML) ?? heading ?? ""
+        let body = fullText ?? excerpt
         return StatutoryProvision(
             sourceID: "ecfr",
             sourceName: "eCFR",
@@ -44,7 +75,7 @@ public struct ECFRStatutorySource: StatutorySource {
             jurisdictionName: "Code of Federal Regulations, Title \(titleNumber)",
             citation: citation,
             heading: heading,
-            snippet: body,
+            snippet: excerpt.isEmpty ? String(body.prefix(280)) : excerpt,
             text: body,
             url: sectionURL(title: titleNumber, section: section),
             locatorPath: section,
