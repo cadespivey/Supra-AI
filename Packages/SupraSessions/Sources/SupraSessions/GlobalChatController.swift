@@ -2590,6 +2590,52 @@ public final class GlobalChatController: ObservableObject {
         messages[index].citations = citations
     }
 
+    // MARK: - Authority reader ([A#], spec §2.5)
+
+    /// Everything the in-app opinion reader shows before the text loads: the case
+    /// header, the passage to highlight, and the hydration key.
+    public struct AuthorityReaderModel: Identifiable, Sendable, Equatable {
+        public let id: String
+        public let caseName: String
+        public let citationText: String?
+        public let court: String?
+        public let dateFiled: String?
+        public let url: String?
+        public let highlight: String?
+        public let opinionID: String?
+    }
+
+    public func authorityReaderModel(for citation: MessageCitation) -> AuthorityReaderModel {
+        AuthorityReaderModel(
+            id: citation.id,
+            caseName: citation.displayName ?? citation.authorityRef?.citation ?? "Authority",
+            citationText: citation.authorityRef?.citation,
+            court: citation.authorityRef?.court,
+            dateFiled: citation.authorityRef?.dateFiled,
+            url: citation.url,
+            highlight: citation.matchText,
+            opinionID: citation.authorityRef?.opinionID
+        )
+    }
+
+    /// The reader's opinion text: the persisted copy on a SAVED authority first
+    /// (offline, locked §8.3), else a one-shot CourtListener hydration. Nil when
+    /// neither is available — the reader then offers the CourtListener link only.
+    public func authorityOpinionText(opinionID: String?) async -> String? {
+        guard let opinionID else { return nil }
+        if let matterID = scopedMatterID,
+           let saved = (try? store.authorities.fetchAuthorities(matterID: matterID))?
+               .first(where: { $0.opinionID == opinionID }),
+           let text = saved.opinionText, !text.isEmpty {
+            return text
+        }
+        guard let id = Int(opinionID),
+              let detail = try? await courtListenerClient.fetchOpinion(id: id),
+              let body = detail.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !body.isEmpty else { return nil }
+        return body
+    }
+
     /// Persists `[A#]` legal-research authorities for a finalized message. The ranked
     /// `authorities` are the same capped, ordered packet the model saw, so `[A1]` =
     /// `authorities[0]`. Only labels that actually appear in the answer are stored, so
@@ -2606,13 +2652,24 @@ public final class GlobalChatController: ObservableObject {
         for (index, authority) in authorities.enumerated() {
             let label = "A\(index + 1)"
             guard present.contains(label), let url = authority.url, !url.isEmpty else { continue }
+            // The reader pointer (spec §2.5): hydration keys + case header in the
+            // locator column; the search snippet anchors the passage highlight.
+            let ref = AuthorityCitationRef(
+                opinionID: authority.opinionId,
+                clusterID: authority.clusterId,
+                citation: authority.citation ?? authority.citations.first,
+                court: authority.court,
+                dateFiled: authority.dateFiled
+            )
             records.append(
                 MessageCitationRecord(
                     messageID: messageID,
                     label: label,
                     kind: MessageCitation.Kind.authority.rawValue,
                     url: url,
+                    locatorJSON: (try? JSONEncoder.encodeToString(ref)),
                     displayName: authority.caseName ?? authority.citation,
+                    matchText: authority.snippet.map { String($0.prefix(280)) },
                     rank: index
                 )
             )

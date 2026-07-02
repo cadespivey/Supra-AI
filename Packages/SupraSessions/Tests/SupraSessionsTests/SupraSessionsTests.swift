@@ -816,6 +816,14 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(citations.map(\.label), ["A1"])
         XCTAssertEqual(citations.first?.kind, .authority)
         XCTAssertNotNil(citations.first?.url)
+
+        // The citation carries the in-app reader's pointer (spec §2.5): hydration key,
+        // case header, and the snippet that anchors the passage highlight.
+        let ref = try XCTUnwrap(citations.first?.authorityRef)
+        XCTAssertEqual(ref.opinionID, "99")
+        XCTAssertEqual(ref.citation, "1 F.4th 1")
+        XCTAssertTrue(ref.court?.contains("Ninth Circuit") ?? false)
+        XCTAssertTrue(citations.first?.matchText?.contains("A claim was recognized") ?? false)
     }
 
     private static let singleResultResponse = CourtListenerSearchResponse(

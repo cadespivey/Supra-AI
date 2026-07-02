@@ -1096,27 +1096,16 @@ struct PreviewSlideOver: View {
     static let maxWidth: CGFloat = 1100
 
     var body: some View {
-        HStack(spacing: 0) {
-            PreviewResizeHandle(width: $width, minWidth: Self.minWidth, maxWidth: Self.maxWidth)
+        SlideOverPanel(width: $width, minWidth: Self.minWidth, maxWidth: Self.maxWidth, onClose: onClose) {
             DocumentPreviewView(model: model, onClose: onClose)
-                .frame(width: width)
         }
-        .frame(maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .overlay(alignment: .leading) {
-            Rectangle().fill(Color(nsColor: .separatorColor)).frame(width: 1)
-        }
-        .shadow(color: .black.opacity(0.18), radius: 10, x: -3, y: 0)
-        .transition(.move(edge: .trailing))
-        // Restore the Escape-to-close that the prior sheet/inspector gave for free.
-        .onExitCommand { onClose() }
     }
 }
 
 /// The thin draggable strip on the leading edge of the slide-over; dragging it left
 /// widens the panel (covering more), right narrows it — the content underneath never
 /// moves. Shows a horizontal-resize cursor on hover.
-private struct PreviewResizeHandle: View {
+struct PreviewResizeHandle: View {
     @Binding var width: CGFloat
     let minWidth: CGFloat
     let maxWidth: CGFloat
