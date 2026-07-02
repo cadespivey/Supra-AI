@@ -284,7 +284,10 @@ public final class DocumentQAController: ObservableObject {
         // leak another matter's content into this answer.
         let chunks = ((try? store.documentIndex.fetchChunks(ids: chunkIDs)) ?? [])
             .filter { nameByID[$0.documentID] != nil }
-        let order = Dictionary(uniqueKeysWithValues: chunkIDs.enumerated().map { ($1, $0) })
+        // `chunkIDs` is caller-supplied (guided generation / regenerate), so it isn't
+        // guaranteed unique the way a primary-key fetch is — dedupe keys to keep the
+        // ordering map from trapping on a repeated id.
+        let order = Dictionary(chunkIDs.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         return chunks
             .sorted { (order[$0.id] ?? 0) < (order[$1.id] ?? 0) }
             .enumerated().map { index, chunk in

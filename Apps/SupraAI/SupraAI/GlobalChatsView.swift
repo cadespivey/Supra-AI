@@ -1,5 +1,6 @@
 import AppKit
 import SupraCore
+import SupraDocuments
 import SupraResearch
 import SupraSessions
 import SwiftUI
@@ -15,6 +16,9 @@ struct GlobalChatsView: View {
 
     @ObservedObject var controller: GlobalChatController
     @ObservedObject var library: ModelLibrary
+    /// The app-wide generation default lives here; the chat reads/writes its own
+    /// per-chat options on `controller`, but Settings is still where new chats'
+    /// defaults come from.
     @ObservedObject var settings: SettingsController
     var listStyle: ChatListStyle = .picker
     /// Matters available as "move chat to…" targets, shown only in the global
@@ -37,6 +41,10 @@ struct GlobalChatsView: View {
     @State private var renamingChat: ChatSummary?
     @State private var renameText = ""
     @State private var pendingDeleteChat: ChatSummary?
+    /// A tapped `[S#]` matter-document citation, shown in a trailing slide-over
+    /// preview hosted over the message area (one host, not per-row).
+    @State private var citationPreview: PreviewItem?
+    @State private var citationPreviewWidth: CGFloat = 580
 
     private let attachmentLoader = ChatAttachmentLoader()
     private static let maxAttachments = 10
@@ -51,7 +59,13 @@ struct GlobalChatsView: View {
             chatColumn
         }
         .onAppear {
-            inputFocused = true
+            // Auto-focusing the composer suits the standalone Chats screen, but inside a
+            // matter workspace it drops the message field into an editing session the moment
+            // the Chat tab appears — so the first click on another tab (Research, Documents…)
+            // is swallowed ending that session and only the second click registers. Only the
+            // standalone (.picker) chat grabs focus on appear; matter (.inline) chat waits for
+            // the user to click into it.
+            if listStyle == .picker { inputFocused = true }
             matters?.loadMatters()
             if suggestions.isEmpty { suggestions = ChatSuggestions.sample() }
         }
@@ -74,6 +88,15 @@ struct GlobalChatsView: View {
         // is its own visual separation.
         VStack(spacing: 0) {
             messageList
+                // The cited source slides in OVER the conversation (it doesn't displace
+                // the text), with a draggable leading edge to resize. Scoped to the
+                // message area so it never covers the composer's Send/Stop controls.
+                .overlay(alignment: .trailing) {
+                    if let item = citationPreview {
+                        PreviewSlideOver(model: item.model, width: $citationPreviewWidth) { citationPreview = nil }
+                    }
+                }
+                .animation(.snappy(duration: 0.25), value: citationPreview != nil)
             if let errorMessage = controller.errorMessage {
                 errorBanner(errorMessage)
             }
@@ -90,7 +113,7 @@ struct GlobalChatsView: View {
     private var chatHistorySidebar: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Chats").font(.headline)
+                Text("Chats").font(.supraHeadline)
                 Spacer()
                 Button {
                     controller.startNewChat()
@@ -118,7 +141,7 @@ struct GlobalChatsView: View {
                         .font(.title2)
                         .foregroundStyle(.tertiary)
                     Text(chatSearch.isEmpty ? "No chats yet" : "No matches")
-                        .font(.callout)
+                        .font(.supraCaption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -138,7 +161,9 @@ struct GlobalChatsView: View {
             }
         }
         .frame(width: 248)
-        .background(Color(nsColor: .controlBackgroundColor))
+        // Match the content pane (and the other interior columns) so the detail area
+        // reads as one continuous surface; the divider provides the separation.
+        .background(Color(nsColor: .windowBackgroundColor))
         .alert("Rename Chat", isPresented: renameAlertBinding) {
             TextField("Chat name", text: $renameText)
             Button("Cancel", role: .cancel) { renamingChat = nil }
@@ -166,23 +191,10 @@ struct GlobalChatsView: View {
     }
 
     private var chatSearchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
-            TextField("Search chats or #tags", text: $chatSearch)
-                .textFieldStyle(.plain)
-                .font(.callout)
-            if !chatSearch.isEmpty {
-                Button { chatSearch = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Clear search")
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+        // Matches the Documents tab's search field — a standard rounded-border text
+        // field rather than a filled pill with an inline icon.
+        TextField("Search chats or #tags", text: $chatSearch)
+            .textFieldStyle(.roundedBorder)
     }
 
     private func chatHistoryRow(_ chat: ChatSummary) -> some View {
@@ -205,6 +217,7 @@ struct GlobalChatsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("chat.row.\(chat.title)")
 
             // Always-visible action affordance (more discoverable than relying on
             // right-click alone); disabled while this chat is still generating.
@@ -220,6 +233,7 @@ struct GlobalChatsView: View {
             .opacity(selected ? 1 : 0.7)
             .disabled(controller.isGenerating && selected)
             .help("Chat actions")
+            .accessibilityIdentifier("chat.menu.\(chat.title)")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -227,6 +241,7 @@ struct GlobalChatsView: View {
             selected ? Color.accentColor.opacity(0.15) : Color.clear,
             in: RoundedRectangle(cornerRadius: 6)
         )
+        .hoverShade(cornerRadius: 6)
         .contextMenu { chatRowMenu(chat) }
     }
 
@@ -251,6 +266,13 @@ struct GlobalChatsView: View {
             }
         }
 
+        Button {
+            exportChat(chat)
+        } label: {
+            Label("Export Chat", systemImage: "square.and.arrow.up")
+        }
+        .accessibilityIdentifier("chat.export")
+
         Divider()
 
         Button(role: .destructive) {
@@ -258,6 +280,37 @@ struct GlobalChatsView: View {
         } label: {
             Label("Delete", systemImage: "trash")
         }
+    }
+
+    /// Saves the full conversation as a Markdown file via a save panel, then reveals
+    /// it in Finder. Emojis are stripped (matching the per-message copy) and the
+    /// filename is derived from the chat title.
+    private func exportChat(_ chat: ChatSummary) {
+        let markdown = EmojiStripper.strip(
+            controller.exportTranscriptMarkdown(chatID: chat.id, title: chat.title)
+        )
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = Self.sanitizedFilename(chat.title) + ".md"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try markdown.write(to: url, atomically: true, encoding: .utf8)
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } catch {
+                controller.reportError(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Strips path separators and control characters from a chat title so it's safe
+    /// as a filename; falls back to "chat" when nothing usable remains.
+    private static func sanitizedFilename(_ title: String) -> String {
+        let cleaned = title
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:").union(.controlCharacters))
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "chat" : cleaned
     }
 
     /// In-scope chats matched by title OR by message content (a `#tag` or any text).
@@ -295,12 +348,12 @@ struct GlobalChatsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Divider().padding(.vertical, 4)
             Text("Tag matches")
-                .font(.caption.weight(.semibold))
+                .font(.supraHeadline)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
             ForEach(discoveryGroups) { group in
                 Text(group.id)
-                    .font(.caption2.weight(.semibold))
+                    .font(.supraCaption.weight(.semibold))
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 8)
                     .padding(.top, 4)
@@ -320,11 +373,11 @@ struct GlobalChatsView: View {
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 1) {
                 Text(hit.title)
-                    .font(.caption.weight(.medium))
+                    .font(.supraCaption.weight(.medium))
                     .lineLimit(1)
                 if !hit.snippet.isEmpty {
                     Text(hit.snippet)
-                        .font(.caption2)
+                        .font(.supraCaption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -350,8 +403,21 @@ struct GlobalChatsView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(controller.messages) { message in
-                        MessageRow(message: message)
-                            .id(message.id)
+                        MessageRow(
+                            message: message,
+                            onOpenAuthority: { NSWorkspace.shared.open($0) },
+                            onOpenSource: { citation in
+                                guard let documentID = citation.documentID,
+                                      let locator = citation.locator else { return }
+                                let model = controller.citationPreview(
+                                    documentID: documentID,
+                                    locator: locator,
+                                    matchText: citation.matchText
+                                )
+                                citationPreview = PreviewItem(model: model)
+                            }
+                        )
+                        .id(message.id)
                     }
                 }
                 .padding(16)
@@ -385,9 +451,9 @@ struct GlobalChatsView: View {
                     .font(.system(size: 44, weight: .semibold, design: .serif))
                     .foregroundStyle(.tertiary)
                 Text("How can I help with your legal work?")
-                    .font(.title3.weight(.semibold))
+                    .font(.supraTitle)
                 Text("Pick a starting point or ask anything.")
-                    .font(.callout)
+                    .font(.supraSubheadline)
                     .foregroundStyle(.secondary)
             }
 
@@ -441,12 +507,8 @@ struct GlobalChatsView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.secondary.opacity(0.15))
-            )
             .contentShape(RoundedRectangle(cornerRadius: 10))
+            .hoverShade(cornerRadius: 10)
         }
         .buttonStyle(.plain)
         .help("Use this prompt: \(suggestion.prompt)")
@@ -457,7 +519,7 @@ struct GlobalChatsView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
             Text(message)
-                .font(.callout)
+                .font(.supraBody)
                 .textSelection(.enabled)
             Spacer()
         }
@@ -572,16 +634,16 @@ struct GlobalChatsView: View {
             EmptyView()
         case let .failed(message):
             Text("Model failed to load: \(message)")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.orange)
                 .textSelection(.enabled)
         case .loading:
             Text("Loading model…")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.secondary)
         case .idle:
             Text("Task models load on demand. Assign them in Models for model answers; verification can run without one.")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.secondary)
         }
     }
@@ -624,7 +686,7 @@ struct GlobalChatsView: View {
                             .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
                         }
-                        .font(.caption)
+                        .font(.supraCaption)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(Color.secondary.opacity(0.12), in: Capsule())
@@ -635,7 +697,7 @@ struct GlobalChatsView: View {
         if let attachmentError {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                Text(attachmentError).font(.caption).foregroundStyle(.secondary)
+                Text(attachmentError).font(.supraCaption).foregroundStyle(.secondary)
                 Spacer()
                 Button { self.attachmentError = nil } label: { Image(systemName: "xmark") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -709,7 +771,7 @@ struct GlobalChatsView: View {
         Task { @MainActor in
             var modelID: ModelID?
             if controller.requiresRuntimeModel(for: routed) {
-                switch await library.ensureLoadedRoutedModelID(
+                switch await library.ensureLoadedChatModelID(
                     for: routed.route.role,
                     configuration: router.configuration
                 ) {
@@ -730,7 +792,7 @@ struct GlobalChatsView: View {
                 prompt: routed.prompt,
                 modelID: modelID,
                 attachments: rawAttachments,
-                options: settings.currentOptions,
+                options: controller.activeChatOptions,
                 route: routed.route,
                 displayPrompt: rawPrompt
             )
@@ -743,10 +805,7 @@ struct GlobalChatsView: View {
     /// quick generation-settings switcher (the same defaults as Settings).
     private var chatStatusBar: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 5) {
-                Circle().fill(modelStatusColor).frame(width: 7, height: 7)
-                Text(modelStatusText).foregroundStyle(.secondary).lineLimit(1)
-            }
+            modelSelector
             if controller.isGenerating {
                 HStack(spacing: 4) {
                     ProgressView().controlSize(.mini)
@@ -761,16 +820,16 @@ struct GlobalChatsView: View {
             Button { showGenerationSettings.toggle() } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "slider.horizontal.3")
-                    Text(settings.preset.displayName)
+                    Text(controller.activeChatOptions.preset.displayName)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.ghost)
             .help("Generation settings")
             .popover(isPresented: $showGenerationSettings, arrowEdge: .bottom) {
                 generationSettings
             }
         }
-        .font(.caption)
+        .font(.supraCaption)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
     }
@@ -786,7 +845,7 @@ struct GlobalChatsView: View {
                 Text(jurisdictionLabel).lineLimit(1)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.ghost)
         .help("Bounds legal research (CourtListener) to a jurisdiction")
         .popover(isPresented: $showJurisdiction, arrowEdge: .bottom) {
             jurisdictionSettings
@@ -794,8 +853,7 @@ struct GlobalChatsView: View {
     }
 
     private var jurisdictionSettings: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Jurisdiction").font(.headline)
+        SupraPopoverFrame("Jurisdiction") {
             Picker("Jurisdiction", selection: $controller.jurisdictionOverrideID) {
                 Text("Auto-detect from prompt").tag("")
                 Section("Federal") {
@@ -816,10 +874,8 @@ struct GlobalChatsView: View {
                 .disabled(!selectedIsState)
                 .help("For a state, also search the federal circuit and district courts that apply its law.")
             Text("Bounds CourtListener research to the selected jurisdiction. Auto-detect infers it from your prompt.")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.supraCaption).foregroundStyle(.secondary)
         }
-        .padding()
-        .frame(width: 320)
     }
 
     private var jurisdictionLabel: String {
@@ -833,12 +889,60 @@ struct GlobalChatsView: View {
         JurisdictionCatalog.shared.option(id: controller.jurisdictionOverrideID)?.system == .state
     }
 
-    private var modelStatusText: String {
+    /// The model readout doubles as a picker: Autoselect (per-route Models-tab
+    /// preference) by default, or force a specific model for every request. The choice
+    /// is app-wide and shared by all chats; "Autoselect" is shown when nothing is pinned.
+    private var modelSelector: some View {
+        Menu {
+            Button {
+                library.setForcedModel(nil)
+            } label: {
+                Label(
+                    "Autoselect (Models preferences)",
+                    systemImage: library.forcedModelID == nil ? "checkmark" : "wand.and.stars"
+                )
+            }
+            if !library.models.isEmpty {
+                Section("Force a model") {
+                    ForEach(library.models) { model in
+                        Button {
+                            library.setForcedModel(UUID(uuidString: model.id).map(ModelID.init))
+                        } label: {
+                            if library.forcedModelID?.rawValue.uuidString == model.id {
+                                Label(model.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(model.displayName)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Circle().fill(modelStatusColor).frame(width: 7, height: 7)
+                Text(modelSelectorLabel).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(library.models.isEmpty ? .hidden : .visible)
+        .fixedSize()
+        .help(library.forcedModelID == nil
+            ? "Autoselect picks the model from your Models-tab preference for each request. Choose a model to force it for every request."
+            : "Forcing a specific model for every request. Choose Autoselect to return to your Models-tab preferences.")
+    }
+
+    /// The selector's caption: the pinned model's name when forced, otherwise an
+    /// "Auto ·" prefix over the loaded model so Autoselect is always identifiable.
+    private var modelSelectorLabel: String {
+        if let forced = library.forcedModelID,
+           let model = library.models.first(where: { $0.id == forced.rawValue.uuidString }) {
+            return model.displayName
+        }
         switch library.loadState {
-        case .loaded: library.loadedModel?.displayName ?? "Model loaded"
-        case .loading: "Loading model…"
-        case .failed: "Model failed to load"
-        case .idle: "Runtime idle"
+        case .loaded: return "Auto · \(library.loadedModel?.displayName ?? "model")"
+        case .loading: return "Loading model…"
+        case .failed: return "Model failed to load"
+        case .idle: return "Autoselect"
         }
     }
 
@@ -852,35 +956,52 @@ struct GlobalChatsView: View {
     }
 
     private var generationSettings: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Generation").font(.headline)
-            Picker("Preset", selection: $settings.preset) {
-                ForEach(GenerationPreset.userSelectableDefaults, id: \.self) { preset in
-                    Text(preset.displayName).tag(preset)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+        // Scoped to THIS chat (not the app-wide default): edits here become a per-chat
+        // override that sticks with the chat. New chats start from Settings → Generation
+        // Defaults.
+        SupraPopoverFrame("Generation", width: 340) {
+            GhostSegmentedControl(
+                selection: Binding(
+                    get: { controller.activeChatOptions.preset },
+                    set: { controller.setActiveChatPreset($0) }
+                ),
+                segments: GenerationPreset.userSelectableDefaults.map { ($0, $0.displayName, "") }
+            )
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Temperature")
                     Spacer()
-                    Text(String(format: "%.2f", settings.temperature))
+                    Text(String(format: "%.2f", controller.activeChatOptions.temperature))
                         .foregroundStyle(.secondary).monospacedDigit()
                 }
-                Slider(value: $settings.temperature, in: 0...1, step: 0.05)
+                Slider(
+                    value: Binding(
+                        get: { controller.activeChatOptions.temperature },
+                        set: { controller.setActiveChatTemperature($0) }
+                    ),
+                    in: 0...1, step: 0.05
+                )
             }
-            Stepper("Max output tokens: \(settings.maxOutputTokens)", value: $settings.maxOutputTokens, in: 128...8192, step: 128)
-            Text("Applies to all chats — same as Settings → Generation Defaults.")
-                .font(.caption2).foregroundStyle(.secondary)
+            Stepper(
+                "Max output tokens: \(controller.activeChatOptions.maxOutputTokens)",
+                value: Binding(
+                    get: { controller.activeChatOptions.maxOutputTokens },
+                    set: { controller.setActiveChatMaxOutputTokens($0) }
+                ),
+                in: 128...8192, step: 128
+            )
+            Text("Applies to this chat. New chats start from Settings → Generation Defaults.")
+                .font(.supraCaption).foregroundStyle(.secondary)
         }
-        .padding()
-        .frame(width: 340)
     }
 }
 
 private struct MessageRow: View {
     let message: ChatMessage
+    /// Opens a tapped `[A#]` authority's CourtListener page.
+    var onOpenAuthority: (URL) -> Void = { _ in }
+    /// Opens a tapped `[S#]` matter-document citation in the trailing slide-over preview.
+    var onOpenSource: (MessageCitation) -> Void = { _ in }
     /// nil until the user toggles. Until then the reasoning section auto-expands
     /// only while the response is still generating, and stays collapsed for
     /// completed/reloaded messages so chat history isn't a wall of reasoning.
@@ -914,6 +1035,11 @@ private struct MessageRow: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                // Expose as one accessibility leaf. A selectable `Text` otherwise
+                // exposes per-run children whose role resolution cycles (role↔label)
+                // and overflows the stack when the a11y tree is walked (VoiceOver /
+                // the XCUITest harness); mouse selection is unaffected.
+                .accessibilityElement(children: .ignore)
                 .accessibilityLabel(Text("You said: \(displayContent)"))
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -927,7 +1053,7 @@ private struct MessageRow: View {
             if showsHeader {
                 HStack(spacing: 6) {
                     if message.role == .system {
-                        Text("System").font(.caption.weight(.semibold)).foregroundStyle(.orange)
+                        Text("System").font(.supraCaption.weight(.semibold)).foregroundStyle(.orange)
                     }
                     if message.isStreaming {
                         ProgressView().controlSize(.small)
@@ -943,6 +1069,8 @@ private struct MessageRow: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 2)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Text(EmojiStripper.strip(reasoning)))
                 } label: {
                     Label("Reasoning", systemImage: "brain")
                         .font(.caption.weight(.medium))
@@ -950,9 +1078,29 @@ private struct MessageRow: View {
                 }
                 .tint(.secondary)
             }
-            MarkdownView(text: displayContent)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            MarkdownView(
+                text: displayContent,
+                citationLabels: citationLabels,
+                onCitationTap: handleCitationTap
+            )
+            // The assistant's answer is a long-form reading surface — body text with
+            // reading leading and a capped line length so long statutory lines stay
+            // comfortable to scan.
+            .supraReadingBody()
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Expose the rendered answer as one accessibility leaf. Markdown text
+            // (`Text(AttributedString(markdown:))`), text selection, and the inline
+            // `supracite://` citation links otherwise create per-run children whose
+            // role resolution cycles (role↔label) and overflows the stack when the
+            // a11y tree is walked (VoiceOver / the XCUITest harness). Mouse clicks and
+            // selection don't traverse the a11y tree, so they keep working; the
+            // citations stay independently actionable via the sources block below.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(displayContent))
+            if !message.citations.isEmpty {
+                sourcesBlock
+            }
             if showsCopy {
                 copyButton
                     .opacity(isHovered ? 1 : 0.35)
@@ -1002,6 +1150,74 @@ private struct MessageRow: View {
         .help("Copy this response as Markdown")
     }
 
+    /// Citation labels that should render as tappable inline links.
+    private var citationLabels: Set<String> {
+        Set(message.citations.map(\.label))
+    }
+
+    /// Routes a tapped citation (inline marker or sources-block row) to its action:
+    /// authorities open their CourtListener page, sources open the preview at a page.
+    private func handleCitationTap(_ label: String) {
+        guard let citation = message.citations.first(where: { $0.label == label }) else { return }
+        switch citation.kind {
+        case .authority:
+            if let urlString = citation.url, let url = URL(string: urlString) {
+                onOpenAuthority(url)
+            }
+        case .source:
+            onOpenSource(citation)
+        }
+    }
+
+    /// A footnote-style, lighter-grey, indented list of the message's sources, set
+    /// apart from the answer prose. Each row shares the inline marker's tap action.
+    private var sourcesBlock: some View {
+        // A subtle footnote list of the cited sources — visually quiet, but each row
+        // is a link that opens the source preview at the cited chunk (with a snippet
+        // highlight where the format supports it), mirroring the inline `[S#]` marker.
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(message.citations) { citation in
+                Button {
+                    handleCitationTap(citation.label)
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Image(systemName: citation.kind == .authority ? "link" : "doc.text.magnifyingglass")
+                            .font(.caption2)
+                            .accessibilityHidden(true)
+                        Text(sourceLine(citation))
+                            .font(.caption)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(citation.kind == .authority ? "Open on CourtListener" : "Open the cited source")
+                // One labeled a11y leaf (deriving the label from the child Image+Text
+                // would make accessibility resolve their roles, which cycles role↔label
+                // like the message text above).
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(sourceLine(citation)))
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("message.source.\(citation.label)")
+            }
+        }
+        .foregroundStyle(.tertiary)
+        .padding(.leading, 32)
+        .padding(.top, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// "[A1] Doe v. Smith" or "[S1] agreement.pdf — p. 3".
+    private func sourceLine(_ citation: MessageCitation) -> String {
+        let name = citation.displayName ?? (citation.kind == .authority ? "Authority" : "Document")
+        var line = "[\(citation.label)] \(name)"
+        if citation.kind == .source, let display = citation.locator?.displayString, !display.isEmpty {
+            line += " — \(display)"
+        }
+        return line
+    }
+
     private var displayContent: String {
         if message.content.isEmpty {
             return message.isStreaming ? "…" : message.content
@@ -1035,7 +1251,7 @@ private struct MessageRow: View {
 
     private func badge(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.caption2.weight(.semibold))
+            .font(.supraCaption.weight(.semibold))
             .foregroundStyle(color)
     }
 }
@@ -1048,8 +1264,14 @@ private struct MessageRow: View {
 /// degrades gracefully on partial/streaming input.
 struct MarkdownView: View {
     let text: String
+    /// Citation labels ("A1", "S1") that should render as tappable links. Empty for
+    /// ordinary messages, which then parse byte-identically to before.
+    var citationLabels: Set<String> = []
+    /// Invoked with a citation label when its inline marker is tapped.
+    var onCitationTap: ((String) -> Void)?
     @State private var blocks: [MarkdownBlock] = []
     @State private var sourceText: String = ""
+    @State private var sourceLabels: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1057,17 +1279,63 @@ struct MarkdownView: View {
                 MarkdownBlockView(block: blocks[index])
             }
         }
+        .environment(\.openURL, OpenURLAction { url in
+            guard let label = Self.citationLabel(from: url) else { return .systemAction }
+            onCitationTap?(label)
+            return .handled
+        })
         .onAppear(perform: refresh)
         .onChange(of: text) { _, _ in refresh() }
+        // Citations attach AFTER a fresh answer is generated (the streamed text is
+        // unchanged), so re-link the inline markers when the labels arrive — otherwise
+        // they stay plain text until the chat is reloaded.
+        .onChange(of: citationLabels) { _, _ in refresh() }
     }
 
-    /// Parse only when the text actually changes, so hover/selection re-renders
-    /// don't re-parse. Emojis are stripped once here (never inside code spacing,
-    /// because the stripper only removes real emoji glyphs).
+    /// Parse only when the text or its citation labels actually change, so
+    /// hover/selection re-renders don't re-parse. Emojis are stripped once here (never
+    /// inside code spacing, because the stripper only removes real emoji glyphs). When
+    /// the message has citations, inline `[A#]`/`[S#]` markers are rewritten to tappable
+    /// links first.
     private func refresh() {
-        guard text != sourceText else { return }
+        guard text != sourceText || citationLabels != sourceLabels else { return }
         sourceText = text
-        blocks = MarkdownParser.parse(EmojiStripper.strip(text))
+        sourceLabels = citationLabels
+        let stripped = EmojiStripper.strip(text)
+        let linked = citationLabels.isEmpty
+            ? stripped
+            : Self.citationLinked(stripped, labels: citationLabels)
+        blocks = MarkdownParser.parse(linked)
+    }
+
+    /// Rewrites standalone `[A#]`/`[S#]` markers whose label is a known citation into
+    /// custom-scheme Markdown links, e.g. `[A1]` → `[\[A1\]](supracite://A1)`. The
+    /// escaped brackets keep the visible text literal ("[A1]"); the lookbehind avoids
+    /// corrupting link syntax or path-like text. Unknown labels are left untouched.
+    static func citationLinked(_ text: String, labels: Set<String>) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"(?<![\w/])\[([AS]\d{1,3})\]"#) else { return text }
+        let ns = text as NSString
+        var result = ""
+        var cursor = 0
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let label = ns.substring(with: match.range(at: 1))
+            result += ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+            if labels.contains(label) {
+                result += "[\\[\(label)\\]](supracite://\(label))"
+            } else {
+                result += ns.substring(with: match.range)
+            }
+            cursor = match.range.location + match.range.length
+        }
+        result += ns.substring(from: cursor)
+        return result
+    }
+
+    /// Extracts an uppercased citation label from a tapped `supracite://A1` URL.
+    static func citationLabel(from url: URL) -> String? {
+        guard url.scheme == "supracite" else { return nil }
+        let raw = url.host ?? String(url.absoluteString.dropFirst("supracite://".count))
+        return raw.isEmpty ? nil : raw.uppercased()
     }
 }
 

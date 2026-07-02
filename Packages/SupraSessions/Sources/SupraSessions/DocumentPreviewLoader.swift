@@ -12,6 +12,12 @@ public struct DocumentPreviewModel: Sendable, Equatable {
         case pdf(path: String, pageIndex: Int?, highlightText: String?)
         /// Original image rendering, with optional OCR bounding boxes.
         case image(path: String, boundingBoxesJSON: String?)
+        /// Original file (Word, RTF, spreadsheet, email, …) rendered with QuickLook
+        /// so it looks like Finder's preview instead of stripped plain text.
+        /// QuickLook can't highlight a char range, so the cited `excerpt` (when a
+        /// match is known) is surfaced in a banner above the preview so the reader
+        /// can still find the cited passage.
+        case quickLook(path: String, excerpt: String?)
         /// Normalized text preview with a best-effort char-range highlight.
         case text(content: String, highlightStart: Int?, highlightEnd: Int?)
         /// Preview could not be rendered; the normalized text is shown with the
@@ -68,8 +74,14 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
                 kind = .unavailable(reason: "Original image unavailable.", fallbackText: fallbackText)
             }
         case .spreadsheetCellRange, .text, .markdown, .html, .xml, .emailBody, .emailAttachment, .convertedDocument:
-            // Normalized text/HTML/grid preview is acceptable for these (plan §3.4).
-            if fallbackText.isEmpty {
+            // Render the original file (Word/RTF/spreadsheet/email/…) with QuickLook so
+            // it looks like Finder's preview; fall back to normalized text only when the
+            // original blob is unavailable (plan §3.4 / §11.2). QuickLook can't paint a
+            // char-range highlight, so carry the cited excerpt for a banner instead.
+            if blobExists, let blobURL {
+                let excerpt = (matchText?.isEmpty == false) ? matchText : nil
+                kind = .quickLook(path: blobURL.path, excerpt: excerpt)
+            } else if fallbackText.isEmpty {
                 kind = .unavailable(reason: "No extracted text for this source.", fallbackText: "")
             } else {
                 kind = .text(content: fallbackText, highlightStart: locator.charStart, highlightEnd: locator.charEnd)

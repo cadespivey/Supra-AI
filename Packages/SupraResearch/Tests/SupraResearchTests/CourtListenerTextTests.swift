@@ -49,6 +49,29 @@ final class CourtListenerTextTests: XCTestCase {
         XCTAssertTrue(url.absoluteString.hasSuffix("/api/rest/v4/opinions/12345/"), url.absoluteString)
     }
 
+    func testCitationLookupURLUsesTrailingSlashOnAllowedHost() {
+        let url = CourtListenerEndpoint.citationLookupURL()
+        XCTAssertEqual(url.host, "www.courtlistener.com")
+        XCTAssertTrue(url.absoluteString.hasSuffix("/api/rest/v4/citation-lookup/"), url.absoluteString)
+    }
+
+    func testCitationLookupDTODecodesResolvedAndUnresolved() throws {
+        let json = """
+        [
+          {"citation": "410 U.S. 113", "normalized_citations": ["410 U.S. 113"], "status": 200,
+           "error_message": "", "clusters": [{"case_name": "Roe v. Wade", "absolute_url": "/opinion/108713/roe-v-wade/"}]},
+          {"citation": "999 F.3d 9999", "normalized_citations": [], "status": 404,
+           "error_message": "Citation not found", "clusters": []}
+        ]
+        """
+        let results = try JSONDecoder().decode([CourtListenerCitationLookupDTO].self, from: Data(json.utf8))
+        XCTAssertEqual(results.count, 2)
+        XCTAssertTrue(results[0].resolved)
+        XCTAssertEqual(results[0].clusters.first?.caseName, "Roe v. Wade")
+        XCTAssertFalse(results[1].resolved)
+        XCTAssertEqual(results[1].status, 404)
+    }
+
     func testPassageReturnsShortBodyUnchanged() {
         XCTAssertEqual(CourtListenerText.passage(from: "A short opinion body."), "A short opinion body.")
         XCTAssertNil(CourtListenerText.passage(from: "   "))

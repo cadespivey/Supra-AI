@@ -27,6 +27,32 @@ final class ECFRStatutorySourceTests: XCTestCase {
         XCTAssertEqual(provision.heading, "Criteria for listing hazardous waste.")
     }
 
+    func testFetchesFullSectionTextForTopHits() async throws {
+        let json = """
+        {"results":[{"starts_on":"2023-08-09","ends_on":null,"type":"Section","hierarchy":{"title":"40","chapter":"I","part":"261","section":"261.11"},"headings":{"title":"Protection of Environment","part":"Hazardous Waste","section":"Criteria for listing."},"full_text_excerpt":"a solid waste is a hazardous..."}]}
+        """
+        let source = ECFRStatutorySource(client: StubECFRClient(
+            result: .success(try decode(json)),
+            sectionText: "<SECTION><HEAD>§ 261.11 Criteria for listing.</HEAD><P>(a) The Administrator shall list a solid waste as a hazardous waste only upon determining…</P></SECTION>"
+        ))
+        let result = await source.lookup(StatutoryQuery(terms: "hazardous waste", jurisdiction: "Federal"))
+        let provision = try XCTUnwrap(result.provisions.first)
+        XCTAssertTrue(provision.text.contains("The Administrator shall list"), "grounds from the full section text")
+        XCTAssertFalse(provision.text.contains("<P>"), "XML tags are stripped")
+        XCTAssertTrue(provision.snippet?.contains("a solid waste is a hazardous") ?? false, "snippet stays the short excerpt")
+    }
+
+    func testStripHTMLDecodesEntitiesAndDropsNonContentBlocks() {
+        let html = "<html><head><title>Sec. 78j</title><style>.foo{color:red}</style></head>" +
+            "<body><p>&#167; 78j. It shall be unlawful &amp; improper. See &#xA7; 240.10b-5 and&nbsp;others.</p></body></html>"
+        let cleaned = ECFRStatutorySource.stripHTML(html)
+        XCTAssertFalse(cleaned.contains("color:red"), "style content is dropped, not just its tags")
+        XCTAssertFalse(cleaned.contains("Sec. 78j"), "head/title content is dropped")
+        XCTAssertTrue(cleaned.contains("\u{00A7} 78j. It shall be unlawful & improper."), cleaned)
+        XCTAssertTrue(cleaned.contains("\u{00A7} 240.10b-5"), "hex numeric entities decode")
+        XCTAssertTrue(cleaned.contains("and others"), "&nbsp; becomes a space, not glued words")
+    }
+
     func testSkipsStateSpecificQueriesWithoutHittingTheNetwork() async {
         // The stub would throw if queried — a state query must short-circuit before that.
         let source = ECFRStatutorySource(client: StubECFRClient(result: .failure(.invalidResponse)))
@@ -73,5 +99,10 @@ final class ECFRStatutorySourceTests: XCTestCase {
 
 private struct StubECFRClient: ECFRClientProtocol {
     let result: Result<ECFRSearchResponse, ECFRError>
+    var sectionText: String?
     func search(query: String, limit: Int) async throws -> ECFRSearchResponse { try result.get() }
+    func fetchSectionText(title: String, part: String?, section: String, date: String) async throws -> String {
+        guard let sectionText else { throw ECFRError.invalidResponse }
+        return sectionText
+    }
 }

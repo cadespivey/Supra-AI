@@ -32,6 +32,25 @@ public struct GenerationOptions: Codable, Hashable, Sendable {
         self.repetitionPenalty = repetitionPenalty
     }
 
+    /// Switches to `newPreset`, snapping the sampling/length parameters to that
+    /// preset's character (the runtime reads temperature/topP, not the label). A
+    /// no-op when the preset is unchanged, so a manual temperature tweak afterwards
+    /// is preserved — the preset only re-applies when it is explicitly changed. This
+    /// mirrors the Settings preset picker so the per-chat and global editors behave
+    /// identically.
+    public mutating func selectPreset(_ newPreset: GenerationPreset) {
+        guard newPreset != preset else { return }
+        let defaults = newPreset.defaultOptions
+        preset = newPreset
+        temperature = defaults.temperature
+        topP = defaults.topP
+        topK = defaults.topK
+        maxContextTokens = defaults.maxContextTokens
+        maxOutputTokens = defaults.maxOutputTokens
+        thinkingBudget = defaults.thinkingBudget
+        repetitionPenalty = defaults.repetitionPenalty
+    }
+
     private enum CodingKeys: String, CodingKey {
         case preset
         case temperature

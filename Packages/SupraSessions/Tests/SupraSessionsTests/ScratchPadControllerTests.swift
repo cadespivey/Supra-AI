@@ -32,6 +32,70 @@ final class ScratchPadControllerTests: XCTestCase {
         XCTAssertEqual(parsed.tags, ["drafting"])
     }
 
+    // MARK: - Tag vocabulary
+
+    func testMergedTagVocabularyKeepsUsedFirstThenCuratedExtras() {
+        let merged = ScratchPadTagResolver.mergedTagVocabulary(
+            used: ["custodianhold", "discovery"],
+            curated: ["call", "discovery", "draft"]
+        )
+        // Used tags lead (in order); curated extras follow; the shared "discovery"
+        // appears once, in its used position.
+        XCTAssertEqual(merged, ["custodianhold", "discovery", "call", "draft"])
+    }
+
+    func testMergedTagVocabularyDedupesCaseInsensitivelyPreferringUsedSpelling() {
+        let merged = ScratchPadTagResolver.mergedTagVocabulary(used: ["Draft"], curated: ["draft", "review"])
+        XCTAssertEqual(merged, ["Draft", "review"])
+    }
+
+    func testDefaultLitigationTagsIncludeReservedNonBillableTag() {
+        // The starter set must offer the reserved non-billable tag so the user can
+        // discover it from `#` autocomplete; matching is case-insensitive.
+        XCTAssertTrue(
+            ScratchPadTagResolver.defaultLitigationTags.contains {
+                $0.caseInsensitiveCompare(ScratchPadEntryRecord.nonBillableTag) == .orderedSame
+            },
+            "defaultLitigationTags should include \(ScratchPadEntryRecord.nonBillableTag)"
+        )
+    }
+
+    func testTagSuggestionsOverVocabularyFilterByPrefixAndListAllWhenEmpty() {
+        let vocab = ScratchPadTagResolver.mergedTagVocabulary(used: [])
+        XCTAssertEqual(ScratchPadTagResolver.tagSuggestions(prefix: "", knownTags: vocab, limit: 3).count, 3)
+        XCTAssertEqual(ScratchPadTagResolver.tagSuggestions(prefix: "dr", knownTags: vocab), ["draft"])
+    }
+
+    // MARK: - Cross-day search
+
+    func testSearchFindsNoteEntriesAcrossDays() throws {
+        let store = try makeStore()
+        func day(_ year: Int, _ month: Int, _ dayOfMonth: Int) -> Date {
+            var c = DateComponents()
+            c.year = year; c.month = month; c.day = dayOfMonth; c.hour = 12
+            return Calendar.current.date(from: c)!
+        }
+        let day1 = ScratchPadController(store: store, now: { day(2026, 6, 20) })
+        day1.load()
+        XCTAssertTrue(day1.addEntry("Deposition prep for @McKernon #deposition"))
+
+        let day2 = ScratchPadController(store: store, now: { day(2026, 6, 22) })
+        day2.load()
+        XCTAssertTrue(day2.addEntry("Drafted motion to compel #discovery"))
+
+        // Same-day term.
+        day2.search("motion")
+        XCTAssertEqual(day2.searchResults.map(\.text), ["Drafted motion to compel #discovery"])
+
+        // Cross-day: a term that only appears on day 1 is found while viewing day 2.
+        day2.search("deposition")
+        XCTAssertTrue(day2.searchResults.contains { $0.day == "2026-06-20" })
+
+        // A one-character term clears results (back to the normal day view).
+        day2.search("m")
+        XCTAssertTrue(day2.searchResults.isEmpty)
+    }
+
     // MARK: - Resolution
 
     func testResolveMentionsByExplicitMapAndNamePrefix() {

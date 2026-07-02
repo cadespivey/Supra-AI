@@ -43,6 +43,7 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         guard let url = URL(string: "\(host)/api/models/\(repoID)") else {
             throw HuggingFaceError.invalidRepoID(repoID)
         }
+        try Self.enforceHost(url)
         let (data, response) = try await session.data(from: url)
         try Self.check(response, file: "model index")
 
@@ -61,6 +62,7 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         guard let url = URL(string: "\(host)/\(repoID)/resolve/main/\(encodedFile)") else {
             throw HuggingFaceError.requestFailed(file, -1)
         }
+        try Self.enforceHost(url)
 
         let (tempURL, response) = try await session.download(from: url)
         do {
@@ -86,6 +88,7 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         guard let url = URL(string: "\(host)/\(repoID)/resolve/main/config.json") else {
             return nil
         }
+        try Self.enforceHost(url)
         let (data, response) = try await session.data(from: url)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             return nil
@@ -97,6 +100,18 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         let parts = repoID.split(separator: "/")
         guard parts.count == 2, parts.allSatisfy({ !$0.isEmpty }) else {
             throw HuggingFaceError.invalidRepoID(repoID)
+        }
+    }
+
+    /// Fail-closed host guard mirroring the app's default-deny network posture. This
+    /// client is deliberately outside `SupraNetworking.NetworkPolicyService` — it fetches
+    /// public, token-free model weights, never legal data or credentialed endpoints — so
+    /// it enforces its own https-only, single-host allow-list here. Any URL that is not
+    /// HTTPS `huggingface.co` throws rather than being sent, so a future change to `host`
+    /// (or a maliciously-shaped repo/file id) can't silently open a new egress path.
+    private static func enforceHost(_ url: URL) throws {
+        guard url.scheme?.lowercased() == "https", url.host?.lowercased() == "huggingface.co" else {
+            throw HuggingFaceError.requestFailed(url.absoluteString, -1)
         }
     }
 

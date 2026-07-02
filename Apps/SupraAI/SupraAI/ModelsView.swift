@@ -133,10 +133,10 @@ struct ModelsView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title)
-                .font(.title3.weight(.semibold))
+                .font(.supraHeadline)
             content()
             if let footer {
-                Text(footer).font(.caption).foregroundStyle(.secondary)
+                Text(footer).font(.supraCaption).foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -145,14 +145,15 @@ struct ModelsView: View {
     private var noModelsRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("No Models", systemImage: "cpu")
-                .font(.callout.weight(.medium))
+                .font(.supraHeadline)
             Text("Download an MLX model from Hugging Face, or register a folder already on disk.")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.secondary)
             HStack {
                 Button("Download a Model…") { showDownloadSheet = true }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.ghostAccent)
                 Button("Add Local Folder…", action: addModelFolder)
+                    .buttonStyle(.ghost)
             }
         }
         .padding(.vertical, 6)
@@ -184,7 +185,7 @@ struct ModelsView: View {
             }
             Spacer()
         }
-        .font(.callout)
+        .font(.supraBody)
         .padding(12)
     }
 
@@ -248,14 +249,14 @@ private struct ModelRow: View {
                     // it's currently loaded into the runtime.
                     if model.isActive {
                         Text("Startup")
-                            .font(.caption2.weight(.semibold))
+                            .font(.supraCaption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Color.secondary.opacity(0.15), in: Capsule())
                     }
                 }
                 Text(model.path)
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -265,7 +266,7 @@ private struct ModelRow: View {
                 ProgressView().controlSize(.small)
             } else if isLoaded {
                 Label("Loaded", systemImage: "checkmark.circle.fill")
-                    .font(.caption.weight(.semibold))
+                    .font(.supraCaption.weight(.semibold))
                     .foregroundStyle(.green)
                     .labelStyle(.titleAndIcon)
             } else {
@@ -306,9 +307,9 @@ private struct ModelRoleAssignmentRow: View {
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(role.displayName)
-                    .font(.callout.weight(.medium))
+                    .font(.supraHeadline)
                 Text(statusText)
-                    .font(.callout)
+                    .font(.supraCaption)
                     .foregroundStyle(resolvedModel == nil ? .orange : .secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -324,7 +325,7 @@ private struct ModelRoleAssignmentRow: View {
                             .buttonStyle(.borderless)
                             .controlSize(.small)
                     }
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.tint)
                 }
             }
@@ -408,7 +409,7 @@ private struct RuntimeModelSetupView: View {
 
             step(number: 2, title: "Assign to tasks", enabled: !library.models.isEmpty) {
                 if library.models.isEmpty {
-                    Text("Download a model first.").font(.callout).foregroundStyle(.secondary)
+                    Text("Download a model first.").font(.supraCaption).foregroundStyle(.secondary)
                 } else {
                     VStack(spacing: 10) {
                         ForEach(ModelRole.allCases, id: \.self) { role in
@@ -422,13 +423,13 @@ private struct RuntimeModelSetupView: View {
                         }
                     }
                     Text("Assigned models load automatically when a task runs; loading below verifies the files now.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.supraCaption).foregroundStyle(.secondary)
                 }
             }
 
             step(number: 3, title: "Load & verify", enabled: !library.models.isEmpty) {
                 if library.models.isEmpty {
-                    Text("Download and assign a model first.").font(.callout).foregroundStyle(.secondary)
+                    Text("Download and assign a model first.").font(.supraCaption).foregroundStyle(.secondary)
                 } else {
                     HStack(spacing: 10) {
                         runtimeStatus
@@ -448,16 +449,16 @@ private struct RuntimeModelSetupView: View {
     @ViewBuilder private var downloadStatus: some View {
         switch downloader.state {
         case let .preparing(repoID):
-            Text("Preparing \(repoID)…").font(.callout).foregroundStyle(.secondary)
+            Text("Preparing \(repoID)…").font(.supraCaption).foregroundStyle(.secondary)
         case let .downloading(_, completed, total, file):
             VStack(alignment: .leading, spacing: 3) {
                 ProgressView(value: Double(completed), total: Double(max(total, 1)))
-                Text("\(completed)/\(total) files — \(file)").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text("\(completed)/\(total) files — \(file)").font(.supraCaption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
         case let .finished(_, displayName):
-            Text("Downloaded \(displayName). Assign it below.").font(.callout).foregroundStyle(.green)
+            Text("Downloaded \(displayName). Assign it below.").font(.supraCaption).foregroundStyle(.green)
         case let .failed(message):
-            Text(message).font(.callout).foregroundStyle(.red)
+            Text(message).font(.supraCaption).foregroundStyle(.red)
         case .idle:
             EmptyView()
         }
@@ -517,12 +518,12 @@ private struct RuntimeModelSetupView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text("\(number)")
-                    .font(.caption.weight(.semibold))
+                    .font(.supraCaption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 18, height: 18)
                     .background(Color.secondary.opacity(0.15), in: Circle())
                 Text(title)
-                    .font(.callout.weight(.semibold))
+                    .font(.supraHeadline)
                     .foregroundStyle(enabled ? .primary : .secondary)
             }
             content()
@@ -539,52 +540,49 @@ private struct ModelDownloadSheet: View {
     @State private var customRepoID = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Download a Model")
-                    .font(.title2.bold())
-                Spacer()
-                Button("Done") { dismiss() }
-            }
+        SupraSheetScaffold("Download a Model", onClose: { dismiss() }) {
+            VStack(alignment: .leading, spacing: 16) {
+                statusView
 
-            statusView
+                Divider()
 
-            Divider()
-
-            Text("Curated · Hugging Face MLX 4-bit")
-                .font(.headline)
-            ForEach(ModelCatalog.curated) { model in
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(model.displayName)
-                        Text("\(model.repoID) · ~\(sizeText(model.approxSizeGB)) GB")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(model.notes)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                Text("Curated · Hugging Face MLX 4-bit")
+                    .font(.supraHeadline)
+                ForEach(ModelCatalog.curated) { model in
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(model.displayName)
+                            Text("\(model.repoID) · ~\(sizeText(model.approxSizeGB)) GB")
+                                .font(.supraCaption)
+                                .foregroundStyle(.secondary)
+                            Text(model.notes)
+                                .font(.supraCaption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Download") { downloader.downloadCatalogModel(model) }
+                            .buttonStyle(.ghost)
+                            .disabled(downloader.isBusy)
                     }
-                    Spacer()
-                    Button("Download") { downloader.downloadCatalogModel(model) }
-                        .disabled(downloader.isBusy)
+                }
+
+                Divider()
+
+                Text("Custom repo ID")
+                    .font(.supraHeadline)
+                HStack {
+                    TextField("e.g. mlx-community/Qwen2.5-32B-Instruct-4bit", text: $customRepoID)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Download") {
+                        downloader.download(repoID: customRepoID)
+                        customRepoID = ""
+                    }
+                    .buttonStyle(.ghost)
+                    .disabled(downloader.isBusy || customRepoID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-
-            Divider()
-
-            Text("Custom repo ID")
-                .font(.headline)
-            HStack {
-                TextField("e.g. mlx-community/Qwen2.5-32B-Instruct-4bit", text: $customRepoID)
-                    .textFieldStyle(.roundedBorder)
-                Button("Download") {
-                    downloader.download(repoID: customRepoID)
-                    customRepoID = ""
-                }
-                .disabled(downloader.isBusy || customRepoID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
+            .padding(20)
         }
-        .padding(20)
         .frame(minWidth: 480, idealWidth: 580, maxWidth: .infinity)
     }
 
@@ -593,7 +591,7 @@ private struct ModelDownloadSheet: View {
         switch downloader.state {
         case .idle:
             Text("Models download into the app's storage and then appear in the list to load. Large models (a 32B is ~18 GB) can take a while.")
-                .font(.callout)
+                .font(.supraCaption)
                 .foregroundStyle(.secondary)
         case let .preparing(repoID):
             HStack(spacing: 8) {
@@ -604,7 +602,7 @@ private struct ModelDownloadSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 ProgressView(value: Double(completed), total: Double(max(total, 1)))
                 Text(currentFile.isEmpty ? "\(repoID) — \(completed) of \(total) files" : "\(repoID) — \(completed) of \(total) files: \(currentFile)")
-                    .font(.caption)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -621,7 +619,7 @@ private struct ModelDownloadSheet: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 Text(message)
-                    .font(.callout)
+                    .font(.supraCaption)
                     .textSelection(.enabled)
                 Spacer()
                 Button("Dismiss") { downloader.dismissResult() }
@@ -644,15 +642,15 @@ private struct DocumentIntelligenceSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Document Intelligence")
-                .font(.title3.weight(.semibold))
+                .font(.supraHeadline)
             HStack {
                 Image(systemName: setup.isComplete ? "checkmark.seal.fill" : "xmark.octagon.fill")
                     .foregroundStyle(setup.isComplete ? .green : .red)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(setup.isComplete ? "Setup complete — document import is enabled." : "Setup required before importing documents.")
-                        .font(.callout.weight(.medium))
+                        .font(.supraHeadline)
                     if let reason = setup.settings.setupInvalidatedReason {
-                        Text("Needs review: \(reason)").font(.caption).foregroundStyle(.red)
+                        Text("Needs review: \(reason)").font(.supraCaption).foregroundStyle(.red)
                     }
                 }
                 Spacer()
@@ -703,15 +701,15 @@ private struct DocumentIntelligenceSection: View {
                 Spacer()
             }
             if let message = setup.message {
-                Text(message).font(.caption).foregroundStyle(.orange)
+                Text(message).font(.supraCaption).foregroundStyle(.orange)
             }
             if !setup.requiredOutstandingSteps.isEmpty {
                 Text("Remaining: " + setup.requiredOutstandingSteps.joined(separator: " "))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.supraCaption).foregroundStyle(.secondary)
             }
             if !setup.optionalOutstandingSteps.isEmpty {
                 Text("Optional: " + setup.optionalOutstandingSteps.joined(separator: " "))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.supraCaption).foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -725,7 +723,7 @@ private struct DocumentIntelligenceSection: View {
             )
             .tint(setup.isComplete ? .green : .orange)
             Text("\(setup.completedRequiredStepCount) of \(setup.requiredStepCount) required checks complete")
-                .font(.caption)
+                .font(.supraCaption)
                 .foregroundStyle(.secondary)
         }
     }
@@ -741,7 +739,7 @@ private struct DocumentIntelligenceSection: View {
                 .foregroundStyle(done ? .green : .secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                Text(detail).font(.callout).foregroundStyle(.secondary)
+                Text(detail).font(.supraCaption).foregroundStyle(.secondary)
             }
             Spacer()
             trailing()

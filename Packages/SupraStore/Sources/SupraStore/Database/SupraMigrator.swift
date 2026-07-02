@@ -875,6 +875,29 @@ public enum SupraMigrator {
             }
         }
 
+        // One row per inline citation in an assistant message: legal-research
+        // authorities ([A#], carrying a CourtListener URL) and matter-document
+        // sources ([S#], carrying a documentID + locator) so the chat UI can resolve
+        // a tapped marker to its destination (web page or in-app page preview).
+        migrator.registerMigration("v049_create_message_citations") { db in
+            try db.create(table: "message_citations", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("message_id", .text)
+                    .notNull()
+                    .references("messages", onDelete: .cascade)
+                table.column("label", .text).notNull()
+                table.column("kind", .text).notNull()
+                table.column("url", .text)
+                table.column("document_id", .text)
+                table.column("locator_json", .text)
+                table.column("display_name", .text)
+                table.column("match_text", .text)
+                table.column("rank", .integer).notNull().defaults(to: 0)
+                table.column("created_at", .datetime).notNull()
+            }
+            try db.create(index: "idx_message_citations_message", on: "message_citations", columns: ["message_id", "rank"], ifNotExists: true)
+        }
+
         return migrator
     }
 
@@ -917,6 +940,7 @@ public enum SupraMigrator {
             "model_validation_tests",
             "model_validation_runs",
             "diagnostic_events",
+            "message_citations",
             "message_variants",
             "generation_sessions",
             "messages",

@@ -67,6 +67,12 @@ struct MainShellView: View {
                 settings: environment.settingsController,
                 matterID: id
             )
+        case .recycleBin:
+            RecycleBinView(
+                controller: environment.recycleBinController,
+                matters: environment.mattersController,
+                chats: environment.chatController
+            )
         }
     }
 
@@ -99,7 +105,7 @@ struct MainShellView: View {
             SettingsView(
                 settings: environment.settingsController,
                 profile: environment.assistantProfileController,
-                update: environment.updateController,
+                update: environment.sparkleUpdater,
                 billing: environment.billingSettingsController
             )
         }
@@ -162,7 +168,7 @@ struct SupraToolbarIconButton: View {
                 .frame(width: 28, height: 28)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.secondary.opacity(isHovered && isEnabled ? 0.16 : 0))
+                        .fill((role == .destructive ? Color.red : Color.primary).opacity(isHovered && isEnabled ? 0.10 : 0))
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }

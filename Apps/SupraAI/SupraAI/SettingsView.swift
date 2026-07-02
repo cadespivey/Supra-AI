@@ -9,15 +9,14 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @ObservedObject var settings: SettingsController
     @ObservedObject var profile: AssistantProfileController
-    @ObservedObject var update: UpdateController
+    @ObservedObject var update: SparkleUpdaterController
     @ObservedObject var billing: BillingSettingsController
 
     var body: some View {
         Form {
-            AssistantProfileSection(profile: profile)
+            AssistantProfileSection(profile: profile, billing: billing)
 
             ScratchPadBillingSection(billing: billing)
-
 
             Section("Generation Defaults") {
                 Picker("Preset", selection: $settings.preset) {
@@ -36,7 +35,7 @@ struct SettingsView: View {
                     }
                     Slider(value: $settings.temperature, in: 0...1, step: 0.05)
                     Text("Lower is more precise, deterministic, and consistent — best for legal accuracy. Higher is more varied and creative, with more risk of drift or invented detail.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.callout).foregroundStyle(.secondary)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -47,11 +46,13 @@ struct SettingsView: View {
                         step: 128
                     )
                     Text("The longest a single answer can be (≈¾ of a word per token). Higher allows fuller answers but uses more memory and takes longer; it doesn't change accuracy.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.callout).foregroundStyle(.secondary)
                 }
             }
 
             Section {
+                Text("Connectors that ground research in primary law and track legislative & regulatory developments. Expand a source to add and verify a key — keys are free and stored only in your Keychain. Sources marked “Free · no key required” are public APIs with no key; use Verify to confirm they’re reachable.")
+                    .font(.callout).foregroundStyle(.secondary)
                 // Case law
                 APIKeyDisclosure(
                     settings: settings, title: "CourtListener",
@@ -97,8 +98,6 @@ struct SettingsView: View {
                 )
             } header: {
                 Text("Legal Data Sources")
-            } footer: {
-                Text("Connectors that ground research in primary law and track legislative & regulatory developments. Expand a source to add and verify a key — keys are free and stored only in your Keychain. Sources marked “Free · no key required” are public APIs with no key; use Verify to confirm they’re reachable.")
             }
 
             Section("Model Storage") {
@@ -115,40 +114,27 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Check for updates automatically", isOn: $update.autoCheckEnabled)
-                if let available = update.available {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.down.circle.fill").foregroundStyle(.green)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Version \(available.version) is available")
-                                .font(.callout.weight(.medium))
-                            Text("You have \(settings.appVersion.marketingVersion).")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Download") {
-                            NSWorkspace.shared.open(available.downloadURL ?? available.releaseURL)
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    Button("Release notes…") { NSWorkspace.shared.open(available.releaseURL) }
-                }
+                Text("Supra AI updates itself: new versions download in the background and install with a single restart — no browser, no drag-to-Applications. Update checks fetch only a signed version feed from supralegal.ai; no usage data is sent.")
+                    .font(.callout).foregroundStyle(.secondary)
+                Toggle("Check for updates automatically", isOn: $update.automaticallyChecksForUpdates)
                 HStack {
-                    Button("Check Now") { Task { await update.checkNow() } }
-                        .disabled(update.isChecking)
-                    if update.isChecking { ProgressView().controlSize(.small) }
+                    Button("Check for Updates") { update.checkForUpdates() }
+                        .disabled(!update.canCheckForUpdates)
                     Spacer()
-                    if update.available == nil, let message = update.statusMessage {
-                        Text(message).font(.caption).foregroundStyle(.secondary)
+                    if let message = update.statusMessage {
+                        Text(message).font(.supraCaption).foregroundStyle(.secondary)
+                    } else {
+                        Text("You're on \(settings.appVersion.marketingVersion).")
+                            .font(.supraCaption).foregroundStyle(.secondary)
                     }
                 }
             } header: {
                 Text("Software Update")
-            } footer: {
-                Text("Checks GitHub for newer releases of Supra AI. It only fetches the latest version number — no usage data is sent — and only when you ask or turn on automatic checks.")
             }
 
             Section {
+                Text("Supra AI's research is grounded in free, public-interest data projects: CourtListener and the Free Law Project (case law), Open Legal Codes (statutes & codes), and OpenStates and LegiScan (legislation). Please consider creating a free account or otherwise supporting their work.")
+                    .font(.callout).foregroundStyle(.secondary)
                 AboutBanner(version: settings.appVersion.marketingVersion)
                 Link(destination: URL(string: "https://github.com/cadespivey/Supra-AI")!) {
                     Label("GitHub repository", systemImage: "chevron.left.forwardslash.chevron.right")
@@ -170,8 +156,6 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("About")
-            } footer: {
-                Text("Supra AI's research is grounded in free, public-interest data projects: CourtListener and the Free Law Project (case law), Open Legal Codes (statutes & codes), and OpenStates and LegiScan (legislation). Please consider creating a free account or otherwise supporting their work.")
             }
         }
         .formStyle(.grouped)
@@ -202,12 +186,12 @@ private struct AboutBanner: View {
                 .resizable()
                 .frame(width: 60, height: 60)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Supra AI").font(.title3.weight(.semibold))
+                Text("Supra AI").font(.supraHeadline)
                 Text("Secure legal AI without compromise.")
-                    .font(.caption)
+                    .font(.supraSubheadline)
                     .foregroundStyle(.secondary)
                 Text("Version \(version)")
-                    .font(.callout)
+                    .font(.supraCaption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -272,7 +256,7 @@ private struct APIKeyDisclosure: View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 8) {
                 Text(description)
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 controls
             }
@@ -281,9 +265,9 @@ private struct APIKeyDisclosure: View {
             HStack(spacing: 8) {
                 Image(systemName: configured ? "checkmark.seal.fill" : "key.slash")
                     .foregroundStyle(configured ? .green : .orange)
-                Text(title).font(.callout.weight(.medium))
+                Text(title).font(.supraHeadline.weight(.medium))
                 Spacer()
-                Text(statusLabel).font(.caption).foregroundStyle(.secondary)
+                Text(statusLabel).font(.supraCaption).foregroundStyle(.secondary)
             }
         }
     }
@@ -291,7 +275,7 @@ private struct APIKeyDisclosure: View {
     @ViewBuilder private var controls: some View {
         switch kind {
         case let .builtIn(sourceID):
-            Text("Free · no key required.").font(.caption).foregroundStyle(.secondary)
+            Text("Free · no key required.").font(.supraCaption).foregroundStyle(.secondary)
             HStack {
                 Button("Verify") { Task { await settings.verifyKeylessSource(sourceID) } }
                     .disabled(settings.keylessVerificationState(sourceID) == .verifying)
@@ -324,7 +308,7 @@ private struct APIKeyDisclosure: View {
         verify: @escaping () async -> Void
     ) -> some View {
         if isEnvironment {
-            Text("Provided by the environment.").font(.caption).foregroundStyle(.secondary)
+            Text("Provided by the environment.").font(.supraCaption).foregroundStyle(.secondary)
             verifyButton(verify)
             KeyVerificationStatusView(state: verificationState)
         } else if configured {
@@ -363,17 +347,17 @@ private struct KeyVerificationStatusView: View {
         case .verifying:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text("Checking…").font(.caption).foregroundStyle(.secondary)
+                Text("Checking…").font(.supraCaption).foregroundStyle(.secondary)
             }
         case .valid:
             Label("Verified", systemImage: "checkmark.circle.fill")
-                .font(.caption).foregroundStyle(.green)
+                .font(.supraCaption).foregroundStyle(.green)
         case let .invalid(message):
             Label(message, systemImage: "xmark.octagon.fill")
-                .font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                .font(.supraCaption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
         case let .unreachable(message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
-                .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                .font(.supraCaption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -390,8 +374,10 @@ private struct ScratchPadBillingSection: View {
 
     var body: some View {
         Section {
+            Text("Standing instructions applied to every billing draft. Per-matter rules (Matter → Billing) layer on top of these. “Narrative punctuation” normalizes how every billing narrative ends at export — a matter can override it.")
+                .font(.callout).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Global billing instructions").font(.caption).foregroundStyle(.secondary)
+                Text("Global billing instructions").font(.subheadline).foregroundStyle(.secondary)
                 MultilineField(
                     placeholder: "e.g. No block billing; spell out abbreviations on first use; cap intra-office conferences",
                     text: $billing.globalInstructions
@@ -404,11 +390,11 @@ private struct ScratchPadBillingSection: View {
             }
         } header: {
             Text("ScratchPad & Billing")
-        } footer: {
-            Text("Standing instructions applied to every billing draft. Per-matter rules (Matter → Billing) layer on top of these. “Narrative punctuation” normalizes how every billing narrative ends at export — a matter can override it.")
         }
 
         Section {
+            Text("Auto-timestamp records when each note is written and uses the gaps as time evidence. Turn it off to rely on written cues instead. UTBMS auto-coding proposes task/activity codes you can always edit.")
+                .font(.callout).foregroundStyle(.secondary)
             Toggle("Auto-timestamp entries", isOn: $billing.autoTimestamp)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -419,12 +405,12 @@ private struct ScratchPadBillingSection: View {
                 Slider(value: $billing.sensitivity, in: 0...1, step: 0.05) {
                     Text("Time inference")
                 } minimumValueLabel: {
-                    Text("Precise").font(.caption2).foregroundStyle(.secondary)
+                    Text("Precise").font(.supraCaption).foregroundStyle(.secondary)
                 } maximumValueLabel: {
-                    Text("Generous").font(.caption2).foregroundStyle(.secondary)
+                    Text("Generous").font(.supraCaption).foregroundStyle(.secondary)
                 }
                 Text("How freely the engine infers durations. Precise bills only explicit, strong-evidence time; generous may infer implied workflow (e.g. research before drafting). Guardrails always apply — nothing is fabricated without a basis.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.callout).foregroundStyle(.secondary)
             }
             Picker("Round time to", selection: $billing.roundingIncrement) {
                 ForEach(Self.increments, id: \.self) { value in
@@ -439,30 +425,8 @@ private struct ScratchPadBillingSection: View {
             Toggle("Propose UTBMS codes automatically", isOn: $billing.utbmsAutoCoding)
         } header: {
             Text("Time & Coding")
-        } footer: {
-            Text("Auto-timestamp records when each note is written and uses the gaps as time evidence. Turn it off to rely on written cues instead. UTBMS auto-coding proposes task/activity codes you can always edit.")
         }
-
-        Section {
-            LabeledTextField(label: "Timekeeper ID", text: $billing.timekeeperID, prompt: "e.g. TK-1001")
-            LabeledTextField(label: "Timekeeper name", text: $billing.timekeeperName, prompt: "e.g. H. Specter")
-            LabeledTextField(label: "Classification", text: $billing.timekeeperClassification, prompt: "e.g. PARTNER, ASSOCIATE, PARALEGAL")
-            HStack {
-                Text("Default rate")
-                Spacer()
-                Text("$").foregroundStyle(.secondary)
-                TextField("Rate", value: $billing.timekeeperRate, format: .number.precision(.fractionLength(0...2)))
-                    .multilineTextAlignment(.trailing)
-                    .frame(width: 90)
-                    .textFieldStyle(.roundedBorder)
-                Text("/ hr").foregroundStyle(.secondary)
-            }
-            LabeledTextField(label: "Firm ID (LAW_FIRM_ID)", text: $billing.lawFirmID, prompt: "e.g. 98-7654321")
-        } header: {
-            Text("Timekeeper & Firm")
-        } footer: {
-            Text("Populates the timekeeper and firm fields on every fee line. LEDES export is blocked until the rate, timekeeper ID, and firm ID are set.")
-        }
+        // The former "Timekeeper & Firm" section now lives inside Profile & Firm Identity.
     }
 }
 
@@ -498,7 +462,7 @@ private struct BarLicensesEditor: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(maxWidth: 210)
+                    .fixedSize()
                     LeadingTextField(text: $license.barNumber, placeholder: "Bar number")
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 7)
@@ -526,18 +490,32 @@ private struct BarLicensesEditor: View {
                     }
                     .buttonStyle(.plain)
                     .help("Remove this admission")
+                    // The last row carries an inline "+" that appends a new admission,
+                    // replacing the separate Add button.
+                    if license.id == profile.barLicenses.last?.id {
+                        Button { appendLicense() } label: {
+                            Image(systemName: "plus.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Add another admission")
+                    }
                 }
             }
-            Button {
-                let license = AssistantProfile.BarLicense(jurisdictionID: "", barNumber: "")
-                profile.barLicenses.append(license)
-                if profile.primaryBarLicenseID.isEmpty { profile.primaryBarLicenseID = license.id }
-                profile.barNumber = ""
-            } label: {
-                Label("Add bar admission", systemImage: "plus")
+            // With no admissions saved yet, offer a single add affordance to start.
+            if profile.barLicenses.isEmpty {
+                Button { appendLicense() } label: {
+                    Label("Add bar admission", systemImage: "plus")
+                }
+                .controlSize(.small)
             }
-            .controlSize(.small)
         }
+    }
+
+    private func appendLicense() {
+        let license = AssistantProfile.BarLicense(jurisdictionID: "", barNumber: "")
+        profile.barLicenses.append(license)
+        if profile.primaryBarLicenseID.isEmpty { profile.primaryBarLicenseID = license.id }
+        profile.barNumber = ""
     }
 }
 
@@ -547,6 +525,7 @@ private struct BarLicensesEditor: View {
 /// audience — no machine-learning jargon.
 private struct AssistantProfileSection: View {
     @ObservedObject var profile: AssistantProfileController
+    @ObservedObject var billing: BillingSettingsController
     @State private var isImportingSample = false
     @State private var showPreview = false
 
@@ -558,60 +537,124 @@ private struct AssistantProfileSection: View {
         return types
     }()
 
-    /// Bridges the `[String]` secondary-email list to a newline-delimited text editor:
-    /// each non-empty line becomes one designation (≤2 kept, per 2.516).
+    /// Bridges the `[String]` secondary-email list to a single-line field: designations
+    /// are separated by semicolons (per 2.516, ≤2 are used).
     private var secondaryEmailsBinding: Binding<String> {
         Binding(
-            get: { profile.profile.secondaryEmails.joined(separator: "\n") },
+            get: { profile.profile.secondaryEmails.joined(separator: "; ") },
             set: { newValue in
                 profile.profile.secondaryEmails = newValue
-                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .split(separator: ";", omittingEmptySubsequences: true)
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { !$0.isEmpty }
             }
         )
     }
 
+    /// Fills the LEDES timekeeper name/classification from the profile above when they
+    /// are blank (still editable). Classification uppercases the role to match LEDES
+    /// code conventions (e.g. "Associate" -> "ASSOCIATE"). Only fills blanks, so a
+    /// value the user typed is never overwritten.
+    private func syncTimekeeperDefaults() {
+        let name = profile.profile.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if billing.timekeeperName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !name.isEmpty {
+            billing.timekeeperName = name
+        }
+        let role = profile.profile.role.trimmingCharacters(in: .whitespacesAndNewlines)
+        if billing.timekeeperClassification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !role.isEmpty {
+            billing.timekeeperClassification = role.uppercased()
+        }
+    }
+
     var body: some View {
         Section {
-            Text("Who you are and your firm details. This shapes how the assistant writes for you and fills the signature block and letterhead of documents you draft. Everything is optional — blank drafting fields are asked for rather than guessed.")
-                .font(.caption)
+            // One VStack owns the whole section so the grouped Form doesn't draw a
+            // separator between every field; spacing here controls the vertical rhythm.
+            VStack(alignment: .leading, spacing: 12) {
+            Text("Who you are and your firm details — this shapes how the assistant writes for you and fills the signature block and letterhead of documents you draft. Everything is optional; blank drafting fields are asked for rather than guessed. Notice of Appearance drafting is currently Florida-only and uses Florida service designations (Fla. R. Jud. Admin. 2.516); when several admissions are saved, the Florida admission prints on that filing.")
+                .font(.callout)
                 .foregroundStyle(.secondary)
-            LabeledTextField(label: "Full name", text: $profile.profile.fullName)
-            LabeledTextField(label: "Role or title", text: $profile.profile.role, prompt: "e.g. Partner, Associate, Paralegal")
-            LabeledTextField(label: "Firm or organization", text: $profile.profile.organization)
-            LabeledTextField(label: "Jurisdictions", text: $profile.profile.jurisdictions, prompt: "e.g. California state and the Ninth Circuit")
+            // Identity — paired two-up.
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Full name", text: $profile.profile.fullName)
+                LabeledTextField(label: "Firm or organization", text: $profile.profile.organization)
+            }
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Role or title", text: $profile.profile.role, prompt: "e.g. Partner, Associate, Paralegal")
+                LabeledTextField(label: "Jurisdictions", text: $profile.profile.jurisdictions, prompt: "e.g. California state and the Ninth Circuit")
+            }
             LabeledTextField(label: "Practice areas", text: $profile.profile.practiceAreas, prompt: "e.g. Commercial litigation, employment")
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Bar admissions").font(.caption).foregroundStyle(.secondary)
-                BarLicensesEditor(profile: $profile.profile)
+            // Office address.
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Office street", text: $profile.profile.officeStreet, prompt: "e.g. 200 West Forsyth Street")
+                LabeledTextField(label: "Suite / floor (optional)", text: $profile.profile.officeSuite, prompt: "e.g. Suite 1400").frame(width: 180)
             }
-
-            LabeledTextField(label: "Office street", text: $profile.profile.officeStreet, prompt: "e.g. 200 West Forsyth Street")
-            LabeledTextField(label: "Suite / floor (optional)", text: $profile.profile.officeSuite, prompt: "e.g. Suite 1400")
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 12) {
                 LabeledTextField(label: "City", text: $profile.profile.officeCity)
                 LabeledTextField(label: "State", text: $profile.profile.officeState).frame(width: 72)
                 LabeledTextField(label: "ZIP", text: $profile.profile.officeZip).frame(width: 96)
             }
-            LabeledTextField(label: "Telephone", text: $profile.profile.officePhone, prompt: "e.g. (904) 555-0142")
-            LabeledTextField(label: "Facsimile (optional)", text: $profile.profile.officeFax)
-            LabeledTextField(label: "Primary service e-mail", text: $profile.profile.primaryEmail, prompt: "e.g. hspecter@psl.com")
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Secondary service e-mails (one per line)").font(.caption).foregroundStyle(.secondary)
-                MultilineField(
-                    placeholder: "e.g. litdocket@psl.com",
-                    text: secondaryEmailsBinding
-                )
+            // Contact — the office line split into main / direct / cell, plus fax.
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Main", text: $profile.profile.officePhone, prompt: "e.g. (904) 555-0142")
+                LabeledTextField(label: "Direct", text: $profile.profile.officePhoneDirect, prompt: "e.g. (904) 555-0143")
+                LabeledTextField(label: "Cell", text: $profile.profile.officeCell, prompt: "e.g. (904) 555-0199")
+                LabeledTextField(label: "Facsimile", text: $profile.profile.officeFax, prompt: "e.g. (904) 555-0100")
+            }
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Primary service e-mail", text: $profile.profile.primaryEmail, prompt: "e.g. hspecter@psl.com")
+                LabeledTextField(label: "Secondary service e-mails (separate with ;)", text: secondaryEmailsBinding, prompt: "e.g. litdocket@psl.com; paralegal@psl.com")
+            }
+
+            // Bar admissions and the LEDES billing identity fill an even two-column grid
+            // so a short column never leaves a tall empty gap beside a taller one.
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Bar admissions").font(.subheadline).foregroundStyle(.secondary)
+                    BarLicensesEditor(profile: $profile.profile)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                LabeledTextField(label: "Timekeeper name", text: $billing.timekeeperName, prompt: "e.g. H. Specter")
+            }
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Timekeeper ID", text: $billing.timekeeperID, prompt: "e.g. TK-1001")
+                LabeledTextField(label: "Firm ID (LAW_FIRM_ID)", text: $billing.lawFirmID, prompt: "e.g. 98-7654321")
+            }
+            HStack(alignment: .bottom, spacing: 12) {
+                LabeledTextField(label: "Classification", text: $billing.timekeeperClassification, prompt: "e.g. PARTNER, ASSOCIATE")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Default rate").font(.subheadline).foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        Text("$").foregroundStyle(.secondary)
+                        TextField("Rate", value: $billing.timekeeperRate, format: .number.precision(.fractionLength(0...2)))
+                            .labelsHidden()
+                            .textFieldStyle(.plain)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 56)
+                        Text("/ hr").foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(nsColor: .separatorColor)))
+                }
+                .fixedSize()
+            }
+            Text("Timekeeper name & classification (LEDES) default from your details above (still editable); export also needs the rate, Timekeeper ID, and Firm ID.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
             Text("Profile & Firm Identity")
-        } footer: {
-            Text("Shapes the assistant's writing and fills signature blocks and letterhead. Notice of Appearance drafting is currently Florida-only and uses Florida service designations (Fla. R. Jud. Admin. 2.516); when several admissions are saved, the Florida admission prints on that filing.")
         }
+        .onAppear { syncTimekeeperDefaults() }
+        .onChange(of: profile.profile.fullName) { _, _ in syncTimekeeperDefaults() }
+        .onChange(of: profile.profile.role) { _, _ in syncTimekeeperDefaults() }
 
         Section {
+            Text("Shapes how the assistant writes for you — how formal, how long, and any habits you prefer.")
+                .font(.callout).foregroundStyle(.secondary)
             Picker("Tone", selection: $profile.profile.formality) {
                 ForEach(AssistantProfile.Formality.allCases) { Text($0.label).tag($0) }
             }
@@ -619,7 +662,7 @@ private struct AssistantProfileSection: View {
                 ForEach(AssistantProfile.Length.allCases) { Text($0.label).tag($0) }
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text("Style notes").font(.caption).foregroundStyle(.secondary)
+                Text("Style notes").font(.subheadline).foregroundStyle(.secondary)
                 MultilineField(
                     placeholder: "e.g. Lead with the bottom line, avoid legalese, use IRAC for analysis",
                     text: $profile.profile.voiceNotes
@@ -627,11 +670,11 @@ private struct AssistantProfileSection: View {
             }
         } header: {
             Text("Writing Style")
-        } footer: {
-            Text("Shapes how the assistant writes for you — how formal, how long, and any habits you prefer.")
         }
 
         Section {
+            Text("How you want authorities cited. The assistant follows this when it references cases, statutes, or rules.")
+                .font(.callout).foregroundStyle(.secondary)
             Picker("Citation style", selection: $profile.profile.citationStyle) {
                 Text("Not set").tag("")
                 Section("General") {
@@ -652,10 +695,10 @@ private struct AssistantProfileSection: View {
             }
             .pickerStyle(.menu)
             if let style = CitationStyleCatalog.style(named: profile.profile.citationStyle) {
-                Text(style.guidance).font(.caption).foregroundStyle(.secondary)
+                Text(style.guidance).font(.callout).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text("Citation notes").font(.caption).foregroundStyle(.secondary)
+                Text("Citation notes").font(.subheadline).foregroundStyle(.secondary)
                 MultilineField(
                     placeholder: "e.g. Always pin-cite; include parallel cites; short form after first reference",
                     text: $profile.profile.citationNotes
@@ -663,24 +706,24 @@ private struct AssistantProfileSection: View {
             }
         } header: {
             Text("Citations")
-        } footer: {
-            Text("How you want authorities cited. The assistant follows this when it references cases, statutes, or rules.")
         }
 
         Section {
+            Text("Standing instructions you'd give a new associate. These apply to every response.")
+                .font(.callout).foregroundStyle(.secondary)
             MultilineField(
                 placeholder: "e.g. Flag missing facts; caveat firm conclusions; prefer primary sources",
                 text: $profile.profile.additionalInstructions
             )
         } header: {
             Text("Other Instructions")
-        } footer: {
-            Text("Standing instructions you'd give a new associate. These apply to every response.")
         }
 
         Section {
+            Text("Add a brief, motion, or letter you've written. The assistant studies its voice and formatting to match your style — it won't reuse the content. Accepts PDF, Word, RTF, or text.")
+                .font(.callout).foregroundStyle(.secondary)
             if profile.profile.writingSamples.isEmpty {
-                Text("No samples added yet.").font(.callout).foregroundStyle(.secondary)
+                Text("No samples added yet.").font(.supraCaption).foregroundStyle(.secondary)
             } else {
                 ForEach(profile.profile.writingSamples) { sample in
                     HStack {
@@ -709,8 +752,6 @@ private struct AssistantProfileSection: View {
             }
         } header: {
             Text("Writing Samples")
-        } footer: {
-            Text("Add a brief, motion, or letter you've written. The assistant studies its voice and formatting to match your style — it won't reuse the content. Accepts PDF, Word, RTF, or text.")
         }
         .fileImporter(
             isPresented: $isImportingSample,
@@ -725,8 +766,10 @@ private struct AssistantProfileSection: View {
         }
 
         Section {
+            Text("Everything above is combined into the instructions the assistant follows. Your changes save automatically as you type.")
+                .font(.supraCaption).foregroundStyle(.secondary)
             if let message = profile.message {
-                Text(message).font(.caption).foregroundStyle(.secondary)
+                Text(message).font(.supraCaption).foregroundStyle(.secondary)
             }
             DisclosureGroup("Preview what the assistant receives", isExpanded: $showPreview) {
                 ScrollView {
@@ -740,8 +783,6 @@ private struct AssistantProfileSection: View {
             }
         } header: {
             Text("Preview")
-        } footer: {
-            Text("Everything above is combined into the instructions the assistant follows. Your changes save automatically as you type.")
         }
     }
 }
@@ -783,7 +824,7 @@ struct EmbeddingModelSetupView: View {
             step(number: 2, title: "Select for use", enabled: !setup.availableEmbeddingModels.isEmpty) {
                 if setup.availableEmbeddingModels.isEmpty {
                     Text("No embedding models downloaded yet.")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.supraCaption).foregroundStyle(.secondary)
                 } else {
                     Picker("Active embedding model", selection: activeSelection) {
                         ForEach(setup.availableEmbeddingModels) { model in
@@ -796,7 +837,7 @@ struct EmbeddingModelSetupView: View {
             }
 
             if let message = setup.message {
-                Text(message).font(.callout).foregroundStyle(.orange)
+                Text(message).font(.supraCaption).foregroundStyle(.orange)
             }
         }
     }
@@ -817,7 +858,7 @@ struct EmbeddingModelSetupView: View {
                     Text("\(selected.displayName) didn't load. Try another model.")
                 }
             }
-            .font(.callout).foregroundStyle(.secondary)
+            .font(.supraCaption).foregroundStyle(.secondary)
         }
     }
 
@@ -854,12 +895,12 @@ struct EmbeddingModelSetupView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text("\(number)")
-                    .font(.caption.weight(.semibold))
+                    .font(.supraCaption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 18, height: 18)
                     .background(Color.secondary.opacity(0.15), in: Circle())
                 Text(title)
-                    .font(.callout.weight(.semibold))
+                    .font(.supraHeadline)
                     .foregroundStyle(enabled ? .primary : .secondary)
             }
             content()
@@ -871,16 +912,16 @@ struct EmbeddingModelSetupView: View {
     @ViewBuilder private var downloadStatus: some View {
         switch downloader.state {
         case .preparing(let repo):
-            Text("Preparing \(repo)…").font(.callout).foregroundStyle(.secondary)
+            Text("Preparing \(repo)…").font(.supraCaption).foregroundStyle(.secondary)
         case let .downloading(_, completed, total, file):
             VStack(alignment: .leading, spacing: 3) {
                 ProgressView(value: Double(completed), total: Double(max(total, 1)))
-                Text("\(completed)/\(total) files — \(file)").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text("\(completed)/\(total) files — \(file)").font(.supraCaption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
         case let .finished(_, name):
-            Text("Downloaded \(name). Verifying it below…").font(.callout).foregroundStyle(.green)
+            Text("Downloaded \(name). Verifying it below…").font(.supraCaption).foregroundStyle(.green)
         case let .failed(message):
-            Text(message).font(.callout).foregroundStyle(.red)
+            Text(message).font(.supraCaption).foregroundStyle(.red)
         case .idle:
             EmptyView()
         }

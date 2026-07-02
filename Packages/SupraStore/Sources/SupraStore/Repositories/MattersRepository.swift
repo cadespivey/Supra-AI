@@ -191,6 +191,79 @@ public final class MattersRepository: @unchecked Sendable {
         }
     }
 
+    /// Soft-deleted matters, newest deletion first — the Recycle Bin source.
+    public func fetchSoftDeletedMatters() throws -> [MatterRecord] {
+        try writer.read { db in
+            try MatterRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM matters WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+            )
+        }
+    }
+
+    /// Restores a soft-deleted matter and the children that *this* delete cascaded
+    /// (matched by the shared deletion timestamp), leaving documents that were trashed
+    /// independently — before the matter — in the trash. Returns false if the matter
+    /// isn't currently deleted.
+    @discardableResult
+    public func restoreMatter(id: String) throws -> Bool {
+        try writer.write { db in
+            guard let deletedAt = try Date.fetchOne(
+                db,
+                sql: "SELECT deleted_at FROM matters WHERE id = ? AND deleted_at IS NOT NULL",
+                arguments: [id]
+            ) else { return false }
+            let now = Date()
+            try db.execute(
+                sql: "UPDATE matters SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+                arguments: [now, id]
+            )
+            for table in ["document_folders", "matter_documents", "structured_outputs"] {
+                try db.execute(
+                    sql: "UPDATE \(table) SET deleted_at = NULL, updated_at = ? WHERE matter_id = ? AND deleted_at = ?",
+                    arguments: [now, id, deletedAt]
+                )
+            }
+            return true
+        }
+    }
+
+    /// Permanently deletes a matter and everything it owns. FK cascade removes the
+    /// matter's chats, documents, folders, outputs, and research rows; the standalone
+    /// FTS index and orphaned blob files are not FK-cascaded, so the document chunks'
+    /// FTS rows are cleared here and the managed paths of any now-unreferenced blob are
+    /// returned for the caller to delete from disk.
+    @discardableResult
+    public func permanentlyDeleteMatter(id: String) throws -> [String] {
+        try writer.write { db in
+            let docIDs = try String.fetchAll(
+                db, sql: "SELECT id FROM matter_documents WHERE matter_id = ?", arguments: [id]
+            )
+            let blobIDs = Set(try String.fetchAll(
+                db,
+                sql: "SELECT blob_id FROM matter_documents WHERE matter_id = ? AND blob_id IS NOT NULL",
+                arguments: [id]
+            ))
+            for docID in docIDs {
+                try db.execute(sql: "DELETE FROM document_chunk_fts WHERE document_id = ?", arguments: [docID])
+            }
+            try db.execute(sql: "DELETE FROM matters WHERE id = ?", arguments: [id])
+
+            var removedPaths: [String] = []
+            for blobID in blobIDs {
+                let remaining = try Int.fetchOne(
+                    db, sql: "SELECT COUNT(*) FROM matter_documents WHERE blob_id = ?", arguments: [blobID]
+                ) ?? 0
+                guard remaining == 0 else { continue }
+                if let path = try DocumentBlobRecord.fetchOne(db, key: blobID)?.managedRelativePath {
+                    removedPaths.append(path)
+                }
+                try db.execute(sql: "DELETE FROM document_blobs WHERE id = ?", arguments: [blobID])
+            }
+            return removedPaths
+        }
+    }
+
     private static func validateMatterFields(
         name: String,
         jurisdiction: String,

@@ -17,6 +17,9 @@ struct MatterWorkspaceView: View {
     @State private var confirmingDelete = false
     @State private var showDraftSheet = false
     @State private var lastUITestTabCommand: String?
+    /// Set when an action outside the Research tab (the Authorities "New Research
+    /// Session" button) wants the planner to open as the Research tab appears.
+    @State private var autoOpenResearchPlanner = false
 
     enum MatterTab: String, CaseIterable, Identifiable {
         case chat = "Chat"
@@ -69,24 +72,27 @@ struct MatterWorkspaceView: View {
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(matter.name).font(.title2.weight(.semibold))
+                Text(matter.name).font(.supraTitle)
                 Text(matterSubtitle)
-                    .font(.subheadline)
+                    .font(.supraSubheadline)
                     .foregroundStyle(.secondary)
                 if let detail = matterClientDetail {
                     Text(detail)
-                        .font(.caption)
+                        .font(.supraCaption)
                         .foregroundStyle(.secondary)
                 }
             }
             Spacer()
             if controller.draftingController != nil {
                 Button { showDraftSheet = true } label: { Label("Draft", systemImage: "doc.badge.plus") }
+                    .buttonStyle(.ghost)
             }
             Button { showEditor = true } label: { Label("Edit", systemImage: "pencil") }
+                .buttonStyle(.ghost)
             Button(role: .destructive) { confirmingDelete = true } label: {
                 Label("Delete", systemImage: "trash")
             }
+            .buttonStyle(.ghostDanger)
         }
         .padding()
     }
@@ -113,18 +119,12 @@ struct MatterWorkspaceView: View {
 
     private var tabBar: some View {
         HStack {
-            Picker("Matter section", selection: $tab) {
-                ForEach(MatterTab.allCases) { item in
-                    Text(item.label)
-                        .tag(item)
-                        .accessibilityIdentifier("matterTab.\(item.rawValue)")
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 640, alignment: .leading)
-            .accessibilityIdentifier("matterTab.picker")
-            Spacer()
+            Spacer(minLength: 0)
+            GhostSegmentedControl(
+                selection: $tab,
+                segments: MatterTab.allCases.map { ($0, $0.label, "matterTab.\($0.rawValue)") }
+            )
+            Spacer(minLength: 0)
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
@@ -160,7 +160,12 @@ struct MatterWorkspaceView: View {
             }
         case .research:
             if let research = controller.researchController {
-                MatterResearchView(controller: research, library: library, matter: matter)
+                MatterResearchView(
+                    controller: research,
+                    library: library,
+                    matter: matter,
+                    autoOpenPlanner: $autoOpenResearchPlanner
+                )
             } else {
                 placeholder(
                     "Research unavailable",
@@ -173,7 +178,10 @@ struct MatterWorkspaceView: View {
                 MatterAuthoritiesView(
                     controller: authorities,
                     documentsController: controller.documentsController,
-                    onNewResearch: { tab = .research },
+                    onNewResearch: {
+                        autoOpenResearchPlanner = true
+                        tab = .research
+                    },
                     onShowDocuments: { tab = .documents }
                 )
             } else {
@@ -234,13 +242,13 @@ struct MatterWorkspaceView: View {
                 List(entries) { entry in
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
-                            Text(auditEventLabel(entry.eventType)).font(.callout.weight(.medium))
+                            Text(auditEventLabel(entry.eventType)).font(.supraHeadline)
                             Spacer()
                             Text(entry.timestamp, format: .dateTime.month().day().hour().minute())
-                                .font(.caption)
+                                .font(.supraCaption)
                                 .foregroundStyle(.secondary)
                         }
-                        Text(entry.summary).font(.caption).foregroundStyle(.secondary)
+                        Text(entry.summary).font(.supraCaption).foregroundStyle(.secondary)
                     }
                 }
             }

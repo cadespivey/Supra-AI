@@ -14,6 +14,29 @@ public enum FederalRegisterError: Error, Equatable, Sendable {
 
 public protocol FederalRegisterClientProtocol: Sendable {
     func search(query: String, limit: Int) async throws -> FederalRegisterResponse
+
+    /// Filtered search: publication-date bounds (ISO dates) and a Federal Register
+    /// document type (`RULE` | `PRORULE` | `NOTICE` | `PRESDOCU`), each optional.
+    func search(
+        query: String,
+        limit: Int,
+        publishedAfter: String?,
+        publishedBefore: String?,
+        documentType: String?
+    ) async throws -> FederalRegisterResponse
+}
+
+public extension FederalRegisterClientProtocol {
+    /// Default so stubs/conformers without filter support still compile (filters ignored).
+    func search(
+        query: String,
+        limit: Int,
+        publishedAfter: String?,
+        publishedBefore: String?,
+        documentType: String?
+    ) async throws -> FederalRegisterResponse {
+        try await search(query: query, limit: limit)
+    }
 }
 
 public struct FederalRegisterResponse: Decodable, Sendable, Equatable {
@@ -45,15 +68,35 @@ public final class FederalRegisterClient: FederalRegisterClientProtocol, @unchec
     }
 
     public func search(query: String, limit: Int) async throws -> FederalRegisterResponse {
+        try await search(query: query, limit: limit, publishedAfter: nil, publishedBefore: nil, documentType: nil)
+    }
+
+    public func search(
+        query: String,
+        limit: Int,
+        publishedAfter: String?,
+        publishedBefore: String?,
+        documentType: String?
+    ) async throws -> FederalRegisterResponse {
         let base = Self.apiBaseURL(baseURLOverride).appendingPathComponent("documents.json")
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             throw FederalRegisterError.invalidResponse
         }
-        components.queryItems = [
+        var items = [
             URLQueryItem(name: "conditions[term]", value: query),
             URLQueryItem(name: "per_page", value: String(limit)),
             URLQueryItem(name: "order", value: "newest")
         ]
+        if let publishedAfter, !publishedAfter.isEmpty {
+            items.append(URLQueryItem(name: "conditions[publication_date][gte]", value: publishedAfter))
+        }
+        if let publishedBefore, !publishedBefore.isEmpty {
+            items.append(URLQueryItem(name: "conditions[publication_date][lte]", value: publishedBefore))
+        }
+        if let documentType, !documentType.isEmpty {
+            items.append(URLQueryItem(name: "conditions[type][]", value: documentType))
+        }
+        components.queryItems = items
         guard let url = components.url else { throw FederalRegisterError.invalidResponse }
 
         var request = URLRequest(url: url)

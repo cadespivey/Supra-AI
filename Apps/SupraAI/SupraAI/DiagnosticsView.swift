@@ -25,14 +25,14 @@ struct DiagnosticsView: View {
                     value: "\(environment.modelLibrary.models.count)"
                 )
             } header: {
-                Text("Runtime").font(.title3.weight(.semibold)).textCase(nil).foregroundStyle(.primary)
+                Text("Runtime").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
             }
 
             Section {
                 Text(nextStep)
                     .foregroundStyle(.secondary)
             } header: {
-                Text("Next Step").font(.title3.weight(.semibold)).textCase(nil).foregroundStyle(.primary)
+                Text("Next Step").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
             }
         }
         // Refresh on appear, then poll every 10 seconds while visible; the task is

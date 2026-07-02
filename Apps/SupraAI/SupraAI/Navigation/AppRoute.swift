@@ -46,4 +46,7 @@ enum AppRoute: String, CaseIterable, Identifiable {
 enum SidebarSelection: Hashable {
     case route(AppRoute)
     case matter(String)
+    /// The Recycle Bin module, pinned to the bottom of the sidebar (below Matters).
+    /// Kept out of `AppRoute` so it isn't rendered among the top-level routes.
+    case recycleBin
 }

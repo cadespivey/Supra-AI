@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import SupraCore
+import SupraDocuments
 import SupraNetworking
 import SupraResearch
 import SupraRuntimeClient
@@ -17,6 +18,11 @@ import SupraStore
 public final class GlobalChatController: ObservableObject {
     @Published public private(set) var chats: [ChatSummary] = []
     @Published public private(set) var selectedChatID: String?
+    /// Generation options for the SELECTED chat. Seeded from the app-wide default
+    /// (Settings → Generation Defaults) and overridable per chat via the status-bar
+    /// popover; a customized chat keeps its value (persisted) until changed again or
+    /// deleted, independent of later changes to the global default.
+    @Published public private(set) var activeChatOptions = GenerationOptions()
     @Published public private(set) var messages: [ChatMessage] = []
     @Published public private(set) var isGenerating = false
     @Published public private(set) var errorMessage: String?
@@ -117,26 +123,31 @@ public final class GlobalChatController: ObservableObject {
             baseURLOverride: legalConfiguration.courtListenerBaseURL
         )
         // Default statutory tier: eCFR (official federal regs, currency-verifiable) + Open Legal
-        // Codes (free state/USC convenience). Both are key-less and token-free; their shared
-        // AuthorizedHTTPClient keeps the statutory rate budget separate from CourtListener's.
-        let statutoryHTTPClient = AuthorizedHTTPClient(
-            keyStore: resolvedTokenStore,
-            policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests),
-            redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
-        )
+        // Codes (free state/USC convenience). Each legal-data provider gets its OWN
+        // AuthorizedHTTPClient because the local rate budget is per-client: with one
+        // shared client, govinfo's section-text fetches exhausted the shared 5/min
+        // budget and starved eCFR/OLC on the next lookup. Budgets remain separate
+        // from CourtListener's client as before.
+        let makeLegalDataHTTPClient: () -> AuthorizedHTTPClient = {
+            AuthorizedHTTPClient(
+                keyStore: resolvedTokenStore,
+                policy: NetworkPolicyService(),
+                logger: NetworkRequestLogger(repository: store.networkRequests),
+                redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
+            )
+        }
         self.statutoryOrchestrator = statutoryOrchestrator ?? StatutorySourceOrchestrator(sources: [
-            GovInfoStatutorySource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore),
-            ECFRStatutorySource(client: ECFRClient(httpClient: statutoryHTTPClient)),
-            OpenLegalCodesStatutorySource(client: OpenLegalCodesClient(httpClient: statutoryHTTPClient))
+            GovInfoStatutorySource(httpClient: makeLegalDataHTTPClient(), tokenStore: resolvedTokenStore),
+            ECFRStatutorySource(client: ECFRClient(httpClient: makeLegalDataHTTPClient())),
+            OpenLegalCodesStatutorySource(client: OpenLegalCodesClient(httpClient: makeLegalDataHTTPClient()))
         ])
         // Legal-developments tracking. Federal Register is key-less; the others read their API key
         // from the token store and contribute nothing (a note) until the key is set in Settings.
         self.developmentsOrchestrator = developmentsOrchestrator ?? LegalDevelopmentOrchestrator(sources: [
-            FederalRegisterSource(client: FederalRegisterClient(httpClient: statutoryHTTPClient)),
-            OpenStatesSource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore),
-            LegiScanSource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore),
-            RegulationsGovSource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore)
+            FederalRegisterSource(client: FederalRegisterClient(httpClient: makeLegalDataHTTPClient())),
+            OpenStatesSource(httpClient: makeLegalDataHTTPClient(), tokenStore: resolvedTokenStore),
+            LegiScanSource(httpClient: makeLegalDataHTTPClient(), tokenStore: resolvedTokenStore),
+            RegulationsGovSource(httpClient: makeLegalDataHTTPClient(), tokenStore: resolvedTokenStore)
         ])
         self.topLevelJurisdictions = Self.makeTopLevelJurisdictions()
         self.federalCircuits = Self.makeFederalCircuits()
@@ -152,6 +163,7 @@ public final class GlobalChatController: ObservableObject {
     public func loadChats() {
         chats = fetchScopedChats()
         if let selectedChatID, chats.contains(where: { $0.id == selectedChatID }) {
+            activeChatOptions = loadChatOptions(for: selectedChatID) ?? storedDefaultOptions()
             reloadMessages()
         } else {
             select(chatID: chats.first?.id)
@@ -190,6 +202,7 @@ public final class GlobalChatController: ObservableObject {
 
     public func select(chatID: String?) {
         selectedChatID = chatID
+        activeChatOptions = chatID.flatMap(loadChatOptions(for:)) ?? storedDefaultOptions()
         reloadMessages()
     }
 
@@ -198,7 +211,16 @@ public final class GlobalChatController: ObservableObject {
             messages = []
             return
         }
-        messages = (try? store.chats.fetchMessages(chatID: selectedChatID))?.map(ChatMessage.init) ?? []
+        let records = (try? store.chats.fetchMessages(chatID: selectedChatID)) ?? []
+        messages = records.map { record in
+            var message = ChatMessage(record: record)
+            // Inline citations only exist for finalized assistant messages.
+            if message.role == .assistant, !message.isStreaming {
+                let citations = (try? store.chats.fetchCitations(messageID: message.id)) ?? []
+                message.citations = citations.map(MessageCitation.init)
+            }
+            return message
+        }
     }
 
     /// Opens a fresh, blank chat: deselects the current chat (clearing the message
@@ -235,6 +257,7 @@ public final class GlobalChatController: ObservableObject {
         }
         do {
             try store.chats.softDeleteChat(id: chatID)
+            clearChatOptions(for: chatID)
             chats = fetchScopedChats()
             if selectedChatID == chatID {
                 select(chatID: nil)
@@ -242,6 +265,75 @@ public final class GlobalChatController: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Renders an entire chat conversation as a Markdown transcript: the chat title
+    /// as an H1, then each turn labelled "You" / "Assistant". Assistant turns use the
+    /// answer with chain-of-thought stripped (matching what's shown on screen), and
+    /// system turns are dropped. Emoji stripping is applied by the caller (the view's
+    /// `EmojiStripper`). Pure and order-preserving so it can be unit-tested directly.
+    /// Surfaces a user-facing error from a view-driven action (e.g. a failed file
+    /// export) through the same banner the controller uses internally.
+    public func reportError(_ message: String) {
+        errorMessage = message
+    }
+
+    /// Resolves a tapped `[S#]` matter-document citation into a renderable preview
+    /// (navigated to its page, with a best-effort highlight). Keeps the view free of
+    /// the store, mirroring `MatterDocumentsController.preview(documentID:)`.
+    public func citationPreview(
+        documentID: String,
+        locator: DocumentSourceLocator,
+        matchText: String?
+    ) -> DocumentPreviewModel {
+        DocumentPreviewLoader(store: store).load(
+            documentID: documentID, locator: locator, matchText: matchText
+        )
+    }
+
+    public func exportTranscriptMarkdown(chatID: String, title: String) -> String {
+        let messages = (try? store.chats.fetchMessages(chatID: chatID))?.map(ChatMessage.init) ?? []
+        var lines: [String] = ["# \(title)", ""]
+        for message in messages where message.role != .system {
+            let label = message.role == .user ? "**You:**" : "**Assistant:**"
+            let body = message.role == .assistant
+                ? ReasoningContent.answer(from: message.content)
+                : message.content
+            let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            lines.append(label)
+            lines.append("")
+            lines.append(trimmed)
+            lines.append("")
+            // The answer body now carries bare `[S#]`/`[A#]` markers (the resolving
+            // excerpt trailer was dropped from generation), so resolve them from the
+            // persisted citations table here — otherwise the export would leave the
+            // markers dangling.
+            let citations = (try? store.chats.fetchCitations(messageID: message.id))?
+                .map(MessageCitation.init(record:)) ?? []
+            if message.role == .assistant, !citations.isEmpty {
+                lines.append("**Sources:**")
+                lines.append("")
+                for citation in citations { lines.append(Self.exportSourceLine(citation)) }
+                lines.append("")
+            }
+            lines.append("---")
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Renders one persisted citation as a Markdown bullet for the exported
+    /// transcript, e.g. `- [S1] agreement.pdf — p. 3` or `- [A1] Doe v. Smith — <url>`.
+    private static func exportSourceLine(_ citation: MessageCitation) -> String {
+        let name = citation.displayName ?? (citation.kind == .authority ? "Authority" : "Document")
+        var line = "- [\(citation.label)] \(name)"
+        if citation.kind == .source, let display = citation.locator?.displayString, !display.isEmpty {
+            line += " — \(display)"
+        } else if citation.kind == .authority, let url = citation.url, !url.isEmpty {
+            line += " — \(url)"
+        }
+        return line
     }
 
     /// Re-homes a global chat into a matter (e.g. a chat that turned out to belong
@@ -427,9 +519,19 @@ public final class GlobalChatController: ObservableObject {
             // Must mirror legalResearchOutput's classification (incl. the chat's
             // jurisdiction selection/inference); otherwise an auto-detected
             // jurisdiction would let research proceed without a model loaded.
+            // History is part of that inference — a follow-up ("the exact language
+            // of the statute") inherits the federal jurisdiction an earlier turn
+            // established — so replay the same prior turns the send path captures.
+            let history = selectedChatID.map {
+                Self.conversationHistory(
+                    from: (try? store.chats.fetchMessages(chatID: $0))?.map(ChatMessage.init) ?? [],
+                    budget: Self.historyCharBudget
+                )
+            } ?? []
             let classification = classificationApplyingChatJurisdiction(
                 classificationApplyingMatterScope(LegalQueryClassifier.classify(routed.prompt)),
-                prompt: routed.prompt
+                prompt: routed.prompt,
+                history: history
             )
             return !(routed.route.requiresJurisdiction && classification.needsJurisdictionForAuthority)
         case .legalCritique, .drafting, .generalQA:
@@ -439,6 +541,48 @@ public final class GlobalChatController: ObservableObject {
 
     private func storedDefaultOptions() -> GenerationOptions {
         (try? store.appSettings.getSetting(SettingsController.generationDefaultsKey, as: GenerationOptions.self)) ?? GenerationOptions()
+    }
+
+    // MARK: - Per-chat generation options
+
+    private static func chatOptionsKey(_ chatID: String) -> String { "generation.chat.\(chatID)" }
+
+    private func loadChatOptions(for chatID: String) -> GenerationOptions? {
+        try? store.appSettings.getSetting(Self.chatOptionsKey(chatID), as: GenerationOptions.self)
+    }
+
+    private func persistChatOptions(_ options: GenerationOptions, for chatID: String) {
+        try? store.appSettings.setSetting(Self.chatOptionsKey(chatID), value: options)
+    }
+
+    private func clearChatOptions(for chatID: String) {
+        try? store.appSettings.removeSetting(Self.chatOptionsKey(chatID))
+    }
+
+    /// Persists the current chat's override (when one is selected). A not-yet-created
+    /// chat keeps the change in memory; `ensureSelectedChat` writes it on the first send.
+    private func persistActiveChatOverride() {
+        if let selectedChatID { persistChatOptions(activeChatOptions, for: selectedChatID) }
+    }
+
+    /// Switches the selected chat's preset (snapping sampling/length to its character),
+    /// scoped to this chat only — the app-wide default is unchanged.
+    public func setActiveChatPreset(_ preset: GenerationPreset) {
+        guard preset != activeChatOptions.preset else { return }
+        activeChatOptions.selectPreset(preset)
+        persistActiveChatOverride()
+    }
+
+    /// Sets the selected chat's temperature (scoped to this chat).
+    public func setActiveChatTemperature(_ temperature: Double) {
+        activeChatOptions.temperature = min(1, max(0, temperature))
+        persistActiveChatOverride()
+    }
+
+    /// Sets the selected chat's max output tokens (scoped to this chat).
+    public func setActiveChatMaxOutputTokens(_ tokens: Int) {
+        activeChatOptions.maxOutputTokens = tokens
+        persistActiveChatOverride()
     }
 
     /// Resolves the options for a send, honoring the user's visible generation
@@ -501,6 +645,26 @@ public final class GlobalChatController: ObservableObject {
         ]
         for excerpt in excerpts {
             lines.append("- \(excerpt)")
+        }
+        return "\n" + lines.joined(separator: "\n")
+    }
+
+    /// A warning footer for a grounded answer whose citations don't clear the coverage
+    /// bar — no inline `[S#]`, a label that doesn't resolve, or a still-indexing scope —
+    /// or nil when coverage is clean. Like the entity banner, the answer is always shown;
+    /// this only marks what the reader must verify.
+    nonisolated static func citationCoverageBanner(_ check: CitationCheckResult) -> String? {
+        guard check.requiresReview else { return nil }
+        let warnings = check.warnings
+        guard !warnings.isEmpty else { return nil }
+        var lines = [
+            "",
+            "---",
+            "",
+            "⚠️ **Citation check — verify before relying on this answer.**"
+        ]
+        for warning in warnings {
+            lines.append("- \(warning)")
         }
         return "\n" + lines.joined(separator: "\n")
     }
@@ -576,6 +740,8 @@ public final class GlobalChatController: ObservableObject {
             let effectiveOptions = grounded == nil ? options : Self.groundedOptions(options)
             let groundingTrailer = grounded?.trailer
             let groundingSourceTexts = grounded?.sourceTexts ?? []
+            let groundingSources = grounded?.sources ?? []
+            let groundingScopeFullyIndexed = grounded?.scopeFullyIndexed ?? true
 
             guard let modelID else {
                 errorMessage = "Load or register a local MLX model in the Models tab."
@@ -678,12 +844,34 @@ public final class GlobalChatController: ObservableObject {
                             streamedContent += banner
                         }
                     }
+                    // Citation-coverage check — the same bar the Documents-tab Q&A
+                    // enforces: a grounded answer with no inline [S#] citation, an
+                    // unresolved label, or one produced from a still-indexing scope is
+                    // flagged for review out-of-band, so the warning can't be dropped by
+                    // the model the way a soft in-prompt note can.
+                    if !groundingSources.isEmpty {
+                        let coverage = CitationCoverage.check(
+                            answer: answerText,
+                            availableLabels: groundingSources.map(\.label),
+                            scopeFullyIndexed: groundingScopeFullyIndexed
+                        )
+                        if let banner = Self.citationCoverageBanner(coverage) {
+                            try? store.chats.appendToken(to: variant.id, token: banner)
+                            streamedContent += banner
+                        }
+                    }
                     try store.chats.completeVariant(variant.id)
                     try store.generation.completeGeneration(
                         generationID: session.id,
                         metrics: storedMetrics(from: finalMetrics)
                     )
+                    let citations = persistSourceCitations(
+                        messageID: assistant.id,
+                        answer: answerText,
+                        sources: groundingSources
+                    )
                     updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                    attachCitations(citations, toMessage: assistant.id)
 
                 case .generationCancelled:
                     sawTerminal = true
@@ -791,7 +979,13 @@ public final class GlobalChatController: ObservableObject {
             try store.chats.appendToken(to: variant.id, token: result.output)
             try store.chats.completeVariant(variant.id)
             try store.generation.completeGeneration(generationID: session.id)
+            let citations = persistAuthorityCitations(
+                messageID: assistant.id,
+                answer: result.output,
+                authorities: result.authorities
+            )
             updateMessage(id: assistant.id, content: result.output, status: .completed)
+            attachCitations(citations, toMessage: assistant.id)
             recordLegalResearchAudit(
                 route: route,
                 modelID: modelID,
@@ -869,8 +1063,9 @@ public final class GlobalChatController: ObservableObject {
             let preface = packet.authorities.isEmpty
                 ? "No source packet is available for this chat. Run `/research` in a matter chat first, or paste source-supported text with citations for a limited citation check.\n\n"
                 : "Verified against the latest source packet\(packet.researchSessionID.map { " (research session \($0))" } ?? "").\n\n"
+            let resolution = await citationResolutionSection(for: answerToVerify)
             return LegalWorkflowResult(
-                output: preface + LegalCitationVerifier.markdownReport(report),
+                output: preface + LegalCitationVerifier.markdownReport(report) + resolution,
                 queryTerms: packet.queryTerms,
                 authorities: packet.authorities,
                 verification: report,
@@ -967,8 +1162,16 @@ public final class GlobalChatController: ObservableObject {
     ) async throws -> LegalWorkflowResult {
         let scopedClassification = classificationApplyingChatJurisdiction(
             classificationApplyingMatterScope(LegalQueryClassifier.classify(prompt)),
-            prompt: prompt
+            prompt: prompt,
+            history: history
         )
+        // A "who sued X / litigation involving X" question is a factual docket lookup, not a
+        // legal-authority question — answer it from RECAP dockets, with no jurisdiction gate
+        // and no citation verifier (dockets are filings, not authority).
+        if scopedClassification.desiredAuthorityType == .docket {
+            return await caseFinderOutput(for: scopedClassification)
+        }
+
         let sourcePlan = LegalResearchSourcePlanner.plan(
             classification: scopedClassification,
             target: legalSourceTarget(for: scopedClassification)
@@ -1005,7 +1208,7 @@ public final class GlobalChatController: ObservableObject {
 
         let retrieval: (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?)
         do {
-            retrieval = try await retrieveAuthorities(for: classification, matterID: scopedMatterID)
+            retrieval = try await retrieveAuthorities(for: classification, route: route, modelID: modelID, matterID: scopedMatterID)
         } catch {
             guard !statutoryLookup.provisions.isEmpty else { throw error }
             retrieval = ([], [], nil)
@@ -1038,10 +1241,12 @@ public final class GlobalChatController: ObservableObject {
         lastLegalPacketsByChatID[chatID] = packet
         guard !authorities.isEmpty else {
             let message = """
-            CourtListener did not return authorities for this query. I cannot provide a source-grounded legal answer from model memory alone.
+            I searched CourtListener's published **opinions** (case law) and didn't find authority matching this query, so I can't give a source-grounded legal answer from model memory alone. This means no matching *opinion* was found — not that no law or litigation on the topic exists.
 
             Search terms used:
             \(retrieval.queryTerms.map { "- \($0)" }.joined(separator: "\n"))
+
+            You can try: rephrasing or narrowing the issue; naming the jurisdiction or court; or — if you're looking for *filed cases* involving a person or company — asking "who has sued [name]" to search the dockets instead.
             """
             return LegalWorkflowResult(
                 output: message,
@@ -1290,7 +1495,9 @@ public final class GlobalChatController: ObservableObject {
         let query = LegalDevelopmentQuery(
             terms: classification.legalIssue,
             jurisdiction: classification.jurisdiction,
-            limit: Self.maxDevelopments
+            limit: Self.maxDevelopments,
+            dateAfter: classification.dateFiledAfter,
+            dateBefore: classification.dateFiledBefore
         )
         let (developments, _) = await developmentsOrchestrator.lookup(query)
         return LegalDevelopmentFormatter.section(developments: developments)
@@ -1298,10 +1505,30 @@ public final class GlobalChatController: ObservableObject {
 
     private func retrieveAuthorities(
         for classification: LegalQueryClassification,
+        route: ModelRoute,
+        modelID: ModelID,
         matterID: String?
     ) async throws -> (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?) {
-        let primaryRequest = courtListenerRequest(for: classification, adverse: false)
-        var requests = [(request: primaryRequest, adverse: false)]
+        // Prefer planner-generated queries (same planner the Research tab uses); fall back
+        // to the single deterministic query when the model is unavailable or returns none.
+        let plannedQueries = await planCourtListenerQueries(for: classification, route: route, modelID: modelID)
+        var primaryRequests: [CourtListenerSearchRequest] = []
+        // Citation-first: when the prompt cites a specific authority, look it up directly
+        // (via CourtListener's citation filter) so the cited case is retrieved even if the
+        // planner's keyword queries wouldn't surface it.
+        if let citation = classification.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines), !citation.isEmpty {
+            primaryRequests.append(courtListenerRequest(for: classification, adverse: false))
+        }
+        if plannedQueries.isEmpty {
+            if primaryRequests.isEmpty {
+                primaryRequests.append(courtListenerRequest(for: classification, adverse: false))
+            }
+        } else {
+            primaryRequests.append(contentsOf: plannedQueries.prefix(Self.maxChatPlannerQueries).map {
+                plannerRequest(query: $0, classification: classification)
+            })
+        }
+        var requests = primaryRequests.map { (request: $0, adverse: false) }
         if classification.adverseAuthorityRequested {
             requests.append((courtListenerRequest(for: classification, adverse: true), true))
         }
@@ -1370,7 +1597,11 @@ public final class GlobalChatController: ObservableObject {
                         errorMessage: error.localizedDescription
                     )
                 }
-                if !item.adverse {
+                // With citation-first + planner queries there are several non-adverse
+                // requests; one transient failure (e.g. a 429 on the narrow citation
+                // query) must not abort the broader queries behind it. Only give up
+                // early when no request can possibly succeed.
+                if case CourtListenerError.missingToken = error {
                     break
                 }
             }
@@ -1404,6 +1635,180 @@ public final class GlobalChatController: ObservableObject {
             return true
         }
         return (queryTerms, deduped, researchSession?.id)
+    }
+
+    /// Answers a party/litigation-lookup question ("who has sued X") from CourtListener's
+    /// RECAP dockets — a factual case list, not legal authority, so it skips the source
+    /// packet and the citation verifier entirely.
+    private func caseFinderOutput(for classification: LegalQueryClassification) async -> LegalWorkflowResult {
+        let party = classification.partyName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasParty = (party?.isEmpty == false)
+        let request = CourtListenerSearchRequest(
+            query: hasParty ? party! : classification.legalIssue,
+            searchType: .recap,
+            orderBy: "dateFiled desc",
+            courtIDs: classification.courtIDs,
+            dateFiledAfter: classification.dateFiledAfter,
+            dateFiledBefore: classification.dateFiledBefore,
+            partyName: hasParty ? party : nil
+        )
+        let terms = [request.query]
+        do {
+            let response = try await courtListenerClient.searchDockets(request)
+            let dockets = Array(response.results.prefix(Self.maxCaseFinderResults))
+            let output = dockets.isEmpty
+                ? Self.caseFinderEmptyMessage(party: hasParty ? party : nil)
+                : Self.formatCaseList(dockets, party: hasParty ? party : nil, total: response.count)
+            return LegalWorkflowResult(output: output, queryTerms: terms, authorities: [], verification: nil, researchSessionID: nil)
+        } catch {
+            return LegalWorkflowResult(output: Self.caseFinderErrorMessage(error), queryTerms: terms, authorities: [], verification: nil, researchSessionID: nil)
+        }
+    }
+
+    private static let maxCaseFinderResults = 15
+
+    /// ADDITIVE live-resolution check for `/verify`: extracts citation strings locally
+    /// and asks CourtListener whether each resolves to a real, published opinion.
+    /// PRIVACY: only the extracted cite strings leave the device — never the answer or
+    /// prompt text. Failures degrade to a short unavailable note; the offline packet
+    /// verifier above remains the gate.
+    private func citationResolutionSection(for answer: String) async -> String {
+        let citations = Array(Set(LegalCitationVerifier.extractCitationLikeStrings(from: answer))).sorted()
+        guard !citations.isEmpty else { return "" }
+        let capped = Array(citations.prefix(Self.maxCitationResolutionLookups))
+        do {
+            let results = try await courtListenerClient.resolveCitations(capped)
+            guard !results.isEmpty else { return "" }
+            var lines = [
+                "",
+                "---",
+                "",
+                "**Citation resolution (CourtListener).** Whether each cite resolves to a real, published opinion. A resolved cite is not necessarily good law; an unresolved one may be fabricated, mistyped, or outside CourtListener's corpus:"
+            ]
+            for result in results {
+                let cite = result.citation.isEmpty ? "(unparsed citation)" : result.citation
+                if result.resolved {
+                    let cluster = result.clusters.first
+                    let name = cluster?.caseName ?? "matching opinion"
+                    if let path = cluster?.absoluteURL, let url = Self.courtListenerURL(path) {
+                        lines.append("- ✅ \(cite) → [\(name)](\(url))")
+                    } else {
+                        lines.append("- ✅ \(cite) → \(name)")
+                    }
+                } else {
+                    lines.append("- ⚠️ \(cite) — did not resolve to a published opinion")
+                }
+            }
+            return "\n" + lines.joined(separator: "\n")
+        } catch {
+            return "\n\n_Live citation resolution unavailable (\(error.localizedDescription))._"
+        }
+    }
+
+    private static let maxCitationResolutionLookups = 20
+
+    private static func formatCaseList(_ dockets: [CourtListenerSearchResultDTO], party: String?, total: Int) -> String {
+        let target = party.map { "“\($0)”" } ?? "your query"
+        var lines = [
+            "Found \(total) case\(total == 1 ? "" : "s") in CourtListener's RECAP/PACER **docket** records matching \(target). These are court **filings** — a factual record of who filed what, **not legal authority** (a filing is not precedent). Verify anything you rely on against the docket itself.",
+            ""
+        ]
+        for docket in dockets {
+            let name = docket.caseName ?? docket.caseNameFull ?? "Case"
+            var parts = ["**\(name)**"]
+            if let court = docket.court, !court.isEmpty { parts.append(court) }
+            if let filed = docket.dateFiled, !filed.isEmpty { parts.append("filed \(filed)") }
+            if let number = docket.docketNumber, !number.isEmpty { parts.append("No. \(number)") }
+            var line = "- " + parts.joined(separator: " · ")
+            if let url = docket.absoluteURL, let full = Self.courtListenerURL(url) {
+                line += " — [view](\(full))"
+            }
+            lines.append(line)
+        }
+        if total > dockets.count {
+            lines.append("")
+            lines.append("Showing the \(dockets.count) most recent of \(total). This is a docket search, not a conflicts check or a complete litigation history.")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func courtListenerURL(_ path: String) -> String? {
+        if path.lowercased().hasPrefix("http") { return path }
+        guard path.hasPrefix("/") else { return nil }
+        return "https://www.courtlistener.com" + path
+    }
+
+    private static func caseFinderEmptyMessage(party: String?) -> String {
+        let target = party.map { "“\($0)”" } ?? "that query"
+        return "I searched CourtListener's RECAP/PACER **docket** records for \(target) and found no matching federal cases. That doesn't mean none exist — RECAP covers federal filings uploaded to CourtListener, not every court and not state courts, and the party may be recorded under a different name. Try the exact entity name, or search PACER / the relevant state docket directly."
+    }
+
+    private static func caseFinderErrorMessage(_ error: Error) -> String {
+        "I couldn't reach CourtListener's docket search just now: \(error.localizedDescription). Check the CourtListener connection in Settings and try again."
+    }
+
+    /// The number of planner-generated CourtListener queries the chat one-shot runs,
+    /// bounded to keep latency and rate-limit pressure reasonable.
+    private static let maxChatPlannerQueries = 3
+
+    /// Uses the local model's query planner — the same one the Research tab uses — to
+    /// turn the classified issue into good CourtListener search queries instead of the
+    /// raw issue string. Returns [] on any failure so the caller falls back to the
+    /// deterministic query.
+    private func planCourtListenerQueries(
+        for classification: LegalQueryClassification,
+        route: ModelRoute,
+        modelID: ModelID
+    ) async -> [String] {
+        let planner = ResearchQueryPlanner()
+        guard let prompt = try? planner.buildPrompt(
+            issueText: classification.legalIssue,
+            jurisdiction: classification.jurisdiction ?? "Unspecified",
+            jurisdictionContext: classification.jurisdictionContext ?? "",
+            partyPerspective: "neutral",
+            preferredCourts: classification.courtIDs,
+            excludedCourts: [],
+            dateRange: Self.plannerDateRange(after: classification.dateFiledAfter, before: classification.dateFiledBefore)
+        ) else { return [] }
+
+        var options = route.options
+        options.thinkingBudget = .off
+        let request = GenerateRequest(
+            generationID: GenerationID(),
+            modelID: modelID,
+            prompt: prompt,
+            systemPrompt: defaultSystemPrompt,
+            options: options
+        )
+        guard let raw = try? await runtimeClient.collectGeneratedText(request),
+              case let .answer(answer) = ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: false) else {
+            return []
+        }
+        return planner.parseQueries(from: answer)
+    }
+
+    private static func plannerDateRange(after: String?, before: String?) -> String {
+        let a = after?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let b = before?.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch (a?.isEmpty == false ? a : nil, b?.isEmpty == false ? b : nil) {
+        case let (start?, end?): return "\(start) to \(end)"
+        case let (start?, nil): return "on or after \(start)"
+        case let (nil, end?): return "on or before \(end)"
+        default: return "Any"
+        }
+    }
+
+    /// A CourtListener request for a planner-generated query, carrying the classification's
+    /// court/date filters. No citation filter: planner queries find RELATED authority; the
+    /// dedicated citation-first request (above) retrieves the specifically-cited case.
+    private func plannerRequest(query: String, classification: LegalQueryClassification) -> CourtListenerSearchRequest {
+        CourtListenerSearchRequest(
+            query: query,
+            orderBy: "score desc",
+            courtIDs: classification.courtIDs,
+            dateFiledAfter: classification.dateFiledAfter,
+            dateFiledBefore: classification.dateFiledBefore
+        )
     }
 
     private func courtListenerRequest(for classification: LegalQueryClassification, adverse: Bool) -> CourtListenerSearchRequest {
@@ -1618,7 +2023,8 @@ public final class GlobalChatController: ObservableObject {
     /// bound by `classificationApplyingMatterScope`.
     private func classificationApplyingChatJurisdiction(
         _ classification: LegalQueryClassification,
-        prompt: String
+        prompt: String,
+        history: [GenerateRequest.Turn] = []
     ) -> LegalQueryClassification {
         guard scopedMatterID == nil else { return classification }
 
@@ -1627,7 +2033,7 @@ public final class GlobalChatController: ObservableObject {
         if isExplicit {
             option = JurisdictionCatalog.shared.option(id: jurisdictionOverrideID)
         } else if classification.jurisdiction == nil {
-            option = inferredJurisdictionOption(from: prompt)
+            option = inferredJurisdictionOption(from: prompt, history: history)
         } else {
             option = nil
         }
@@ -1661,9 +2067,33 @@ public final class GlobalChatController: ObservableObject {
 
     /// Best-effort detection of a jurisdiction named in the prompt across every
     /// state aggregate plus the federal courts — broader than the classifier's
-    /// built-in shortlist, used only as the auto-detect fallback.
-    private func inferredJurisdictionOption(from prompt: String) -> JurisdictionOption? {
-        let lower = prompt.lowercased()
+    /// built-in shortlist, used only as the auto-detect fallback. When the current
+    /// prompt names no jurisdiction, the most recent user turns are scanned too, so
+    /// a follow-up like "what is the exact language of the statute?" inherits the
+    /// federal (or state) jurisdiction established earlier in the conversation.
+    private func inferredJurisdictionOption(
+        from prompt: String,
+        history: [GenerateRequest.Turn] = []
+    ) -> JurisdictionOption? {
+        if let option = inferredJurisdictionOption(fromText: prompt) {
+            return option
+        }
+        // Fall back to recent user turns (most recent first), stopping at the first
+        // match. Restricted to user turns so the assistant's own boilerplate (e.g.
+        // the "I need the jurisdiction" prompt) can't re-trigger detection.
+        for turn in history.reversed() where turn.role == .user {
+            if let option = inferredJurisdictionOption(fromText: turn.content) {
+                return option
+            }
+        }
+        return nil
+    }
+
+    /// Single-string jurisdiction detection: explicit state/circuit names, the
+    /// "federal court(s)" phrase, or a federal citation shape (U.S.C., C.F.R.,
+    /// federal reporters, the U.S. reporter) — all of which imply federal courts.
+    private func inferredJurisdictionOption(fromText text: String) -> JurisdictionOption? {
+        let lower = text.lowercased()
         func mentions(_ needle: String) -> Bool {
             guard !needle.isEmpty else { return false }
             let pattern = "(^|[^a-z])" + NSRegularExpression.escapedPattern(for: needle.lowercased()) + "([^a-z]|$)"
@@ -1680,10 +2110,27 @@ public final class GlobalChatController: ObservableObject {
         if lower.range(
             of: #"(^|[^a-z])(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|federal|d\.?c\.?)\s+circuit"#,
             options: .regularExpression
-        ) != nil || mentions("federal court") || mentions("federal courts") {
+        ) != nil || mentions("federal court") || mentions("federal courts")
+            || Self.mentionsFederalCitation(lower) {
             return topLevelJurisdictions.first { $0.id == "federal-courts" }
         }
         return nil
+    }
+
+    /// Conservative, digit-anchored detection of a federal statute, regulation, or
+    /// reporter citation (e.g. "18 U.S.C. § 1001", "32 C.F.R. § 1100", "123 F.3d
+    /// 456", "410 U.S. 113"). All imply federal jurisdiction. Each pattern requires
+    /// a leading volume/section number so prose mentions of "U.S." don't trigger it.
+    static func mentionsFederalCitation(_ lowercasedText: String) -> Bool {
+        let patterns = [
+            #"\b\d+\s+u\.?\s?s\.?\s?c\.?(\s?a\.?)?\b"#,                              // U.S.C. / U.S.C.A.
+            #"\b\d+\s+c\.?\s?f\.?\s?r\.?\b"#,                                        // C.F.R.
+            #"\b\d+\s+f\.(\s?(2d|3d|4th|app'?x|supp\.?(\s?(2d|3d))?))?\s+\d+"#,      // F., F.2d, F.3d, F. Supp. 2d
+            #"\b\d+\s+u\.?\s?s\.?\s+\d+"#                                            // U.S. reporter, e.g. 410 U.S. 113
+        ]
+        return patterns.contains {
+            lowercasedText.range(of: $0, options: .regularExpression) != nil
+        }
     }
 
     private static func makeTopLevelJurisdictions() -> [JurisdictionOption] {
@@ -1980,8 +2427,18 @@ public final class GlobalChatController: ObservableObject {
         if let selectedChatID, let existing = chats.first(where: { $0.id == selectedChatID }) {
             return existing
         }
+        // A brand-new chat inherits the options the user set on the still-chat-less
+        // composer. createChat() calls select(), which resets activeChatOptions to the
+        // global default, so capture the pending customization first and re-apply +
+        // persist it for the freshly created chat.
+        let pending = activeChatOptions
         let title = titleHint.map(Self.derivedTitle(from:)) ?? "New Chat"
-        return try createChat(title: title)
+        let created = try createChat(title: title)
+        if pending != storedDefaultOptions() {
+            activeChatOptions = pending
+            persistChatOptions(pending, for: created.id)
+        }
+        return created
     }
 
     private func updateMessage(id: String, content: String, status: MessageStatus) {
@@ -1991,6 +2448,92 @@ public final class GlobalChatController: ObservableObject {
         }
         messages[index].content = content
         messages[index].status = status
+    }
+
+    /// Attaches resolved citations to the in-memory message so the chat UI can wire
+    /// taps without waiting for a full reload (and tolerates a since-deselected chat).
+    private func attachCitations(_ citations: [MessageCitation], toMessage id: String) {
+        guard !citations.isEmpty,
+              let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        messages[index].citations = citations
+    }
+
+    /// Persists `[A#]` legal-research authorities for a finalized message. The ranked
+    /// `authorities` are the same capped, ordered packet the model saw, so `[A1]` =
+    /// `authorities[0]`. Only labels that actually appear in the answer are stored, so
+    /// unused packet entries don't become orphan rows. Returns the domain citations.
+    @discardableResult
+    private func persistAuthorityCitations(
+        messageID: String,
+        answer: String,
+        authorities: [LegalAuthority]
+    ) -> [MessageCitation] {
+        guard !authorities.isEmpty else { return [] }
+        let present = Self.citationLabels(in: answer)
+        var records: [MessageCitationRecord] = []
+        for (index, authority) in authorities.enumerated() {
+            let label = "A\(index + 1)"
+            guard present.contains(label), let url = authority.url, !url.isEmpty else { continue }
+            records.append(
+                MessageCitationRecord(
+                    messageID: messageID,
+                    label: label,
+                    kind: MessageCitation.Kind.authority.rawValue,
+                    url: url,
+                    displayName: authority.caseName ?? authority.citation,
+                    rank: index
+                )
+            )
+        }
+        guard !records.isEmpty else { return [] }
+        try? store.chats.replaceCitations(messageID: messageID, records)
+        return records.map(MessageCitation.init)
+    }
+
+    /// Persists `[S#]` matter-document sources for a finalized message, so a tapped
+    /// marker opens the in-app preview at the cited page. Only labels present in the
+    /// answer are stored. Returns the domain citations. Chat-attachment `[S#]` (which
+    /// carry no document reference) pass an empty `sources` and so persist nothing.
+    @discardableResult
+    private func persistSourceCitations(
+        messageID: String,
+        answer: String,
+        sources: [GroundedSourceRef]
+    ) -> [MessageCitation] {
+        guard !sources.isEmpty else { return [] }
+        let present = Self.citationLabels(in: answer)
+        var records: [MessageCitationRecord] = []
+        for (index, source) in sources.enumerated() {
+            guard present.contains(source.label) else { continue }
+            records.append(
+                MessageCitationRecord(
+                    messageID: messageID,
+                    label: source.label,
+                    kind: MessageCitation.Kind.source.rawValue,
+                    documentID: source.documentID,
+                    locatorJSON: source.locator.encodedJSON(),
+                    displayName: source.documentName,
+                    matchText: source.excerpt,
+                    rank: index
+                )
+            )
+        }
+        guard !records.isEmpty else { return [] }
+        try? store.chats.replaceCitations(messageID: messageID, records)
+        return records.map(MessageCitation.init)
+    }
+
+    /// The distinct `[A#]`/`[S#]` citation labels (no brackets) present in an answer.
+    static func citationLabels(in text: String) -> Set<String> {
+        guard let regex = try? NSRegularExpression(pattern: #"\[([AS]\d{1,3})\]"#) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        var labels: Set<String> = []
+        for match in regex.matches(in: text, range: range) {
+            if let r = Range(match.range(at: 1), in: text) {
+                labels.insert(String(text[r]))
+            }
+        }
+        return labels
     }
 
     private func storedMetrics(from metrics: RuntimeMetrics?) -> StoredRuntimeMetrics {

@@ -41,8 +41,8 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         XCTAssertTrue(matter.waitForExistence(timeout: 20), "Seeded matter did not appear in the sidebar")
         matter.click()
 
-        // --- Research tab ---
-        let researchTab = app.radioButtons["matterTab.Research"]
+        // --- Research tab --- (ghost segments surface as buttons, not radioButtons)
+        let researchTab = app.buttons["matterTab.Research"]
         XCTAssertTrue(researchTab.waitForExistence(timeout: 10), "Research tab not found")
         selectMatterTab("Research")
 
@@ -96,20 +96,21 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         )
 
         // --- Authorities tab ---
-        XCTAssertTrue(app.radioButtons["matterTab.Authorities"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["matterTab.Authorities"].waitForExistence(timeout: 10))
         selectMatterTab("Authorities")
         XCTAssertTrue(
             app.staticTexts["No Authorities Saved"].waitForExistence(timeout: 10),
             "Authorities empty state not shown"
         )
 
-        // Its "New Research Session" action routes back to the Research tab.
+        // Its "New Research Session" action switches to the Research tab AND opens the
+        // planner sheet directly (rather than just leaving the user on the tab).
         let authoritiesNewResearch = app.buttons["authorities.newResearch"]
         XCTAssertTrue(authoritiesNewResearch.waitForExistence(timeout: 5), "Authorities New Research action not found")
         authoritiesNewResearch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         XCTAssertTrue(
-            app.buttons["research.newSession"].waitForExistence(timeout: 10),
-            "Authorities empty-state action should switch back to the Research tab"
+            app.textFields["planner.title"].waitForExistence(timeout: 10),
+            "Authorities 'New Research Session' should open the research planner sheet"
         )
     }
 
@@ -121,5 +122,62 @@ final class ResearchAuthoritiesUITests: XCTestCase {
     private func selectMatterTab(_ rawValue: String) {
         guard let tabCommandURL else { return }
         try? rawValue.write(to: tabCommandURL, atomically: true, encoding: .utf8)
+    }
+}
+
+/// End-to-end UI test for the chat citation + export features, driven against the
+/// `-uiTestMode` "Citations Demo" global chat seeded with an assistant answer that
+/// carries clickable `[A1]` (authority) and `[S1]` (document) citations. Fully
+/// offline — no model or network (see AppEnvironment.seedUITestCitationsChatIfNeeded).
+@MainActor
+final class ChatCitationsAndExportUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    private func launchApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-uiTestMode"]
+        app.launch()
+        app.activate()
+        if !app.windows.firstMatch.waitForExistence(timeout: 5) {
+            app.typeKey("n", modifierFlags: .command)
+            _ = app.windows.firstMatch.waitForExistence(timeout: 10)
+        }
+        return app
+    }
+
+    func testSourcesLinkOpensPreviewAndExportIsAvailable() {
+        let app = launchApp()
+
+        // The seeded global chat appears in the chat-history sidebar; open it.
+        let chatRow = app.buttons["chat.row.Citations Demo"]
+        XCTAssertTrue(chatRow.waitForExistence(timeout: 20), "Seeded 'Citations Demo' chat not found")
+        chatRow.click()
+
+        // The subtle sources list beneath the answer names both citations and links
+        // each to its source.
+        let authorityRow = app.descendants(matching: .any)["message.source.A1"]
+        let sourceRow = app.descendants(matching: .any)["message.source.S1"]
+        XCTAssertTrue(authorityRow.waitForExistence(timeout: 10), "Authority [A1] source row not shown")
+        XCTAssertTrue(sourceRow.waitForExistence(timeout: 10), "Document [S1] source row not shown")
+
+        // Clicking the [S1] document source opens the preview (a trailing slideover).
+        sourceRow.click()
+        let preview = app.descendants(matching: .any)["documentPreview"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 10), "Document preview did not open for [S1]")
+        XCTAssertTrue(app.staticTexts["agreement.pdf"].waitForExistence(timeout: 5), "Preview did not show the document name")
+        app.buttons["Done"].click()
+
+        // Export Chat is reachable from the chat's actions menu. (SwiftUI's Menu
+        // surfaces as a menu/pop-up control rather than a plain button, so match any
+        // element type by identifier.)
+        let menu = app.descendants(matching: .any)["chat.menu.Citations Demo"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "Chat actions menu not found")
+        menu.click()
+        XCTAssertTrue(
+            app.menuItems["Export Chat"].waitForExistence(timeout: 10),
+            "Export Chat action not found in the chat menu"
+        )
     }
 }
