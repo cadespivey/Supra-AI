@@ -173,7 +173,13 @@ public struct LegiScanResponse: Decodable, Sendable, Equatable {
         status = try container.decodeIfPresent(String.self, forKey: .status)
         var bills: [LegiScanBill] = []
         if let nested = try? container.nestedContainer(keyedBy: DynamicKey.self, forKey: .searchresult) {
-            for key in nested.allKeys where key.stringValue.lowercased() != "summary" {
+            // allKeys ordering is unspecified (hash-randomized per process); LegiScan's
+            // numeric keys ARE the relevance order, so sort them numerically — otherwise
+            // `results.first` (used for named-bill enrichment) is a random bill.
+            let orderedKeys = nested.allKeys
+                .filter { $0.stringValue.lowercased() != "summary" }
+                .sorted { (Int($0.stringValue) ?? Int.max) < (Int($1.stringValue) ?? Int.max) }
+            for key in orderedKeys {
                 if let bill = try? nested.decode(LegiScanBill.self, forKey: key) {
                     bills.append(bill)
                 }

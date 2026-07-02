@@ -34,12 +34,15 @@ public struct GovInfoStatutorySource: StatutorySource {
             for result in response.results.prefix(query.limit) {
                 // Section-level (granule) hits: fetch the official section text so the
                 // provision is real, citable primary law — capped to bound latency.
+                // The emptiness gate runs on the STRIPPED text: a 200 page that reduces
+                // to nothing (tags only) must not be promoted to citable law.
                 if let packageId = result.packageId, let granuleId = result.granuleId,
                    fetchedText < Self.maxSectionTextFetches,
-                   let text = try? await client.fetchGranuleText(packageId: packageId, granuleId: granuleId),
-                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                   let raw = try? await client.fetchGranuleText(packageId: packageId, granuleId: granuleId),
+                   case let cleaned = ECFRStatutorySource.stripHTML(raw),
+                   !cleaned.isEmpty {
                     fetchedText += 1
-                    provisions.append(Self.sectionProvision(from: result, packageId: packageId, granuleId: granuleId, text: text))
+                    provisions.append(Self.sectionProvision(from: result, packageId: packageId, granuleId: granuleId, cleanedText: cleaned))
                 } else if let provision = Self.provision(from: result) {
                     provisions.append(provision)
                 }
@@ -61,12 +64,12 @@ public struct GovInfoStatutorySource: StatutorySource {
     /// Cap stored section text (some sections run very long).
     static let maxSectionTextLength = 8_000
 
-    /// A citable provision from a granule-level (section) hit with fetched text.
-    static func sectionProvision(from result: GovInfoResult, packageId: String, granuleId: String, text: String) -> StatutoryProvision {
-        let cleaned = ECFRStatutorySource.stripHTML(text)
-        let capped = cleaned.count > maxSectionTextLength
-            ? String(cleaned.prefix(maxSectionTextLength)) + "…"
-            : cleaned
+    /// A citable provision from a granule-level (section) hit whose text has already
+    /// been stripped (and verified non-empty) by the caller.
+    static func sectionProvision(from result: GovInfoResult, packageId: String, granuleId: String, cleanedText: String) -> StatutoryProvision {
+        let capped = cleanedText.count > maxSectionTextLength
+            ? String(cleanedText.prefix(maxSectionTextLength)) + "…"
+            : cleanedText
         let citation = Self.uscCitation(packageId: packageId, granuleId: granuleId) ?? result.title ?? granuleId
         return StatutoryProvision(
             sourceID: "govinfo",
@@ -88,9 +91,11 @@ public struct GovInfoStatutorySource: StatutorySource {
 
     /// Derives a "11 U.S.C. § 701"-style citation from USCODE package/granule ids
     /// (`USCODE-2023-title11` / `…-sec701`). Nil when the ids don't carry both parts.
+    /// Dash continuations must be numeric (§ 78j-1) so an alphabetic granule suffix
+    /// like `…-sec78j-1-note` doesn't fold "-note" into the citation.
     public static func uscCitation(packageId: String, granuleId: String) -> String? {
         guard let titleRange = packageId.range(of: #"title(\d+[A-Za-z]?)"#, options: .regularExpression),
-              let secRange = granuleId.range(of: #"sec[0-9][0-9A-Za-z\-–.]*$"#, options: .regularExpression) else {
+              let secRange = granuleId.range(of: #"\bsec[0-9][0-9A-Za-z.]*(?:-\d+[a-z]?)*"#, options: .regularExpression) else {
             return nil
         }
         let title = packageId[titleRange].dropFirst("title".count)

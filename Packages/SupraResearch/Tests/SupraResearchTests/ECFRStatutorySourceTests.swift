@@ -42,6 +42,17 @@ final class ECFRStatutorySourceTests: XCTestCase {
         XCTAssertTrue(provision.snippet?.contains("a solid waste is a hazardous") ?? false, "snippet stays the short excerpt")
     }
 
+    func testStripHTMLDecodesEntitiesAndDropsNonContentBlocks() {
+        let html = "<html><head><title>Sec. 78j</title><style>.foo{color:red}</style></head>" +
+            "<body><p>&#167; 78j. It shall be unlawful &amp; improper. See &#xA7; 240.10b-5 and&nbsp;others.</p></body></html>"
+        let cleaned = ECFRStatutorySource.stripHTML(html)
+        XCTAssertFalse(cleaned.contains("color:red"), "style content is dropped, not just its tags")
+        XCTAssertFalse(cleaned.contains("Sec. 78j"), "head/title content is dropped")
+        XCTAssertTrue(cleaned.contains("\u{00A7} 78j. It shall be unlawful & improper."), cleaned)
+        XCTAssertTrue(cleaned.contains("\u{00A7} 240.10b-5"), "hex numeric entities decode")
+        XCTAssertTrue(cleaned.contains("and others"), "&nbsp; becomes a space, not glued words")
+    }
+
     func testSkipsStateSpecificQueriesWithoutHittingTheNetwork() async {
         // The stub would throw if queried — a state query must short-circuit before that.
         let source = ECFRStatutorySource(client: StubECFRClient(result: .failure(.invalidResponse)))

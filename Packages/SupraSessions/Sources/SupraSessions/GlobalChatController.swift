@@ -1597,7 +1597,11 @@ public final class GlobalChatController: ObservableObject {
                         errorMessage: error.localizedDescription
                     )
                 }
-                if !item.adverse {
+                // With citation-first + planner queries there are several non-adverse
+                // requests; one transient failure (e.g. a 429 on the narrow citation
+                // query) must not abort the broader queries behind it. Only give up
+                // early when no request can possibly succeed.
+                if case CourtListenerError.missingToken = error {
                     break
                 }
             }

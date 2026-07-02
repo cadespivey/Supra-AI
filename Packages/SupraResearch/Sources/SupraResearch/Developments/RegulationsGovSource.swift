@@ -54,10 +54,13 @@ public struct RegulationsGovSource: LegalDevelopmentSource {
     }
 
     /// A Regulations.gov docket ID in free text (e.g. `EPA-HQ-OW-2021-0602`,
-    /// `FDA-2023-N-1234`): agency prefix, optional program segments, a year, and a
-    /// trailing number. Nil when the text names no specific rulemaking.
+    /// `FDA-2023-N-1234`). To avoid hijacking ordinary hyphenated phrases
+    /// ("Order-2021-05", "contract-2022-100"), a match must carry a program segment
+    /// before the year (EPA-HQ-…) or a letter segment after it (FDA-2023-N-…) —
+    /// plain `word-year-number` is never treated as a docket. Nil when the text
+    /// names no specific rulemaking.
     public static func docketID(in text: String) -> String? {
-        let pattern = #"(?i)\b[A-Z]{2,10}(?:-[A-Z0-9]{1,10}){0,4}-(?:19|20)\d{2}(?:-[A-Z]{1,3})?-\d{2,6}\b"#
+        let pattern = #"(?i)\b[A-Z]{2,10}(?:(?:-[A-Z0-9]{1,10}){1,4}-(?:19|20)\d{2}(?:-[A-Z]{1,3})?|-(?:19|20)\d{2}-[A-Z]{1,3})-\d{2,6}\b"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         guard let match = regex.firstMatch(in: text, range: range),

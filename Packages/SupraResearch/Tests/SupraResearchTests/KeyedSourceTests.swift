@@ -27,6 +27,10 @@ final class KeyedSourceTests: XCTestCase {
         XCTAssertEqual(RegulationsGovSource.docketID(in: "status of EPA-HQ-OW-2021-0602 rulemaking"), "EPA-HQ-OW-2021-0602")
         XCTAssertEqual(RegulationsGovSource.docketID(in: "what's new in fda-2023-n-1234?"), "FDA-2023-N-1234")
         XCTAssertNil(RegulationsGovSource.docketID(in: "hazardous waste manifests"))
+        // Ordinary hyphenated word-year-number phrases must NOT read as dockets.
+        XCTAssertNil(RegulationsGovSource.docketID(in: "the Order-2021-05-14 deadline"))
+        XCTAssertNil(RegulationsGovSource.docketID(in: "under contract-2022-100 terms"))
+        XCTAssertNil(RegulationsGovSource.docketID(in: "case No-2019-045 was continued"))
     }
 
     func testRegulationsGovDocketQueryReturnsDocketTimeline() async throws {
@@ -191,6 +195,11 @@ final class KeyedSourceTests: XCTestCase {
             "15 U.S.C. § 78j-1"
         )
         XCTAssertNil(GovInfoStatutorySource.uscCitation(packageId: "USCODE-2023-title11", granuleId: "USCODE-2023-title11-chap7"))
+        // An alphabetic granule suffix must not fold into the citation.
+        XCTAssertEqual(
+            GovInfoStatutorySource.uscCitation(packageId: "USCODE-2011-title15", granuleId: "USCODE-2011-title15-chap2B-sec78j-1-note"),
+            "15 U.S.C. \u{00A7} 78j-1"
+        )
     }
 }
 

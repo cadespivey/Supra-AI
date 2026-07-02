@@ -88,9 +88,22 @@ public struct ECFRStatutorySource: StatutorySource {
         "https://www.ecfr.gov/current/title-\(title)/section-\(section)"
     }
 
-    /// eCFR highlights matches with `<strong>` tags; strip them (and any other tags) for clean text.
-    static func stripHTML(_ value: String) -> String {
-        value.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+    /// Reduces provider HTML/XML (eCFR search highlights, eCFR versioner section XML,
+    /// govinfo's rendered /htm pages) to clean text: non-content blocks are dropped
+    /// entirely (a govinfo page carries a real <head>/<style>), tags become spaces so
+    /// adjacent elements don't weld into one word, and entities are decoded (statute
+    /// text is full of `&#167;`/`&amp;`).
+    public static func stripHTML(_ value: String) -> String {
+        var text = value.replacingOccurrences(
+            of: #"(?is)<(head|style|script)\b[^>]*>.*?</\1>"#,
+            with: " ",
+            options: .regularExpression
+        )
+        text = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        text = CourtListenerText.decodeEntities(text)
+        return text
+            .replacingOccurrences(of: #"[ \t]+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #" ?\n ?"#, with: "\n", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

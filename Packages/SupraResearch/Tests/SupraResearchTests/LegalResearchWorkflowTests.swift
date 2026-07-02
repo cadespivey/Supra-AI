@@ -207,6 +207,22 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertNil(c.partyName)
     }
 
+    func testClassifierDoesNotMisrouteLegalConceptOrStatuteQuestionsToDockets() {
+        // "cases against <legal concept>" is a case-law question, not a party lookup.
+        let concept = LegalQueryClassifier.classify(
+            "What are the leading cases against piercing the corporate veil in Delaware?"
+        )
+        XCTAssertEqual(concept.desiredAuthorityType, .case)
+        XCTAssertNil(concept.partyName)
+
+        // Statute intent outranks a docket-flavored phrase in the same sentence.
+        let statute = LegalQueryClassifier.classify(
+            "What is the statute of limitations for a lawsuit against my employer in Florida?"
+        )
+        XCTAssertEqual(statute.desiredAuthorityType, .statute)
+        XCTAssertNil(statute.partyName)
+    }
+
     func testClassifierFindsCourtIDsAndDateFilters() {
         let classification = LegalQueryClassifier.classify(
             "Find binding 9th Cir. and N.D. Cal. authority after 2020 on employee non-compete agreements."
