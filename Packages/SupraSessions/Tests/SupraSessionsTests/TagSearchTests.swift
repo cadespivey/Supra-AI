@@ -22,7 +22,7 @@ final class TagSearchTests: XCTestCase {
         // A near-miss tag that must NOT match the exact #urgent.
         try store.scratchPad.addEntry(dayID: day.id, text: "Long-term #urgentish planning", mentions: [matter.id], tags: ["urgentish"])
 
-        let controller = GlobalChatController(store: store, runtimeClient: stub(), scope: .global)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub(), scope: .global)
         controller.loadChats()
         let hits = controller.tagSearch(term: "#urgent")
 
@@ -49,7 +49,7 @@ final class TagSearchTests: XCTestCase {
         try store.scratchPad.addEntry(dayID: day.id, text: "#urgent for @McKernon", mentions: [acme.id], tags: ["urgent"])
         try store.scratchPad.addEntry(dayID: day.id, text: "#urgent for @Hessington", mentions: [other.id], tags: ["urgent"])
 
-        let controller = GlobalChatController(store: store, runtimeClient: stub(), scope: .matter(id: acme.id))
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub(), scope: .matter(id: acme.id))
         controller.loadChats()
         let hits = controller.tagSearch(term: "#urgent")
 
@@ -64,7 +64,7 @@ final class TagSearchTests: XCTestCase {
         let store = try SupraStore.inMemory()
         let chat = try store.chats.createGlobalChat(title: "Untitled")
         _ = try store.chats.appendUserMessage(chatID: chat.id, content: "Discuss the proportionality objection under Rule 26")
-        let controller = GlobalChatController(store: store, runtimeClient: stub(), scope: .global)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub(), scope: .global)
         controller.loadChats()
         // A non-tag term still matches message bodies (title is "Untitled").
         let hits = controller.tagSearch(term: "proportionality")
