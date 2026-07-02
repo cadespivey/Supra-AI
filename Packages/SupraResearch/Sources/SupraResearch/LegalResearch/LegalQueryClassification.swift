@@ -64,22 +64,26 @@ public enum LegalQueryClassifier {
         let dateRange = dateRange(in: prompt)
         // Litigation-lookup ("who sued X / lawsuits against X / has X been sued") is a
         // factual docket question, not a legal-authority question — route it to RECAP.
+        // Triggers must be party-flavored: "case(s) against" reads just as naturally as
+        // a legal-concept phrase ("cases against piercing the veil"), so it is NOT one.
         let docketIntent = lower.contains("docket")
             || lower.contains("who sued") || lower.contains("who has sued") || lower.contains("who is suing")
             || lower.contains("sued by") || lower.contains("been sued")
             || lower.contains("lawsuit against") || lower.contains("lawsuits against")
             || lower.contains("suit against") || lower.contains("suits against")
             || lower.contains("litigation involving") || lower.contains("litigation against")
-            || lower.contains("cases against") || lower.contains("case against")
             || lower.contains("complaints against") || lower.contains("filed suit against")
             || lower.contains("filed a lawsuit") || lower.contains("filed lawsuits")
-        let desiredType: LegalAuthorityType
-        if docketIntent {
-            desiredType = .docket
-        } else if lower.contains("statute") || lower.contains("code section") || lower.contains("§")
+        let statuteIntent = lower.contains("statute") || lower.contains("code section") || lower.contains("§")
             || lower.contains("u.s.c") || lower.contains("c.f.r") || lower.contains("limitations period")
-            || lower.contains("statute of limitations") || lower.contains("deadline") {
+            || lower.contains("statute of limitations") || lower.contains("deadline")
+        let desiredType: LegalAuthorityType
+        // Statute intent outranks docket intent: "statute of limitations for a lawsuit
+        // against my employer" is a statutory question, not a docket lookup.
+        if statuteIntent {
             desiredType = .statute
+        } else if docketIntent {
+            desiredType = .docket
         } else {
             desiredType = .case
         }
@@ -97,7 +101,7 @@ public enum LegalQueryClassifier {
             bindingAuthorityRequired: lower.contains("binding") || lower.contains("controlling"),
             adverseAuthorityRequested: lower.contains("adverse") || lower.contains("limiting authority") || lower.contains("red flag"),
             citationLookup: citation,
-            partyName: docketIntent ? partyEntity(in: prompt) : nil
+            partyName: desiredType == .docket ? partyEntity(in: prompt) : nil
         )
     }
 
@@ -106,7 +110,9 @@ public enum LegalQueryClassifier {
     /// case-finder then falls back to a full-text docket search).
     public static func partyEntity(in prompt: String) -> String? {
         let patterns = [
-            #"(?i)\b(?:lawsuits?|suits?|litigation|complaints?|claims?|cases?)\s+(?:filed\s+)?against\s+(.+?)(?:\?|\.|,|;|$|\bin\b|\bfor\b|\bover\b|\brelated\b)"#,
+            // Mirrors the docket-intent triggers: "claim(s)/case(s) against" are legal-
+            // concept phrasings, not party references, so they don't extract a party.
+            #"(?i)\b(?:lawsuits?|suits?|litigation|complaints?)\s+(?:filed\s+)?against\s+(.+?)(?:\?|\.|,|;|$|\bin\b|\bfor\b|\bover\b|\brelated\b)"#,
             #"(?i)\b(?:litigation|cases?)\s+involving\s+(.+?)(?:\?|\.|,|;|$|\bin\b|\bfor\b)"#,
             #"(?i)\bhas\s+(.+?)\s+been\s+sued\b"#,
             #"(?i)\bwho\s+(?:has\s+|is\s+)?su(?:ed|ing)\s+(.+?)(?:\?|\.|,|;|$)"#,
