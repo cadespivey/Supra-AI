@@ -43,11 +43,19 @@ struct MatterEditorSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(mode.title)
-                .font(.supraTitle)
-                .padding([.horizontal, .top])
+        SupraSheetScaffold(mode.title, doneLabel: "Cancel", onClose: { dismiss() }) {
+            editorForm
+        } footer: {
+            Spacer()
+            Button(mode.confirmLabel) { save() }
+                .buttonStyle(.ghost)
+                .keyboardShortcut(.defaultAction)
+                .disabled(showValidation && !draft.isValid)
+        }
+        .frame(minWidth: 480, idealWidth: 600, maxWidth: .infinity, minHeight: 520, idealHeight: 640, maxHeight: .infinity)
+    }
 
+    private var editorForm: some View {
             Form {
                 Section("Required") {
                     field("Matter name", text: $draft.name, invalid: nameInvalid, message: "Name is required.")
@@ -94,18 +102,6 @@ struct MatterEditorSheet: View {
                 }
             }
             .formStyle(.grouped)
-
-            Divider()
-            HStack {
-                Button("Cancel", role: .cancel) { dismiss() }
-                Spacer()
-                Button(mode.confirmLabel) { save() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(showValidation && !draft.isValid)
-            }
-            .padding()
-        }
-        .frame(minWidth: 480, idealWidth: 600, maxWidth: .infinity, minHeight: 520, idealHeight: 640, maxHeight: .infinity)
     }
 
     private var nameInvalid: Bool {

@@ -35,6 +35,99 @@ extension View {
     }
 }
 
+// MARK: - Sheet & popover chrome
+
+/// Uniform chrome for a centered sheet: a `supraTitle` header with a trailing ghost
+/// Done button (Esc), a divider, the content, and an optional right-aligned footer
+/// action row. Replaces the hand-rolled header/divider/footer each sheet grew on its
+/// own, so every sheet reads as the same surface.
+struct SupraSheetScaffold<Content: View, Footer: View>: View {
+    private let title: String
+    private let doneLabel: String
+    private let onClose: () -> Void
+    private let content: Content
+    private let footer: Footer
+    private let hasFooter: Bool
+
+    init(
+        _ title: String,
+        doneLabel: String = "Done",
+        onClose: @escaping () -> Void,
+        @ViewBuilder content: () -> Content,
+        @ViewBuilder footer: () -> Footer
+    ) {
+        self.title = title
+        self.doneLabel = doneLabel
+        self.onClose = onClose
+        self.content = content()
+        self.footer = footer()
+        self.hasFooter = true
+    }
+
+    init(
+        _ title: String,
+        doneLabel: String = "Done",
+        onClose: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) where Footer == EmptyView {
+        self.title = title
+        self.doneLabel = doneLabel
+        self.onClose = onClose
+        self.content = content()
+        self.footer = EmptyView()
+        self.hasFooter = false
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.supraTitle)
+                Spacer()
+                Button(doneLabel, action: onClose)
+                    .buttonStyle(.ghost)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding()
+            Divider()
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if hasFooter {
+                Divider()
+                // Callers own alignment (add a leading Spacer for a right-aligned row),
+                // so footers with a leading secondary action still fit the frame.
+                HStack(spacing: 8) {
+                    footer
+                }
+                .padding(12)
+            }
+        }
+    }
+}
+
+/// Uniform chrome for an anchored popover: a `supraTitle` heading over the content,
+/// standard padding, and a fixed width — matching the generation-settings popover
+/// that set the pattern.
+struct SupraPopoverFrame<Content: View>: View {
+    private let title: String
+    private let width: CGFloat
+    private let content: Content
+
+    init(_ title: String, width: CGFloat = 320, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.width = width
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title).font(.supraTitle)
+            content
+        }
+        .padding()
+        .frame(width: width)
+    }
+}
+
 /// Claude-style chrome primitives: "ghost" buttons (no outline, text/icon on the
 /// surface, a soft shade only on hover) and a `hoverShade` modifier for rows and
 /// icon buttons. The wash is ~10% of the foreground, adapting to light/dark. Reserve

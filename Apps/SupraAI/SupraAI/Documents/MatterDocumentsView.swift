@@ -161,10 +161,8 @@ struct MatterDocumentsView: View {
             }
         }
         .popover(isPresented: $showNewFolder) {
-            VStack(alignment: .leading) {
-                Text("New Folder").font(.supraHeadline)
+            SupraPopoverFrame("New Folder", width: 260) {
                 TextField("Folder name", text: $newFolderName)
-                    .frame(width: 220)
                 HStack {
                     Spacer()
                     Button("Create") {
@@ -172,10 +170,10 @@ struct MatterDocumentsView: View {
                         newFolderName = ""
                         showNewFolder = false
                     }
+                    .buttonStyle(.ghost)
                     .disabled(newFolderName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-            .padding()
         }
     }
 
@@ -506,9 +504,7 @@ struct MatterDocumentsView: View {
     }
 
     private var trashSheet: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Trash").font(.supraTitle).padding()
-            Divider()
+        SupraSheetScaffold("Trash", onClose: { showTrash = false }) {
             if controller.trashedDocuments.isEmpty && controller.trashedFolders.isEmpty {
                 ContentUnavailableView("Trash is Empty", systemImage: "trash", description: Text("Soft-deleted documents and folders appear here."))
                     .frame(minWidth: 460, minHeight: 240)
@@ -521,6 +517,7 @@ struct MatterDocumentsView: View {
                                     Label(folder.name, systemImage: "folder")
                                     Spacer()
                                     Button("Restore") { controller.restoreFolder(id: folder.id) }
+                                        .buttonStyle(.ghost)
                                 }
                             }
                         }
@@ -531,15 +528,15 @@ struct MatterDocumentsView: View {
                                 Text(doc.displayName)
                                 Spacer()
                                 Button("Restore") { controller.restore(documentID: doc.id) }
+                                    .buttonStyle(.ghost)
                                 Button("Delete Permanently", role: .destructive) { controller.permanentlyDelete(documentID: doc.id) }
+                                    .buttonStyle(.ghostDanger)
                             }
                         }
                     }
                 }
                 .frame(minWidth: 480, minHeight: 320)
             }
-            Divider()
-            HStack { Spacer(); Button("Done") { showTrash = false }.keyboardShortcut(.defaultAction) }.padding()
         }
     }
 
@@ -642,17 +639,30 @@ struct DocumentQASheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Ask the Documents").font(.supraTitle)
-                Spacer()
-                Button("Done", action: onClose)
+        SupraSheetScaffold("Ask the Documents", onClose: onClose) {
+            qaContent
+        } footer: {
+            if let result = qa.lastResult {
+                Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
+                    .buttonStyle(.ghost)
+                    .disabled(qa.isGenerating || routeModel == nil)
             }
-            .padding()
-            Divider()
+            Spacer()
+            if qa.isGenerating { ProgressView().controlSize(.small) }
+            Button("Ask") { Task { await ask() } }
+                .buttonStyle(.ghost)
+                .keyboardShortcut(.defaultAction)
+                .disabled(qa.isGenerating || routeModel == nil || question.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .frame(minWidth: 520, idealWidth: 620, maxWidth: .infinity, minHeight: 460, idealHeight: 600, maxHeight: .infinity)
+        .onAppear { library.refresh() }
+    }
+
+    private var qaContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
             Form {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Your question").font(.supraCaption).foregroundStyle(.secondary)
+                    Text("Your question").font(.subheadline).foregroundStyle(.secondary)
                     MultilineField(
                         placeholder: "e.g. What are the termination provisions in the lease?",
                         text: $question,
@@ -698,23 +708,7 @@ struct DocumentQASheet: View {
                 }
                 .frame(minHeight: 200)
             }
-
-            Divider()
-            HStack {
-                if let result = qa.lastResult {
-                    Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
-                        .disabled(qa.isGenerating || routeModel == nil)
-                }
-                Spacer()
-                if qa.isGenerating { ProgressView().controlSize(.small) }
-                Button("Ask") { Task { await ask() } }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(qa.isGenerating || routeModel == nil || question.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .padding()
         }
-        .frame(minWidth: 520, idealWidth: 620, maxWidth: .infinity, minHeight: 460, idealHeight: 600, maxHeight: .infinity)
-        .onAppear { library.refresh() }
     }
 
     @ViewBuilder
@@ -792,14 +786,27 @@ struct DocumentChronologySheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Fact Chronology").font(.supraTitle)
-                Spacer()
-                Button("Done", action: onClose)
+        SupraSheetScaffold("Fact Chronology", onClose: onClose) {
+            chronologyContent
+        } footer: {
+            if let result = chronology.lastResult {
+                Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
+                    .buttonStyle(.ghost)
+                    .disabled(chronology.isGenerating || routeModel == nil)
             }
-            .padding()
-            Divider()
+            Spacer()
+            if chronology.isGenerating { ProgressView().controlSize(.small) }
+            Button("Generate") { Task { await generate() } }
+                .buttonStyle(.ghost)
+                .keyboardShortcut(.defaultAction)
+                .disabled(chronology.isGenerating || routeModel == nil)
+        }
+        .frame(minWidth: 540, idealWidth: 640, maxWidth: .infinity, minHeight: 480, idealHeight: 620, maxHeight: .infinity)
+        .onAppear { library.refresh() }
+    }
+
+    private var chronologyContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
             Form {
                 LabeledContent("Format") {
                     GhostSegmentedControl(
@@ -840,23 +847,7 @@ struct DocumentChronologySheet: View {
                 }
                 .frame(minHeight: 220)
             }
-
-            Divider()
-            HStack {
-                if let result = chronology.lastResult {
-                    Button("Regenerate") { Task { await regenerate(outputID: result.outputID) } }
-                        .disabled(chronology.isGenerating || routeModel == nil)
-                }
-                Spacer()
-                if chronology.isGenerating { ProgressView().controlSize(.small) }
-                Button("Generate") { Task { await generate() } }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(chronology.isGenerating || routeModel == nil)
-            }
-            .padding()
         }
-        .frame(minWidth: 540, idealWidth: 640, maxWidth: .infinity, minHeight: 480, idealHeight: 620, maxHeight: .infinity)
-        .onAppear { library.refresh() }
     }
 
     @ViewBuilder
