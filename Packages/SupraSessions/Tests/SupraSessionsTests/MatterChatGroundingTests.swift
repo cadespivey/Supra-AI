@@ -154,7 +154,7 @@ final class MatterChatGroundingTests: XCTestCase {
             capture.record(request)
             return .events([.event(request, 1, .token, token: "ok"), .event(request, 2, .generationCompleted)])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
         )
         controller.loadChats()
@@ -192,7 +192,7 @@ final class MatterChatGroundingTests: XCTestCase {
             capture.record(request)
             return .events([.event(request, 1, .generationCompleted)])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
         )
         controller.loadChats()
@@ -222,7 +222,7 @@ final class MatterChatGroundingTests: XCTestCase {
             capture.record(request)
             return .events([.event(request, 1, .generationCompleted)])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
         )
         controller.loadChats()
@@ -249,7 +249,7 @@ final class MatterChatGroundingTests: XCTestCase {
             capture.record(request)
             return .events([.event(request, 1, .generationCompleted)])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
         )
         controller.loadChats()

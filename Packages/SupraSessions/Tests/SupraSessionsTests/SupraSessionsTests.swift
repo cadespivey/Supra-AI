@@ -117,7 +117,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 5, .generationCompleted, metrics: RuntimeMetrics(generatedTokenCount: 2))
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
 
         await controller.performSend(prompt: "Hi", modelID: modelID, systemPrompt: nil, options: GenerationOptions())
@@ -132,7 +132,7 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.messages[1].status, .completed)
 
         // Persisted across a fresh controller instance.
-        let reopened = GlobalChatController(store: store, runtimeClient: stub)
+        let reopened = makeGlobalChatController(store: store, runtimeClient: stub)
         reopened.loadChats()
         XCTAssertEqual(reopened.messages.map(\.content), ["Hi", "Hello"])
         XCTAssertEqual(reopened.messages.last?.status, .completed)
@@ -147,7 +147,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 3, .generationCancelled, metrics: RuntimeMetrics(cancellationLatencyMs: 0))
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
 
         await controller.performSend(prompt: "Write a long thing", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
@@ -165,7 +165,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 3, .generationFailed, error: RuntimeError(category: "generationFailed", message: "boom"))
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
 
         await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
@@ -182,7 +182,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .token, token: "Partial")
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
 
         await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
@@ -199,7 +199,7 @@ final class SupraSessionsTests: XCTestCase {
             error: RuntimeError(category: "modelNotLoaded", message: "No model is loaded.")
         )
         let stub = StubRuntimeClient { _ in .reject(RuntimeClientError.generationRejected(rejection)) }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
 
         await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
@@ -215,7 +215,7 @@ final class SupraSessionsTests: XCTestCase {
         let stub = StubRuntimeClient { request in
             .events([.event(request, 1, .generationCompleted)])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
         XCTAssertTrue(controller.chats.isEmpty)
 
@@ -230,7 +230,7 @@ final class SupraSessionsTests: XCTestCase {
     func testFirstSendAutoTitlesChatFromPrompt() async throws {
         let store = try makeStore()
         let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
 
         await controller.performSend(
@@ -247,7 +247,7 @@ final class SupraSessionsTests: XCTestCase {
     func testAutoTitleUsesRoutedPromptNotRawSlashCommand() async throws {
         let store = try makeStore()
         let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
 
         // The view sends the routed (slash-stripped) prompt plus the raw text as
@@ -277,7 +277,7 @@ final class SupraSessionsTests: XCTestCase {
     func testStartNewChatClearsSelectionWithoutCreatingEmptyRow() async throws {
         let store = try makeStore()
         let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
         await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
         XCTAssertNotNil(controller.selectedChatID)
@@ -292,7 +292,7 @@ final class SupraSessionsTests: XCTestCase {
     func testRenameChatUpdatesTitle() async throws {
         let store = try makeStore()
         let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
         await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
         let chatID = try XCTUnwrap(controller.selectedChatID)
@@ -307,7 +307,7 @@ final class SupraSessionsTests: XCTestCase {
     func testDeleteChatRemovesFromListAndDeselects() async throws {
         let store = try makeStore()
         let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
         await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
         let chatID = try XCTUnwrap(controller.selectedChatID)
@@ -323,7 +323,7 @@ final class SupraSessionsTests: XCTestCase {
         let store = try makeStore()
         let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
         await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
         let chatID = try XCTUnwrap(controller.selectedChatID)
@@ -342,7 +342,7 @@ final class SupraSessionsTests: XCTestCase {
     func testMoveToMissingMatterSurfacesErrorAndRecordsNoAudit() async throws {
         let store = try makeStore()
         let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
         await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
         let chatID = try XCTUnwrap(controller.selectedChatID)
@@ -361,7 +361,7 @@ final class SupraSessionsTests: XCTestCase {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
         let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
-        let controller = GlobalChatController(store: store, runtimeClient: stub, scope: .matter(id: matter.id))
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub, scope: .matter(id: matter.id))
         controller.loadChats()
         let initialCount = controller.chats.count   // the default "General — Acme" chat
 
@@ -408,7 +408,7 @@ final class SupraSessionsTests: XCTestCase {
             ])
         }
         let court = StubCourtListenerClient(shouldFail: true)
-        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
         controller.loadChats()
 
         await controller.performSend(
@@ -430,7 +430,7 @@ final class SupraSessionsTests: XCTestCase {
             XCTFail("Runtime should not run until jurisdiction is supplied.")
             return .events([])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
 
         await controller.performSend(
@@ -457,7 +457,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
         controller.loadChats()
         controller.jurisdictionOverrideID = "federal-courts"
 
@@ -489,7 +489,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
         controller.loadChats()
         // jurisdictionOverrideID stays "" (auto-detect).
 
@@ -519,7 +519,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
         controller.loadChats()
         // jurisdictionOverrideID stays "" (auto-detect).
 
@@ -549,7 +549,28 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        // The statutory question needs citable primary law to proceed; ground it in a
+        // canned offline provision (the point under test is jurisdiction inheritance).
+        let provision = StatutoryProvision(
+            sourceID: "stub-statutes",
+            sourceName: "Stub Statutes",
+            weightTier: .currencyVerifiable,
+            jurisdictionID: "us-code",
+            jurisdictionName: "United States Code",
+            citation: "18 U.S.C. § 1001",
+            heading: "Statements or entries generally",
+            text: "Whoever, in any matter within the jurisdiction of the executive, legislative, or judicial branch, knowingly and willfully falsifies, conceals, or covers up a material fact shall be fined or imprisoned.",
+            url: "https://example.test/usc/18/1001",
+            effectiveDate: "2024-01-01"
+        )
+        let controller = makeGlobalChatController(
+            store: store,
+            runtimeClient: stub,
+            courtListenerClient: court,
+            statutoryOrchestrator: StatutorySourceOrchestrator(
+                sources: [StubStatutorySource(result: StatutoryLookupResult(provisions: [provision]))]
+            )
+        )
         controller.loadChats()
 
         await controller.performSend(
@@ -583,7 +604,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
         controller.loadChats()
 
         // Turn 1 establishes federal jurisdiction via a U.S.C. citation.
@@ -616,7 +637,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
         await controller.performSend(prompt: "Hi", modelID: ModelID(), systemPrompt: nil, options: GenerationOptions())
 
@@ -637,7 +658,7 @@ final class SupraSessionsTests: XCTestCase {
             SettingsController.generationDefaultsKey,
             value: GenerationOptions(preset: .balanced, temperature: 0.5)
         )
-        let controller = GlobalChatController(store: store, runtimeClient: StubRuntimeClient { _ in .events([]) })
+        let controller = makeGlobalChatController(store: store, runtimeClient: StubRuntimeClient { _ in .events([]) })
         controller.loadChats()
 
         // A new chat starts from the app-wide default.
@@ -672,7 +693,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
         controller.loadChats()
 
         // Customize a brand-new (not-yet-created) chat, then send.
@@ -687,7 +708,7 @@ final class SupraSessionsTests: XCTestCase {
 
         // The created chat kept the customization; a fresh controller reloads it.
         let chatID = try XCTUnwrap(controller.selectedChatID)
-        let reloaded = GlobalChatController(store: store, runtimeClient: stub)
+        let reloaded = makeGlobalChatController(store: store, runtimeClient: stub)
         reloaded.loadChats()
         reloaded.select(chatID: chatID)
         XCTAssertEqual(reloaded.activeChatOptions.temperature, 0.85, accuracy: 0.0001)
@@ -779,7 +800,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
         controller.loadChats()
         controller.jurisdictionOverrideID = "federal-courts"
 
@@ -877,7 +898,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store,
             runtimeClient: stub,
             scope: .matter(id: matter.id),
@@ -976,7 +997,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store, runtimeClient: stub, scope: .matter(id: matter.id), courtListenerClient: court
         )
         controller.loadChats()
@@ -1017,7 +1038,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store, runtimeClient: stub, scope: .matter(id: matter.id), courtListenerClient: court
         )
         controller.loadChats()
@@ -1071,7 +1092,7 @@ final class SupraSessionsTests: XCTestCase {
                 : "The rule applies [A1]."
             return .events([.event(request, 1, .token, token: token), .event(request, 2, .generationCompleted)])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store, runtimeClient: stub, scope: .matter(id: matter.id), courtListenerClient: court
         )
         controller.loadChats()
@@ -1114,7 +1135,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store,
             runtimeClient: stub,
             scope: .matter(id: matter.id),
@@ -1157,7 +1178,7 @@ final class SupraSessionsTests: XCTestCase {
             )
         )
 
-        let reopened = GlobalChatController(
+        let reopened = makeGlobalChatController(
             store: store,
             runtimeClient: StubRuntimeClient { _ in
                 XCTFail("Verify should not call the runtime.")
@@ -1212,7 +1233,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store,
             runtimeClient: stub,
             scope: .matter(id: matter.id),
@@ -1236,7 +1257,7 @@ final class SupraSessionsTests: XCTestCase {
         )
         let chatID = try XCTUnwrap(controller.selectedChatID)
 
-        let reopened = GlobalChatController(
+        let reopened = makeGlobalChatController(
             store: store,
             runtimeClient: StubRuntimeClient { _ in
                 XCTFail("Verify should not call the runtime.")
@@ -1287,7 +1308,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub, courtListenerClient: court)
         controller.loadChats()
 
         await controller.performSend(
@@ -1299,7 +1320,7 @@ final class SupraSessionsTests: XCTestCase {
         )
         let chatID = try XCTUnwrap(controller.selectedChatID)
 
-        let reopened = GlobalChatController(
+        let reopened = makeGlobalChatController(
             store: store,
             runtimeClient: StubRuntimeClient { _ in
                 XCTFail("Verify should not call the runtime.")
@@ -1367,7 +1388,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store,
             runtimeClient: stub,
             scope: .matter(id: matter.id),
@@ -1384,7 +1405,7 @@ final class SupraSessionsTests: XCTestCase {
         )
         let chatID = try XCTUnwrap(controller.selectedChatID)
 
-        let reopened = GlobalChatController(
+        let reopened = makeGlobalChatController(
             store: store,
             runtimeClient: StubRuntimeClient { _ in
                 XCTFail("Verify should not call the runtime.")
@@ -1432,7 +1453,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store,
             runtimeClient: stub,
             scope: .matter(id: matter.id),
@@ -1480,7 +1501,7 @@ final class SupraSessionsTests: XCTestCase {
         let stub = StubRuntimeClient { request in
             .events([.event(request, 1, .token, token: "Roe v. Doe, 1 F.4th 1."), .event(request, 2, .generationCompleted)])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store,
             runtimeClient: stub,
             scope: .matter(id: matter.id),
@@ -1534,7 +1555,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store,
             runtimeClient: stub,
             scope: .matter(id: matter.id),
@@ -1588,7 +1609,7 @@ final class SupraSessionsTests: XCTestCase {
                 .event(request, 2, .generationCompleted)
             ])
         }
-        let controller = GlobalChatController(
+        let controller = makeGlobalChatController(
             store: store,
             runtimeClient: stub,
             courtListenerClient: court
@@ -1606,6 +1627,58 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(controller.messages.last?.content.contains("Verification warnings") ?? false)
         XCTAssertTrue(controller.messages.last?.content.contains("unsupported_citation") ?? false)
         XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
+    /// A statutory question must be grounded in the injected (offline) statutory
+    /// source: the canned provision enters the SOURCE PACKET as citable [A1]
+    /// authority and the answer completes without any live statutory provider.
+    func testStatutoryQuestionGroundsInStubProvisionOffline() async throws {
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let provision = StatutoryProvision(
+            sourceID: "stub-statutes",
+            sourceName: "Stub Statutes",
+            weightTier: .currencyVerifiable,
+            jurisdictionID: "fl-statutes",
+            jurisdictionName: "Florida Statutes",
+            citation: "§ 672.201",
+            heading: "Formal requirements; statute of frauds",
+            text: "A contract for the sale of goods for the price of $500 or more is not enforceable unless there is some writing sufficient to indicate that a contract for sale has been made.",
+            url: "https://example.test/fl/672.201",
+            effectiveDate: "2024-01-01"
+        )
+        final class PromptBox: @unchecked Sendable { var prompt = "" }
+        let box = PromptBox()
+        let stub = StubRuntimeClient { request in
+            box.prompt = request.prompt
+            return .events([
+                .event(request, 1, .token, token: "A writing is required for a $600 sale of goods [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(
+            store: store,
+            runtimeClient: stub,
+            statutoryOrchestrator: StatutorySourceOrchestrator(
+                sources: [StubStatutorySource(result: StatutoryLookupResult(provisions: [provision]))]
+            )
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "Under the Florida statute of frauds, is a $600 oral contract for the sale of goods enforceable?",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        XCTAssertTrue(box.prompt.contains("SOURCE PACKET"))
+        XCTAssertTrue(box.prompt.contains("§ 672.201"), "the canned provision must enter the packet")
+        XCTAssertEqual(controller.messages.last?.status, .completed)
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertTrue(answer.contains("[A1]"), answer)
+        XCTAssertFalse(answer.contains("UNVERIFIED DRAFT"), answer)
     }
 
     // MARK: - MattersController
