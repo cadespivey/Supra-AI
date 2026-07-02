@@ -123,26 +123,31 @@ public final class GlobalChatController: ObservableObject {
             baseURLOverride: legalConfiguration.courtListenerBaseURL
         )
         // Default statutory tier: eCFR (official federal regs, currency-verifiable) + Open Legal
-        // Codes (free state/USC convenience). Both are key-less and token-free; their shared
-        // AuthorizedHTTPClient keeps the statutory rate budget separate from CourtListener's.
-        let statutoryHTTPClient = AuthorizedHTTPClient(
-            keyStore: resolvedTokenStore,
-            policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests),
-            redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
-        )
+        // Codes (free state/USC convenience). Each legal-data provider gets its OWN
+        // AuthorizedHTTPClient because the local rate budget is per-client: with one
+        // shared client, govinfo's section-text fetches exhausted the shared 5/min
+        // budget and starved eCFR/OLC on the next lookup. Budgets remain separate
+        // from CourtListener's client as before.
+        let makeLegalDataHTTPClient: () -> AuthorizedHTTPClient = {
+            AuthorizedHTTPClient(
+                keyStore: resolvedTokenStore,
+                policy: NetworkPolicyService(),
+                logger: NetworkRequestLogger(repository: store.networkRequests),
+                redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
+            )
+        }
         self.statutoryOrchestrator = statutoryOrchestrator ?? StatutorySourceOrchestrator(sources: [
-            GovInfoStatutorySource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore),
-            ECFRStatutorySource(client: ECFRClient(httpClient: statutoryHTTPClient)),
-            OpenLegalCodesStatutorySource(client: OpenLegalCodesClient(httpClient: statutoryHTTPClient))
+            GovInfoStatutorySource(httpClient: makeLegalDataHTTPClient(), tokenStore: resolvedTokenStore),
+            ECFRStatutorySource(client: ECFRClient(httpClient: makeLegalDataHTTPClient())),
+            OpenLegalCodesStatutorySource(client: OpenLegalCodesClient(httpClient: makeLegalDataHTTPClient()))
         ])
         // Legal-developments tracking. Federal Register is key-less; the others read their API key
         // from the token store and contribute nothing (a note) until the key is set in Settings.
         self.developmentsOrchestrator = developmentsOrchestrator ?? LegalDevelopmentOrchestrator(sources: [
-            FederalRegisterSource(client: FederalRegisterClient(httpClient: statutoryHTTPClient)),
-            OpenStatesSource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore),
-            LegiScanSource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore),
-            RegulationsGovSource(httpClient: statutoryHTTPClient, tokenStore: resolvedTokenStore)
+            FederalRegisterSource(client: FederalRegisterClient(httpClient: makeLegalDataHTTPClient())),
+            OpenStatesSource(httpClient: makeLegalDataHTTPClient(), tokenStore: resolvedTokenStore),
+            LegiScanSource(httpClient: makeLegalDataHTTPClient(), tokenStore: resolvedTokenStore),
+            RegulationsGovSource(httpClient: makeLegalDataHTTPClient(), tokenStore: resolvedTokenStore)
         ])
         self.topLevelJurisdictions = Self.makeTopLevelJurisdictions()
         self.federalCircuits = Self.makeFederalCircuits()
