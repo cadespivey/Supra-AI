@@ -3,19 +3,27 @@ import { Section } from "./Section";
 const capabilities = [
   {
     title: "Source-grounded research",
-    body: "Research workflows are designed around retrieved source material, not unsupported model memory.",
+    body: "Answers cite retrieved authority, never model memory. Matters with saved authorities answer from your own library first; a wider CourtListener search is always one explicit click away. Party and docket questions search real federal filings.",
   },
   {
     title: "Citation verification",
-    body: "Citation-sensitive outputs are built for review, verification, and correction before reliance.",
+    body: "Every generated cite is checked against the retrieved source packet, and /verify resolves citations against CourtListener's live corpus — unsupported or fabricated authority is flagged or blocked before you rely on it.",
   },
   {
     title: "Document intelligence",
-    body: "Import matter documents, extract facts, ask questions, and keep answers tied to source material.",
+    body: "Import matter documents and ask questions answered only from their text — fast preliminary answers with an explicit full-file pass, and every [S#] cite opens the source at the supporting passage.",
+  },
+  {
+    title: "Primary law from official text",
+    body: "Statutory and regulatory questions ground in the official sources themselves — U.S. Code section text from GovInfo, CFR sections with effective dates from eCFR — with currency caveats whenever a source can't vouch for freshness.",
   },
   {
     title: "Matter workspace",
-    body: "Organize research, drafts, documents, outputs, and review artifacts by matter.",
+    body: "Organize research, drafts, documents, authorities, outputs, billing, and a full audit trail by matter — with an in-app reader for saved opinions that works offline.",
+  },
+  {
+    title: "Legislative & regulatory tracking",
+    body: "Pending bills and rulemaking relevant to a question appear as clearly-labeled tracking context — sourced from the Federal Register, Regulations.gov, OpenStates, and LegiScan — and are never passed off as citable authority.",
   },
   {
     title: "Document drafting",

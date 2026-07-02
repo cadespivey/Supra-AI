@@ -20,7 +20,7 @@ const steps = [
   },
   {
     title: "Review grounded answers",
-    body: "Run CourtListener-backed legal research or document Q&A, then inspect the sources and verification warnings before relying on the work.",
+    body: "Answers arrive fast and honestly labeled: document questions search the most relevant passages first with a full-file pass one click away, and research answers ground in your saved authorities before reaching for CourtListener. Every [S#] and [A#] citation is clickable — sources open beside the chat at the supporting passage, and opinions open in a built-in reader with the cited holding highlighted.",
   },
   {
     title: "Draft, critique, or export",
