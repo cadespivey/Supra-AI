@@ -15,11 +15,17 @@ public struct LegalDevelopmentQuery: Sendable, Equatable {
     public var terms: String
     public var jurisdiction: String?
     public var limit: Int
+    /// Optional ISO date bounds (from the classified prompt, e.g. "since 2024") that
+    /// date-capable sources apply as publication/action filters.
+    public var dateAfter: String?
+    public var dateBefore: String?
 
-    public init(terms: String, jurisdiction: String? = nil, limit: Int = 5) {
+    public init(terms: String, jurisdiction: String? = nil, limit: Int = 5, dateAfter: String? = nil, dateBefore: String? = nil) {
         self.terms = terms
         self.jurisdiction = jurisdiction
         self.limit = limit
+        self.dateAfter = dateAfter
+        self.dateBefore = dateBefore
     }
 }
 

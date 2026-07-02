@@ -1495,7 +1495,9 @@ public final class GlobalChatController: ObservableObject {
         let query = LegalDevelopmentQuery(
             terms: classification.legalIssue,
             jurisdiction: classification.jurisdiction,
-            limit: Self.maxDevelopments
+            limit: Self.maxDevelopments,
+            dateAfter: classification.dateFiledAfter,
+            dateBefore: classification.dateFiledBefore
         )
         let (developments, _) = await developmentsOrchestrator.lookup(query)
         return LegalDevelopmentFormatter.section(developments: developments)

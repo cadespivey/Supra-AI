@@ -19,12 +19,29 @@ public struct FederalRegisterSource: LegalDevelopmentSource {
             return LegalDevelopmentLookupResult()   // a specific state → not the Federal Register's domain
         }
         do {
-            let response = try await client.search(query: query.terms, limit: query.limit)
+            let response = try await client.search(
+                query: query.terms,
+                limit: query.limit,
+                publishedAfter: query.dateAfter,
+                publishedBefore: query.dateBefore,
+                documentType: Self.documentType(in: query.terms)
+            )
             let developments = response.results.prefix(query.limit).compactMap(Self.development(from:))
             return LegalDevelopmentLookupResult(developments: Array(developments))
         } catch {
             return LegalDevelopmentLookupResult(note: "Federal Register lookup was unavailable for this query.")
         }
+    }
+
+    /// A Federal Register document-type filter implied by the query wording, or nil for
+    /// an unfiltered search. ("proposed rule" → PRORULE must be checked before "rule".)
+    public static func documentType(in terms: String) -> String? {
+        let lower = terms.lowercased()
+        if lower.contains("proposed rule") || lower.contains("nprm") { return "PRORULE" }
+        if lower.contains("final rule") { return "RULE" }
+        if lower.contains("executive order") || lower.contains("presidential") { return "PRESDOCU" }
+        if lower.contains("notice") { return "NOTICE" }
+        return nil
     }
 
     static func development(from document: FederalRegisterDocument) -> LegalDevelopment? {
