@@ -113,6 +113,12 @@ struct GlobalChatsView: View {
                 }
                 .animation(.snappy(duration: 0.25), value: citationPreview != nil)
                 .animation(.snappy(duration: 0.25), value: authorityReader != nil)
+                // Esc closes the inspector panel even when focus sits in the composer
+                // (the panel's own onExitCommand only fires when it has focus).
+                .closesOnEscape(when: citationPreview != nil || authorityReader != nil) {
+                    citationPreview = nil
+                    authorityReader = nil
+                }
             if let errorMessage = controller.errorMessage {
                 errorBanner(errorMessage)
             }

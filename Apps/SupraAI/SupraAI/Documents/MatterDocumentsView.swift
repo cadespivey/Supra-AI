@@ -60,6 +60,9 @@ struct MatterDocumentsView: View {
             .overlay(alignment: .trailing) {
                 if let item = preview {
                     PreviewSlideOver(model: item.model, width: previewWidth) { preview = nil }
+                        // Esc closes the panel even when focus sits elsewhere in the
+                        // tab (the panel's onExitCommand needs focus inside it).
+                        .closesOnEscape(when: item.id == preview?.id) { preview = nil }
                 }
             }
             .animation(.snappy(duration: 0.25), value: preview != nil)

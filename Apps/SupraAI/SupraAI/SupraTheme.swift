@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Semantic type scale
@@ -110,6 +111,48 @@ struct SupraSheetScaffold<Content: View, Footer: View>: View {
                 .padding(12)
             }
         }
+    }
+}
+
+/// Closes transient chrome (the inspector slide-over) on Esc no matter which view
+/// has focus. `onExitCommand` and `.keyboardShortcut(.cancelAction)` both need
+/// responder-chain cooperation that an NSTextView-focused composer denies, so this
+/// installs an NSEvent local monitor only while `isActive`.
+private struct EscapeCloseModifier: ViewModifier {
+    let isActive: Bool
+    let action: () -> Void
+    @State private var monitor: Any?
+
+    func body(content: Content) -> some View {
+        content
+            // onAppear too: a host inside `if let` mounts with isActive already true,
+            // and onChange only fires on changes after insertion.
+            .onAppear { if isActive { install() } }
+            .onChange(of: isActive) { _, active in
+                active ? install() : remove()
+            }
+            .onDisappear { remove() }
+    }
+
+    private func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53 else { return event }   // Esc
+            action()
+            return nil
+        }
+    }
+
+    private func remove() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+}
+
+extension View {
+    /// Esc runs `action` while `isActive`, regardless of focus.
+    func closesOnEscape(when isActive: Bool, action: @escaping () -> Void) -> some View {
+        modifier(EscapeCloseModifier(isActive: isActive, action: action))
     }
 }
 
