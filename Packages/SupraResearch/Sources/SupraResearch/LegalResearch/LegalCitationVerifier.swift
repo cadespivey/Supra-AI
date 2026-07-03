@@ -89,17 +89,28 @@ public enum LegalCitationVerifier {
         let authorityText = authorities.map {
             [$0.text, $0.snippet, $0.caseName, $0.citation, $0.url].compactMap { $0 }.joined(separator: "\n")
         }.joined(separator: "\n\n")
-        // A quote can only be REFUTED against opinion text/snippets. A packet
-        // restored without text (persisted packets are audit-safe) makes every
-        // quote uncheckable — report that honestly instead of "fabricated".
-        let quotesAreCheckable = authorities.contains {
-            ($0.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-                || ($0.snippet?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-        }
+        // A quote can only be REFUTED against FULL opinion text — a 280-char
+        // snippet is a window into the opinion, not the opinion, and a packet
+        // restored without text (persisted packets are audit-safe) has nothing
+        // to search. Per quote: the [A#] labels on the quote's own line say
+        // which authorities it claims to come from. A hard "fabricated" verdict
+        // requires every claimed source to carry full text; otherwise the
+        // honest verdict is "unverifiable".
+        let fullTextLabels = Set((0..<packetSize).compactMap { index -> Int? in
+            let text = authorities[index].text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return text.isEmpty ? nil : index + 1   // 1-based label space
+        })
+        let packetFullyTexted = packetSize > 0 && fullTextLabels.count == packetSize
+        let answerLines = answer.components(separatedBy: .newlines)
         for quote in extractQuotedText(from: answer) where quote.count >= 12 {
             if !authorityText.localizedCaseInsensitiveContains(quote) {
+                let line = answerLines.first { $0.localizedCaseInsensitiveContains(quote) }
+                let lineLabels = line.map { packetLabelIndices(in: $0).filter { $0 >= 1 && $0 <= packetSize } } ?? []
+                let refutable = lineLabels.isEmpty
+                    ? packetFullyTexted
+                    : lineLabels.allSatisfy(fullTextLabels.contains)
                 issues.append(
-                    quotesAreCheckable
+                    refutable
                         ? LegalVerificationIssue(
                             kind: .unsupportedQuote,
                             message: "Quoted text does not appear verbatim in the retrieved source packet.",
@@ -107,7 +118,7 @@ public enum LegalCitationVerifier {
                         )
                         : LegalVerificationIssue(
                             kind: .unverifiableQuote,
-                            message: "The source packet carries no opinion text to check this quotation against, so it is UNVERIFIED (not necessarily fabricated). Re-run /research or open the cited authority to restore its text, then /verify again.",
+                            message: "The cited authority's full opinion text is not in the packet, so this quotation is UNVERIFIED (not necessarily fabricated). Open the cited authority or re-run /research to restore its text, then /verify again.",
                             excerpt: quote
                         )
                 )

@@ -19,7 +19,10 @@ public struct CourtListenerSearchRequest: Codable, Equatable, Sendable {
     public let dateFiledAfter: String?
     public let dateFiledBefore: String?
     public let citation: String?
-    /// Party / case-name filters for RECAP/docket search (ignored for opinion search).
+    /// Party filter (RECAP/docket search) and case-name filter. `case_name=` IS
+    /// honored for v4 OPINION search too — a caption lookup returns a handful of
+    /// field-matched opinions where the same terms as full-text `q=` return
+    /// hundreds (verified live 2026-07).
     public let partyName: String?
     public let caseName: String?
 

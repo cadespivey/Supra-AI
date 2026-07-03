@@ -2470,17 +2470,17 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.messages.last?.status, .completed)
     }
 
-    func testDeadlineQuestionWithoutStatutoryHitAnswersFromCaseLawWithCaveat() async throws {
-        // "Deadline"-type wording marks primary law as required, but when no
-        // statutory source returns citable text the send used to hard-block
-        // before ANY case-law retrieval. It must now continue on case law,
-        // led by a prominent primary-law caveat.
+    func testProceduralQuestionWithoutStatutoryHitAnswersFromCaseLawWithCaveat() async throws {
+        // Procedural-tier wording ("notice requirement") marks primary law as
+        // required, but when no statutory source returns citable text the send
+        // must continue on case law, led by a prominent primary-law caveat —
+        // not hard-refuse.
         let store = try makeStore()
         let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
         let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
         let runtime = StubRuntimeClient { request in
             .events([
-                .event(request, 1, .token, token: "Courts require a response within the rule's period. Foo v. Bar [A1]."),
+                .event(request, 1, .token, token: "Courts describe the notice prerequisites in Foo v. Bar [A1]."),
                 .event(request, 2, .generationCompleted)
             ])
         }
@@ -2488,7 +2488,7 @@ final class SupraSessionsTests: XCTestCase {
         controller.loadChats()
 
         await controller.performSend(
-            prompt: "What is the deadline to respond to a garnishment complaint in Florida?",
+            prompt: "What are the notice requirements for a garnishment action in Florida?",
             modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
         )
 
@@ -2497,6 +2497,114 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(answer.contains("Primary law not retrieved"), answer)
         XCTAssertTrue(answer.contains("Foo v. Bar"), answer)
         XCTAssertFalse(court.requests.isEmpty, "case-law retrieval must run despite the statutory miss")
+    }
+
+    func testDeadlineQuestionWithoutStatutoryHitStaysHardBlocked() async throws {
+        // Limitations-class wording is the malpractice tier: a stale period
+        // quoted from old case law is worse than a refusal, so the hard block
+        // stays when no citable statute could be retrieved.
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Answer."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What is the deadline to respond to a garnishment complaint in Florida?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertTrue(answer.contains("could not retrieve the governing primary law"), answer)
+    }
+
+    func testSurnameFollowUpInheritsActiveCaseAndBoilerplateDoesNot() {
+        func user(_ text: String) -> GenerateRequest.Turn { .init(role: .user, content: text) }
+        let base = LegalQueryClassifier.classify("Did Peacock address laches?")
+        XCTAssertNil(base.citationLookup)
+
+        // A distinctive party surname in an interrogative pins the active case.
+        let inherited = GlobalChatController.classificationInheritingNamedCase(
+            base, prompt: "Did Peacock address laches?", history: [],
+            activeAuthority: "Peacock v. Thomas"
+        )
+        XCTAssertEqual(inherited.citationLookup, "Peacock v. Thomas")
+
+        // Caption boilerplate ("State") must not resurrect Smith v. State.
+        let topical = LegalQueryClassifier.classify("Are state law claims preempted?")
+        let unchanged = GlobalChatController.classificationInheritingNamedCase(
+            topical, prompt: "Are state law claims preempted?", history: [],
+            activeAuthority: "Smith v. State"
+        )
+        XCTAssertNil(unchanged.citationLookup)
+
+        // "In that case," is the conditional idiom, not a case reference.
+        let idiom = LegalQueryClassifier.classify("In that case, what should we file next?")
+        let idiomResult = GlobalChatController.classificationInheritingNamedCase(
+            idiom, prompt: "In that case, what should we file next?",
+            history: [user("What is the holding of Rush v. Savchuk?")],
+            activeAuthority: "Rush v. Savchuk"
+        )
+        XCTAssertNil(idiomResult.citationLookup)
+
+        // Anaphor + no citation in recent history → the active authority fills in.
+        let anaphor = LegalQueryClassifier.classify("What about the dissent?")
+        let fromActive = GlobalChatController.classificationInheritingNamedCase(
+            anaphor, prompt: "What about the dissent?",
+            history: [user("Tell me about garnishment procedure.")],
+            activeAuthority: "Peacock v. Thomas"
+        )
+        XCTAssertEqual(fromActive.citationLookup, "Peacock v. Thomas")
+    }
+
+    func testWeakFollowUpIsRewrittenIntoStandaloneQuestion() async throws {
+        // Turn 2 uses no anaphor and no surname ("why did they rule that way?")
+        // — the model rewriter must produce a self-contained question that
+        // classification then resolves to the case under discussion.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Adams", jurisdiction: "Florida")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "Rush v. Savchuk"))
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id,
+            caseName: "Rush v. Savchuk",
+            citationJSON: #"["444 U.S. 320"]"#,
+            court: "Supreme Court of the United States", courtID: "scotus",
+            opinionText: "Quasi in rem jurisdiction cannot rest on the presence of the defendant's insurer."
+        ))
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let runtime = StubRuntimeClient { request in
+            let isRewrite = request.prompt.contains("Rewrite the FOLLOW-UP")
+            let token = isRewrite
+                ? "Why did the Court reject quasi in rem jurisdiction in Rush v. Savchuk?"
+                : "Rush v. Savchuk rejected attributing the insurer's contacts to the defendant [A1]."
+            return .events([
+                .event(request, 1, .token, token: token),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What is the holding of Rush v. Savchuk?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+        await controller.performSend(
+            prompt: "Why did they rule that way?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertEqual(controller.messages.last?.status, .completed, answer)
+        XCTAssertTrue(answer.contains("Rush v. Savchuk"), answer)
+        XCTAssertFalse(answer.contains("didn't find authority matching this query"), answer)
     }
 
     func testStatutoryCitationQuestionStillHardBlocksWhenUnretrievable() async throws {

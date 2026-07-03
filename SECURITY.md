@@ -59,7 +59,9 @@ need an explicit, documented justification.
   - `courtlistener.com` / `www.courtlistener.com` — CourtListener API (token-authenticated) —
     and `storage.courtlistener.com` — its public asset CDN (token-free opinion PDF downloads).
   - Free, key-less official sources: `openlegalcodes.org` (statutes), `ecfr.gov`
-    (Code of Federal Regulations), `federalregister.gov` (regulatory developments).
+    (Code of Federal Regulations), `federalregister.gov` (regulatory developments),
+    and `www.govinfo.gov` (govinfo's key-less U.S. Code citation link service and
+    the official section HTML it redirects to — always token-free).
   - Key'd legal-data APIs (the key is read from the Keychain): `api.govinfo.gov`
     (U.S. Code), `v3.openstates.org` (bills), `api.regulations.gov`
     (federal rulemaking dockets).

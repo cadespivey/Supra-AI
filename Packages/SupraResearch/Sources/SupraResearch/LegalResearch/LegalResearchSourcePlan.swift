@@ -36,6 +36,12 @@ public struct LegalResearchSourcePlan: Codable, Hashable, Sendable {
     public var target: LegalSourceTarget
     public var effectiveClassification: LegalQueryClassification
     public var requiresPrimaryLaw: Bool
+    /// True when the question's primary-law need is LIMITATIONS-class ("statute
+    /// of limitations", "deadline", "time limit"): a stale period sourced from
+    /// old case law is the malpractice scenario, so a statutory miss must refuse
+    /// rather than caveat — unless the question is about a NAMED case's own
+    /// discussion, which the controller detects via the citation lookup.
+    public var primaryLawHardBlock: Bool
     public var shouldRetrievePrimaryLaw: Bool
     public var shouldRetrieveCaseLaw: Bool
     public var shouldRetrieveDevelopments: Bool
@@ -49,6 +55,7 @@ public struct LegalResearchSourcePlan: Codable, Hashable, Sendable {
         target: LegalSourceTarget,
         effectiveClassification: LegalQueryClassification,
         requiresPrimaryLaw: Bool,
+        primaryLawHardBlock: Bool = false,
         shouldRetrievePrimaryLaw: Bool,
         shouldRetrieveCaseLaw: Bool,
         shouldRetrieveDevelopments: Bool,
@@ -61,6 +68,7 @@ public struct LegalResearchSourcePlan: Codable, Hashable, Sendable {
         self.target = target
         self.effectiveClassification = effectiveClassification
         self.requiresPrimaryLaw = requiresPrimaryLaw
+        self.primaryLawHardBlock = primaryLawHardBlock
         self.shouldRetrievePrimaryLaw = shouldRetrievePrimaryLaw
         self.shouldRetrieveCaseLaw = shouldRetrieveCaseLaw
         self.shouldRetrieveDevelopments = shouldRetrieveDevelopments
@@ -126,6 +134,7 @@ public enum LegalResearchSourcePlanner {
             target: target,
             effectiveClassification: effective,
             requiresPrimaryLaw: requiresPrimary,
+            primaryLawHardBlock: requiresPrimary && isLimitationsSensitive(effective),
             shouldRetrievePrimaryLaw: shouldRetrievePrimary,
             shouldRetrieveCaseLaw: true,
             shouldRetrieveDevelopments: shouldRetrieveDevelopments(for: effective),
@@ -160,6 +169,17 @@ public enum LegalResearchSourcePlanner {
             "benefits claim", "exhaustion", "notice requirement"
         ]
         return markers.contains { lower.contains($0) } || federalSchemeHint(for: lower) != nil
+    }
+
+    /// The limitations class: questions where the primary-law answer is a
+    /// specific period, and quoting old case law risks a stale deadline.
+    public static func isLimitationsSensitive(_ classification: LegalQueryClassification) -> Bool {
+        let lower = classification.legalIssue.lowercased()
+        let hardMarkers = [
+            "statute of limitations", "limitations period", "deadline",
+            "time limit", "limitations run"
+        ]
+        return hardMarkers.contains { lower.contains($0) }
     }
 
     public static func isStatutoryOrRegulatory(_ classification: LegalQueryClassification) -> Bool {

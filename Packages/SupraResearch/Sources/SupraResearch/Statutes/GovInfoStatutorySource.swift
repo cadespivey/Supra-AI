@@ -34,16 +34,35 @@ public struct GovInfoStatutorySource: StatutorySource {
            !citesFederalLaw {
             return StatutoryLookupResult()   // a specific state — govinfo USCODE is federal
         }
-        // An exact federal cite is a far better search term than the literal
-        // question text — search for the SECTION, not the sentence around it.
-        // Only the citation FIELD qualifies (the terms may cite federal law while
-        // the citation is a state code, which would send govinfo a state cite).
-        let citationTerm = query.citation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let citationIsFederal = !citationTerm.isEmpty
-            && StatutoryJurisdictionMapper.referencesFederalLaw(citation: citationTerm, terms: "")
-        let term = citationIsFederal ? citationTerm : query.terms
+        // An exact U.S.C. cite resolves DETERMINISTICALLY through the keyless
+        // citation link service — text search cannot find a section because a
+        // section's own text never cites itself (verified live: both the cite
+        // and prose terms returned unrelated titles). Works without an API key.
+        let citedText = [query.citation, query.terms].compactMap { $0 }.joined(separator: " ")
+        var resolved: [StatutoryProvision] = []
+        for cite in StatutoryJurisdictionMapper.federalUSCCitations(in: citedText).prefix(Self.maxSectionTextFetches) {
+            guard let section = try? await client.resolveUSCodeSection(title: cite.title, section: cite.section) else { continue }
+            let cleaned = ECFRStatutorySource.stripHTML(section.rawHTML)
+            guard !cleaned.isEmpty else { continue }
+            let result = GovInfoResult(
+                title: nil,
+                packageId: section.packageId,
+                granuleId: section.granuleId,
+                dateIssued: section.editionYear,
+                collectionCode: "USCODE"
+            )
+            resolved.append(Self.sectionProvision(
+                from: result,
+                packageId: section.packageId,
+                granuleId: section.granuleId,
+                cleanedText: cleaned
+            ))
+        }
+        if !resolved.isEmpty {
+            return StatutoryLookupResult(provisions: resolved)
+        }
         do {
-            let response = try await client.searchUSCode(term: term, limit: query.limit)
+            let response = try await client.searchUSCode(term: query.terms, limit: query.limit)
             var provisions: [StatutoryProvision] = []
             var fetchedText = 0
             for result in response.results.prefix(query.limit) {
@@ -149,12 +168,40 @@ public protocol GovInfoClientProtocol: Sendable {
     /// Fetches a granule's (U.S. Code section's) rendered text. Throwing conformers
     /// degrade to locator-only results.
     func fetchGranuleText(packageId: String, granuleId: String) async throws -> String
+
+    /// Resolves an exact U.S.C. cite through govinfo's KEYLESS citation link
+    /// service (www.govinfo.gov/link/uscode/{title}/{section}), which redirects
+    /// to the official section HTML. Nil when the service can't resolve the cite.
+    func resolveUSCodeSection(title: Int, section: String) async throws -> GovInfoResolvedSection?
 }
 
 public extension GovInfoClientProtocol {
     /// Default so stubs/conformers that don't fetch section text still compile.
     func fetchGranuleText(packageId: String, granuleId: String) async throws -> String {
         throw GovInfoError.invalidResponse
+    }
+
+    /// Default so stubs/conformers without link-service support still compile —
+    /// callers fall back to search.
+    func resolveUSCodeSection(title: Int, section: String) async throws -> GovInfoResolvedSection? {
+        nil
+    }
+}
+
+/// An exact U.S. Code section resolved through govinfo's citation link service:
+/// the official section HTML plus the package/granule ids the redirect encodes.
+public struct GovInfoResolvedSection: Sendable, Equatable {
+    public let packageId: String
+    public let granuleId: String
+    /// The U.S. Code edition year from the package id (e.g. "2024").
+    public let editionYear: String?
+    public let rawHTML: String
+
+    public init(packageId: String, granuleId: String, editionYear: String?, rawHTML: String) {
+        self.packageId = packageId
+        self.granuleId = granuleId
+        self.editionYear = editionYear
+        self.rawHTML = rawHTML
     }
 }
 
@@ -249,5 +296,50 @@ public final class GovInfoClient: GovInfoClientProtocol, @unchecked Sendable {
         case 500...599: throw GovInfoError.serverError(statusCode: response.statusCode)
         default: throw GovInfoError.invalidResponse
         }
+    }
+
+    public func resolveUSCodeSection(title: Int, section: String) async throws -> GovInfoResolvedSection? {
+        // KEYLESS: the link service is public. URLSession follows the 302 to the
+        // official section HTML; the FINAL url encodes package + granule ids.
+        // Subsection parentheticals aren't part of the locator ("1001(a)" → 1001).
+        let core = section.prefix { $0 != "(" }
+        guard !core.isEmpty,
+              let encoded = String(core).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://www.govinfo.gov/link/uscode/\(title)/\(encoded)?link-type=html") else {
+            return nil
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response): (Data, HTTPURLResponse)
+        do { (data, response) = try await httpClient.sendUnauthenticated(request, relatedResearchSessionID: nil) }
+        catch { return nil }   // resolution is best-effort; callers fall back to search
+        // The final URL must still be govinfo's own host — official section text
+        // may only ever be ingested from the official source, even if the link
+        // service were ever to redirect elsewhere.
+        guard (200..<300).contains(response.statusCode),
+              response.url?.host?.lowercased() == "www.govinfo.gov",
+              let finalURL = response.url?.absoluteString,
+              let match = finalURL.range(
+                  of: #"/pkg/(USCODE-\d{4}-title[^/]+)/html/([^/]+)\.htm"#,
+                  options: .regularExpression
+              ),
+              let html = String(data: data, encoding: .utf8), !html.isEmpty else {
+            return nil
+        }
+        let path = String(finalURL[match])
+        let parts = path.split(separator: "/").map(String.init)
+        // parts: ["pkg", packageId, "html", "<granule>.htm"]
+        guard parts.count == 4 else { return nil }
+        let packageId = parts[1]
+        let granuleId = String(parts[3].dropLast(".htm".count))
+        let year = packageId.range(of: #"USCODE-(\d{4})-"#, options: .regularExpression)
+            .map { String(packageId[$0].dropFirst("USCODE-".count).dropLast(1)) }
+        return GovInfoResolvedSection(
+            packageId: packageId,
+            granuleId: granuleId,
+            editionYear: year,
+            rawHTML: html
+        )
     }
 }

@@ -90,7 +90,7 @@ public enum LegalCitationMatch {
     /// Lowercased word tokens that identify a party: drops procedural words,
     /// corporate suffixes, numbers (reporter volumes/pages), and short
     /// fragments like initials or "US" left over from a trailing cite.
-    static func significantTokens(in value: String) -> [String] {
+    public static func significantTokens(in value: String) -> [String] {
         value.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { token in

@@ -152,9 +152,12 @@ final class GroundedRetrievalHardeningTests: XCTestCase {
             citation: "18 U.S.C. § 1001",
             limit: 3
         ))
+        // The exact cite goes to the LINK SERVICE first; with no resolution
+        // available the lookup falls back to search — either way govinfo runs.
+        XCTAssertEqual(recorder.resolvedCites.count, 1)
+        XCTAssertEqual(recorder.resolvedCites.first?.title, 18)
+        XCTAssertEqual(recorder.resolvedCites.first?.section, "1001")
         XCTAssertEqual(recorder.searchTerms.count, 1, "federal cite must reach govinfo despite the state jurisdiction")
-        // And the exact cite — not the prose — is the search term.
-        XCTAssertEqual(recorder.searchTerms.first, "18 U.S.C. § 1001")
 
         // Without a federal cite, the state gate still applies.
         _ = await source.lookup(StatutoryQuery(
@@ -164,6 +167,33 @@ final class GroundedRetrievalHardeningTests: XCTestCase {
             limit: 3
         ))
         XCTAssertEqual(recorder.searchTerms.count, 1, "state-only statutory query must still skip govinfo")
+    }
+
+    func testGovInfoExactCiteResolvesThroughLinkServiceWithoutSearch() async throws {
+        // The link service resolves an exact cite deterministically — no search,
+        // no API key — and yields citable official section text.
+        let recorder = RecordingGovInfoClient()
+        recorder.resolution = GovInfoResolvedSection(
+            packageId: "USCODE-2024-title18",
+            granuleId: "USCODE-2024-title18-partI-chap47-sec1001",
+            editionYear: "2024",
+            rawHTML: "<html><body>§ 1001. Statements or entries generally. Whoever knowingly and willfully falsifies a material fact shall be fined under this title.</body></html>"
+        )
+        let source = GovInfoStatutorySource(client: recorder)
+
+        let result = await source.lookup(StatutoryQuery(
+            terms: "what does 18 U.S.C. § 1001 require",
+            jurisdiction: nil,
+            citation: "18 U.S.C. § 1001",
+            limit: 3
+        ))
+
+        XCTAssertTrue(recorder.searchTerms.isEmpty, "an exact-cite resolution must skip search entirely")
+        let provision = try XCTUnwrap(result.provisions.first)
+        XCTAssertEqual(provision.citation, "18 U.S.C. § 1001")
+        XCTAssertTrue(provision.isCitableAuthority)
+        XCTAssertTrue(provision.text.contains("Statements or entries"))
+        XCTAssertEqual(provision.effectiveDate, "2024")
     }
 
     // MARK: - Verifier state-statute citations
@@ -242,11 +272,14 @@ final class GroundedRetrievalHardeningTests: XCTestCase {
     }
 }
 
-/// GovInfo client that records search terms and returns no results.
+/// GovInfo client that records search terms and link-service resolutions.
 private final class RecordingGovInfoClient: GovInfoClientProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private var _searchTerms: [String] = []
+    private var _resolvedCites: [(title: Int, section: String)] = []
     var searchTerms: [String] { lock.withLock { _searchTerms } }
+    var resolvedCites: [(title: Int, section: String)] { lock.withLock { _resolvedCites } }
+    var resolution: GovInfoResolvedSection?
 
     func searchUSCode(term: String, limit: Int) async throws -> GovInfoSearchResponse {
         lock.withLock { _searchTerms.append(term) }
@@ -255,5 +288,10 @@ private final class RecordingGovInfoClient: GovInfoClientProtocol, @unchecked Se
 
     func fetchGranuleText(packageId: String, granuleId: String) async throws -> String {
         throw GovInfoError.invalidResponse
+    }
+
+    func resolveUSCodeSection(title: Int, section: String) async throws -> GovInfoResolvedSection? {
+        lock.withLock { _resolvedCites.append((title: title, section: section)) }
+        return resolution
     }
 }

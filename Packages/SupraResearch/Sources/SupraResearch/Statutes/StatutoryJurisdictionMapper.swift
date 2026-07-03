@@ -55,6 +55,29 @@ public enum StatutoryJurisdictionMapper {
         "wisc": "WI", "wyo": "WY"
     ]
 
+    /// Exact U.S.C. cites — title AND section — extracted from text, in order of
+    /// appearance ("18 U.S.C. § 1001", "42 USC 1983"). These resolve
+    /// deterministically through govinfo's citation link service.
+    public static func federalUSCCitations(in text: String) -> [(title: Int, section: String)] {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(?i)\b(\d{1,2})\s+u\.?\s?s\.?\s?c\.?(?:a\.?)?\s*(?:§+\s*|\s+section\s+|\s+)([0-9][\w.-]*(?:\([\w).(]*\))?)"#
+        ) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        var cites: [(title: Int, section: String)] = []
+        regex.enumerateMatches(in: text, range: range) { match, _, _ in
+            guard let match, match.numberOfRanges >= 3,
+                  let titleRange = Range(match.range(at: 1), in: text),
+                  let sectionRange = Range(match.range(at: 2), in: text),
+                  let title = Int(text[titleRange]), title >= 1, title <= 54 else { return }
+            let section = String(text[sectionRange])
+                .trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
+            guard !section.isEmpty else { return }
+            cites.append((title: title, section: section))
+        }
+        var seen = Set<String>()
+        return cites.filter { seen.insert("\($0.title)|\($0.section.lowercased())").inserted }
+    }
+
     /// Whether the query itself cites FEDERAL law (U.S.C. or C.F.R.). A federal
     /// cite must reach the federal sources even when the matter sits in a state
     /// jurisdiction — state matters raise federal questions constantly.

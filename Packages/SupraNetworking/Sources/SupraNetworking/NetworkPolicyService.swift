@@ -27,6 +27,10 @@ public final class NetworkPolicyService: NetworkPolicyServiceProtocol, @unchecke
             "federalregister.gov",
             // Key'd legal-data sources (the key is read from the Keychain, not the URL where avoidable).
             "api.govinfo.gov",        // official U.S. Code (USCODE)
+            // govinfo's KEYLESS citation link service + official section HTML it
+            // redirects to (exact-cite U.S.C. resolution — search can't find a
+            // section because a section's text never cites itself). Token-free.
+            "www.govinfo.gov",
             "v3.openstates.org",      // state/federal bills
             "api.regulations.gov"     // federal rulemaking dockets
         ]
