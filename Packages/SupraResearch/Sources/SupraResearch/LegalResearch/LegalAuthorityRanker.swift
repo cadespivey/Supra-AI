@@ -62,8 +62,11 @@ public enum LegalAuthorityRanker {
             reasons.append(precedentialReason)
         }
 
+        // Token-aware matching, not string equality: the lookup is the SHORT name
+        // the user typed ("Rush v. Savchuk"); the record carries the full caption.
+        // The named case must never be ranked out of the packet it was asked about.
         if let citation = classification.citationLookup,
-           authority.allCitationStrings.contains(where: { normalized($0) == normalized(citation) }) {
+           LegalCitationMatch.authority(authority, matchesLookup: citation) {
             score += 30
             reasons.append("citation_match")
         }

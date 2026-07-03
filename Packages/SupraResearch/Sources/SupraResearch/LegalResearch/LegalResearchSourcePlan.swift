@@ -108,7 +108,11 @@ public enum LegalResearchSourcePlanner {
         let citationQuery = primaryLawCitationQuery(classification: effective, scheme: scheme)
         let terms = primaryLawQueryTerms(classification: effective, scheme: scheme)
         let hasJurisdiction = !(effective.jurisdiction?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        let satisfiesJurisdiction = hasJurisdiction || scheme != nil
+        // A question that names its authority ("What is the holding of Rush v.
+        // Savchuk?") pins its own court — refusing it for lack of a jurisdiction
+        // word would block a perfectly answerable lookup.
+        let hasCitationLookup = !(effective.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let satisfiesJurisdiction = hasJurisdiction || scheme != nil || hasCitationLookup
 
         var notes: [String] = []
         if let scheme {

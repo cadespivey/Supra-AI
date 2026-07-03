@@ -17,9 +17,11 @@ public struct ECFRStatutorySource: StatutorySource {
     }
 
     public func lookup(_ query: StatutoryQuery) async -> StatutoryLookupResult {
-        // eCFR covers federal regulations only. Skip when the query names a specific state.
+        // eCFR covers federal regulations only. Skip when the query names a specific
+        // state — unless it cites federal law, which state matters raise constantly.
         if let jurisdiction = query.jurisdiction,
-           StatutoryJurisdictionMapper.postalCode(forJurisdiction: jurisdiction) != nil {
+           StatutoryJurisdictionMapper.postalCode(forJurisdiction: jurisdiction) != nil,
+           !StatutoryJurisdictionMapper.referencesFederalLaw(citation: query.citation, terms: query.terms) {
             return StatutoryLookupResult()
         }
         do {

@@ -995,6 +995,7 @@ public final class GlobalChatController: ObservableObject {
         do {
             let result = try await legalWorkflowOutput(
                 prompt: modelPrompt,
+                classificationText: prompt,
                 chatID: chatID,
                 modelID: modelID,
                 generationID: generationID,
@@ -1052,6 +1053,7 @@ public final class GlobalChatController: ObservableObject {
 
     private func legalWorkflowOutput(
         prompt: String,
+        classificationText: String? = nil,
         chatID: String,
         modelID: ModelID?,
         generationID: GenerationID,
@@ -1105,6 +1107,7 @@ public final class GlobalChatController: ObservableObject {
         case .legalResearch, .legalQA:
             return try await legalResearchOutput(
                 prompt: prompt,
+                classificationText: classificationText,
                 chatID: chatID,
                 modelID: modelID,
                 generationID: generationID,
@@ -1183,6 +1186,7 @@ public final class GlobalChatController: ObservableObject {
 
     private func legalResearchOutput(
         prompt: String,
+        classificationText: String? = nil,
         chatID: String,
         modelID: ModelID?,
         generationID: GenerationID,
@@ -1192,9 +1196,14 @@ public final class GlobalChatController: ObservableObject {
         history: [GenerateRequest.Turn],
         researchDepth: RetrievalDepth = .fast
     ) async throws -> LegalWorkflowResult {
+        // Classify from the USER'S QUESTION only. The model prompt may carry an
+        // attachments block whose first citation, statute keywords, or sheer bulk
+        // would otherwise hijack the citation lookup, authority type, and search
+        // terms. The full prompt (with attachments) still drives generation.
+        let questionForClassification = classificationText ?? prompt
         let scopedClassification = classificationApplyingChatJurisdiction(
-            classificationApplyingMatterScope(LegalQueryClassifier.classify(prompt)),
-            prompt: prompt,
+            classificationApplyingMatterScope(LegalQueryClassifier.classify(questionForClassification)),
+            prompt: questionForClassification,
             history: history
         )
         // A "who sued X / litigation involving X" question is a factual docket lookup, not a
@@ -1252,14 +1261,25 @@ public final class GlobalChatController: ObservableObject {
             do {
                 retrieval = try await retrieveAuthorities(for: classification, route: route, modelID: modelID, matterID: scopedMatterID)
             } catch {
-                guard !statutoryLookup.provisions.isEmpty else { throw error }
-                retrieval = ([], [], nil)
+                // Network down or rate-limited: the matter's own library is still
+                // a grounded source — better a local answer than a dead send,
+                // even on the deep tier.
+                if let local = localAuthorityRetrieval(for: classification) {
+                    retrieval = local
+                    answeredFromSavedAuthorities = true
+                } else if !statutoryLookup.provisions.isEmpty {
+                    retrieval = ([], [], nil)
+                } else {
+                    throw error
+                }
             }
         }
         // Saved authorities already carry their persisted opinion text — hydrating
         // them again would defeat the local tier's no-network promise.
         let rankedBase = LegalAuthorityRanker.rank(retrieval.authorities, for: classification)
-        let rankedAll = answeredFromSavedAuthorities ? rankedBase : await hydrateTopAuthorities(rankedBase)
+        let rankedAll = answeredFromSavedAuthorities
+            ? rankedBase
+            : await hydrateTopAuthorities(rankedBase, citationLookup: classification.citationLookup)
         // Cap to exactly the packet the model is shown. buildAnswerPrompt caps the
         // SOURCE PACKET at maxPacketAuthorities, so the model only ever sees
         // [A1]…[A maxPacketAuthorities]. The verifier and the stored packet (used by
@@ -1491,9 +1511,20 @@ public final class GlobalChatController: ObservableObject {
     /// body fetched from CourtListener. Any fetch failure (network, rate limit, no
     /// opinion id, empty body) leaves that authority's existing snippet untouched, so
     /// hydration never blocks or fails the research answer.
-    private func hydrateTopAuthorities(_ ranked: [RankedLegalAuthority]) async -> [RankedLegalAuthority] {
+    private func hydrateTopAuthorities(
+        _ ranked: [RankedLegalAuthority],
+        citationLookup: String? = nil
+    ) async -> [RankedLegalAuthority] {
         var result = ranked
-        for index in result.indices.prefix(Self.maxHydratedAuthorities) {
+        // The named case must carry full text wherever it ranked — a snippet-only
+        // body cannot contain the holding the user asked about.
+        var indices = Array(result.indices.prefix(Self.maxHydratedAuthorities))
+        if let lookup = citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines), !lookup.isEmpty,
+           let namedIndex = result.indices.first(where: { LegalCitationMatch.authority(result[$0].authority, matchesLookup: lookup) }),
+           !indices.contains(namedIndex) {
+            indices.append(namedIndex)
+        }
+        for index in indices {
             guard let opinionID = result[index].authority.opinionId.flatMap(Int.init) else { continue }
             guard
                 let detail = try? await courtListenerClient.fetchOpinion(id: opinionID),
@@ -1830,13 +1861,17 @@ public final class GlobalChatController: ObservableObject {
         let locals = saved.map(Self.savedLegalAuthority)
         // A cited case the library doesn't hold must go to the network — a local
         // answer that misses the very authority the user named would be wrong.
+        // Token-aware matching: the user types the SHORT caption ("Peacock v.
+        // Thomas"); the saved record carries the full one.
         if let cite = classification.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines), !cite.isEmpty {
-            let holdsCite = locals.contains { authority in
-                authority.citations.contains { $0.localizedCaseInsensitiveContains(cite) }
-                    || (authority.citation?.localizedCaseInsensitiveContains(cite) ?? false)
-                    || (authority.caseName?.localizedCaseInsensitiveContains(cite) ?? false)
-            }
-            guard holdsCite else { return nil }
+            let holders = locals.filter { LegalCitationMatch.authority($0, matchesLookup: cite) }
+            guard !holders.isEmpty else { return nil }
+            // Held, but with NO persisted opinion text: the grounded filter below
+            // would silently drop the very case the user asked about and answer
+            // from the rest of the library. Go to the network instead, which
+            // retrieves the case, hydrates it, and persists the text back onto
+            // the saved record for next time.
+            guard holders.contains(where: { !($0.text ?? "").isEmpty }) else { return nil }
         }
         let ranked = LegalAuthorityRanker.rank(locals, for: classification)
         let grounded = ranked.filter { !($0.authority.text ?? "").isEmpty }
@@ -1946,7 +1981,36 @@ public final class GlobalChatController: ObservableObject {
     }
 
     private func courtListenerRequest(for classification: LegalQueryClassification, adverse: Bool) -> CourtListenerSearchRequest {
-        CourtListenerSearchRequest(
+        // A request that NAMES a specific case must not be court- or date-bounded:
+        // those filters bound TOPICAL searches, but the named case pins itself —
+        // an out-of-forum cite (sister state, another circuit) would otherwise be
+        // structurally unretrievable, and a "recent"-triggered date floor would
+        // filter out the very (older) case being asked about. Case names go to
+        // the case_name parameter; reporter cites to the citation filter.
+        // Only a lookup that pins a specific CASE (a caption or reporter cite)
+        // unbounds the request — a §-statute cite is a topic, not a case, and
+        // keeps the forum-bounded search below.
+        if !adverse,
+           let lookup = classification.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !lookup.isEmpty,
+           LegalCitationMatch.isCaseNameLookup(lookup) || Self.courtListenerCitationParameter(lookup) != nil {
+            let isName = LegalCitationMatch.isCaseNameLookup(lookup)
+            // "Rush v. Savchuk, 444 U.S. 320" splits into name + reporter cite.
+            let nameOnly = lookup.replacingOccurrences(
+                of: #",\s*\d.*$"#,
+                with: "",
+                options: .regularExpression
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            let reporterTail = lookup.range(of: #"\d{1,4}\s+[A-Za-z. ]{1,30}\s+\d{1,5}\s*$"#, options: .regularExpression)
+                .map { String(lookup[$0]) }
+            return CourtListenerSearchRequest(
+                query: courtListenerQuery(for: classification, adverse: false),
+                orderBy: "score desc",
+                citation: isName ? reporterTail : Self.courtListenerCitationParameter(lookup),
+                caseName: isName ? nameOnly : nil
+            )
+        }
+        return CourtListenerSearchRequest(
             query: courtListenerQuery(for: classification, adverse: adverse),
             orderBy: "score desc",
             courtIDs: classification.courtIDs,

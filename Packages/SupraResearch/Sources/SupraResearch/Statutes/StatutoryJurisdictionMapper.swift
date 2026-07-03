@@ -32,6 +32,41 @@ public enum StatutoryJurisdictionMapper {
         federalUSCTitles(in: text).first
     }
 
+    /// Resolves a state reference as it appears in a citation — full name
+    /// ("Florida"), postal code ("FL"), or Bluebook abbreviation ("Fla.",
+    /// "N.Y.", "W. Va.") — to a two-letter postal code.
+    public static func postalCode(forStateReference reference: String) -> String? {
+        if let direct = postalCode(forJurisdiction: reference) { return direct }
+        let key = reference.lowercased().filter(\.isLetter)
+        guard !key.isEmpty else { return nil }
+        // Many Bluebook forms reduce to the postal code once periods are
+        // stripped ("Ga." → "ga", "N.Y." → "ny"); the rest are in the table.
+        if let stripped = postalCode(forJurisdiction: key) { return stripped }
+        return bluebookStateToPostal[key]
+    }
+
+    /// Bluebook table T10 state abbreviations, keyed with periods/spaces stripped.
+    private static let bluebookStateToPostal: [String: String] = [
+        "ala": "AL", "ariz": "AZ", "ark": "AR", "cal": "CA", "colo": "CO",
+        "conn": "CT", "del": "DE", "fla": "FL", "haw": "HI", "ill": "IL",
+        "ind": "IN", "kan": "KS", "mass": "MA", "mich": "MI", "minn": "MN",
+        "miss": "MS", "mont": "MT", "neb": "NE", "nev": "NV", "okla": "OK",
+        "tenn": "TN", "tex": "TX", "wash": "WA", "wva": "WV", "wis": "WI",
+        "wisc": "WI", "wyo": "WY"
+    ]
+
+    /// Whether the query itself cites FEDERAL law (U.S.C. or C.F.R.). A federal
+    /// cite must reach the federal sources even when the matter sits in a state
+    /// jurisdiction — state matters raise federal questions constantly.
+    public static func referencesFederalLaw(citation: String?, terms: String) -> Bool {
+        let combined = [citation, terms].compactMap { $0 }.joined(separator: " ")
+        if !federalUSCTitles(in: combined).isEmpty { return true }
+        return combined.range(
+            of: #"(?i)\b\d{1,4}\s+c\.?\s?f\.?\s?r\.?\b"#,
+            options: .regularExpression
+        ) != nil
+    }
+
     static func federalUSCTitles(in text: String) -> [Int] {
         guard let regex = try? NSRegularExpression(pattern: #"(?i)\b(\d{1,2})\s+U\.?\s?S\.?\s?C\.?"#) else { return [] }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)

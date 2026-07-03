@@ -460,7 +460,60 @@ public enum LegalCitationVerifier {
             code: "cfr"
         )
         keys += providerLocatorStatutoryKeys(in: value)
+        keys += stateStatutoryKeys(in: value)
         return Array(Set(keys))
+    }
+
+    /// State-code cites: the answer's Bluebook form ("Fla. Stat. § 768.28",
+    /// "Cal. Civ. Code § 1942") and the packet's provider label ("Florida
+    /// Statutes § 768.28", "California Civil Code § 1942") must normalize to the
+    /// SAME key, or every correctly-cited state statute reads as unsupported.
+    private static func stateStatutoryKeys(in value: String) -> [StatutoryCitationKey] {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"\b([A-Z][A-Za-z.]*(?:\s+[A-Z][A-Za-z.]*)?)\s+((?:[A-Za-z&.']{1,14}\s+){0,3}?)(Stats?\.?|Statutes|Codes?|Laws?)(?:\s+Ann\.?)?\s*§+\s*([\w().-]+)"#
+        ) else { return [] }
+        let nsRange = NSRange(value.startIndex..<value.endIndex, in: value)
+        return regex.matches(in: value, range: nsRange).compactMap { match in
+            guard match.numberOfRanges >= 5,
+                  let stateRange = Range(match.range(at: 1), in: value),
+                  let middleRange = Range(match.range(at: 2), in: value),
+                  let nounRange = Range(match.range(at: 3), in: value),
+                  let sectionRange = Range(match.range(at: 4), in: value)
+            else { return nil }
+            let stateWords = String(value[stateRange]).split(separator: " ").map(String.init)
+            let middleWords = String(value[middleRange]).split(separator: " ").map(String.init)
+
+            // The greedy state group may swallow a code word ("Cal. Civ." before
+            // "Code") — resolve the full reference first, then the first word
+            // alone, treating the leftovers as part of the code name.
+            var postal: String?
+            var extraMiddle: [String] = []
+            if let full = StatutoryJurisdictionMapper.postalCode(forStateReference: stateWords.joined(separator: " ")) {
+                postal = full
+            } else if let firstWord = stateWords.first,
+                      let first = StatutoryJurisdictionMapper.postalCode(forStateReference: firstWord) {
+                postal = first
+                extraMiddle = Array(stateWords.dropFirst())
+            }
+            // Not recognizably a state cite — leave it to the other match paths.
+            guard let postal else { return nil }
+
+            // Code-name words match on 3-letter stems so "Civ." meets "Civil"
+            // and "Gen. Stat." meets "General Statutes".
+            var stems: [String] = []
+            for word in extraMiddle + middleWords {
+                let letters: String = word.lowercased().filter { $0.isLetter }
+                guard letters.count >= 3, letters != "and", letters != "the", letters != "ann" else { continue }
+                stems.append(String(letters.prefix(3)))
+            }
+            let noun = String(value[nounRange]).lowercased()
+            let family = noun.hasPrefix("stat") ? "stat" : (noun.hasPrefix("code") ? "code" : "law")
+            return StatutoryCitationKey(
+                code: "state-\(postal.lowercased())",
+                title: (stems + [family]).joined(),
+                section: canonicalStatutorySection(String(value[sectionRange]))
+            )
+        }
     }
 
     private static func statutoryCitationKeys(in value: String, pattern: String, code: String) -> [StatutoryCitationKey] {

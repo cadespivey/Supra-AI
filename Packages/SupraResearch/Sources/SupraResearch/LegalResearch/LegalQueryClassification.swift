@@ -77,6 +77,8 @@ public enum LegalQueryClassifier {
         let statuteIntent = lower.contains("statute") || lower.contains("code section") || lower.contains("§")
             || lower.contains("u.s.c") || lower.contains("c.f.r") || lower.contains("limitations period")
             || lower.contains("statute of limitations") || lower.contains("deadline")
+            // Lawyers type "18 USC 1001" without periods or § just as often.
+            || firstMatch(#"(?i)\b\d{1,4}\s+(?:u\.?\s?s\.?\s?c\.?(?:a\.?)?|c\.?\s?f\.?\s?r\.?)\b"#, in: prompt) != nil
         let desiredType: LegalAuthorityType
         // Statute intent outranks docket intent: "statute of limitations for a lawsuit
         // against my employer" is a statutory question, not a docket lookup.
@@ -136,13 +138,21 @@ public enum LegalQueryClassifier {
         let patterns = [
             #"(?i)\b\d{1,4}\s+U\.?\s?S\.?\s?C\.?(?:A\.?)?\s*§+\s*[\w().-]+"#,
             #"(?i)\b\d{1,4}\s+C\.?\s?F\.?\s?R\.?\s*§+\s*[\w().-]+"#,
+            // The same federal cites typed without the section sign ("18 USC 1001").
+            #"(?i)\b\d{1,4}\s+U\.?\s?S\.?\s?C\.?(?:A\.?)?\s+\d[\w().-]*"#,
+            #"(?i)\b\d{1,4}\s+C\.?\s?F\.?\s?R\.?\s+\d[\w().-]*"#,
             #"(?i)\b\d{1,4}\s+U\.S\.\s+\d{1,5}\b"#,
             #"(?i)\b\d{1,4}\s+S\.?\s?Ct\.?\s+\d{1,5}\b"#,
             #"(?i)\b\d{1,4}\s+F\.?\s?(?:2d|3d|4th|Supp\.?\s?2d|Supp\.?\s?3d)?\s+\d{1,5}\b"#,
             #"(?i)\b\d{1,4}\s+(?:Cal\.?(?:\s+App\.?)?|N\.Y\.?|So\.?|S\.W\.?|N\.E\.?|P\.?)\s?(?:2d|3d|4th|5th)?\s+\d{1,5}\b"#,
-            #"(?i)\b\d{1,4}\s+[A-Z][A-Za-z. ]{1,30}\s+\d{1,5}\b"#,
+            // Case-SENSITIVE: a generic reporter must look like a reporter
+            // ("532 U. S. 483", "12 Wheat. 19"), or ordinary prose like
+            // "2019 amendments to rule 1.510" becomes a phantom citation that
+            // disables the local tier and poisons downstream requests.
+            #"\b\d{1,4}\s+[A-Z][A-Za-z. ]{1,30}\s+\d{1,5}\b"#,
             #"(?i)\b\d{4}\s+WL\s+\d+\b"#,
             #"\b[A-Z][A-Za-z0-9&'.-]*(?:\s+(?:of|the|and|[A-Z][A-Za-z0-9&'.-]*)){0,5}\s+v\.?\s+[A-Z][A-Za-z0-9&'.-]*(?:\s+(?:of|the|and|[A-Z][A-Za-z0-9&'.-]*)){0,5}(?:,\s+\d{1,4}\s+(?:Cal\.?(?:\s+App\.?)?|[A-Z][A-Za-z. ]{1,30})\s?(?:2d|3d|4th|5th)?\s+\d{1,5})?"#,
+            #"\b(?:In re|Ex parte)\s+[A-Z][A-Za-z0-9&'.-]*(?:\s+(?:of|the|and|[A-Z][A-Za-z0-9&'.-]*)){0,4}"#,
             #"(?i)\b(?:[A-Z][A-Za-z. ]+\s+)?(?:Code|Stat\.?|Rev\. Stat\.?|Civ\. Code|Bus\. & Prof\. Code)\s+§+\s*[\w().-]+"#
         ]
         for pattern in patterns {
@@ -190,8 +200,20 @@ public enum LegalQueryClassifier {
             " on ",
             " under "
         ]
+        // The " re " of an "In re X" / "Ex parte X" caption is part of the case
+        // name, not a tail comment — start the stop-phrase scan past the caption
+        // prefix so "In re Winship" doesn't get cut down to "In".
+        let lower = cleaned.lowercased()
+        let scanStart: String.Index
+        if lower.hasPrefix("in re ") {
+            scanStart = cleaned.index(cleaned.startIndex, offsetBy: "in re ".count)
+        } else if lower.hasPrefix("ex parte ") {
+            scanStart = cleaned.index(cleaned.startIndex, offsetBy: "ex parte ".count)
+        } else {
+            scanStart = cleaned.startIndex
+        }
         for phrase in stopPhrases {
-            if let range = cleaned.range(of: phrase, options: [.caseInsensitive]) {
+            if let range = cleaned.range(of: phrase, options: [.caseInsensitive], range: scanStart..<cleaned.endIndex) {
                 cleaned = String(cleaned[..<range.lowerBound])
                 break
             }

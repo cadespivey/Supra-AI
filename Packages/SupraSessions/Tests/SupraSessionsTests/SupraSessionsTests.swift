@@ -533,7 +533,13 @@ final class SupraSessionsTests: XCTestCase {
 
         XCTAssertEqual(controller.messages.last?.content, "Answer.")
         XCTAssertFalse(court.requests.isEmpty)
-        XCTAssertTrue(court.requests.allSatisfy { !$0.courtIDs.isEmpty })
+        // The cited case pins itself: the citation-first request is deliberately
+        // UNBOUNDED (no court/date filter) with the reporter cite as a filter;
+        // any topical requests stay forum-bounded.
+        let citationRequest = try XCTUnwrap(court.requests.first { $0.citation == "123 F.3d 456" })
+        XCTAssertTrue(citationRequest.courtIDs.isEmpty)
+        XCTAssertNil(citationRequest.dateFiledAfter)
+        XCTAssertTrue(court.requests.filter { $0.citation == nil && $0.caseName == nil }.allSatisfy { !$0.courtIDs.isEmpty })
         XCTAssertFalse(controller.messages.last?.content.contains("I need the jurisdiction") ?? true)
     }
 
@@ -2284,6 +2290,139 @@ final class SupraSessionsTests: XCTestCase {
         let answer = try XCTUnwrap(controller.messages.last?.content)
         XCTAssertFalse(answer.contains("answered from this matter's saved authorities"), answer)
         XCTAssertNil(controller.deeperSearchOffer)
+    }
+
+    func testNamedCaseSavedWithoutTextGoesToNetworkNotLocalTier() async throws {
+        // Regression: a saved-but-TEXTLESS named case passed the holds-the-cite
+        // gate, then the grounded filter silently dropped it — the local tier
+        // answered "from the library" without the very case the user asked about.
+        // The library also holds another case WITH text, which used to make the
+        // local tier look viable.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Adams", jurisdiction: "Florida")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let peacock = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "Peacock v. Thomas"))
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: peacock.id,
+            caseName: "Peacock v. Thomas",
+            citationJSON: #"["516 U.S. 349"]"#,
+            preferredCitation: "516 U.S. 349",
+            court: "Supreme Court of the United States", courtID: "scotus"
+            // No opinionText — metadata-only save.
+        ))
+        let other = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "MacKey v. Lanier Collection Agency"))
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: other.id,
+            caseName: "MacKey v. Lanier Collection Agency & Service, Inc.",
+            citationJSON: #"["486 U.S. 825"]"#,
+            court: "Supreme Court of the United States", courtID: "scotus",
+            opinionText: "ERISA does not bar garnishment of welfare benefit plans."
+        ))
+
+        let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Answer."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id), courtListenerClient: court)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What is the holding of Peacock v. Thomas?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+
+        // The send must fall through to the network (which retrieves + hydrates
+        // the named case) instead of answering locally without it.
+        XCTAssertFalse(court.requests.isEmpty, "expected a network search, got a local-tier answer")
+        // And the citation-first request must target the named case, unbounded.
+        let named = try XCTUnwrap(court.requests.first { $0.caseName?.contains("Peacock") == true })
+        XCTAssertTrue(named.courtIDs.isEmpty)
+        XCTAssertNil(named.dateFiledAfter)
+        XCTAssertNil(named.dateFiledBefore)
+    }
+
+    func testNamedCaseHeldWithTextStillAnswersLocally() async throws {
+        // The complement: when the named case IS saved with opinion text, the
+        // local tier answers with no network call, and short-name matching finds
+        // the full stored caption.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Adams", jurisdiction: "Florida")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "Sniadach"))
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id,
+            caseName: "Sniadach v. Family Finance Corp. of Bay View",
+            citationJSON: #"["395 U.S. 337"]"#,
+            court: "Supreme Court of the United States", courtID: "scotus",
+            opinionText: "Prejudgment wage garnishment without notice and a prior hearing violates procedural due process."
+        ))
+        let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Sniadach held prejudgment garnishment without a hearing unconstitutional [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id), courtListenerClient: court)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What is the holding of Sniadach v. Family Finance?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+
+        XCTAssertTrue(court.requests.isEmpty, "local-first answer must not touch the network")
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertTrue(answer.contains("Sniadach"), answer)
+        XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
+    func testDeepTierFallsBackToSavedAuthoritiesWhenNetworkFails() async throws {
+        // Deep tier skips the local library by design — but when CourtListener is
+        // down or rate-limited, a grounded local answer beats a dead send.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Adams", jurisdiction: "Florida")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "Rush v. Savchuk"))
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id,
+            caseName: "Rush v. Savchuk",
+            citationJSON: #"["444 U.S. 320"]"#,
+            court: "Supreme Court of the United States", courtID: "scotus",
+            opinionText: "Quasi in rem jurisdiction cannot rest on the presence of the defendant's insurer."
+        ))
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Rush v. Savchuk rejected insurer-based quasi in rem jurisdiction [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(
+            store: store,
+            runtimeClient: runtime,
+            scope: .matter(id: matter.id),
+            courtListenerClient: StubCourtListenerClient(shouldFail: true)
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What is the holding of Rush v. Savchuk?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route,
+            researchDepth: .deep
+        )
+
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertEqual(controller.messages.last?.status, .completed, answer)
+        XCTAssertTrue(answer.contains("quasi in rem"), answer)
     }
 
     // MARK: - Authority library (WO 27)

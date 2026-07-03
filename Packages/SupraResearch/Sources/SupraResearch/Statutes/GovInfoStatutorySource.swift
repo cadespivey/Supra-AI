@@ -23,12 +23,27 @@ public struct GovInfoStatutorySource: StatutorySource {
     }
 
     public func lookup(_ query: StatutoryQuery) async -> StatutoryLookupResult {
+        // A U.S.C./C.F.R. cite in the question must reach this federal source even
+        // when the matter sits in a state — state matters raise federal questions.
+        let citesFederalLaw = StatutoryJurisdictionMapper.referencesFederalLaw(
+            citation: query.citation,
+            terms: query.terms
+        )
         if let jurisdiction = query.jurisdiction,
-           StatutoryJurisdictionMapper.postalCode(forJurisdiction: jurisdiction) != nil {
+           StatutoryJurisdictionMapper.postalCode(forJurisdiction: jurisdiction) != nil,
+           !citesFederalLaw {
             return StatutoryLookupResult()   // a specific state — govinfo USCODE is federal
         }
+        // An exact federal cite is a far better search term than the literal
+        // question text — search for the SECTION, not the sentence around it.
+        // Only the citation FIELD qualifies (the terms may cite federal law while
+        // the citation is a state code, which would send govinfo a state cite).
+        let citationTerm = query.citation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let citationIsFederal = !citationTerm.isEmpty
+            && StatutoryJurisdictionMapper.referencesFederalLaw(citation: citationTerm, terms: "")
+        let term = citationIsFederal ? citationTerm : query.terms
         do {
-            let response = try await client.searchUSCode(term: query.terms, limit: query.limit)
+            let response = try await client.searchUSCode(term: term, limit: query.limit)
             var provisions: [StatutoryProvision] = []
             var fetchedText = 0
             for result in response.results.prefix(query.limit) {

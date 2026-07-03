@@ -856,7 +856,14 @@ struct GlobalChatsView: View {
     private func searchDeeper(_ offer: GlobalChatController.DeeperSearchOffer) {
         guard !controller.isGenerating else { return }
         let router = ModelRouter(configuration: .fromEnvironment())
-        let routed = router.routePrompt(offer.question)
+        var routed = router.routePrompt(offer.question)
+        // A research offer re-runs a question that ALREADY went through the
+        // grounded legal workflow. Keyword re-routing would silently downgrade a
+        // marker-free follow-up ("what about the dissent?") to an ungrounded
+        // general answer — the opposite of what the button promises.
+        if offer.kind == .research, routed.command == nil {
+            routed.route = router.route(for: .legalResearch)
+        }
         Task { @MainActor in
             var modelID: ModelID?
             if controller.requiresRuntimeModel(for: routed) {
