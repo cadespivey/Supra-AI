@@ -2425,6 +2425,267 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(answer.contains("quasi in rem"), answer)
     }
 
+    func testFollowUpInheritsNamedCaseAndSurvivesJurisdictionGate() async throws {
+        // Turn 1 asks about a named out-of-forum (11th Cir.) case in a Florida
+        // matter and answers fine (named-case exemption). Turn 2 — "what about
+        // the dissent?" — used to re-classify from scratch: no citation lookup,
+        // so the matter forum quarantined the same discussion one turn later.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Adams", jurisdiction: "Florida")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "SunTrust"))
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id,
+            caseName: "SunTrust Bank v. Houghton Mifflin Co.",
+            citationJSON: #"["268 F.3d 1257"]"#,
+            court: "United States Court of Appeals for the Eleventh Circuit", courtID: "ca11",
+            opinionText: "The panel majority vacated the preliminary injunction as an unconstitutional prior restraint; the dissent would have enforced the copyright."
+        ))
+        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "In SunTrust Bank v. Houghton Mifflin Co., the dissent would have enforced the copyright [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What is the holding of SunTrust Bank v. Houghton Mifflin Co.?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+        let first = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertFalse(first.contains("I cannot provide a source-grounded legal answer"), first)
+
+        await controller.performSend(
+            prompt: "What about the dissent in that case?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+        let second = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertFalse(second.contains("I cannot provide a source-grounded legal answer"), second)
+        XCTAssertFalse(second.contains("jurisdiction_mismatch"), second)
+        XCTAssertTrue(second.contains("dissent"), second)
+        XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
+    func testDeadlineQuestionWithoutStatutoryHitAnswersFromCaseLawWithCaveat() async throws {
+        // "Deadline"-type wording marks primary law as required, but when no
+        // statutory source returns citable text the send used to hard-block
+        // before ANY case-law retrieval. It must now continue on case law,
+        // led by a prominent primary-law caveat.
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Courts require a response within the rule's period. Foo v. Bar [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, courtListenerClient: court)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What is the deadline to respond to a garnishment complaint in Florida?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertFalse(answer.contains("could not retrieve the governing primary law"), answer)
+        XCTAssertTrue(answer.contains("Primary law not retrieved"), answer)
+        XCTAssertTrue(answer.contains("Foo v. Bar"), answer)
+        XCTAssertFalse(court.requests.isEmpty, "case-law retrieval must run despite the statutory miss")
+    }
+
+    func testStatutoryCitationQuestionStillHardBlocksWhenUnretrievable() async throws {
+        // The complement: a question that PINPOINTS a provision can only be
+        // answered by quoting it — with no citable statutory text the hard
+        // block stays.
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Answer."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What does 18 U.S.C. § 1001 require?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertTrue(answer.contains("could not retrieve the governing primary law"), answer)
+    }
+
+    func testVerifyAfterRestartChecksQuotesAgainstRehydratedText() async throws {
+        // Persisted packets strip opinion text (audit-safe), so a /verify run in
+        // a NEW app session used to false-flag genuine quotes as unsupported.
+        // Rehydration must refill text from the matter's saved authorities.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Adams", jurisdiction: "Florida")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "Sniadach"))
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id,
+            caseName: "Sniadach v. Family Finance Corp. of Bay View",
+            citationJSON: #"["395 U.S. 337"]"#,
+            court: "Supreme Court of the United States", courtID: "scotus",
+            opinionText: "We hold that prejudgment wage garnishment without notice and a prior hearing violates procedural due process."
+        ))
+        let researchRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "Sniadach v. Family Finance Corp. held that \"prejudgment wage garnishment without notice and a prior hearing violates procedural due process\" [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let first = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        first.loadChats()
+        await first.performSend(
+            prompt: "What is the holding of Sniadach v. Family Finance Corp.?",
+            modelID: ModelID(), systemPrompt: researchRoute.systemPrompt, options: researchRoute.options, route: researchRoute
+        )
+        XCTAssertEqual(first.messages.last?.status, .completed)
+
+        // "Restart": a fresh controller over the same store has no in-memory
+        // packet and must verify against the persisted (text-stripped) one.
+        let verifyRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalVerify)
+        let second = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        second.loadChats()
+        await second.performSend(
+            prompt: "",
+            modelID: ModelID(), systemPrompt: verifyRoute.systemPrompt, options: verifyRoute.options, route: verifyRoute
+        )
+
+        let report = try XCTUnwrap(second.messages.last?.content)
+        XCTAssertFalse(report.contains("unsupported_quote"), report)
+        XCTAssertFalse(report.contains("unverifiable_quote"), report)
+        XCTAssertTrue(report.contains("Verification passed"), report)
+    }
+
+    func testNamedCaseInheritanceGuards() {
+        func user(_ text: String) -> GenerateRequest.Turn { .init(role: .user, content: text) }
+        let followUp = LegalQueryClassifier.classify("What about the dissent?")
+        XCTAssertNil(followUp.citationLookup)
+
+        // Inherits the prior USER turn's case for a true anaphoric follow-up.
+        let inherited = GlobalChatController.classificationInheritingNamedCase(
+            followUp, prompt: "What about the dissent?",
+            history: [user("What is the holding of Rush v. Savchuk?")]
+        )
+        XCTAssertEqual(inherited.citationLookup, "Rush v. Savchuk")
+
+        // Topical phrasing ("where the holding turned on…") must NOT inherit —
+        // a misfire would pin the question to an old case and relax checks.
+        let topical = LegalQueryClassifier.classify("Find cases where the holding turned on lack of notice")
+        let unchanged = GlobalChatController.classificationInheritingNamedCase(
+            topical, prompt: "Find cases where the holding turned on lack of notice",
+            history: [user("What is the holding of Rush v. Savchuk?")]
+        )
+        XCTAssertNil(unchanged.citationLookup)
+
+        // A statute cite is not a named CASE — inheriting it would reroute a
+        // case follow-up into the primary-law pipeline.
+        let afterStatute = GlobalChatController.classificationInheritingNamedCase(
+            followUp, prompt: "What about the dissent?",
+            history: [user("What is 18 U.S.C. § 1001?")]
+        )
+        XCTAssertNil(afterStatute.citationLookup)
+
+        // Depth cap: a citation three user turns back is stale context.
+        let stale = GlobalChatController.classificationInheritingNamedCase(
+            followUp, prompt: "What about the dissent?",
+            history: [
+                user("What is the holding of Rush v. Savchuk?"),
+                user("Thanks."),
+                user("Now check the local rules on responses.")
+            ]
+        )
+        XCTAssertNil(stale.citationLookup)
+
+        // A follow-up that names its own authority keeps it.
+        let named = LegalQueryClassifier.classify("What about the dissent in Peacock v. Thomas?")
+        let kept = GlobalChatController.classificationInheritingNamedCase(
+            named, prompt: "What about the dissent in Peacock v. Thomas?",
+            history: [user("What is the holding of Rush v. Savchuk?")]
+        )
+        XCTAssertEqual(kept.citationLookup, named.citationLookup)
+    }
+
+    func testStatutoryCitationTargetShapes() {
+        XCTAssertTrue(GlobalChatController.isStatutoryCitationTarget("42 U.S.C. § 1651"))
+        XCTAssertTrue(GlobalChatController.isStatutoryCitationTarget("Fla. Stat. § 95.11"))
+        XCTAssertTrue(GlobalChatController.isStatutoryCitationTarget("Florida Statutes section 95.11"))
+        XCTAssertTrue(GlobalChatController.isStatutoryCitationTarget("18 USC 1001"))
+        XCTAssertFalse(GlobalChatController.isStatutoryCitationTarget("Mullane v. Central Hanover Bank & Trust Co."))
+        XCTAssertFalse(GlobalChatController.isStatutoryCitationTarget("444 U.S. 320"))
+    }
+
+    func testStrippingAssistantFurnitureRemovesAppLinesOnly() {
+        let stored = """
+        > ⚠️ **Primary law not retrieved.** This question likely turns on a statute.
+        >
+        > Retrieval notes: No statutory or regulatory source is configured.
+
+        The court held the clause enforceable. Foo v. Bar [A1].
+
+        _Preliminary — answered from this matter's saved authorities. Use “Search CourtListener” below for a wider search._
+        """
+        let stripped = GlobalChatController.strippingAssistantFurniture(stored)
+        XCTAssertEqual(stripped, "The court held the clause enforceable. Foo v. Bar [A1].")
+    }
+
+    func testAnaphoricStatuteFlavoredFollowUpSoftContinuesLocally() async throws {
+        // Composed regression (review finding): turn 2 "when did the limitations
+        // period run in that case?" inherits a CASE caption while "limitations
+        // period" marks primary law required. The caption is not a statutory
+        // target, so the send must soft-continue from the matter's saved case —
+        // not hard-refuse for missing statutory text.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Adams", jurisdiction: "Florida")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "SunTrust"))
+        _ = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id,
+            caseName: "SunTrust Bank v. Houghton Mifflin Co.",
+            citationJSON: #"["268 F.3d 1257"]"#,
+            court: "United States Court of Appeals for the Eleventh Circuit", courtID: "ca11",
+            opinionText: "The panel discussed the limitations period applicable to the copyright claim and vacated the injunction."
+        ))
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "In SunTrust Bank v. Houghton Mifflin Co., the limitations discussion was dictum [A1]."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What is the holding of SunTrust Bank v. Houghton Mifflin Co.?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+        await controller.performSend(
+            prompt: "When did the limitations period run in that case?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+        )
+
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertFalse(answer.contains("could not retrieve the governing primary law"), answer)
+        XCTAssertTrue(answer.contains("Primary law not retrieved"), answer)
+        XCTAssertTrue(answer.contains("SunTrust"), answer)
+        XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
     // MARK: - Authority library (WO 27)
 
     func testAuthorityUseStatusTransitionsEnforcedAndAudited() throws {

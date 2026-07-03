@@ -99,6 +99,18 @@ final class GroundedRetrievalHardeningTests: XCTestCase {
         XCTAssertNil(damages.citationLookup)
     }
 
+    func testSpelledOutSectionCitationIsExtracted() {
+        // "Florida Statutes section 95.11" (no §) must be a citation lookup so a
+        // question pinpointing it is treated as statutory; bare "code section"
+        // prose without a number must not be.
+        let spelled = LegalQueryClassifier.classify("What does Florida Statutes section 95.11 provide?")
+        XCTAssertEqual(spelled.citationLookup, "Florida Statutes section 95.11")
+        XCTAssertEqual(spelled.desiredAuthorityType, .statute)
+
+        let prose = LegalQueryClassifier.classify("Does the code section apply here?")
+        XCTAssertNil(prose.citationLookup)
+    }
+
     func testInReCitationExtractionSurvivesTailTrimming() {
         // " re " is a stop-phrase for tail comments — it must not truncate an
         // "In re" caption to "In".
@@ -190,6 +202,34 @@ final class GroundedRetrievalHardeningTests: XCTestCase {
         let answer = "The limitations period is four years. (Fla. Stat. § 95.11) [A1]"
         let report = LegalCitationVerifier.verify(answer: answer, authorities: [authority], expectedJurisdiction: nil)
         XCTAssertTrue(report.issues.contains { $0.kind == .unsupportedCitation }, "\(report.issues)")
+    }
+
+    // MARK: - Quote checks on text-less packets
+
+    func testQuoteAgainstTextlessPacketIsUnverifiableNotFabricated() {
+        // A packet restored after an app restart carries no opinion text; a
+        // genuine quote must be reported "unverifiable", never "fabricated".
+        let bare = LegalAuthority(
+            id: "1",
+            source: .courtlistener,
+            authorityType: .case,
+            caseName: "Sniadach v. Family Finance Corp.",
+            citation: "395 U.S. 337",
+            citations: ["395 U.S. 337"]
+        )
+        let answer = "The Court held that \"prejudgment garnishment without notice violates due process\" (Sniadach v. Family Finance Corp.) [A1]."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [bare], expectedJurisdiction: nil)
+        XCTAssertTrue(report.issues.contains { $0.kind == .unverifiableQuote }, "\(report.issues)")
+        XCTAssertFalse(report.issues.contains { $0.kind == .unsupportedQuote }, "\(report.issues)")
+    }
+
+    func testFabricatedQuoteStillFlaggedWhenTextIsPresent() {
+        var grounded = caseAuthority(name: "Sniadach v. Family Finance Corp.", citations: ["395 U.S. 337"])
+        grounded.text = String(repeating: "The wage garnishment procedure at issue denied the debtor notice and a prior hearing. ", count: 5)
+        let answer = "The Court held that \"a completely invented sentence that appears nowhere\" (Sniadach v. Family Finance Corp.) [A1]."
+        let report = LegalCitationVerifier.verify(answer: answer, authorities: [grounded], expectedJurisdiction: nil)
+        XCTAssertTrue(report.issues.contains { $0.kind == .unsupportedQuote }, "\(report.issues)")
+        XCTAssertFalse(report.issues.contains { $0.kind == .unverifiableQuote }, "\(report.issues)")
     }
 
     func testStateReferenceResolution() {

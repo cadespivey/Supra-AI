@@ -4,6 +4,10 @@ public enum LegalVerificationIssueKind: String, Codable, Hashable, Sendable {
     case unsupportedCitation = "unsupported_citation"
     case missingCitation = "missing_citation"
     case unsupportedQuote = "unsupported_quote"
+    /// A quotation that could not be CHECKED because the packet carries no opinion
+    /// text to search (e.g. a packet restored after an app restart, which is
+    /// persisted without text). Soft: "unverified", never "fabricated".
+    case unverifiableQuote = "unverifiable_quote"
     case jurisdictionMismatch = "jurisdiction_mismatch"
     case noRetrievedAuthorities = "no_retrieved_authorities"
     /// A person/entity name, email, or phone number asserted in a document-grounded
@@ -85,14 +89,27 @@ public enum LegalCitationVerifier {
         let authorityText = authorities.map {
             [$0.text, $0.snippet, $0.caseName, $0.citation, $0.url].compactMap { $0 }.joined(separator: "\n")
         }.joined(separator: "\n\n")
+        // A quote can only be REFUTED against opinion text/snippets. A packet
+        // restored without text (persisted packets are audit-safe) makes every
+        // quote uncheckable — report that honestly instead of "fabricated".
+        let quotesAreCheckable = authorities.contains {
+            ($0.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                || ($0.snippet?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+        }
         for quote in extractQuotedText(from: answer) where quote.count >= 12 {
             if !authorityText.localizedCaseInsensitiveContains(quote) {
                 issues.append(
-                    LegalVerificationIssue(
-                        kind: .unsupportedQuote,
-                        message: "Quoted text does not appear verbatim in the retrieved source packet.",
-                        excerpt: quote
-                    )
+                    quotesAreCheckable
+                        ? LegalVerificationIssue(
+                            kind: .unsupportedQuote,
+                            message: "Quoted text does not appear verbatim in the retrieved source packet.",
+                            excerpt: quote
+                        )
+                        : LegalVerificationIssue(
+                            kind: .unverifiableQuote,
+                            message: "The source packet carries no opinion text to check this quotation against, so it is UNVERIFIED (not necessarily fabricated). Re-run /research or open the cited authority to restore its text, then /verify again.",
+                            excerpt: quote
+                        )
                 )
             }
         }

@@ -153,7 +153,11 @@ public enum LegalQueryClassifier {
             #"(?i)\b\d{4}\s+WL\s+\d+\b"#,
             #"\b[A-Z][A-Za-z0-9&'.-]*(?:\s+(?:of|the|and|[A-Z][A-Za-z0-9&'.-]*)){0,5}\s+v\.?\s+[A-Z][A-Za-z0-9&'.-]*(?:\s+(?:of|the|and|[A-Z][A-Za-z0-9&'.-]*)){0,5}(?:,\s+\d{1,4}\s+(?:Cal\.?(?:\s+App\.?)?|[A-Z][A-Za-z. ]{1,30})\s?(?:2d|3d|4th|5th)?\s+\d{1,5})?"#,
             #"\b(?:In re|Ex parte)\s+[A-Z][A-Za-z0-9&'.-]*(?:\s+(?:of|the|and|[A-Z][A-Za-z0-9&'.-]*)){0,4}"#,
-            #"(?i)\b(?:[A-Z][A-Za-z. ]+\s+)?(?:Code|Stat\.?|Rev\. Stat\.?|Civ\. Code|Bus\. & Prof\. Code)\s+§+\s*[\w().-]+"#
+            // "section" spelled out counts too ("Florida Statutes section 95.11")
+            // but only with a numbered section — "the code section applies" is
+            // prose. The code-name prefix is case-SENSITIVE (Capitalized words
+            // only) so leading question words can't be swallowed into the cite.
+            #"(?i)\b(?:(?-i:[A-Z][A-Za-z.]*)(?:\s+(?-i:[A-Z][A-Za-z.]*)){0,3}\s+)?(?:Statutes|Stats?\.?|Codes?|Laws?|Rev\. Stat\.?|Civ\. Code|Bus\. & Prof\. Code)\s+(?:§+\s*[\w().-]+|section\s+\d[\w().-]*)"#
         ]
         for pattern in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }

@@ -1076,7 +1076,13 @@ public final class GlobalChatController: ObservableObject {
             let typedIsContent = !typed.isEmpty
                 && (typed.range(of: #"\[[AS]\d+\]"#, options: .regularExpression) != nil
                     || !LegalCitationVerifier.extractCitationLikeStrings(from: typed).isEmpty)
-            let answerToVerify = typedIsContent ? typed : (priorDraft.isEmpty ? typed : priorDraft)
+            // Strip app-appended furniture (the local-first "Preliminary" footer)
+            // before verifying: its own wording reads as an uncited proposition
+            // with a quoted button label, so /verify would flag the app, not the
+            // answer.
+            let answerToVerify = Self.strippingAssistantFurniture(
+                typedIsContent ? typed : (priorDraft.isEmpty ? typed : priorDraft)
+            )
 
             // A document-grounded answer cites [S#] document sources, not the [A#]
             // legal-authority packet; checking it against a (possibly stale) CourtListener
@@ -1090,7 +1096,10 @@ public final class GlobalChatController: ObservableObject {
                 )
             }
 
-            let packet = latestLegalSourcePacket(chatID: chatID)
+            // Persisted packets are audit-safe (opinion text stripped), so after an
+            // app restart the quote check would have nothing to search. Refill text
+            // from the matter's saved authorities, then a capped network fetch.
+            let packet = await rehydratedForVerification(latestLegalSourcePacket(chatID: chatID))
             let report = LegalCitationVerifier.verify(answer: answerToVerify, authorities: packet.authorities)
             let preface = packet.authorities.isEmpty
                 ? "No source packet is available for this chat. Run `/research` in a matter chat first, or paste source-supported text with citations for a limited citation check.\n\n"
@@ -1201,8 +1210,17 @@ public final class GlobalChatController: ObservableObject {
         // would otherwise hijack the citation lookup, authority type, and search
         // terms. The full prompt (with attachments) still drives generation.
         let questionForClassification = classificationText ?? prompt
+        // An anaphoric follow-up ("what about the dissent?") is still about the
+        // case named earlier — inherit that citation so retrieval targets the
+        // case (instead of searching the follow-up's words) and the named-case
+        // verification exemption survives the turn.
+        let baseClassification = Self.classificationInheritingNamedCase(
+            LegalQueryClassifier.classify(questionForClassification),
+            prompt: questionForClassification,
+            history: history
+        )
         let scopedClassification = classificationApplyingChatJurisdiction(
-            classificationApplyingMatterScope(LegalQueryClassifier.classify(questionForClassification)),
+            classificationApplyingMatterScope(baseClassification),
             prompt: questionForClassification,
             history: history
         )
@@ -1241,10 +1259,26 @@ public final class GlobalChatController: ObservableObject {
             ? await statutoryProvisions(for: sourcePlan)
             : ([], [])
         let citableStatutoryProvisions = statutoryLookup.provisions.filter(\.isCitableAuthority)
+        var primaryLawCaveat: String?
         if sourcePlan.requiresPrimaryLaw, citableStatutoryProvisions.isEmpty {
-            let terms = [sourcePlan.primaryLawQueryTerms].filter { !$0.isEmpty }
-            let output = Self.missingPrimaryLawMessage(plan: sourcePlan, notes: statutoryLookup.notes)
-            return LegalWorkflowResult(output: output, queryTerms: terms, authorities: [], verification: nil, researchSessionID: nil)
+            // A question that PINPOINTS primary law ("what does 18 U.S.C. § 1001
+            // require?", a named federal scheme) can only be answered by quoting
+            // that law — answering around a missing provision would fabricate
+            // statutory text, so it stays hard-blocked. A question that merely
+            // SOUNDS statutory ("what's the deadline to respond?") continues on
+            // retrieved case law, prominently caveated: a grounded case-law
+            // answer beats a refusal, but it must never read as the statute.
+            // The target must itself be STATUTORY-shaped: a case caption riding
+            // in citationLookup ("the notice deadline in Mullane v. Central
+            // Hanover") pinpoints a case, not a provision.
+            let citationTarget = (sourcePlan.primaryLawCitationQuery ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !citationTarget.isEmpty, Self.isStatutoryCitationTarget(citationTarget) {
+                let terms = [sourcePlan.primaryLawQueryTerms].filter { !$0.isEmpty }
+                let output = Self.missingPrimaryLawMessage(plan: sourcePlan, notes: statutoryLookup.notes)
+                return LegalWorkflowResult(output: output, queryTerms: terms, authorities: [], verification: nil, researchSessionID: nil)
+            }
+            primaryLawCaveat = Self.primaryLawUnavailableCaveat(notes: sourcePlan.notes + statutoryLookup.notes)
         }
 
         // Local-first research (spec §4.1/§4.4, locked §8.5): with ≥1 saved authority,
@@ -1417,6 +1451,12 @@ public final class GlobalChatController: ObservableObject {
             deeperSearchOffer = DeeperSearchOffer(kind: .research, chatID: chatID, question: prompt)
         }
 
+        // The caveat leads the answer — the reader must see "no primary law was
+        // retrieved" before any case-law discussion of a deadline or requirement.
+        if let primaryLawCaveat {
+            output = primaryLawCaveat + "\n\n" + output
+        }
+
         return LegalWorkflowResult(
             output: output,
             queryTerms: queryTerms,
@@ -1424,6 +1464,25 @@ public final class GlobalChatController: ObservableObject {
             verification: verification,
             researchSessionID: retrieval.researchSessionID
         )
+    }
+
+    /// Removes app-appended lines from a stored assistant answer before /verify
+    /// re-checks it. The local-first "Preliminary" footer, the "⚠️" banners
+    /// (primary-law caveat, unverified-draft), and their blockquote continuation
+    /// lines are the APP talking, not the model citing law — left in, their
+    /// quoted labels and uncited sentences false-flag every /verify.
+    static func strippingAssistantFurniture(_ answer: String) -> String {
+        answer
+            .components(separatedBy: .newlines)
+            .filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return !trimmed.hasPrefix("_Preliminary — answered from")
+                    && !trimmed.hasPrefix("> ⚠️")
+                    && !trimmed.hasPrefix("> Retrieval notes:")
+                    && trimmed != ">"
+            }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Banner prepended to a legal answer whose citations failed verification, so
@@ -1439,6 +1498,29 @@ public final class GlobalChatController: ObservableObject {
 
         \(LegalCitationVerifier.markdownReport(report))
         """
+    }
+
+    /// Whether a primary-law citation target actually names STATUTORY law
+    /// (U.S.C./C.F.R./§/a statutes-or-code reference) as opposed to a case
+    /// caption or reporter cite that rode in through `citationLookup`.
+    static func isStatutoryCitationTarget(_ target: String) -> Bool {
+        let lower = target.lowercased()
+        if lower.contains("§") || lower.contains("u.s.c") || lower.contains("c.f.r") { return true }
+        if lower.range(of: #"(?i)\b\d{1,4}\s+(?:u\.?\s?s\.?\s?c\.?|c\.?\s?f\.?\s?r\.?)\b"#, options: .regularExpression) != nil { return true }
+        return lower.range(of: #"(?i)\b(?:stat(?:s\.|utes|\.)|code)\b"#, options: .regularExpression) != nil
+    }
+
+    /// Leads a case-law-only answer to a question that SOUNDED statutory
+    /// ("deadline", "notice requirement") when no citable primary law could be
+    /// retrieved. The soft complement to `missingPrimaryLawMessage`, which stays
+    /// a hard block for questions that pinpoint a specific provision.
+    static func primaryLawUnavailableCaveat(notes: [String]) -> String {
+        var caveat = "> ⚠️ **Primary law not retrieved.** This question likely turns on a statute, rule, or regulation, but no citable primary-law text could be retrieved, so the answer below is grounded in retrieved case law only. Verify the controlling statute or rule before relying on any deadline, limitations period, or filing requirement."
+        let meaningful = notes.filter { !$0.isEmpty }
+        if !meaningful.isEmpty {
+            caveat += "\n>\n> Retrieval notes: " + meaningful.joined(separator: "; ")
+        }
+        return caveat
     }
 
     static func missingPrimaryLawMessage(plan: LegalResearchSourcePlan, notes: [String]) -> String {
@@ -1484,9 +1566,10 @@ public final class GlobalChatController: ObservableObject {
                 return true
             case .jurisdictionMismatch:
                 return route.requiresJurisdiction
-            case .missingCitation, .noRetrievedAuthorities, .ungroundedEntity:
-                // .ungroundedEntity is a soft "shown but unverified" warning, never a
-                // hard failure that would trigger self-repair.
+            case .missingCitation, .noRetrievedAuthorities, .ungroundedEntity, .unverifiableQuote:
+                // .ungroundedEntity and .unverifiableQuote are soft "shown but
+                // unverified" warnings, never hard failures that would trigger
+                // self-repair or quarantine.
                 return false
             }
         }.count
@@ -2087,6 +2170,63 @@ public final class GlobalChatController: ObservableObject {
             ?? LegalSourcePacket(queryTerms: [], authorities: [], researchSessionID: nil)
     }
 
+    /// Refills opinion text on a packet restored without it (persisted packets are
+    /// audit-safe), so `/verify` can actually check quotes after an app restart.
+    /// Saved matter authorities first — offline and free — then a capped
+    /// CourtListener fetch for authorities the library doesn't hold.
+    private func rehydratedForVerification(_ packet: LegalSourcePacket) async -> LegalSourcePacket {
+        var authorities = packet.authorities
+        guard authorities.contains(where: { ($0.text ?? "").isEmpty }) else { return packet }
+        let saved: [AuthorityRecord] = scopedMatterID
+            .flatMap { try? store.authorities.fetchAuthorities(matterID: $0) } ?? []
+        var networkFetchAttempts = 0
+        for index in authorities.indices where (authorities[index].text ?? "").isEmpty {
+            let authority = authorities[index]
+            // Exact ID evidence first, across ALL records — a loose caption match
+            // on an earlier record must never outrank a clusterID match on a
+            // later one (same caption at two court levels is routine, and the
+            // wrong opinion's text would turn genuine quotes into confident
+            // "fabricated" flags).
+            let exact = saved.first { record in
+                guard record.opinionText?.isEmpty == false else { return false }
+                if let clusterID = record.clusterID, clusterID == authority.clusterId { return true }
+                if let opinionID = record.opinionID, opinionID == authority.opinionId { return true }
+                return false
+            }
+            let caption = exact ?? saved.first { record in
+                guard record.opinionText?.isEmpty == false else { return false }
+                // Present-but-different IDs disqualify the caption fallback.
+                if let clusterID = record.clusterID, let authorityCluster = authority.clusterId,
+                   clusterID != authorityCluster { return false }
+                if let opinionID = record.opinionID, let authorityOpinion = authority.opinionId,
+                   opinionID != authorityOpinion { return false }
+                let lookup = authority.caseName ?? authority.citation ?? ""
+                return !lookup.isEmpty
+                    && LegalCitationMatch.authority(Self.savedLegalAuthority(record), matchesLookup: lookup)
+            }
+            if let record = caption {
+                authorities[index].text = record.opinionText
+                continue
+            }
+            // Cap ATTEMPTS, not successes: against a throttled/offline client,
+            // "keep trying until 4 succeed" is an unbounded hammer.
+            if networkFetchAttempts < Self.maxHydratedAuthorities,
+               let opinionID = authority.opinionId.flatMap(Int.init) {
+                networkFetchAttempts += 1
+                if let detail = try? await courtListenerClient.fetchOpinion(id: opinionID),
+                   let body = detail.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !body.isEmpty {
+                    authorities[index].text = body
+                }
+            }
+        }
+        return LegalSourcePacket(
+            queryTerms: packet.queryTerms,
+            authorities: authorities,
+            researchSessionID: packet.researchSessionID
+        )
+    }
+
     private func latestChatSourcePacket(chatID: String) -> LegalSourcePacket? {
         let sessions = (try? store.generation.fetchGenerationSessions(chatID: chatID, limit: nil)) ?? []
         for session in sessions {
@@ -2269,6 +2409,68 @@ public final class GlobalChatController: ObservableObject {
     /// prompt names no jurisdiction, the most recent user turns are scanned too, so
     /// a follow-up like "what is the exact language of the statute?" inherits the
     /// federal (or state) jurisdiction established earlier in the conversation.
+    /// Carries the case a prior USER turn named into an anaphoric follow-up's
+    /// classification. "What about the dissent?" re-classified alone yields no
+    /// citation lookup, so retrieval ran on the follow-up's words and — because
+    /// the named-case verification exemption keys off citationLookup — the
+    /// matter's forum could quarantine turn 2 of a discussion turn 1 answered
+    /// fine. Restricted to user turns (the assistant's answers cite many cases)
+    /// and to prompts that plainly refer back to the discussed case; a follow-up
+    /// that names its own authority keeps it.
+    static func classificationInheritingNamedCase(
+        _ classification: LegalQueryClassification,
+        prompt: String,
+        history: [GenerateRequest.Turn]
+    ) -> LegalQueryClassification {
+        guard classification.citationLookup == nil, referencesPriorCase(prompt) else {
+            return classification
+        }
+        // Only the last two user turns: a citation from an older, likely-changed
+        // topic must not hijack retrieval. And only CASE-shaped citations — an
+        // inherited statute cite would flip a case follow-up into the
+        // primary-law pipeline, and a misfire also relaxes the jurisdiction
+        // check, so the inherited value must plainly be a case.
+        var scanned = 0
+        for turn in history.reversed() where turn.role == .user {
+            scanned += 1
+            if scanned > 2 { break }
+            if let cite = LegalQueryClassifier.firstCitation(in: turn.content),
+               isCaseShapedLookup(cite) {
+                var inherited = classification
+                inherited.citationLookup = cite
+                return inherited
+            }
+        }
+        return classification
+    }
+
+    /// A caption ("X v. Y", "In re Z") or a bare reporter cite — never a statute
+    /// or code reference.
+    private static func isCaseShapedLookup(_ cite: String) -> Bool {
+        if LegalCitationMatch.isCaseNameLookup(cite) { return true }
+        let lower = cite.lowercased()
+        if lower.contains("§") || lower.contains("u.s.c") || lower.contains("c.f.r")
+            || lower.contains("stat") || lower.contains("code") {
+            return false
+        }
+        return cite.range(of: #"^\d{1,4}\s+[A-Za-z. ]{1,30}\s+\d{1,5}$"#, options: .regularExpression) != nil
+    }
+
+    /// Anaphors that only make sense about a specific, already-named decision.
+    /// Deliberately narrow: phrasing that is common in genuinely NEW questions
+    /// must not pin a topical question to an old case — "this case" reads as
+    /// the MATTER in a matter chat, and "the holding"/"the opinion" appear in
+    /// topical prompts ("where the holding turned on…", "the opinion testimony").
+    private static func referencesPriorCase(_ prompt: String) -> Bool {
+        let lower = prompt.lowercased()
+        let anaphors = [
+            "the dissent", "the majority", "the concurrence", "the plurality",
+            "that case", "that decision", "that ruling", "that opinion",
+            "that holding", "the syllabus", "the oral argument"
+        ]
+        return anaphors.contains { lower.contains($0) }
+    }
+
     private func inferredJurisdictionOption(
         from prompt: String,
         history: [GenerateRequest.Turn] = []
