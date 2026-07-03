@@ -1,7 +1,9 @@
+import AppKit
 import SupraDesignSystem
 import SupraResearch
 import SupraSessions
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// A research session's detail: run the approved queries through CourtListener,
 /// review each stored result (Save as Authority / Skip / adverse markers), and
@@ -11,6 +13,15 @@ struct ResearchSessionDetailView: View {
     let sessionID: String
 
     @State private var selectedResult: ResearchSessionController.SessionResult?
+    @State private var readerWidth: CGFloat = 760
+
+    /// The panel must never outgrow the pane it slides over (narrow windows).
+    private func clampedReaderWidth(container: CGFloat) -> Binding<CGFloat> {
+        Binding(
+            get: { min(readerWidth, max(420, container - 24)) },
+            set: { readerWidth = $0 }
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -22,9 +33,32 @@ struct ResearchSessionDetailView: View {
         }
         .navigationTitle("Research Session")
         .onAppear { controller.openSession(sessionID) }
-        .sheet(item: $selectedResult) { result in
-            ResultDetailSheet(controller: controller, result: result)
+        // The case opens as a wide, resizable READER sliding over the result
+        // list (same inspector pattern as the chat's [A#] reader) instead of a
+        // small modal sheet — opinions are for reading, not peeking.
+        .overlay(alignment: .trailing) {
+            if let result = selectedResult {
+                GeometryReader { geo in
+                SlideOverPanel(
+                    width: clampedReaderWidth(container: geo.size.width),
+                    minWidth: 420,
+                    onClose: { selectedResult = nil }
+                ) {
+                    ResearchCaseReader(controller: controller, result: result) {
+                        selectedResult = nil
+                    }
+                    // Fresh identity per result: opening a DIFFERENT case while
+                    // the reader is up must reset every bit of reader state
+                    // (fetched opinion, format picker) — never show case A's
+                    // opinion under case B's title.
+                    .id(result.id)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                }
+            }
         }
+        .animation(.snappy(duration: 0.25), value: selectedResult != nil)
+        .closesOnEscape(when: selectedResult != nil) { selectedResult = nil }
     }
 
     private var runBar: some View {
@@ -222,91 +256,83 @@ struct ReviewBadge: View {
     }
 }
 
-private struct ResultDetailSheet: View {
+/// The research result as a full READER: case header, review actions, and the
+/// opinion in the richest available format (official HTML, else full text
+/// scrolled to the matching passage). Hosted in the session view's slideover.
+private struct ResearchCaseReader: View {
     @ObservedObject var controller: ResearchSessionController
     let result: ResearchSessionController.SessionResult
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
+
     @State private var opinion: CourtListenerOpinionDetailDTO?
     @State private var loadingOpinion = false
-    @State private var showHTML = false
+    @State private var exportingHTML = false
 
     /// The current result from the controller, so the review badge reflects an
-    /// in-sheet review immediately instead of the (stale) snapshot captured when
-    /// the sheet was presented.
+    /// in-reader review immediately instead of the (stale) snapshot captured
+    /// when the reader was presented.
     private var liveResult: ResearchSessionController.SessionResult {
         controller.resultsByQuery.values.flatMap { $0 }.first { $0.id == result.id } ?? result
     }
 
     var body: some View {
-        SupraSheetScaffold(result.caseNameFull ?? result.caseName, onClose: { dismiss() }) {
-            Form {
-                Section {
-                    if let citation = result.citation { LabeledContent("Citation", value: citation) }
-                    if let court = result.court { LabeledContent("Court", value: court) }
-                    if let date = result.dateFiled {
-                        LabeledContent("Date filed") { Text(date, format: .dateTime.year().month().day()) }
-                    }
-                    if let docket = result.docketNumber { LabeledContent("Docket", value: docket) }
-                    if let path = result.absoluteURL, let url = URL(string: "https://www.courtlistener.com" + path) {
-                        Link("View on CourtListener", destination: url)
-                    }
-                    if loadingOpinion {
-                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Loading opinion…").foregroundStyle(.secondary) }
-                    } else if opinion?.bestHTML != nil {
-                        Button { showHTML = true } label: { Label("View opinion (HTML)", systemImage: "doc.richtext") }
-                    }
+        CaseReaderPanel(
+            title: result.caseNameFull ?? result.caseName,
+            subtitle: subtitle,
+            courtListenerURL: result.absoluteURL.flatMap(AuthorityReaderView.courtListenerURL),
+            html: opinion?.bestHTML,
+            text: opinion?.bodyText ?? result.snippet,
+            highlight: result.snippet,
+            isLoading: loadingOpinion,
+            onClose: onClose
+        ) {
+            ReviewBadge(state: liveResult.reviewState)
+            ResultReviewMenu(controller: controller, resultID: result.id)
+                .fixedSize()
+            if opinion?.bestHTML != nil {
+                Button { exportingHTML = true } label: {
+                    Label("Download HTML…", systemImage: "arrow.down.circle")
                 }
-                if let passage = enrichedPassage {
-                    Section("Excerpt") { Text(passage).supraReadingBody().textSelection(.enabled) }
-                } else if let snippet = result.snippet, !snippet.isEmpty {
-                    Section("Snippet") {
-                        Text(snippet).supraReadingBody()
-                        if loadingOpinion {
-                            Text("Loading a longer passage…").font(.supraCaption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                Section("Review") {
-                    ReviewBadge(state: liveResult.reviewState)
-                    ResultReviewMenu(controller: controller, resultID: result.id)
-                }
-                Section("Raw metadata") {
-                    DisclosureGroup("Raw CourtListener JSON") {
-                        Text(result.rawResultJSON)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                    }
-                }
+                .buttonStyle(.ghost)
             }
-            .formStyle(.grouped)
-        }
-        // §14.4 inspector-panel width behavior.
-        .frame(minWidth: 320, idealWidth: 420, maxWidth: 560, minHeight: 480, idealHeight: 600)
-        .sheet(isPresented: $showHTML) {
-            if let html = opinion?.bestHTML {
-                OpinionHTMLSheet(
-                    title: result.caseName,
-                    html: html,
-                    suggestedFileName: AuthorityDetailView.fileName(for: result.caseName)
-                )
+            Menu {
+                Button("Copy Raw CourtListener JSON") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(result.rawResultJSON, forType: .string)
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
         }
-        .onAppear(perform: loadOpinionIfPossible)
-    }
-
-    /// A ~50–100 word passage from the full opinion, windowed on the search snippet
-    /// so it shows the relevant language. Nil until the opinion loads.
-    private var enrichedPassage: String? {
-        CourtListenerText.passage(from: opinion?.bodyText, around: result.snippet)
-    }
-
-    private func loadOpinionIfPossible() {
-        guard opinion == nil, !loadingOpinion,
-              result.opinionID != nil, controller.hasCourtListenerToken else { return }
-        loadingOpinion = true
-        Task { @MainActor in
-            opinion = await controller.fetchOpinionDetail(opinionID: result.opinionID)
+        .task(id: result.id) {
+            // Belt-and-braces with the call site's `.id(result.id)`: reset any
+            // stale state, and never let a cancelled (superseded) fetch land.
+            opinion = nil
             loadingOpinion = false
+            guard result.opinionID != nil, controller.hasCourtListenerToken else { return }
+            loadingOpinion = true
+            let fetched = await controller.fetchOpinionDetail(opinionID: result.opinionID)
+            if !Task.isCancelled {
+                opinion = fetched
+                loadingOpinion = false
+            }
         }
+        .fileExporter(
+            isPresented: $exportingHTML,
+            document: (opinion?.bestHTML).map { HTMLFileDocument(text: OpinionWebView.document(for: $0)) },
+            contentType: .html,
+            defaultFilename: AuthorityDetailView.fileName(for: result.caseName)
+        ) { _ in }
+    }
+
+    private var subtitle: String {
+        var parts: [String] = []
+        if let citation = result.citation { parts.append(citation) }
+        if let court = result.court { parts.append(court) }
+        if let date = result.dateFiled { parts.append(date.formatted(date: .abbreviated, time: .omitted)) }
+        if let docket = result.docketNumber { parts.append("No. " + docket) }
+        return parts.joined(separator: " · ")
     }
 }

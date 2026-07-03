@@ -543,12 +543,7 @@ public final class GlobalChatController: ObservableObject {
             // History is part of that inference — a follow-up ("the exact language
             // of the statute") inherits the federal jurisdiction an earlier turn
             // established — so replay the same prior turns the send path captures.
-            let history = selectedChatID.map {
-                Self.conversationHistory(
-                    from: (try? store.chats.fetchMessages(chatID: $0))?.map(ChatMessage.init) ?? [],
-                    budget: Self.historyCharBudget
-                )
-            } ?? []
+            let history = selectedChatID.map { replayHistory(chatID: $0) } ?? []
             let classification = classificationApplyingChatJurisdiction(
                 classificationApplyingMatterScope(LegalQueryClassifier.classify(routed.prompt)),
                 prompt: routed.prompt,
@@ -782,12 +777,7 @@ public final class GlobalChatController: ObservableObject {
             // self-contained (its prompt carries the authoritative inventory/sources
             // and the "use ONLY these" contract), so it skips history — prior, possibly
             // ungrounded turns must not dilute the grounding, matching the Q&A path.
-            let history = grounded == nil
-                ? Self.conversationHistory(
-                    from: (try? store.chats.fetchMessages(chatID: chatID))?.map(ChatMessage.init) ?? [],
-                    budget: Self.historyCharBudget
-                )
-                : []
+            let history = grounded == nil ? replayHistory(chatID: chatID) : []
 
             _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
             let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
@@ -974,10 +964,7 @@ public final class GlobalChatController: ObservableObject {
         // "apply that rule to my facts") resolve in context. Captured before the new
         // user message is appended; the runtime's budget guard trims it if the packet
         // + question leave no room.
-        let history = Self.conversationHistory(
-            from: (try? store.chats.fetchMessages(chatID: chatID))?.map(ChatMessage.init) ?? [],
-            budget: Self.historyCharBudget
-        )
+        let history = replayHistory(chatID: chatID)
 
         _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
         let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
@@ -1370,7 +1357,9 @@ public final class GlobalChatController: ObservableObject {
             statutoryProvisions: citableStatutoryProvisions,
             rankedCases: rankedAll,
             jurisdictionLabel: classification.jurisdiction,
-            cap: LegalResearchPromptBuilder.maxPacketAuthorities
+            cap: LegalResearchPromptBuilder.maxPacketAuthorities,
+            citation: sourcePlan.primaryLawCitationQuery ?? classification.citationLookup,
+            queryTerms: sourcePlan.primaryLawQueryTerms
         )
         let authorities = ranked.map(\.authority)
         let queryTerms = Self.uniqued(
@@ -1392,8 +1381,11 @@ public final class GlobalChatController: ObservableObject {
 
             You can try: rephrasing or narrowing the issue; naming the jurisdiction or court; or — if you're looking for *filed cases* involving a person or company — asking "who has sued [name]" to search the dockets instead.
             """
+            // The primary-law miss still matters even when case law came up
+            // empty — without the caveat this read as a pure case-law miss.
+            let output = (primaryLawCaveat.map { $0 + "\n\n" } ?? "") + message
             return LegalWorkflowResult(
-                output: message,
+                output: output,
                 queryTerms: queryTerms,
                 authorities: [],
                 verification: nil,
@@ -2741,7 +2733,44 @@ public final class GlobalChatController: ObservableObject {
 
     /// Prior turns to replay (oldest→newest), selecting the most recent within the
     /// budget. Assistant chain-of-thought is stripped so only answers are fed back.
-    static func conversationHistory(from messages: [ChatMessage], budget: Int) -> [GenerateRequest.Turn] {
+    /// History replay for a chat: prior turns with stale `[A#]`/`[S#]` labels
+    /// rewritten to the case/source names their persisted citations recorded.
+    private func replayHistory(chatID: String) -> [GenerateRequest.Turn] {
+        let messages = (try? store.chats.fetchMessages(chatID: chatID))?.map(ChatMessage.init) ?? []
+        // Citation lookups only for turns that can SURVIVE the char budget —
+        // a long matter chat must not pay one fetch per discarded message.
+        // 1.5× covers the rewrite shrinking content slightly under the budget.
+        var window: [String] = []
+        var used = 0
+        for message in messages.reversed() {
+            if message.role == .assistant { window.append(message.id) }
+            used += message.content.count
+            if used > Self.historyCharBudget * 3 / 2 { break }
+        }
+        var names: [String: [String: String]] = [:]
+        for messageID in window {
+            let citations = (try? store.chats.fetchCitations(messageID: messageID)) ?? []
+            guard !citations.isEmpty else { continue }
+            var map: [String: String] = [:]
+            for record in citations {
+                if let display = record.displayName, !display.isEmpty {
+                    map[record.label] = display
+                }
+            }
+            if !map.isEmpty { names[messageID] = map }
+        }
+        return Self.conversationHistory(
+            from: messages,
+            budget: Self.historyCharBudget,
+            citationNamesByMessageID: names
+        )
+    }
+
+    static func conversationHistory(
+        from messages: [ChatMessage],
+        budget: Int,
+        citationNamesByMessageID: [String: [String: String]] = [:]
+    ) -> [GenerateRequest.Turn] {
         var turns: [GenerateRequest.Turn] = []
         var used = 0
         for message in messages.reversed() {
@@ -2751,9 +2780,12 @@ public final class GlobalChatController: ObservableObject {
             case .assistant: role = .assistant
             case .system: continue
             }
-            let raw = message.role == .assistant
+            var raw = message.role == .assistant
                 ? ReasoningContent.answer(from: message.content)
                 : message.content
+            if message.role == .assistant {
+                raw = Self.historyReplayAnswer(raw, citationNames: citationNamesByMessageID[message.id] ?? [:])
+            }
             let content = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !content.isEmpty else { continue }
             if !turns.isEmpty, used + content.count > budget { break }
@@ -2761,6 +2793,51 @@ public final class GlobalChatController: ObservableObject {
             used += content.count
         }
         return turns.reversed()
+    }
+
+    /// Prepares a stored assistant answer for HISTORY REPLAY. Three hazards:
+    /// (1) `[A#]`/`[S#]` labels are numbered against a packet that no longer
+    /// exists — replayed verbatim, the model copies them and the verifier
+    /// validates the stale number against the NEW packet, so labels are
+    /// rewritten to the actual case/source names the message's persisted
+    /// citations recorded (unknown labels are dropped); (2) a quarantined
+    /// answer replayed in full both wastes budget and teaches the model to
+    /// refuse — it is replaced by a one-line placeholder; (3) app furniture
+    /// (caveat banners, the Preliminary footer) is the app talking, not the
+    /// model — stripped.
+    private static let historyLabelRegex = try? NSRegularExpression(pattern: #"\s?\[([AS])(\d{1,3})\]"#)
+
+    static func historyReplayAnswer(_ answer: String, citationNames: [String: String]) -> String {
+        let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip furniture BEFORE the quarantine check: the primary-law caveat
+        // prepends "> ⚠️ …" above a blocked message, which would otherwise
+        // defeat the prefix match and replay the whole verification report —
+        // bad citations included — into model context.
+        var content = strippingAssistantFurniture(trimmed)
+        if content.hasPrefix("I cannot provide a source-grounded legal answer")
+            || trimmed.contains("**UNVERIFIED DRAFT — DO NOT RELY.**") {
+            return "[The previous answer was withheld by citation verification and must not be relied on or repeated.]"
+        }
+        guard let regex = Self.historyLabelRegex else { return content }
+        let range = NSRange(content.startIndex..<content.endIndex, in: content)
+        var replacements: [(Range<String.Index>, String)] = []
+        regex.enumerateMatches(in: content, range: range) { match, _, _ in
+            guard let match,
+                  let whole = Range(match.range, in: content),
+                  let kindRange = Range(match.range(at: 1), in: content),
+                  let numberRange = Range(match.range(at: 2), in: content) else { return }
+            let label = String(content[kindRange]) + String(content[numberRange])
+            if let name = citationNames[label], !name.isEmpty {
+                let prefix = content[kindRange] == "A" ? "citing " : "from "
+                replacements.append((whole, " (\(prefix)\(name))"))
+            } else {
+                replacements.append((whole, ""))
+            }
+        }
+        for (target, replacement) in replacements.reversed() {
+            content.replaceSubrange(target, with: replacement)
+        }
+        return content
     }
 
     private static func sameJurisdiction(_ lhs: String?, _ rhs: String) -> Bool {

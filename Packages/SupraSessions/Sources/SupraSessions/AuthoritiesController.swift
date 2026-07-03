@@ -67,6 +67,15 @@ public final class AuthoritiesController: ObservableObject {
         return try? await courtListenerClient.fetchOpinion(id: id)
     }
 
+    /// The opinion text persisted on the saved record (spec §4.3), so the reader
+    /// works offline without a fetch.
+    public func storedOpinionText(authorityID: String) -> String? {
+        let text = (try? store.authorities.fetchAuthorities(matterID: matterID))?
+            .first { $0.id == authorityID }?
+            .opinionText
+        return (text?.isEmpty == false) ? text : nil
+    }
+
     /// The app-managed location of a previously-downloaded opinion PDF, or nil if
     /// none has been downloaded for this opinion.
     public func storedOpinionPDF(opinionID: String?) -> URL? {

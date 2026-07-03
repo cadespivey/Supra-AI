@@ -19,7 +19,18 @@ struct AuthorityDetailView: View {
     @State private var confirmingDelete = false
     @State private var opinion: CourtListenerOpinionDetailDTO?
     @State private var loadingOpinion = false
-    @State private var showHTML = false
+    @State private var storedText: String?
+    @State private var showReader = false
+    @State private var readerWidth: CGFloat = 760
+
+    /// The panel must never outgrow the pane it slides over (narrow windows).
+    private func clampedReaderWidth(container: CGFloat) -> Binding<CGFloat> {
+        Binding(
+            get: { min(readerWidth, max(420, container - 24)) },
+            set: { readerWidth = $0 }
+        )
+    }
+    @State private var htmlExporting = false
     @State private var pdfURL: URL?
     @State private var downloadingPDF = false
     @State private var pdfExporting = false
@@ -28,11 +39,76 @@ struct AuthorityDetailView: View {
         Group {
             if let authority = controller.authorities.first(where: { $0.id == authorityID }) {
                 form(authority)
+                    // The opinion opens as a wide, resizable READER sliding over
+                    // the detail form (the chat's [A#] inspector pattern) — not a
+                    // modal web sheet or a PDF squeezed into a form row.
+                    .overlay(alignment: .trailing) {
+                        if showReader {
+                            GeometryReader { geo in
+                                SlideOverPanel(
+                                    width: clampedReaderWidth(container: geo.size.width),
+                                    minWidth: 420,
+                                    onClose: { showReader = false }
+                                ) {
+                                    reader(authority)
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                            }
+                        }
+                    }
+                    .animation(.snappy(duration: 0.25), value: showReader)
+                    .closesOnEscape(when: showReader) { showReader = false }
             } else {
                 ContentUnavailableView("Authority not found", systemImage: "questionmark.circle")
             }
         }
         .navigationTitle("Authority")
+    }
+
+    private func reader(_ authority: AuthoritiesController.AuthorityItem) -> some View {
+        CaseReaderPanel(
+            title: authority.caseNameFull ?? authority.caseName,
+            subtitle: readerSubtitle(authority),
+            courtListenerURL: authority.absoluteURL.flatMap(AuthorityReaderView.courtListenerURL),
+            html: opinion?.bestHTML,
+            pdfURL: pdfURL,
+            text: storedText ?? opinion?.bodyText,
+            isLoading: loadingOpinion || downloadingPDF,
+            onClose: { showReader = false }
+        ) {
+            if opinion?.bestHTML != nil {
+                Button { htmlExporting = true } label: {
+                    Label("Download HTML…", systemImage: "arrow.down.circle")
+                }
+                .buttonStyle(.ghost)
+            }
+            if pdfURL != nil {
+                Button { pdfExporting = true } label: {
+                    Label("Save PDF…", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.ghost)
+            } else if !downloadingPDF, opinion?.courtListenerPDFURL != nil {
+                Button { downloadPDF() } label: {
+                    Label("Download PDF", systemImage: "arrow.down.doc")
+                }
+                .buttonStyle(.ghost)
+            }
+        }
+        .fileExporter(
+            isPresented: $htmlExporting,
+            document: (opinion?.bestHTML).map { HTMLFileDocument(text: OpinionWebView.document(for: $0)) },
+            contentType: .html,
+            defaultFilename: Self.fileName(for: authority.caseName)
+        ) { _ in }
+    }
+
+    private func readerSubtitle(_ authority: AuthoritiesController.AuthorityItem) -> String {
+        var parts: [String] = []
+        if let citation = authority.preferredCitation ?? authority.citations.first { parts.append(citation) }
+        if let court = authority.court { parts.append(court) }
+        if let date = authority.dateFiled { parts.append(date.formatted(date: .abbreviated, time: .omitted)) }
+        if let docket = authority.docketNumber { parts.append("No. " + docket) }
+        return parts.joined(separator: " · ")
     }
 
     private func form(_ authority: AuthoritiesController.AuthorityItem) -> some View {
@@ -49,15 +125,9 @@ struct AuthorityDetailView: View {
                 }
                 if loadingOpinion {
                     HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Loading opinion…").foregroundStyle(.secondary) }
-                } else {
-                    if opinion?.bestHTML != nil {
-                        Button { showHTML = true } label: { Label("View opinion (HTML)", systemImage: "doc.richtext") }
-                    }
-                    if downloadingPDF {
-                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Downloading PDF…").foregroundStyle(.secondary) }
-                    } else if pdfURL == nil, opinion?.courtListenerPDFURL != nil {
-                        Button { downloadPDF() } label: { Label("Download PDF", systemImage: "arrow.down.doc") }
-                    }
+                } else if hasReadableOpinion(authority) {
+                    Button { showReader = true } label: { Label("Read Opinion", systemImage: "book") }
+                        .help("Opens the full opinion in a wide reader — HTML, PDF, or stored text.")
                 }
             }
 
@@ -95,15 +165,6 @@ struct AuthorityDetailView: View {
                 }
             }
 
-            if let pdfURL {
-                Section("Opinion PDF") {
-                    OpinionPDFView(url: pdfURL)
-                        .frame(minHeight: 360)
-                        .listRowInsets(EdgeInsets())
-                    Button { pdfExporting = true } label: { Label("Save a copy…", systemImage: "square.and.arrow.down") }
-                }
-            }
-
             Section("Notes") {
                 MultilineField(placeholder: "User notes", text: $notes, minLines: 3)
                 Button("Save Notes") { controller.updateUserNotes(authorityID: authorityID, notes) }
@@ -138,15 +199,6 @@ struct AuthorityDetailView: View {
         } message: {
             Text("This removes it from the matter's authority library. You can re-add it by saving the result again from Research.")
         }
-        .sheet(isPresented: $showHTML) {
-            if let html = opinion?.bestHTML {
-                OpinionHTMLSheet(
-                    title: authority.caseName,
-                    html: html,
-                    suggestedFileName: Self.fileName(for: authority.caseName)
-                )
-            }
-        }
         .fileExporter(
             isPresented: $pdfExporting,
             document: pdfURL.flatMap { try? PDFFileDocument(url: $0) },
@@ -157,8 +209,21 @@ struct AuthorityDetailView: View {
             citation = authority.preferredCitation ?? ""
             notes = authority.userNotes ?? ""
             pdfURL = controller.storedOpinionPDF(opinionID: authority.opinionID)
+            // Loaded ONCE: fetching every saved authority's full text from the
+            // form body would re-read megabytes on each keystroke in Notes.
+            storedText = controller.storedOpinionText(authorityID: authority.id)
             loadOpinionIfPossible(authority)
         }
+    }
+
+    /// Whether the reader has ANYTHING to show: fetched HTML, a downloaded PDF,
+    /// persisted opinion text, or fetched body text.
+    private func hasReadableOpinion(_ authority: AuthoritiesController.AuthorityItem) -> Bool {
+        opinion?.bestHTML != nil
+            || pdfURL != nil
+            || storedText != nil
+            || opinion?.bodyText?.isEmpty == false
+            || opinion?.courtListenerPDFURL != nil
     }
 
     /// A ~80-word excerpt of the opinion body, once fetched.
@@ -195,35 +260,6 @@ struct AuthorityDetailView: View {
     }
 }
 
-/// Renders fetched opinion HTML in a sheet (JavaScript disabled; clicked links
-/// open in the browser) with a Download action that writes the HTML to disk.
-struct OpinionHTMLSheet: View {
-    let title: String
-    let html: String
-    /// Base file name (no extension); the exporter adds `.html`.
-    let suggestedFileName: String
-    @Environment(\.dismiss) private var dismiss
-    @State private var exporting = false
-
-    var body: some View {
-        SupraSheetScaffold(title, onClose: { dismiss() }) {
-            OpinionWebView(html: html)
-        } footer: {
-            Spacer()
-            Button { exporting = true } label: { Label("Download HTML…", systemImage: "arrow.down.circle") }
-                .buttonStyle(.ghost)
-        }
-        .frame(minWidth: 680, minHeight: 560)
-        // .fileExporter presents reliably from within a sheet (NSSavePanel.runModal
-        // does not — it conflicts with the window-modal sheet and never appears).
-        .fileExporter(
-            isPresented: $exporting,
-            document: HTMLFileDocument(text: OpinionWebView.document(for: html)),
-            contentType: .html,
-            defaultFilename: suggestedFileName
-        ) { _ in }
-    }
-}
 
 /// A minimal HTML document for SwiftUI's `.fileExporter`.
 struct HTMLFileDocument: FileDocument {
@@ -241,7 +277,7 @@ struct HTMLFileDocument: FileDocument {
     }
 }
 
-private struct OpinionWebView: NSViewRepresentable {
+struct OpinionWebView: NSViewRepresentable {
     let html: String
 
     func makeNSView(context: Context) -> WKWebView {
@@ -327,8 +363,8 @@ private struct OpinionWebView: NSViewRepresentable {
     }
 }
 
-/// In-app preview of a downloaded opinion PDF.
-private struct OpinionPDFView: NSViewRepresentable {
+/// In-app opinion PDF rendering (shared with the case readers).
+struct OpinionPDFView: NSViewRepresentable {
     let url: URL
 
     func makeNSView(context: Context) -> PDFView {

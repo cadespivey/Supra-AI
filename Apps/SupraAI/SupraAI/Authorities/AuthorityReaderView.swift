@@ -143,9 +143,178 @@ struct AuthorityReaderView: View {
         return nil
     }
 
-    private static func courtListenerURL(_ path: String) -> URL? {
+    static func courtListenerURL(_ path: String) -> URL? {
         if path.lowercased().hasPrefix("http") { return URL(string: path) }
         guard path.hasPrefix("/") else { return nil }
         return URL(string: "https://www.courtlistener.com" + path)
+    }
+}
+
+/// The opinion body as selectable reading-typography paragraphs, scrolled to
+/// (and highlighting) the cited passage. Shared by the chat's `[A#]` reader and
+/// the Research/Authorities case readers.
+struct OpinionParagraphsView: View {
+    let text: String
+    var highlight: String?
+
+    var body: some View {
+        let paragraphs = AuthorityReaderView.paragraphs(of: text)
+        let highlightIndex = AuthorityReaderView.highlightIndex(in: paragraphs, matching: highlight)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
+                        Text(paragraph)
+                            .supraReadingBody(measure: nil)
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 6)
+                            .background(
+                                index == highlightIndex
+                                    ? Color.yellow.opacity(0.22)
+                                    : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 4)
+                            )
+                            .id(index)
+                    }
+                }
+                .padding()
+            }
+            .onAppear {
+                if let highlightIndex {
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(highlightIndex, anchor: UnitPoint(x: 0, y: 0.15))
+                    }
+                }
+            }
+            // The common path renders the snippet first and swaps in the full
+            // opinion when the fetch lands — re-anchor on the swap, or the
+            // "scrolled to the cited passage" promise fails exactly then.
+            .onChange(of: text) {
+                if let highlightIndex {
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(highlightIndex, anchor: UnitPoint(x: 0, y: 0.15))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A full-height case reader for the Research and Authorities slideovers:
+/// case header, caller-supplied action row (review/status/download controls),
+/// and the opinion in the richest available format — official HTML, downloaded
+/// PDF, or plain text — switchable when more than one is on hand.
+struct CaseReaderPanel<Actions: View>: View {
+    enum Format: String, CaseIterable, Identifiable {
+        case html = "HTML"
+        case pdf = "PDF"
+        case text = "Text"
+        var id: String { rawValue }
+    }
+
+    let title: String
+    let subtitle: String
+    let courtListenerURL: URL?
+    var html: String?
+    var pdfURL: URL?
+    var text: String?
+    var highlight: String?
+    var isLoading = false
+    let onClose: () -> Void
+    @ViewBuilder let actions: () -> Actions
+
+    @State private var selectedFormat: Format?
+
+    private var availableFormats: [Format] {
+        var formats: [Format] = []
+        if html?.isEmpty == false { formats.append(.html) }
+        if pdfURL != nil { formats.append(.pdf) }
+        if text?.isEmpty == false { formats.append(.text) }
+        return formats
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            content
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.supraTitle)
+                    .lineLimit(2)
+                Spacer()
+                Button("Done", action: onClose)
+                    .buttonStyle(.ghost)
+                    .keyboardShortcut(.cancelAction)
+            }
+            HStack(spacing: 6) {
+                Text(subtitle)
+                    .font(.supraSubheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                if let courtListenerURL {
+                    Link(destination: courtListenerURL) {
+                        Label("Open on CourtListener", systemImage: "arrow.up.right.square")
+                    }
+                    .font(.supraSubheadline)
+                }
+            }
+            HStack(spacing: 10) {
+                actions()
+                Spacer()
+                if availableFormats.count > 1 {
+                    Picker("Format", selection: formatSelection) {
+                        ForEach(availableFormats) { format in
+                            Text(format.rawValue).tag(format)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            }
+        }
+        .padding()
+    }
+
+    private var formatSelection: Binding<Format> {
+        Binding(
+            get: { selectedFormat ?? availableFormats.first ?? .text },
+            set: { selectedFormat = $0 }
+        )
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        let format = selectedFormat.flatMap { availableFormats.contains($0) ? $0 : nil }
+            ?? availableFormats.first
+        switch format {
+        case .html:
+            if let html { OpinionWebView(html: html) }
+        case .pdf:
+            if let pdfURL { OpinionPDFView(url: pdfURL) }
+        case .text:
+            if let text { OpinionParagraphsView(text: text, highlight: highlight) }
+        case nil:
+            if isLoading {
+                VStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading opinion…").font(.supraCaption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView(
+                    "Opinion not available",
+                    systemImage: "text.book.closed",
+                    description: Text("The opinion isn't stored offline and couldn't be fetched. Use “Open on CourtListener” above to read it there.")
+                )
+            }
+        }
     }
 }

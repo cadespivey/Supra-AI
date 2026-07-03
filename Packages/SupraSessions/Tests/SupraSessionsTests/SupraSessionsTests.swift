@@ -2736,6 +2736,51 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertFalse(GlobalChatController.isStatutoryCitationTarget("444 U.S. 320"))
     }
 
+    func testHistoryReplayRewritesStaleLabelsAndBlockedAnswers() {
+        // [A#]/[S#] labels are numbered against a packet that no longer exists —
+        // replayed verbatim, the model copies them and a stale number validates
+        // against the NEW packet. Replay rewrites them to persisted names.
+        let rewritten = GlobalChatController.historyReplayAnswer(
+            "Ancillary jurisdiction does not reach new liability theories [A2]. See also the docket [S1]. An unknown label [A9] disappears.",
+            citationNames: ["A2": "Peacock v. Thomas", "S1": "Adams complaint.pdf"]
+        )
+        XCTAssertTrue(rewritten.contains("(citing Peacock v. Thomas)"), rewritten)
+        XCTAssertTrue(rewritten.contains("(from Adams complaint.pdf)"), rewritten)
+        XCTAssertFalse(rewritten.contains("[A2]"), rewritten)
+        XCTAssertFalse(rewritten.contains("[A9]"), rewritten)
+
+        // A quarantined answer must not be replayed into context.
+        let blocked = GlobalChatController.historyReplayAnswer(
+            "I cannot provide a source-grounded legal answer from the retrieved packet because…",
+            citationNames: [:]
+        )
+        XCTAssertTrue(blocked.contains("withheld by citation verification"), blocked)
+
+        // …including when the primary-law caveat was PREPENDED above the block
+        // (the soft path does exactly that): the caveat must not defeat the
+        // prefix check and replay the verification report's bad citations.
+        let caveatedBlock = GlobalChatController.historyReplayAnswer(
+            "> ⚠️ **Primary law not retrieved.** This question likely turns on a statute.\n\nI cannot provide a source-grounded legal answer from the retrieved packet because…\n- unsupported_citation: Fabricated v. Cite",
+            citationNames: [:]
+        )
+        XCTAssertTrue(caveatedBlock.contains("withheld by citation verification"), caveatedBlock)
+        XCTAssertFalse(caveatedBlock.contains("Fabricated v. Cite"), caveatedBlock)
+
+        let banner = GlobalChatController.historyReplayAnswer(
+            GlobalChatController.unverifiedDraftBanner + "Some draft with a bad cite.",
+            citationNames: [:]
+        )
+        XCTAssertTrue(banner.contains("withheld by citation verification"), banner)
+
+        // App furniture is stripped from replayed answers.
+        let furnished = GlobalChatController.historyReplayAnswer(
+            "The holding is narrow [A1].\n\n_Preliminary — answered from this matter's saved authorities. Use “Search CourtListener” below for a wider search._",
+            citationNames: ["A1": "Rush v. Savchuk"]
+        )
+        XCTAssertFalse(furnished.contains("Preliminary"), furnished)
+        XCTAssertTrue(furnished.contains("(citing Rush v. Savchuk)"), furnished)
+    }
+
     func testStrippingAssistantFurnitureRemovesAppLinesOnly() {
         let stored = """
         > ⚠️ **Primary law not retrieved.** This question likely turns on a statute.

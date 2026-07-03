@@ -138,6 +138,12 @@ private struct EscapeCloseModifier: ViewModifier {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard event.keyCode == 53 else { return event }   // Esc
+            // A save panel, alert, or attached sheet owns Esc while it's up —
+            // pass the event through so the DIALOG cancels, not the slide-over
+            // beneath it (the case readers host fileExporters).
+            if event.window is NSPanel || event.window?.attachedSheet != nil {
+                return event
+            }
             action()
             return nil
         }

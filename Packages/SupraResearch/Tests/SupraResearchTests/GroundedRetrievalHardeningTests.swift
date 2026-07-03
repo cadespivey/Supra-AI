@@ -262,6 +262,78 @@ final class GroundedRetrievalHardeningTests: XCTestCase {
         XCTAssertFalse(report.issues.contains { $0.kind == .unverifiableQuote }, "\(report.issues)")
     }
 
+    // MARK: - Statutory packet merge relevance
+
+    private func provision(citation: String, heading: String, source: String) -> StatutoryProvision {
+        StatutoryProvision(
+            sourceID: source,
+            sourceName: source,
+            weightTier: .currencyVerifiable,
+            jurisdictionID: source,
+            jurisdictionName: "United States Code",
+            citation: citation,
+            heading: heading,
+            snippet: heading,
+            text: String(repeating: heading + ". ", count: 20),
+            url: "https://example.test/\(source)",
+            effectiveDate: "2024"
+        )
+    }
+
+    func testCitedProvisionLeadsPacketOverTangentialArrival() {
+        // The tangential eCFR regulation arrives FIRST (higher source tier);
+        // the provision the user actually cited must still LEAD the packet.
+        let tangential = provision(
+            citation: "29 C.F.R. § 1910.132",
+            heading: "Personal protective equipment general requirements",
+            source: "ecfr"
+        )
+        let cited = provision(
+            citation: "18 U.S.C. § 1001",
+            heading: "Statements or entries generally",
+            source: "govinfo"
+        )
+        let merged = StatutoryPacketMerge.merge(
+            statutoryProvisions: [tangential, cited],
+            rankedCases: [],
+            jurisdictionLabel: "Federal",
+            cap: 10,
+            citation: "18 U.S.C. § 1001",
+            queryTerms: "false statements liability"
+        )
+        XCTAssertTrue(merged.first?.authority.citation?.contains("18 U.S.C. § 1001") ?? false, "\(merged.map { $0.authority.citation ?? "?" })")
+
+        // Without a cited provision, arrival (source-tier) order is preserved.
+        let neutral = StatutoryPacketMerge.merge(
+            statutoryProvisions: [tangential, cited],
+            rankedCases: [],
+            jurisdictionLabel: "Federal",
+            cap: 10
+        )
+        XCTAssertTrue(neutral.first?.authority.citation?.contains("29 C.F.R. § 1910.132") ?? false)
+    }
+
+    func testNeighborSectionCannotStealTheCitationBoost() {
+        // Token-boundary matching: § 672.201 must not +100 on a § 672.20 cite,
+        // and a semicolon-joined multi-cite target must not manufacture digit
+        // runs ("…201; 29…" ≠ § 2012).
+        let exact = provision(citation: "Fla. Stat. § 672.20", heading: "Exact section", source: "olc")
+        let neighbor = provision(citation: "Fla. Stat. § 672.201", heading: "Neighbor section", source: "olc")
+        XCTAssertEqual(StatutoryPacketMerge.relevance(of: neighbor, citation: "Fla. Stat. § 672.20", queryTerms: ""), 0)
+        XCTAssertEqual(StatutoryPacketMerge.relevance(of: exact, citation: "Fla. Stat. § 672.20", queryTerms: ""), 100)
+
+        let unrelated = provision(citation: "18 U.S.C. § 2012", heading: "Unrelated", source: "govinfo")
+        XCTAssertEqual(
+            StatutoryPacketMerge.relevance(of: unrelated, citation: "29 U.S.C. § 201; 29 U.S.C. § 216(b)", queryTerms: ""),
+            0
+        )
+        // A reporter cite riding in the citation target matches no provision.
+        XCTAssertEqual(
+            StatutoryPacketMerge.relevance(of: provision(citation: "Cal. Civ. Code § 320", heading: "H", source: "olc"), citation: "444 U.S. 320", queryTerms: ""),
+            0
+        )
+    }
+
     func testStateReferenceResolution() {
         XCTAssertEqual(StatutoryJurisdictionMapper.postalCode(forStateReference: "Fla."), "FL")
         XCTAssertEqual(StatutoryJurisdictionMapper.postalCode(forStateReference: "N.Y."), "NY")
