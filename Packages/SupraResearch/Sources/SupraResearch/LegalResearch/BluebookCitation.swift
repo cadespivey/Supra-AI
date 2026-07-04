@@ -99,7 +99,11 @@ public struct BluebookCitation: Sendable, Equatable {
         let letters = name.filter(\.isLetter)
         guard letters.count >= 4 else { return name }
         let uppercase = letters.filter(\.isUppercase).count
-        guard Double(uppercase) / Double(letters.count) > 0.85 else { return name }
+        // 0.7, not higher: CourtListener captions arrive as "FLAGG BROS., INC.,
+        // Et Al. v. BROOKS Et Al." — the mixed "Et Al." particles dilute the
+        // ratio of an otherwise ALL-CAPS caption. Ordinary mixed-case captions
+        // sit far below this line ("SunTrust Bank v. …" ≈ 0.25).
+        guard Double(uppercase) / Double(letters.count) > 0.7 else { return name }
 
         let words = name.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
         let recased = words.enumerated().map { index, word in
@@ -124,8 +128,14 @@ public struct BluebookCitation: Sendable, Equatable {
         if word.range(of: #"^\(?(?:[A-Za-z]\.){2,},?\)?$"#, options: .regularExpression) != nil {
             return word.uppercased()
         }
-        // Entity designators and roman numerals keep their capitals.
-        let keepUppercase: Set<String> = ["LLC", "LLP", "PLLC", "LP", "PLC", "NA", "FSB", "USA", "DCA"]
+        // Entity designators, agency acronyms, and roman numerals keep their
+        // capitals — "SEC V. SMITH" must not become "Sec v. Smith".
+        let keepUppercase: Set<String> = [
+            "LLC", "LLP", "PLLC", "LP", "PLC", "NA", "FSB", "USA", "DCA",
+            "NLRB", "FTC", "SEC", "FCC", "FDA", "EPA", "EEOC", "FBI", "IRS",
+            "INS", "ICE", "DOJ", "DHS", "HHS", "HUD", "OSHA", "TVA", "NCAA",
+            "NAACP", "ACLU", "AFL", "CIO", "UPS", "IBM", "ATT"
+        ]
         if keepUppercase.contains(key) { return word.uppercased() }
         if key.count >= 2, key.allSatisfy({ "IVXLC".contains($0) }) { return word.uppercased() }
         // Default: capitalize each hyphen-separated segment.
@@ -281,18 +291,31 @@ public enum StarPagination {
     /// The page at `offset`, i.e. the last marker at or before it. `firstPage`
     /// (from the citation) sanity-bounds markers so a stray "*3" footnote
     /// symbol can't read as page 3 of a 320-first-page reporter.
+    /// Marker families, in one pass:
+    /// - `*152` / `[*152]` — star pagination (Harvard/Columbia-sourced text)
+    /// - `Page 436 U. S. 152` — Justia-style reporter page headers, which is
+    ///   what old SCOTUS records carry once their HTML is stripped to text
+    /// - a bare `-152-` alone on a line — centered page numbers
+    static let markerPattern =
+        #"\[?\*\s?(\d{1,5})\]?"# + "|" +
+        #"(?i)\bpage\s+\d{1,4}\s+[a-z][a-z0-9. ]{0,12}?\s+(\d{1,5})\b"# + "|" +
+        #"(?m)^\s*-\s?(\d{1,5})\s?-\s*$"#
+
     public static func page(at offset: Int, in text: String, firstPage: Int? = nil) -> Int? {
         guard offset >= 0, !text.isEmpty else { return nil }
-        guard let regex = try? NSRegularExpression(pattern: #"\[?\*\s?(\d{1,5})\]?"#) else { return nil }
+        guard let regex = try? NSRegularExpression(pattern: markerPattern) else { return nil }
         let bound = min(offset, (text as NSString).length)
         let range = NSRange(location: 0, length: bound)
         var page: Int?
         regex.enumerateMatches(in: text, range: range) { match, _, _ in
-            guard let match, match.numberOfRanges >= 2,
-                  let valueRange = Range(match.range(at: 1), in: text),
-                  let value = Int(text[valueRange]) else { return }
-            if let firstPage, value < firstPage || value > firstPage + 2_000 { return }
-            page = value
+            guard let match else { return }
+            for group in 1..<match.numberOfRanges {
+                guard let valueRange = Range(match.range(at: group), in: text),
+                      let value = Int(text[valueRange]) else { continue }
+                if let firstPage, value < firstPage || value > firstPage + 2_000 { continue }
+                page = value
+                break
+            }
         }
         return page
     }

@@ -914,6 +914,14 @@ public enum SupraMigrator {
             }
         }
 
+        migrator.registerMigration("v052_add_authority_case_summary") { db in
+            // A model-generated ≤100-word summary of the opinion, persisted so the
+            // Authorities list reads at a glance without regenerating.
+            try db.alter(table: "authorities") { table in
+                table.add(column: "case_summary", .text)
+            }
+        }
+
         return migrator
     }
 

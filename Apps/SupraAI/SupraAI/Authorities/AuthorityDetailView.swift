@@ -12,6 +12,8 @@ import WebKit
 struct AuthorityDetailView: View {
     @ObservedObject var controller: AuthoritiesController
     let authorityID: String
+    /// Loads the summarization model on demand (nil disables Generate Summary).
+    var library: ModelLibrary?
 
     @Environment(\.dismiss) private var dismiss
     @State private var citation = ""
@@ -34,6 +36,7 @@ struct AuthorityDetailView: View {
     @State private var pdfURL: URL?
     @State private var downloadingPDF = false
     @State private var pdfExporting = false
+    @State private var summaryError: String?
 
     var body: some View {
         Group {
@@ -137,13 +140,27 @@ struct AuthorityDetailView: View {
                 }
             }
 
-            if loadingOpinion || opinionPassage != nil {
-                Section("Opinion text") {
-                    if let passage = opinionPassage {
-                        Text(passage).supraReadingBody().textSelection(.enabled)
-                    } else {
-                        Text("Loading…").foregroundStyle(.secondary)
+            Section("Summary") {
+                if controller.summarizingAuthorityIDs.contains(authority.id) {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Summarizing…").foregroundStyle(.secondary)
                     }
+                } else if let summary = authority.caseSummary {
+                    Text(summary).supraReadingBody().textSelection(.enabled)
+                    Button("Regenerate Summary") { generateSummary(authority) }
+                        .disabled(library == nil)
+                } else {
+                    Text("A 100-word summary of the holding and key reasoning, generated locally from the opinion text.")
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                    Button { generateSummary(authority) } label: {
+                        Label("Generate Summary", systemImage: "text.badge.star")
+                    }
+                    .disabled(library == nil)
+                }
+                if let summaryError {
+                    Text(summaryError).font(.supraCaption).foregroundStyle(.orange)
                 }
             }
 
@@ -232,11 +249,6 @@ struct AuthorityDetailView: View {
             || opinion?.courtListenerPDFURL != nil
     }
 
-    /// A ~80-word excerpt of the opinion body, once fetched.
-    private var opinionPassage: String? {
-        CourtListenerText.passage(from: opinion?.bodyText)
-    }
-
     private func loadOpinionIfPossible(_ authority: AuthoritiesController.AuthorityItem) {
         guard opinion == nil, !loadingOpinion,
               authority.opinionID != nil, controller.hasCourtListenerToken else { return }
@@ -244,6 +256,22 @@ struct AuthorityDetailView: View {
         Task { @MainActor in
             opinion = await controller.fetchOpinionDetail(opinionID: authority.opinionID)
             loadingOpinion = false
+        }
+    }
+
+    private func generateSummary(_ authority: AuthoritiesController.AuthorityItem) {
+        summaryError = nil
+        Task { @MainActor in
+            guard let library else {
+                summaryError = "Model library unavailable."
+                return
+            }
+            switch await library.ensureLoadedChatModelID(for: .legalReasoning) {
+            case .success(let modelID):
+                summaryError = await controller.generateSummary(authorityID: authority.id, modelID: modelID)
+            case .failure(let issue):
+                summaryError = issue.message
+            }
         }
     }
 
@@ -334,9 +362,13 @@ struct OpinionWebView: NSViewRepresentable {
         """
         (function() {
           function lastMarker(text) {
-            var re = /\\[?\\*\\s?(\\d{1,5})\\]?/g; var m, last = null;
+            // Same families as the native scanner: *152 stars, Justia-style
+            // "Page 436 U. S. 152" headers, bare "-152-" page lines.
+            var re = /\\[?\\*\\s?(\\d{1,5})\\]?|[Pp]age\\s+\\d{1,4}\\s+[A-Za-z][A-Za-z0-9. ]{0,12}?\\s+(\\d{1,5})\\b|^\\s*-\\s?(\\d{1,5})\\s?-\\s*$/gm;
+            var m, last = null;
             while ((m = re.exec(text)) !== null) {
-              var v = parseInt(m[1], 10);
+              var v = parseInt(m[1] || m[2] || m[3], 10);
+              if (isNaN(v)) continue;
               if (\(firstPage) > 0 && (v < \(firstPage) || v > \(firstPage) + 2000)) continue;
               last = v;
             }

@@ -104,7 +104,7 @@ struct ModelsView: View {
 
                 modelSection(
                     "Task Models",
-                    footer: "Download a text model, assign it to each chat task, then load it. The runtime holds one model at a time."
+                    footer: "The runtime holds one model at a time."
                 ) {
                     RuntimeModelSetupView(library: library, downloader: downloader)
                 }
@@ -308,11 +308,15 @@ private struct ModelRoleAssignmentRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(role.displayName)
                     .font(.supraHeadline)
-                Text(statusText)
-                    .font(.supraCaption)
-                    .foregroundStyle(resolvedModel == nil ? .orange : .secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                // The picker names the assigned model — subtext only when the
+                // route needs attention.
+                if resolvedModel == nil {
+                    Text(statusText)
+                        .font(.supraCaption)
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 // Suggest the best-fitting downloaded model for this route when it
                 // isn't already the one in use; one tap assigns it.
                 if let recommendedModel, recommendedModel.id != resolvedModel?.id {
@@ -347,13 +351,7 @@ private struct ModelRoleAssignmentRow: View {
     }
 
     private var statusText: String {
-        if models.isEmpty {
-            return "Add a model to assign this route"
-        }
-        if let resolvedModel {
-            return resolvedModel.displayName
-        }
-        return "No route model"
+        models.isEmpty ? "Add a model to assign this route" : "No route model"
     }
 
     private var iconName: String {

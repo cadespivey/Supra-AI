@@ -314,7 +314,7 @@ public final class MattersController: ObservableObject {
         research.loadSessions()
         researchController = research
 
-        let authorities = AuthoritiesController(store: store, matterID: matterID)
+        let authorities = AuthoritiesController(store: store, matterID: matterID, runtimeClient: runtimeClient)
         authorities.load()
         authoritiesController = authorities
 

@@ -10,6 +10,8 @@ struct MatterAuthoritiesView: View {
     /// The matter's documents controller, so research uploaded here flows through
     /// the existing import → OCR → chunk → embed pipeline and becomes queryable.
     var documentsController: MatterDocumentsController?
+    /// Loads the summarization model on demand (nil disables Generate Summary).
+    var library: ModelLibrary?
     var onNewResearch: () -> Void = {}
     var onShowDocuments: () -> Void = {}
     @State private var pendingDelete: AuthoritiesController.AuthorityItem?
@@ -36,7 +38,7 @@ struct MatterAuthoritiesView: View {
                 }
             }
             .navigationDestination(for: String.self) { id in
-                AuthorityDetailView(controller: controller, authorityID: id)
+                AuthorityDetailView(controller: controller, authorityID: id, library: library)
             }
         }
         .confirmationDialog(

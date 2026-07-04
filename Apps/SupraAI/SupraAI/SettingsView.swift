@@ -844,7 +844,7 @@ struct EmbeddingModelSetupView: View {
                     Text("Verifying \(selected.displayName)…")
                 } else if setup.embeddingTestPassed {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    Text("Ready — \(selected.displayName) (\(selected.dimension)-d)")
+                    Text("Ready (\(selected.dimension)-d)")
                 } else {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     Text("\(selected.displayName) didn't load. Try another model.")

@@ -147,6 +147,15 @@ public final class AuthorityRepository: @unchecked Sendable {
         }
     }
 
+    public func updateCaseSummary(authorityID: String, summary: String) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE authorities SET case_summary = ?, updated_at = ? WHERE id = ?",
+                arguments: [summary, Date(), authorityID]
+            )
+        }
+    }
+
     public func fetchAuthorities(matterID: String) throws -> [AuthorityRecord] {
         try writer.read { db in
             try AuthorityRecord.fetchAll(

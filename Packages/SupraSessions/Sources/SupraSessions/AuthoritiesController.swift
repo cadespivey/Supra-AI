@@ -3,6 +3,8 @@ import Foundation
 import SupraCore
 import SupraNetworking
 import SupraResearch
+import SupraRuntimeClient
+import SupraRuntimeInterface
 import SupraStore
 
 /// The matter's authority library (spec §11): lists saved authorities and edits
@@ -23,6 +25,7 @@ public final class AuthoritiesController: ObservableObject {
         public let reviewState: String
         public let useStatus: AuthorityUseStatus
         public let userNotes: String?
+        public let caseSummary: String?
         public let rawMetadataJSON: String
     }
 
@@ -32,16 +35,23 @@ public final class AuthoritiesController: ObservableObject {
     public let matterID: String
     private let courtListenerClient: any CourtListenerClientProtocol
     private let tokenStore: any APIKeyStoreProtocol
+    private var runtimeClient: (any RuntimeClientProtocol)?
+    private let legalConfiguration: LegalModelConfiguration
+    /// Authorities with a summary generation in flight (UI busy state).
+    @Published public private(set) var summarizingAuthorityIDs: Set<String> = []
 
     public init(
         store: SupraStore,
         matterID: String,
         legalConfiguration: LegalModelConfiguration = .fromEnvironment(),
         tokenStore: (any APIKeyStoreProtocol)? = nil,
-        courtListenerClient: (any CourtListenerClientProtocol)? = nil
+        courtListenerClient: (any CourtListenerClientProtocol)? = nil,
+        runtimeClient: (any RuntimeClientProtocol)? = nil
     ) {
         self.store = store
         self.matterID = matterID
+        self.runtimeClient = runtimeClient
+        self.legalConfiguration = legalConfiguration
         let resolvedTokenStore = tokenStore ?? EnvironmentBackedTokenStore(primary: KeychainTokenStore())
         self.tokenStore = resolvedTokenStore
         self.courtListenerClient = courtListenerClient ?? CourtListenerClient(
@@ -133,9 +143,82 @@ public final class AuthoritiesController: ObservableObject {
                 reviewState: record.reviewState,
                 useStatus: AuthorityUseStatus(rawValue: record.useStatus) ?? .unverified,
                 userNotes: record.userNotes,
+                caseSummary: CourtListenerText.clean(record.caseSummary),
                 rawMetadataJSON: record.rawMetadataJSON
             )
         }
+    }
+
+    /// Generates and persists a ≤100-word case summary from the opinion text —
+    /// the persisted copy when the authority has one, else a one-shot fetch.
+    /// Grounded summarization only: with no opinion text there is no summary.
+    /// Returns nil on success, else a user-facing reason.
+    public func generateSummary(authorityID: String, modelID: ModelID) async -> String? {
+        guard let runtimeClient else { return "Summaries need the local model runtime." }
+        guard let item = authorities.first(where: { $0.id == authorityID }) else { return "Authority not found." }
+        guard !summarizingAuthorityIDs.contains(authorityID) else { return nil }
+        summarizingAuthorityIDs.insert(authorityID)
+        defer { summarizingAuthorityIDs.remove(authorityID) }
+
+        var opinionText = storedOpinionText(authorityID: authorityID)
+        if opinionText == nil {
+            opinionText = (await fetchOpinionDetail(opinionID: item.opinionID))?.bodyText
+        }
+        guard let opinionText, !opinionText.isEmpty else {
+            return "No opinion text is available to summarize — open the case on CourtListener or re-run research."
+        }
+
+        // Head + tail window: the holding usually opens the opinion; the
+        // disposition closes it. Bounded so a 200-page opinion can't blow the
+        // context.
+        let condensed: String
+        if opinionText.count > 12_000 {
+            condensed = opinionText.prefix(9_000) + "\n[…]\n" + opinionText.suffix(3_000)
+        } else {
+            condensed = opinionText
+        }
+        let prompt = """
+        Summarize this judicial opinion in AT MOST 100 words for a litigator's authority library: the holding first, then the key reasoning. Neutral tone, no citations, no preamble — output ONLY the summary paragraph.
+
+        CASE: \(item.caseNameFull ?? item.caseName)
+
+        OPINION TEXT:
+        \(condensed)
+        """
+        var options = ModelRouter(configuration: legalConfiguration).route(for: .generalQA).options
+        options.thinkingBudget = .off
+        let request = GenerateRequest(
+            generationID: GenerationID(),
+            modelID: modelID,
+            prompt: prompt,
+            systemPrompt: nil,
+            options: options
+        )
+        guard let raw = try? await runtimeClient.collectGeneratedText(request),
+              case let .answer(answer) = ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: false) else {
+            return "The model didn't return a summary. Check that a model is loaded in the Models tab."
+        }
+        let summary = Self.cappedSummary(answer)
+        guard !summary.isEmpty else { return "The model returned an empty summary." }
+        do {
+            try store.authorities.updateCaseSummary(authorityID: authorityID, summary: summary)
+        } catch {
+            return "Couldn't save the summary: \(error.localizedDescription)"
+        }
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID, eventType: "authority_summary_generated", actor: "runtime",
+            summary: "Generated case summary for “\(item.caseName)”"
+        )
+        load()
+        return nil
+    }
+
+    /// Hard 100-word cap — the prompt asks, this enforces.
+    static func cappedSummary(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = trimmed.split(whereSeparator: \.isWhitespace)
+        guard words.count > 100 else { return trimmed }
+        return words.prefix(100).joined(separator: " ") + "…"
     }
 
     /// Soft-deletes a saved authority (removes it from the library). Writes an

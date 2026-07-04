@@ -2839,6 +2839,41 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.messages.last?.status, .completed)
     }
 
+    func testGenerateCaseSummaryPersistsCappedSummary() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Adams", jurisdiction: "Florida")
+        let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
+        let query = try store.research.createQuery(researchSessionID: session.id, queryText: "q", queryIndex: 0, status: .approved)
+        let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: query.id, caseName: "Flagg Bros."))
+        let record = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id, researchSessionID: session.id, researchResultID: result.id,
+            caseName: "Flagg Bros., Inc. v. Brooks",
+            citationJSON: #"["436 U.S. 149"]"#,
+            court: "Supreme Court of the United States", courtID: "scotus",
+            opinionText: "A warehouseman's proposed sale of goods entrusted to him for storage is not state action under the Fourteenth Amendment."
+        ))
+        let runtime = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "The Court held that a warehouseman's proposed sale of stored goods under the UCC is not state action; due process protections therefore do not attach."),
+                .event(request, 2, .generationCompleted)
+            ])
+        }
+        let controller = AuthoritiesController(store: store, matterID: matter.id, runtimeClient: runtime)
+        controller.load()
+
+        let error = await controller.generateSummary(authorityID: record.id, modelID: ModelID())
+        XCTAssertNil(error, error ?? "")
+        let summary = try XCTUnwrap(controller.authorities.first?.caseSummary)
+        XCTAssertTrue(summary.contains("state action"), summary)
+        XCTAssertLessThanOrEqual(summary.split(whereSeparator: \.isWhitespace).count, 101)
+
+        // The hard cap truncates a runaway generation.
+        let long = (1...250).map { "word\($0)" }.joined(separator: " ")
+        let capped = AuthoritiesController.cappedSummary(long)
+        XCTAssertEqual(capped.split(whereSeparator: \.isWhitespace).count, 100)
+        XCTAssertTrue(capped.hasSuffix("…"))
+    }
+
     // MARK: - Authority library (WO 27)
 
     func testAuthorityUseStatusTransitionsEnforcedAndAudited() throws {

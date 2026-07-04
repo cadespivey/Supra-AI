@@ -28,6 +28,7 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
     /// Hydrated full opinion text, persisted only for user-saved authorities (spec
     /// §8.3) — grounds local-first research and the offline [A#] reader.
     public var opinionText: String?
+    public var caseSummary: String?
     public var rawMetadataJSON: String
     public var createdAt: Date
     public var updatedAt: Date
@@ -55,6 +56,7 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
         useStatus: String = AuthorityUseStatus.retrievedFromCourtListener.rawValue,
         userNotes: String? = nil,
         opinionText: String? = nil,
+        caseSummary: String? = nil,
         rawMetadataJSON: String = "{}",
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -81,6 +83,7 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
         self.useStatus = useStatus
         self.userNotes = userNotes
         self.opinionText = opinionText
+        self.caseSummary = caseSummary
         self.rawMetadataJSON = rawMetadataJSON
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -109,6 +112,7 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
         case useStatus = "use_status"
         case userNotes = "user_notes"
         case opinionText = "opinion_text"
+        case caseSummary = "case_summary"
         case rawMetadataJSON = "raw_metadata_json"
         case createdAt = "created_at"
         case updatedAt = "updated_at"

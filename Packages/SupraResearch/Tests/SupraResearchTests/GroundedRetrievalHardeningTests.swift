@@ -444,6 +444,33 @@ final class GroundedRetrievalHardeningTests: XCTestCase {
         XCTAssertEqual(BluebookCitation.recasedCaption("McDonald's Corp. v. Doe"), "McDonald's Corp. v. Doe")
     }
 
+    func testFlaggBrosCaptionRecasesDespiteMixedEtAl() {
+        // CourtListener's exact stored caption: the mixed "Et Al." particles
+        // dilute the caps ratio, which used to defeat the recaser entirely.
+        XCTAssertEqual(
+            BluebookCitation.recasedCaption("FLAGG BROS., INC., Et Al. v. BROOKS Et Al."),
+            "Flagg Bros., Inc., et al. v. Brooks et al."
+        )
+        // Agency acronyms survive a full recase.
+        XCTAssertEqual(BluebookCitation.recasedCaption("NLRB V. JONES & LAUGHLIN STEEL CORP."), "NLRB v. Jones & Laughlin Steel Corp.")
+        XCTAssertEqual(BluebookCitation.recasedCaption("SEC V. W.J. HOWEY CO."), "SEC v. W.J. Howey Co.")
+    }
+
+    func testJustiaPageHeadersYieldPinCites() {
+        // Old SCOTUS records carry Justia-style "Page 436 U. S. 152" markers
+        // (their plain_text is empty; text comes from stripped HTML).
+        let text = "Syllabus text here. Page 436 U. S. 152 The State action doctrine requires more. Page 436 U. S. 157 A warehouseman's sale is not state action."
+        let holding = (text as NSString).range(of: "warehouseman").location
+        XCTAssertEqual(StarPagination.page(at: holding, in: text, firstPage: 149), 157)
+        let earlier = (text as NSString).range(of: "doctrine").location
+        XCTAssertEqual(StarPagination.page(at: earlier, in: text, firstPage: 149), 152)
+
+        // Bare centered page lines count too.
+        let dashText = "Intro words.\n-152-\nBody of page one hundred fifty-two."
+        let offset = (dashText as NSString).range(of: "Body").location
+        XCTAssertEqual(StarPagination.page(at: offset, in: dashText, firstPage: 149), 152)
+    }
+
     func testStarPaginationPinLookup() {
         let text = "Intro before pagination. *321 The first page of substance. More words here. *322 Second page text with the holding language."
         let holdingOffset = (text as NSString).range(of: "holding language").location

@@ -178,6 +178,7 @@ struct MatterWorkspaceView: View {
                 MatterAuthoritiesView(
                     controller: authorities,
                     documentsController: controller.documentsController,
+                    library: library,
                     onNewResearch: {
                         autoOpenResearchPlanner = true
                         tab = .research
