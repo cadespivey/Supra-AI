@@ -382,6 +382,68 @@ final class GroundedRetrievalHardeningTests: XCTestCase {
         XCTAssertEqual(unknown.formatted(), "In re Doe, 77 X.Y.Z. 1 (1999).")
     }
 
+    func testFloridaDCAUsesFloridaStyleAbbreviation() {
+        // Florida practitioners cite DCAs Florida-style: "(Fla. 1st DCA 2026)".
+        let first = BluebookCitation(
+            caseName: "Smith v. Jones",
+            citation: "300 So. 3d 100",
+            court: "District Court of Appeal of Florida, First District",
+            year: 2026
+        )
+        XCTAssertEqual(first.formatted(), "Smith v. Jones, 300 So. 3d 100 (Fla. 1st DCA 2026).")
+
+        let second = BluebookCitation(
+            caseName: "Roe v. Coe",
+            citation: "310 So. 3d 200",
+            court: "Florida District Court of Appeal, Second District",
+            year: 2021
+        )
+        XCTAssertEqual(second.courtAbbreviation, "Fla. 2d DCA")
+
+        let third = BluebookCitation(
+            caseName: "A v. B",
+            citation: "320 So. 3d 300",
+            court: "District Court of Appeal of Florida, 3rd District",
+            year: 2020
+        )
+        XCTAssertEqual(third.courtAbbreviation, "Fla. 3d DCA")
+
+        // District unknown → generic Bluebook form, never a guessed district.
+        let unknownDistrict = BluebookCitation(
+            caseName: "C v. D",
+            citation: "330 So. 3d 400",
+            court: "District Court of Appeal of Florida",
+            year: 2019
+        )
+        XCTAssertEqual(unknownDistrict.courtAbbreviation, "Fla. Dist. Ct. App.")
+    }
+
+    func testAllCapsCaptionIsRecasedForTheCitation() {
+        // Filing-style ALL-CAPS captions re-case to cite style…
+        let capped = BluebookCitation(
+            caseName: "ADAMS V. FRITZ MARTIN CABINETRY LLC, ET AL.",
+            citation: "300 F. Supp. 3d 1300",
+            court: "United States District Court for the Middle District of Florida",
+            year: 2018
+        )
+        XCTAssertEqual(
+            capped.formatted(),
+            "Adams v. Fritz Martin Cabinetry LLC, et al., 300 F. Supp. 3d 1300 (M.D. Fla. 2018)."
+        )
+
+        XCTAssertEqual(BluebookCitation.recasedCaption("IN RE WINSHIP"), "In re Winship")
+        XCTAssertEqual(BluebookCitation.recasedCaption("J.B. V. STATE OF FLORIDA"), "J.B. v. State of Florida")
+        XCTAssertEqual(BluebookCitation.recasedCaption("BANK OF AMERICA, N.A. V. SMITH-JONES"), "Bank of America, N.A. v. Smith-Jones")
+        XCTAssertEqual(BluebookCitation.recasedCaption("STATE EX REL. DOE V. ROE III"), "State ex rel. Doe v. Roe III")
+
+        // …while mixed-case captions pass through untouched.
+        XCTAssertEqual(
+            BluebookCitation.recasedCaption("SunTrust Bank v. Houghton Mifflin Co."),
+            "SunTrust Bank v. Houghton Mifflin Co."
+        )
+        XCTAssertEqual(BluebookCitation.recasedCaption("McDonald's Corp. v. Doe"), "McDonald's Corp. v. Doe")
+    }
+
     func testStarPaginationPinLookup() {
         let text = "Intro before pagination. *321 The first page of substance. More words here. *322 Second page text with the holding language."
         let holdingOffset = (text as NSString).range(of: "holding language").location

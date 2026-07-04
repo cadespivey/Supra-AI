@@ -79,14 +79,63 @@ public struct BluebookCitation: Sendable, Equatable {
     }
 
     /// Strips a citation tail that rode into the caption ("Rush v. Savchuk,
-    /// 444 U.S. 320" → "Rush v. Savchuk").
+    /// 444 U.S. 320" → "Rush v. Savchuk") and re-cases an ALL-CAPS filing
+    /// caption into cite style.
     static func cleanedCaseName(_ name: String) -> String {
-        name.replacingOccurrences(
+        let stripped = name.replacingOccurrences(
             of: #",\s*\d{1,4}\s+[A-Za-z. ]{1,30}\s+\d{1,5}.*$"#,
             with: "",
             options: .regularExpression
         )
         .trimmingCharacters(in: .whitespacesAndNewlines)
+        return recasedCaption(stripped)
+    }
+
+    /// Captions arrive in filing style — often ALL CAPS. A citation is title
+    /// case ("Adams v. Fritz Martin Cabinetry LLC"), so a predominantly
+    /// uppercase caption is re-cased; anything mixed-case passes through
+    /// untouched (re-casing would destroy "SunTrust" or "McDonald's").
+    static func recasedCaption(_ name: String) -> String {
+        let letters = name.filter(\.isLetter)
+        guard letters.count >= 4 else { return name }
+        let uppercase = letters.filter(\.isUppercase).count
+        guard Double(uppercase) / Double(letters.count) > 0.85 else { return name }
+
+        let words = name.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        let recased = words.enumerated().map { index, word in
+            recasedWord(word, isFirst: index == 0)
+        }
+        var caption = recased.joined(separator: " ")
+        // Procedural phrases keep their Bluebook lowercase particle.
+        caption = caption.replacingOccurrences(of: "In Re ", with: "In re ")
+        caption = caption.replacingOccurrences(of: "Ex Parte ", with: "Ex parte ")
+        caption = caption.replacingOccurrences(of: "Ex Rel", with: "ex rel")
+        return caption
+    }
+
+    private static func recasedWord(_ word: String, isFirst: Bool) -> String {
+        let key = word.filter(\.isLetter).uppercased()
+        // The versus particle.
+        if key == "V" || key == "VS" { return word.lowercased() }
+        // Small words stay lowercase mid-caption ("Bank of America", "et al.").
+        let smallWords: Set<String> = ["OF", "THE", "AND", "IN", "ON", "AT", "FOR", "A", "AN", "TO", "BY", "RE", "ET", "AL", "EX", "REL"]
+        if !isFirst, smallWords.contains(key) { return word.lowercased() }
+        // Initialisms with periods keep their capitals ("U.S.", "J.B.", "P.A.").
+        if word.range(of: #"^\(?(?:[A-Za-z]\.){2,},?\)?$"#, options: .regularExpression) != nil {
+            return word.uppercased()
+        }
+        // Entity designators and roman numerals keep their capitals.
+        let keepUppercase: Set<String> = ["LLC", "LLP", "PLLC", "LP", "PLC", "NA", "FSB", "USA", "DCA"]
+        if keepUppercase.contains(key) { return word.uppercased() }
+        if key.count >= 2, key.allSatisfy({ "IVXLC".contains($0) }) { return word.uppercased() }
+        // Default: capitalize each hyphen-separated segment.
+        return word.lowercased()
+            .split(separator: "-", omittingEmptySubsequences: false)
+            .map { segment -> String in
+                guard let first = segment.first else { return String(segment) }
+                return first.uppercased() + segment.dropFirst()
+            }
+            .joined(separator: "-")
     }
 
     // MARK: - Court abbreviation
@@ -150,9 +199,14 @@ public struct BluebookCitation: Sendable, Equatable {
             let state = String(lower[match]).replacingOccurrences(of: "supreme court of ", with: "")
             if let stateAbbr = bluebookState(state) { return stateAbbr }
         }
-        // Common intermediate pattern: "{State} District Court of Appeal(s)" /
-        // "Court of Appeals of {State}" / "{State} Court of Appeals".
-        if lower.contains("district court of appeal"), lower.contains("florida") {
+        // Florida DCAs use the FLORIDA-style abbreviation ("Fla. 1st DCA") —
+        // the convention Florida practitioners cite by — not the generic
+        // Bluebook "Fla. Dist. Ct. App." form. District from the court name;
+        // an unidentifiable district degrades to the generic form.
+        if lower.contains("district court of appeal"), lower.contains("florida") || lower.contains("fla.") {
+            if let district = floridaDCADistrict(in: lower) {
+                return "Fla. \(district) DCA"
+            }
             return "Fla. Dist. Ct. App."
         }
         if let match = lower.range(of: #"court of appeals? of ([a-z ]+)$"#, options: .regularExpression) {
@@ -161,6 +215,23 @@ public struct BluebookCitation: Sendable, Equatable {
         }
 
         // Unknown: better a year-only parenthetical than a made-up abbreviation.
+        return nil
+    }
+
+    /// The DCA district ("1st", "2d", …, "6th") from a court name, matching
+    /// spelled ordinals ("First District") or digits ("1st District").
+    private static func floridaDCADistrict(in lower: String) -> String? {
+        let florida: [(word: String, abbreviation: String)] = [
+            ("first", "1st"), ("second", "2d"), ("third", "3d"),
+            ("fourth", "4th"), ("fifth", "5th"), ("sixth", "6th")
+        ]
+        for entry in florida where lower.contains(entry.word) {
+            return entry.abbreviation
+        }
+        if let match = lower.range(of: #"\b([1-6])(?:st|nd|rd|th)\b"#, options: .regularExpression),
+           let digit = lower[match].first(where: \.isNumber) {
+            return ["1": "1st", "2": "2d", "3": "3d", "4": "4th", "5": "5th", "6": "6th"][String(digit)]
+        }
         return nil
     }
 
