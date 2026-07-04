@@ -79,11 +79,24 @@ final class SupraFocusChain {
         return entries[ObjectIdentifier(view)]
     }
 
-    private func installInitialFocusIfPossible() {
+    /// Focuses the first registered field once the hosting window exists.
+    /// Idempotent (latched) and safe to call from several triggers —
+    /// register-time async AND the host view's `onAppear` — because the
+    /// register-time call can fire before the window is attached on slower
+    /// presentations, and `onAppear` is the reliable "window is ready" signal.
+    func installInitialFocusIfPossible() {
         guard !installedInitialFocus else { return }
         guard let first = orderedEntries().first, let window = first.view.window else { return }
         installedInitialFocus = true
         window.initialFirstResponder = first.view
+        // Never yank focus away from a registered field the user reached
+        // first (a late-firing trigger must not steal it). The field editor of
+        // an NSTextField is a descendant of the field, so cover both.
+        let responder = window.firstResponder as? NSView
+        let alreadyInChain = orderedEntries().contains { entry in
+            responder === entry.view || responder?.isDescendant(of: entry.view) == true
+        }
+        guard !alreadyInChain else { return }
         if window.firstResponder !== first.view {
             window.makeFirstResponder(first.view)
         }

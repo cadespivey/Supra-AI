@@ -220,6 +220,11 @@ struct ResearchPlannerView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focusChain.noteFirstRegisteredControl() }
             }
             #endif
+            // Reliable window-ready trigger for initial focus on Title, with a
+            // short retry — register-time async can fire before the sheet's
+            // window is attached on slower presentations. Idempotent + guarded.
+            DispatchQueue.main.async { focusChain.installInitialFocusIfPossible() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focusChain.installInitialFocusIfPossible() }
             library.refresh()
             Task { @MainActor in seedManualQueryIfNeeded() }
         }
