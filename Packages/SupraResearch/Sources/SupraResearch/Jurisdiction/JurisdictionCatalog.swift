@@ -781,6 +781,13 @@ private extension JurisdictionCatalog {
         case "13": "Thirteenth"
         case "14": "Fourteenth"
         case "15": "Fifteenth"
+        // State judicial circuits run to the Twentieth (Florida's 16th–20th
+        // are real trial courts a litigator searches by number).
+        case "16": "Sixteenth"
+        case "17": "Seventeenth"
+        case "18": "Eighteenth"
+        case "19": "Nineteenth"
+        case "20": "Twentieth"
         default: number
         }
     }

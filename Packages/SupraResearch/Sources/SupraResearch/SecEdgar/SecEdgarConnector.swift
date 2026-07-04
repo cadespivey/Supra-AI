@@ -176,16 +176,23 @@ public final class SecEdgarConnector: @unchecked Sendable {
 
     // MARK: - Form-family helpers
 
+    /// Form families, the single source of truth shared by the fetch helpers
+    /// and by `filings(in:formFamily:...)` so callers that already hold a
+    /// submissions payload don't re-fetch it.
+    public static let annualReportForms = ["10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"]
+    public static let quarterlyReportForms = ["10-Q", "10-Q/A"]
+    public static let currentReportForms = ["8-K", "8-K/A", "6-K", "6-K/A"]
+
     public func getAnnualReports(cik: String, filters: SecFilingFilters = .init()) async throws -> [SecFilingRecord] {
-        try await filingsForForms(cik: cik, forms: ["10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"], filters: filters)
+        try await filingsForForms(cik: cik, forms: Self.annualReportForms, filters: filters)
     }
 
     public func getQuarterlyReports(cik: String, filters: SecFilingFilters = .init()) async throws -> [SecFilingRecord] {
-        try await filingsForForms(cik: cik, forms: ["10-Q", "10-Q/A"], filters: filters)
+        try await filingsForForms(cik: cik, forms: Self.quarterlyReportForms, filters: filters)
     }
 
     public func getCurrentReports(cik: String, filters: SecFilingFilters = .init()) async throws -> [SecFilingRecord] {
-        try await filingsForForms(cik: cik, forms: ["8-K", "8-K/A", "6-K", "6-K/A"], filters: filters)
+        try await filingsForForms(cik: cik, forms: Self.currentReportForms, filters: filters)
     }
 
     /// 8-K family with an optional item filter (e.g. "1.01"); matching is a
@@ -216,17 +223,31 @@ public final class SecEdgarConnector: @unchecked Sendable {
     }
 
     private func filingsForForms(cik: String, forms: [String], filters: SecFilingFilters) async throws -> [SecFilingRecord] {
+        let submissions = try await getCompanySubmissions(cik)
+        return try Self.filings(in: submissions, formFamily: forms, filters: filters, operation: "getRecentFilings")
+    }
+
+    /// Filters an ALREADY-FETCHED submissions payload by form family — no
+    /// network. Callers that already hold submissions (e.g. a company view
+    /// that fetched the header) use this to avoid re-fetching the same JSON.
+    /// Semantics match `getRecentFilings` + the form-family merge exactly.
+    public static func filings(
+        in submissions: SecCompanySubmissions,
+        formFamily: [String],
+        filters: SecFilingFilters = .init(),
+        operation: String
+    ) throws -> [SecFilingRecord] {
         var merged = filters
         if merged.formTypes.isEmpty {
             // The family list is connector-injected, not caller-explicit, so
             // includeAmendments=false strips its /A members.
-            merged.formTypes = filters.includeAmendments ? forms : forms.filter { !$0.hasSuffix("/A") }
+            merged.formTypes = filters.includeAmendments ? formFamily : formFamily.filter { !$0.hasSuffix("/A") }
         } else {
-            let allowed = Set(forms.map { $0.uppercased() })
+            let allowed = Set(formFamily.map { $0.uppercased() })
             merged.formTypes = merged.formTypes.filter { allowed.contains($0.trimmingCharacters(in: .whitespaces).uppercased()) }
             if merged.formTypes.isEmpty { return [] }
         }
-        return try await getRecentFilings(cik: cik, filters: merged)
+        return try apply(merged, to: submissions.recentFilings, operation: operation)
     }
 
     // MARK: - XBRL
@@ -309,7 +330,7 @@ public final class SecEdgarConnector: @unchecked Sendable {
 
     // MARK: - Filters
 
-    static func apply(_ filters: SecFilingFilters, to filings: [SecFilingRecord], operation: String) throws -> [SecFilingRecord] {
+    public static func apply(_ filters: SecFilingFilters, to filings: [SecFilingRecord], operation: String) throws -> [SecFilingRecord] {
         try validateISODate(filters.startDate, field: "startDate", operation: operation)
         try validateISODate(filters.endDate, field: "endDate", operation: operation)
         let forms = Set(filters.formTypes.map { $0.trimmingCharacters(in: .whitespaces).uppercased() }.filter { !$0.isEmpty })

@@ -125,17 +125,23 @@ public final class PublicRecordsController: ObservableObject {
         secCompany = nil
         secFilings = []
         do {
+            // Fetch the submissions ONCE and derive every scope from it — the
+            // per-scope connector methods would each re-fetch the same CIK's
+            // submissions JSON (a redundant parse, and a redundant SEC hit if
+            // the cache is cold or disabled).
             let submissions = try await secConnector.getCompanySubmissions(trimmed)
             secCompany = submissions.company
+            let filters = SecFilingFilters(limit: 40)
+            let operation = "searchSecFilings"
             switch scope {
             case .all:
-                secFilings = try await secConnector.getRecentFilings(cik: trimmed, filters: .init(limit: 40))
+                secFilings = try SecEdgarConnector.apply(filters, to: submissions.recentFilings, operation: operation)
             case .annual:
-                secFilings = try await secConnector.getAnnualReports(cik: trimmed, filters: .init(limit: 40))
+                secFilings = try SecEdgarConnector.filings(in: submissions, formFamily: SecEdgarConnector.annualReportForms, filters: filters, operation: operation)
             case .quarterly:
-                secFilings = try await secConnector.getQuarterlyReports(cik: trimmed, filters: .init(limit: 40))
+                secFilings = try SecEdgarConnector.filings(in: submissions, formFamily: SecEdgarConnector.quarterlyReportForms, filters: filters, operation: operation)
             case .current:
-                secFilings = try await secConnector.getCurrentReports(cik: trimmed, filters: .init(limit: 40))
+                secFilings = try SecEdgarConnector.filings(in: submissions, formFamily: SecEdgarConnector.currentReportForms, filters: filters, operation: operation)
             }
             secPhase = .loaded
         } catch {

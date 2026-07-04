@@ -132,6 +132,34 @@ final class NlrbDataConnectorTests: XCTestCase {
         }
     }
 
+    func testDetectVariantMatchesEveryNormalizerAlias() throws {
+        // The election export uses the ALTERNATE header spellings the
+        // normalizer aliases (Date Tally Issued / Votes for Labor Org /
+        // Against Votes / Number of Eligible Voters) — detectVariant must
+        // classify it as election, not silently fall through to filings and
+        // drop the vote data.
+        let electionAltHeader = "Case Number,Case Name,Region,City,State,Unit ID,Date Tally Issued,Labor Organization,Votes for Labor Org,Against Votes,Valid Votes Counted,Unit Size,Number of Eligible Voters,Certified Rep\n01-RC-1,Acme,Region 1,Tampa,FL,A,03/01/2024,Local 1,20,10,30,35,34,None\n"
+        XCTAssertEqual(
+            try NlrbDataConnector.detectVariant(inCSV: electionAltHeader, operation: "t"),
+            .officialRecentElectionResults
+        )
+
+        // A filings export using the bare "Case" column (also a caseRecord
+        // alias) must be recognized, not rejected.
+        let filingsBareCase = "Case,Case Name,Case Type,Region Assigned,Date Filed,Status,Employer,Union\n01-CA-1,Acme,CA,Region 1,03/01/2024,Open,Acme,Local 1\n"
+        XCTAssertEqual(
+            try NlrbDataConnector.detectVariant(inCSV: filingsBareCase, operation: "t"),
+            .officialRecentFilings
+        )
+
+        // The canonical filings export (no vote columns) is still filings, not
+        // misclassified as election.
+        XCTAssertEqual(
+            try NlrbDataConnector.detectVariant(inCSV: try fixtureText("recent-filings", ext: "csv"), operation: "t"),
+            .officialRecentFilings
+        )
+    }
+
     func testCSVParserHandlesQuotedCommasAndCRLF() {
         let csv = "a,b,c\r\n\"one, two\",\"say \"\"hi\"\"\",\r\nplain,,\"multi\nline\"\n"
         let rows = NlrbCSVImporter.parse(csv)

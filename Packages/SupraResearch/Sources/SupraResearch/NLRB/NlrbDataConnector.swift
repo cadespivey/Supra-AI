@@ -204,12 +204,36 @@ public final class NlrbDataConnector: @unchecked Sendable {
         )
     }
 
+    /// Header fields that appear ONLY in the election-results export, spelled
+    /// every way `NlrbNormalizer.electionRecord` accepts. The discriminator
+    /// must recognize exactly the headers the normalizer can parse — a subset
+    /// silently misclassifies a valid alternate-spelling export and drops its
+    /// vote data.
+    static let electionOnlyHeaderKeys: Set<String> = Set([
+        "Tally Date", "tally_date", "Date Tally Issued",
+        "Election Type", "Ballot Type",
+        "Votes For", "Votes for Labor Org", "Union Yes Votes",
+        "Votes Against", "Against Votes", "No Votes",
+        "Total Ballots Counted", "Valid Votes Counted",
+        "Unit ID", "unit_id", "Unit Size",
+        "Eligible Voters", "Number of Eligible Voters",
+        "Certified Representative", "Certified Rep",
+    ].map(NlrbCSVImporter.normalizedHeaderKey))
+
+    /// Case-number header spellings `NlrbNormalizer.caseRecord` accepts,
+    /// including the bare `Case` column.
+    static let caseNumberHeaderKeys: Set<String> = Set([
+        "Case Number", "case_number", "CaseNumber", "Case",
+    ].map(NlrbCSVImporter.normalizedHeaderKey))
+
     /// Header-based variant detection for manually downloaded exports.
+    /// Election is checked FIRST because the election export also carries a
+    /// case-number column; the election-only fields never appear in the
+    /// filings export, so this cannot misclassify filings as elections.
     static func detectVariant(inCSV text: String, operation: String) throws -> NlrbSourceVariant {
         let headerKeys = Set((NlrbCSVImporter.parse(text).first ?? []).map(NlrbCSVImporter.normalizedHeaderKey))
-        let electionMarkers: Set<String> = ["tallydate", "votesfor", "votesagainst", "ballottype", "electiontype"]
-        if !headerKeys.isDisjoint(with: electionMarkers) { return .officialRecentElectionResults }
-        if headerKeys.contains("casenumber") { return .officialRecentFilings }
+        if !headerKeys.isDisjoint(with: electionOnlyHeaderKeys) { return .officialRecentElectionResults }
+        if !headerKeys.isDisjoint(with: caseNumberHeaderKeys) { return .officialRecentFilings }
         throw LegalDataConnectorError(
             kind: .validation,
             connectorName: Self.connectorName,

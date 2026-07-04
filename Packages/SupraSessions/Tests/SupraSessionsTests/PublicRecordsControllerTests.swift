@@ -91,11 +91,14 @@ final class PublicRecordsControllerTests: XCTestCase {
             "primaryDocDescription":["Annual report","Current report"]
          },"files":[]}}
         """.utf8)
-        let (controller, dir) = makeController(secScript: [.success(submissions), .success(submissions)])
+        // Exactly ONE scripted response (no cache): if the controller
+        // re-fetched submissions per scope, the second fetch would hit the
+        // empty script and fail, so `.loaded` proves a single fetch.
+        let (controller, dir) = makeController(secScript: [.success(submissions)])
         defer { try? FileManager.default.removeItem(at: dir) }
 
         await controller.searchSecFilings(cik: "320193", scope: .all)
-        XCTAssertEqual(controller.secPhase, .loaded)
+        XCTAssertEqual(controller.secPhase, .loaded, "one submissions fetch should satisfy the whole search")
         XCTAssertEqual(controller.secCompany?.entityName, "Apple Inc.")
         XCTAssertEqual(controller.secFilings.map(\.form), ["10-K", "8-K"])
         XCTAssertTrue(controller.secFilings.allSatisfy { $0.filingUrl.hasPrefix("https://www.sec.gov/") })

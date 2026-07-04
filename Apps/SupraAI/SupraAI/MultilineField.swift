@@ -372,12 +372,17 @@ struct FocusChainSwitch: NSViewRepresentable {
                 super.keyDown(with: event)
                 return
             }
+            // At a chain boundary (this is the last/first registered field),
+            // hand off to the native key-view loop so Tab reaches the buttons
+            // below instead of dead-ending on the toggle — mirroring the
+            // text-field boundary behavior above.
             if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.shift) {
                 if focusChain?.focusPrevious(before: self) == true { return }
-            } else if focusChain?.focusNext(after: self) == true {
-                return
+                window?.selectPreviousKeyView(nil)
+            } else {
+                if focusChain?.focusNext(after: self) == true { return }
+                window?.selectNextKeyView(nil)
             }
-            super.keyDown(with: event)
         }
 
         override func becomeFirstResponder() -> Bool {
