@@ -434,7 +434,8 @@ struct OpinionWebView: NSViewRepresentable {
                 let end = body["pinEnd"] as? Int ?? start
                 pins = (start, max(start, end))
             }
-            let payload = text + "\n\n" + bluebook.formatted(pinPages: pins)
+            // Inline, Bluebook-style: the cite follows the quoted text directly.
+            let payload = text + " " + bluebook.formatted(pinPages: pins)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(payload, forType: .string)
         }

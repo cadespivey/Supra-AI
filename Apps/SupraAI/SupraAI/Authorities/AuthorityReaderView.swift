@@ -238,7 +238,8 @@ final class CitationCopyingTextView: NSTextView {
             in: string,
             firstPage: bluebook.firstPage
         )
-        let payload = selected + "\n\n" + bluebook.formatted(pinPages: pin)
+        // Inline, Bluebook-style: the cite follows the quoted text directly.
+        let payload = selected + " " + bluebook.formatted(pinPages: pin)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(payload, forType: .string)
     }
