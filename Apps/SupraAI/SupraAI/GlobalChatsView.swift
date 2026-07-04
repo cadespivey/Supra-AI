@@ -215,7 +215,7 @@ struct GlobalChatsView: View {
     private var chatSearchField: some View {
         // Matches the Documents tab's search field — a standard rounded-border text
         // field rather than a filled pill with an inline icon.
-        TextField("Search chats or #tags", text: $chatSearch)
+        TextField("Search chats or #tags", text: $chatSearch).supraField()
             .textFieldStyle(.roundedBorder)
     }
 

@@ -365,7 +365,7 @@ private struct EditLineSheet: View {
                 if codeSet == .none {
                     Text("—").foregroundStyle(.tertiary).frame(width: 150, alignment: .leading)
                 } else {
-                    TextField("Firm code", text: $taskCode).textFieldStyle(.roundedBorder).frame(width: 150)
+                    TextField("Firm code", text: $taskCode).supraField().frame(width: 150)
                 }
             } else {
                 codePicker(selection: $taskCode, options: options)
@@ -398,7 +398,7 @@ private struct EditLineSheet: View {
     private func field(_ label: String, text: Binding<String>, width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
-            TextField(label, text: text).textFieldStyle(.roundedBorder).frame(width: width)
+            TextField(label, text: text).supraField().frame(width: width)
         }
     }
 }

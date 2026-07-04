@@ -145,9 +145,10 @@ struct FirstRunOnboardingView: View {
     private var footer: some View {
         HStack {
             Button("Set up later") { onComplete() }
+                .buttonStyle(.ghost)
             Spacer()
             Button("Enter Supra AI") { onComplete() }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.ghostAccent)
                 .keyboardShortcut(.defaultAction)
         }
         .padding(20)

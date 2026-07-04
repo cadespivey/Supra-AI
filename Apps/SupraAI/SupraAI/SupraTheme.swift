@@ -214,6 +214,46 @@ struct SupraPopoverFrame<Content: View>: View {
     }
 }
 
+// MARK: - Text-field chrome
+
+/// THE standard single-line input surface, matching `MultilineField`'s box:
+/// `textBackgroundColor` fill + `separatorColor` hairline, radius 6, and an
+/// accent border while focused. Fields styled `.plain` or left on the macOS
+/// default disappear into window backgrounds (especially in dark mode) —
+/// every form field should read as a field at a glance. A ViewModifier (not a
+/// TextFieldStyle) because `_body(configuration:)` trips Swift 6 region
+/// isolation when handing the field to a stateful chrome view.
+private struct SupraFieldModifier: ViewModifier {
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .focused($focused)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: .textBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(
+                        focused ? Color.accentColor.opacity(0.7) : Color(nsColor: .separatorColor),
+                        lineWidth: focused ? 1.5 : 1
+                    )
+            )
+            .animation(.easeOut(duration: 0.12), value: focused)
+    }
+}
+
+extension View {
+    /// Apply to every single-line `TextField` in forms, sheets, and toolbars.
+    func supraField() -> some View {
+        modifier(SupraFieldModifier())
+    }
+}
+
 /// Claude-style chrome primitives: "ghost" buttons (no outline, text/icon on the
 /// surface, a soft shade only on hover) and a `hoverShade` modifier for rows and
 /// icon buttons. The wash is ~10% of the foreground, adapting to light/dark. Reserve

@@ -3,6 +3,9 @@ import Foundation
 extension Notification.Name {
     /// Posted by the Go menu; observed by MainShellView to drive the sidebar.
     static let supraNavigateToRoute = Notification.Name("SupraNavigateToRoute")
+    /// DEBUG automation channel: selects a matter-workspace tab by raw value
+    /// (optionally "+planner" to auto-open the research planner).
+    static let supraDebugSelectMatterTab = Notification.Name("SupraDebugSelectMatterTab")
 }
 
 enum AppRoute: String, CaseIterable, Identifiable {

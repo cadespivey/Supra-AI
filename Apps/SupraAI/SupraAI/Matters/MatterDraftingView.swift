@@ -252,7 +252,7 @@ struct MatterDraftingView: View {
 
     private var customSection: some View {
         Section {
-            TextField("Title (e.g. Reply brief outline)", text: $customTitle)
+            BoxedLeadingTextField(placeholder: "Title (e.g. Reply brief outline)", text: $customTitle)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Describe the work product").font(.supraCaption).foregroundStyle(.secondary)
                 MultilineField(
@@ -280,8 +280,8 @@ struct MatterDraftingView: View {
         Section {
             ForEach($parties) { $party in
                 HStack {
-                    TextField("Party name (e.g. MCKERNON MOTORS, INC.,)", text: $party.name)
-                    TextField("Designation", text: $party.designation)
+                    BoxedLeadingTextField(placeholder: "Party name (e.g. MCKERNON MOTORS, INC.,)", text: $party.name)
+                    BoxedLeadingTextField(placeholder: "Designation", text: $party.designation)
                         .frame(width: 120)
                     if parties.count > 1 {
                         Button { parties.removeAll { $0.id == party.id } } label: {
@@ -302,8 +302,8 @@ struct MatterDraftingView: View {
 
     private var representedSection: some View {
         Section("Your client") {
-            TextField("Party you represent (e.g. Defendant)", text: $partyRepresented)
-            TextField("Client's full name (e.g. Liberty Rail, LLC)", text: $representedPartyName)
+            BoxedLeadingTextField(placeholder: "Party you represent (e.g. Defendant)", text: $partyRepresented)
+            BoxedLeadingTextField(placeholder: "Client's full name (e.g. Liberty Rail, LLC)", text: $representedPartyName)
         }
     }
 
@@ -312,24 +312,24 @@ struct MatterDraftingView: View {
             ForEach($recipients) { $r in
                 VStack(spacing: 6) {
                     HStack {
-                        TextField("Attorney name", text: $r.name)
+                        BoxedLeadingTextField(placeholder: "Attorney name", text: $r.name)
                         if recipients.count > 1 {
                             Button { recipients.removeAll { $0.id == r.id } } label: {
                                 Image(systemName: "minus.circle")
                             }.buttonStyle(.plain).foregroundStyle(.secondary)
                         }
                     }
-                    TextField("Firm", text: $r.firm)
+                    BoxedLeadingTextField(placeholder: "Firm", text: $r.firm)
                     HStack {
-                        TextField("Street", text: $r.street)
+                        BoxedLeadingTextField(placeholder: "Street", text: $r.street)
                     }
                     HStack {
-                        TextField("City", text: $r.city)
-                        TextField("State", text: $r.state).frame(width: 90)
-                        TextField("ZIP", text: $r.zip).frame(width: 80)
+                        BoxedLeadingTextField(placeholder: "City", text: $r.city)
+                        BoxedLeadingTextField(placeholder: "State", text: $r.state).frame(width: 90)
+                        BoxedLeadingTextField(placeholder: "ZIP", text: $r.zip).frame(width: 80)
                     }
-                    TextField("E-mails (comma-separated)", text: $r.emails)
-                    TextField("Role (e.g. Counsel for Plaintiff)", text: $r.role)
+                    BoxedLeadingTextField(placeholder: "E-mails (comma-separated)", text: $r.emails)
+                    BoxedLeadingTextField(placeholder: "Role (e.g. Counsel for Plaintiff)", text: $r.role)
                 }
                 .padding(.vertical, 2)
             }

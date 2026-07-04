@@ -31,6 +31,14 @@ struct MainShellView: View {
         .onReceive(NotificationCenter.default.publisher(for: .supraNavigateToRoute)) { note in
             if let route = note.object as? AppRoute { selection = .route(route) }
         }
+        #if DEBUG
+        // Sandboxes (the app's and any automation harness's) exclude each
+        // other's filesystems, so the DEBUG automation channel rides
+        // distributed notifications instead of a command file.
+        .onReceive(DistributedNotificationCenter.default().publisher(for: .init("SupraDebugNav"))) { note in
+            handleDebugNavCommand(note.object as? String)
+        }
+        #endif
         .sheet(isPresented: $showNewMatter) {
             MatterEditorSheet(mode: .create, draft: MatterDraft()) { draft in
                 if let created = try? environment.mattersController.createMatter(draft) {
@@ -78,6 +86,34 @@ struct MainShellView: View {
             )
         }
     }
+
+    #if DEBUG
+    /// DEBUG-only automation commands ("route <name>" / "matter-first" /
+    /// "tab <Tab>[+planner]") — synthetic mouse clicks don't register on every
+    /// machine, so UI verification drives navigation this way. Compiled out of
+    /// release builds.
+    private func handleDebugNavCommand(_ command: String?) {
+        guard let command else { return }
+        let pieces = command.split(separator: " ", maxSplits: 1).map(String.init)
+        switch pieces.first {
+        case "route":
+            if pieces.count > 1, let route = AppRoute(rawValue: pieces[1]) {
+                selection = .route(route)
+            }
+        case "matter-first":
+            if let id = environment.mattersController.matters.first?.id {
+                environment.mattersController.select(matterID: id)
+                selection = .matter(id)
+            }
+        case "tab":
+            if pieces.count > 1 {
+                NotificationCenter.default.post(name: .supraDebugSelectMatterTab, object: pieces[1])
+            }
+        default:
+            break
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func routeView(_ route: AppRoute) -> some View {

@@ -87,7 +87,7 @@ struct ScratchPadView: View {
     }
 
     private var scratchSearchField: some View {
-        TextField("Search notes", text: $searchTerm)
+        TextField("Search notes", text: $searchTerm).supraField()
             .textFieldStyle(.roundedBorder)
             .controlSize(.small)
             .onChange(of: searchTerm) { _, term in controller.search(term) }

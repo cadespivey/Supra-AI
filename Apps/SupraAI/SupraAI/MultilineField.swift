@@ -143,6 +143,35 @@ private struct HeightKey: PreferenceKey {
 /// right-aligned and reads as an unlabeled value; this keeps the label visible and the
 /// text flowing naturally from the left. Shared across Settings, Edit Matter, and
 /// drafting (spec §9.3).
+/// The `.supraField()` surface for GROUPED `Form` rows, where SwiftUI's
+/// `TextField` is unavoidably forced to trailing alignment and renders its
+/// label inside the row. AppKit-backed (like `LabeledTextField`) so text stays
+/// leading; carries the same box + focus accent as `.supraField()`.
+struct BoxedLeadingTextField: View {
+    let placeholder: String
+    @Binding var text: String
+    @State private var focused = false
+
+    var body: some View {
+        LeadingTextField(text: $text, placeholder: placeholder, onEditingChanged: { focused = $0 })
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: .textBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(
+                        focused ? Color.accentColor.opacity(0.7) : Color(nsColor: .separatorColor),
+                        lineWidth: focused ? 1.5 : 1
+                    )
+            )
+            .animation(.easeOut(duration: 0.12), value: focused)
+    }
+}
+
 struct LabeledTextField: View {
     let label: String
     @Binding var text: String
@@ -167,6 +196,7 @@ struct LabeledTextField: View {
 struct LeadingTextField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String
+    var onEditingChanged: ((Bool) -> Void)? = nil
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField(string: text)
@@ -189,14 +219,20 @@ struct LeadingTextField: NSViewRepresentable {
         nsView.placeholderString = placeholder
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text, onEditingChanged: onEditingChanged) }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         private let text: Binding<String>
-        init(text: Binding<String>) { self.text = text }
+        private let onEditingChanged: ((Bool) -> Void)?
+        init(text: Binding<String>, onEditingChanged: ((Bool) -> Void)?) {
+            self.text = text
+            self.onEditingChanged = onEditingChanged
+        }
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
             text.wrappedValue = field.stringValue
         }
+        func controlTextDidBeginEditing(_ notification: Notification) { onEditingChanged?(true) }
+        func controlTextDidEndEditing(_ notification: Notification) { onEditingChanged?(false) }
     }
 }

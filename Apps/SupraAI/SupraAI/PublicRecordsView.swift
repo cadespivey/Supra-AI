@@ -34,13 +34,10 @@ struct PublicRecordsView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            Picker("Source", selection: $source) {
-                ForEach(Source.allCases) { source in
-                    Text(source.rawValue).tag(source)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            GhostSegmentedControl(
+                selection: $source,
+                segments: Source.allCases.map { ($0, $0.rawValue, "publicRecords.source.\($0.rawValue)") }
+            )
             .padding(16)
             .accessibilityIdentifier("publicRecords.sourcePicker")
             .background {
@@ -86,7 +83,7 @@ struct PublicRecordsView: View {
             Text("Company filings").font(.supraHeadline)
             HStack(spacing: 8) {
                 TextField("CIK (e.g. 320193)", text: $secCIK)
-                    .textFieldStyle(.roundedBorder)
+                    .supraField()
                     .frame(maxWidth: 220)
                     .accessibilityIdentifier("publicRecords.sec.cik")
                     .onSubmit { runSecSearch() }
@@ -98,6 +95,7 @@ struct PublicRecordsView: View {
                 .labelsHidden()
                 .frame(maxWidth: 180)
                 Button("Search Filings") { runSecSearch() }
+                    .buttonStyle(.ghostAccent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(secCIK.trimmingCharacters(in: .whitespaces).isEmpty || controller.secPhase == .loading)
                     .accessibilityIdentifier("publicRecords.sec.search")
@@ -187,16 +185,17 @@ struct PublicRecordsView: View {
             Text("Consumer complaints").font(.supraHeadline)
             HStack(spacing: 8) {
                 TextField("Company name", text: $cfpbCompany)
-                    .textFieldStyle(.roundedBorder)
+                    .supraField()
                     .accessibilityIdentifier("publicRecords.cfpb.company")
                     .onSubmit { runCfpbSearch() }
                 TextField("State (FL)", text: $cfpbState)
-                    .textFieldStyle(.roundedBorder)
+                    .supraField()
                     .frame(maxWidth: 90)
                 TextField("Product (optional)", text: $cfpbProduct)
-                    .textFieldStyle(.roundedBorder)
+                    .supraField()
                     .frame(maxWidth: 200)
                 Button("Search Complaints") { runCfpbSearch() }
+                    .buttonStyle(.ghostAccent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(cfpbInputEmpty || controller.cfpbPhase == .loading)
                     .accessibilityIdentifier("publicRecords.cfpb.search")
@@ -292,6 +291,7 @@ struct PublicRecordsView: View {
                 Button("Check Official Datasets") {
                     Task { await controller.refreshNlrbDatasets() }
                 }
+                .buttonStyle(.ghost)
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(controller.nlrbDatasetsPhase == .loading)
                 .accessibilityIdentifier("publicRecords.nlrb.refresh")
@@ -302,10 +302,12 @@ struct PublicRecordsView: View {
                         }
                     }
                 }
+                .buttonStyle(.ghost)
                 .keyboardShortcut("i", modifiers: [.command, .shift])
                 .disabled(controller.nlrbDatasets.allSatisfy { $0.status != .available })
                 .accessibilityIdentifier("publicRecords.nlrb.importAll")
                 Button("Import Downloaded CSV…") { showNlrbFileImporter = true }
+                    .buttonStyle(.ghost)
                     .keyboardShortcut("o", modifiers: [.command, .shift])
                     .accessibilityIdentifier("publicRecords.nlrb.importFile")
                 if controller.nlrbDatasetsPhase == .loading {
@@ -341,19 +343,21 @@ struct PublicRecordsView: View {
             Text("Search imported records").font(.supraHeadline)
             HStack(spacing: 8) {
                 TextField("Party name (employer or union)", text: $nlrbParty)
-                    .textFieldStyle(.roundedBorder)
+                    .supraField()
                     .accessibilityIdentifier("publicRecords.nlrb.party")
                     .onSubmit { runNlrbPartySearch() }
                 Button("Party History") { runNlrbPartySearch() }
+                    .buttonStyle(.ghostAccent)
                     .disabled(nlrbParty.trimmingCharacters(in: .whitespaces).isEmpty || controller.nlrbPhase == .loading)
                     .accessibilityIdentifier("publicRecords.nlrb.partySearch")
             }
             HStack(spacing: 8) {
                 TextField("Case number (e.g. 12-CA-345678)", text: $nlrbCaseNumber)
-                    .textFieldStyle(.roundedBorder)
+                    .supraField()
                     .frame(maxWidth: 280)
                     .onSubmit { runNlrbCaseLookup() }
                 Button("Look Up Case") { runNlrbCaseLookup() }
+                    .buttonStyle(.ghost)
                     .disabled(nlrbCaseNumber.trimmingCharacters(in: .whitespaces).isEmpty || controller.nlrbPhase == .loading)
             }
         }
@@ -450,6 +454,7 @@ struct PublicRecordsView: View {
                 Button("Import") {
                     Task { await controller.importNlrbDataset(dataset) }
                 }
+                .buttonStyle(.ghost)
                 .controlSize(.small)
             }
             if dataset.status != .available, let page = dataset.pageUrl, let url = URL(string: page) {

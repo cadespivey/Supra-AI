@@ -315,13 +315,10 @@ struct CaseReaderPanel<Actions: View>: View {
                 actions()
                 Spacer()
                 if availableFormats.count > 1 {
-                    Picker("Format", selection: formatSelection) {
-                        ForEach(availableFormats) { format in
-                            Text(format.rawValue).tag(format)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    GhostSegmentedControl(
+                        selection: formatSelection,
+                        segments: availableFormats.map { ($0, $0.rawValue, "") }
+                    )
                     .fixedSize()
                 }
             }

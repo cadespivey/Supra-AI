@@ -40,7 +40,7 @@ struct ResearchPlannerView: View {
         SupraSheetScaffold("New Research Session", doneLabel: "Cancel", onClose: { controller.resetPlan(); dismiss() }) {
             Form {
                 Section("Issue") {
-                    TextField("Title", text: $draft.title)
+                    BoxedLeadingTextField(placeholder: "Title", text: $draft.title)
                         .accessibilityIdentifier("planner.title")
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Legal issue or question").font(.subheadline).foregroundStyle(.secondary)
@@ -62,8 +62,8 @@ struct ResearchPlannerView: View {
                 }
 
                 Section("Filters (optional)") {
-                    TextField("Additional preferred courts (comma-separated)", text: $preferredCourtsText)
-                    TextField("Excluded courts (comma-separated)", text: $excludedCourtsText)
+                    BoxedLeadingTextField(placeholder: "Additional preferred courts (comma-separated)", text: $preferredCourtsText)
+                    BoxedLeadingTextField(placeholder: "Excluded courts (comma-separated)", text: $excludedCourtsText)
                     Toggle("Limit to a date range", isOn: $useDateRange)
                     if useDateRange {
                         DatePicker("From", selection: $startDate, displayedComponents: .date)
@@ -78,6 +78,7 @@ struct ResearchPlannerView: View {
                             Text(isGenerating ? "Generating…" : "Generate Search Plan")
                         }
                     }
+                    .buttonStyle(.ghostAccent)
                     .disabled(!draft.isValid || isGenerating)
                     .accessibilityIdentifier("planner.generate")
                     routeStatus
@@ -97,19 +98,20 @@ struct ResearchPlannerView: View {
                             HStack(spacing: 8) {
                                 Toggle("Approved", isOn: $query.approved).labelsHidden()
                                     .accessibilityIdentifier("planner.approved")
-                                TextField("Query", text: $query.text)
+                                BoxedLeadingTextField(placeholder: "Query", text: $query.text)
                                     .accessibilityIdentifier("planner.query")
                                 Button(role: .destructive) {
                                     controller.deleteQuery(id: query.id)
                                 } label: {
                                     Image(systemName: "trash")
                                 }
-                                .buttonStyle(.borderless)
+                                .buttonStyle(.ghostDanger)
                             }
                         }
                         Button { controller.addQuery() } label: {
                             Label("Add Query", systemImage: "plus")
                         }
+                        .buttonStyle(.ghost)
                         .accessibilityIdentifier("planner.addQuery")
                     }
                 }

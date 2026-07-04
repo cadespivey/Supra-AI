@@ -109,8 +109,7 @@ struct MatterDocumentsView: View {
 
     private var documentActionBar: some View {
         HStack(spacing: 8) {
-            TextField("Search documents", text: $controller.searchText)
-                .textFieldStyle(.roundedBorder)
+            TextField("Search documents", text: $controller.searchText).supraField()
                 .frame(minWidth: 140, idealWidth: 220, maxWidth: 260)
                 .onSubmit { controller.runSearch() }
             SupraToolbarIconButton("Search Documents", systemImage: "magnifyingglass") {
@@ -171,7 +170,7 @@ struct MatterDocumentsView: View {
         }
         .popover(isPresented: $showNewFolder) {
             SupraPopoverFrame("New Folder", width: 260) {
-                TextField("Folder name", text: $newFolderName)
+                TextField("Folder name", text: $newFolderName).supraField()
                 HStack {
                     Spacer()
                     Button("Create") {

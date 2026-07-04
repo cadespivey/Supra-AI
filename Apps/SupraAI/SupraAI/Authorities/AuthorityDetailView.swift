@@ -166,7 +166,7 @@ struct AuthorityDetailView: View {
 
             Section("Citations") {
                 ForEach(authority.citations, id: \.self) { Text($0).font(.supraBody) }
-                TextField("Preferred citation", text: $citation)
+                BoxedLeadingTextField(placeholder: "Preferred citation", text: $citation)
                 Button("Save Citation") { controller.updatePreferredCitation(authorityID: authorityID, citation) }
                     .disabled(citation.trimmingCharacters(in: .whitespacesAndNewlines) == (authority.preferredCitation ?? ""))
             }

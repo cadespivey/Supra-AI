@@ -166,7 +166,7 @@ struct JurisdictionAutocompleteField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                TextField("Jurisdiction or court", text: queryBinding)
+                BoxedLeadingTextField(placeholder: "Jurisdiction or court", text: queryBinding)
                 if isNotApplicable {
                     Button("Clear") { clear() }
                         .buttonStyle(.borderless)

@@ -67,6 +67,15 @@ struct MatterWorkspaceView: View {
             Text("This hides the matter and its chats. You can't undo this from the app.")
         }
         .task { await pollUITestTabCommand() }
+        #if DEBUG
+        .onReceive(NotificationCenter.default.publisher(for: .supraDebugSelectMatterTab)) { note in
+            guard let command = note.object as? String else { return }
+            let parts = command.split(separator: "+").map(String.init)
+            guard let first = parts.first, let target = MatterTab(rawValue: first) else { return }
+            if parts.count > 1, parts[1] == "planner" { autoOpenResearchPlanner = true }
+            tab = target
+        }
+        #endif
     }
 
     private var header: some View {

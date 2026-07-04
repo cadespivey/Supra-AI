@@ -394,7 +394,7 @@ private struct RuntimeModelSetupView: View {
                     }
                 }
                 HStack {
-                    TextField("or a custom repo ID, e.g. mlx-community/Qwen2.5-32B-Instruct-4bit", text: $customRepoID)
+                    TextField("or a custom repo ID, e.g. mlx-community/Qwen2.5-32B-Instruct-4bit", text: $customRepoID).supraField()
                         .textFieldStyle(.roundedBorder)
                     Button("Download") {
                         downloader.download(repoID: customRepoID)
@@ -569,7 +569,7 @@ private struct ModelDownloadSheet: View {
                 Text("Custom repo ID")
                     .font(.supraHeadline)
                 HStack {
-                    TextField("e.g. mlx-community/Qwen2.5-32B-Instruct-4bit", text: $customRepoID)
+                    TextField("e.g. mlx-community/Qwen2.5-32B-Instruct-4bit", text: $customRepoID).supraField()
                         .textFieldStyle(.roundedBorder)
                     Button("Download") {
                         downloader.download(repoID: customRepoID)
