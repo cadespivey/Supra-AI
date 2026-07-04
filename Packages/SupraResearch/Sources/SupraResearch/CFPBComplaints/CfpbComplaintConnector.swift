@@ -120,6 +120,32 @@ public final class CfpbComplaintConnector: @unchecked Sendable {
         )
     }
 
+    /// Resolves free-text company input to the database's canonical company
+    /// names via the official `_suggest_company` endpoint. The `company`
+    /// filter matches EXACTLY, so searches should pass these values, not raw
+    /// user input.
+    public func suggestCompanies(_ text: String, limit: Int = 10) async throws -> [String] {
+        let operation = "suggestCompanies"
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let url = CfpbComplaintEndpoint.suggestCompany(text: trimmed)
+        let response = try await executor.execute(
+            operation: operation,
+            request: jsonRequest(url),
+            cacheTTL: Self.searchTTL
+        )
+        guard let names = try? JSONDecoder().decode([String].self, from: response.data) else {
+            throw LegalDataConnectorError(
+                kind: .parse,
+                connectorName: Self.connectorName,
+                operation: operation,
+                sourceURL: url.absoluteString,
+                message: "The company-suggestion response was not a list of names."
+            )
+        }
+        return Array(names.prefix(max(1, min(limit, 25))))
+    }
+
     public func getComplaintById(_ complaintId: String) async throws -> CfpbComplaintRecord {
         let operation = "getComplaintById"
         let trimmed = complaintId.trimmingCharacters(in: .whitespacesAndNewlines)

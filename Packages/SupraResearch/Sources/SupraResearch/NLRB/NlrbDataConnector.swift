@@ -164,7 +164,69 @@ public final class NlrbDataConnector: @unchecked Sendable {
                 message: "The dataset download was empty or not decodable as text."
             )
         }
+        return try await ingest(
+            text: text, data: response.data, variant: datasetSource.sourceVariant,
+            datasetName: datasetSource.name, datasetUrl: url.absoluteString,
+            operation: operation, options: options
+        )
+    }
 
+    /// Imports an official export the USER downloaded in their browser — the
+    /// supported path when the official pages hide the CSV behind their
+    /// cookie-token download tray. The variant is detected from the header
+    /// row. Only the file NAME enters stored metadata, never the local path.
+    public func importLocalCSV(fileURL: URL, options: NlrbImportOptions = .init()) async throws -> NlrbImportRun {
+        let operation = "importLocalCSV"
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            throw LegalDataConnectorError(
+                kind: .validation,
+                connectorName: Self.connectorName,
+                operation: operation,
+                message: "The selected file could not be read."
+            )
+        }
+        guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+            throw LegalDataConnectorError(
+                kind: .validation,
+                connectorName: Self.connectorName,
+                operation: operation,
+                message: "The selected file is empty or not text."
+            )
+        }
+        let variant = try Self.detectVariant(inCSV: text, operation: operation)
+        return try await ingest(
+            text: text, data: data, variant: variant,
+            datasetName: "Manually downloaded export (\(fileURL.lastPathComponent))",
+            datasetUrl: nil, operation: operation, options: options
+        )
+    }
+
+    /// Header-based variant detection for manually downloaded exports.
+    static func detectVariant(inCSV text: String, operation: String) throws -> NlrbSourceVariant {
+        let headerKeys = Set((NlrbCSVImporter.parse(text).first ?? []).map(NlrbCSVImporter.normalizedHeaderKey))
+        let electionMarkers: Set<String> = ["tallydate", "votesfor", "votesagainst", "ballottype", "electiontype"]
+        if !headerKeys.isDisjoint(with: electionMarkers) { return .officialRecentElectionResults }
+        if headerKeys.contains("casenumber") { return .officialRecentFilings }
+        throw LegalDataConnectorError(
+            kind: .validation,
+            connectorName: Self.connectorName,
+            operation: operation,
+            message: "The file does not look like an NLRB recent-filings or election-results export (no recognizable header row)."
+        )
+    }
+
+    private func ingest(
+        text: String,
+        data: Data,
+        variant: NlrbSourceVariant,
+        datasetName: String,
+        datasetUrl: String?,
+        operation: String,
+        options: NlrbImportOptions
+    ) async throws -> NlrbImportRun {
         var warnings: [String] = []
         var errors: [String] = []
         var rows = NlrbCSVImporter.headerMappedRows(text)
@@ -174,20 +236,20 @@ public final class NlrbDataConnector: @unchecked Sendable {
             rows = Array(rows.prefix(cap))
         }
 
-        let payloadHash = ConnectorHashing.sha256Hex(response.data)
+        let payloadHash = ConnectorHashing.sha256Hex(data)
         let rawPath = try await localStore.saveRawPayload(
-            response.data, variant: datasetSource.sourceVariant, hash: payloadHash
+            data, variant: variant, hash: payloadHash
         )
 
         var normalizedCount = 0
         var imported = 0
         var duplicates = 0
-        switch datasetSource.sourceVariant {
+        switch variant {
         case .officialRecentFilings:
             let records = rows.compactMap {
                 NlrbNormalizer.caseRecord(
-                    from: $0, variant: datasetSource.sourceVariant,
-                    datasetUrl: url.absoluteString, retrievedAt: now()
+                    from: $0, variant: variant,
+                    datasetUrl: datasetUrl, retrievedAt: now()
                 )
             }
             normalizedCount = records.count
@@ -200,8 +262,8 @@ public final class NlrbDataConnector: @unchecked Sendable {
         case .officialRecentElectionResults:
             let records = rows.compactMap {
                 NlrbNormalizer.electionRecord(
-                    from: $0, variant: datasetSource.sourceVariant,
-                    datasetUrl: url.absoluteString, retrievedAt: now()
+                    from: $0, variant: variant,
+                    datasetUrl: datasetUrl, retrievedAt: now()
                 )
             }
             normalizedCount = records.count
@@ -217,9 +279,9 @@ public final class NlrbDataConnector: @unchecked Sendable {
 
         let run = NlrbImportRun(
             id: String(payloadHash.prefix(16)) + "-" + String(Int(now().timeIntervalSince1970)) + "-" + String(UUID().uuidString.prefix(8)),
-            sourceVariant: datasetSource.sourceVariant,
-            datasetName: datasetSource.name,
-            sourceUrl: url.absoluteString,
+            sourceVariant: variant,
+            datasetName: datasetName,
+            sourceUrl: datasetUrl,
             retrievedAt: now(),
             recordCount: rows.count,
             rawPayloadHash: payloadHash,

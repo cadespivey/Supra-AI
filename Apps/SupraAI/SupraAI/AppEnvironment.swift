@@ -37,6 +37,8 @@ final class AppEnvironment: ObservableObject {
     let recycleBinController: RecycleBinController
     // Milestone 4: ScratchPad daily notes -> billing.
     let scratchPadController: ScratchPadController
+    /// Key-less government-data searches (SEC EDGAR, CFPB, NLRB).
+    let publicRecordsController: PublicRecordsController
     let billingDraftController: BillingDraftController
     let billingSettingsController: BillingSettingsController
     // Milestone 3: document intelligence setup.
@@ -72,6 +74,10 @@ final class AppEnvironment: ObservableObject {
         self.sparkleUpdater = SparkleUpdaterController()
         self.recycleBinController = RecycleBinController(store: store)
         self.scratchPadController = ScratchPadController(store: store)
+        self.publicRecordsController = PublicRecordsController(
+            store: store,
+            keyStore: EnvironmentBackedTokenStore(primary: KeychainTokenStore())
+        )
         // Phase 7: the billing draft controller is seeded from the firm's persisted
         // ScratchPad billing settings (timekeeper, rounding, sensitivity, etc.).
         let billingSettings = BillingSettingsController(store: store)

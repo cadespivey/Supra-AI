@@ -38,9 +38,19 @@ with an NLRB-tuned `RateLimitTracker` (suggested 30/min, 120/hr).
 
 - **Discovery** (`refreshAvailableDatasets`): fetches the two official pages
   (cached 6h), extracts their Download CSV links, and reports every known
-  source honestly — `available` only with a confirmed official download URL.
-  If a page's layout changes and no link is found, the dataset is reported
-  `unsupported` with a note; session state is never automated.
+  source honestly — `available` only with a confirmed official download URL
+  that actually looks like a file export (`.csv`, `csv` query, `/export`, or
+  `/files/` path). If a page's layout changes and no link is found, the
+  dataset is reported `unsupported` with a note; session state is never
+  automated. **Observed 2026-07-04**: the live pages serve their CSVs through
+  a JavaScript "download tray" keyed by a cookie token, so discovery reports
+  them `unsupported` — automating that cookie flow is intentionally out of
+  scope.
+- **Manual import** (`importLocalCSV`): the supported path while the tray is
+  in place — download the CSV in a browser from the official page, then
+  import the file. The variant (filings vs election results) is detected from
+  the header row; only the file NAME enters stored metadata, never the local
+  path; nothing touches the network.
 - **Import** (`importDataset`): downloads the CSV, parses it with a real
   RFC-4180 state machine (quoted commas, `""` escapes, CRLF/LF — CRLF is a
   single Swift `Character`, handled explicitly), normalizes rows via

@@ -41,6 +41,17 @@ enum NlrbSources {
             guard let resolved = URL(string: href, relativeTo: pageURL)?.absoluteURL,
                   resolved.scheme == "https",
                   resolved.host?.lowercased() == "www.nlrb.gov" else { return }
+            // The live pages use a JS "download tray" whose anchor href is the
+            // page itself (the real download runs behind a cookie token —
+            // session state this connector never automates). Only accept
+            // targets that actually LOOK like a file export.
+            let path = resolved.path.lowercased()
+            let queryString = resolved.query?.lowercased() ?? ""
+            let looksLikeExport = path.hasSuffix(".csv")
+                || queryString.contains("csv")
+                || path.contains("export")
+                || path.contains("/files/")
+            guard looksLikeExport, resolved.path != pageURL.path || !queryString.isEmpty else { return }
             found = resolved
             stop.pointee = true
         }

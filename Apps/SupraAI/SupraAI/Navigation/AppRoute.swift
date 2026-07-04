@@ -1,8 +1,14 @@
 import Foundation
 
+extension Notification.Name {
+    /// Posted by the Go menu; observed by MainShellView to drive the sidebar.
+    static let supraNavigateToRoute = Notification.Name("SupraNavigateToRoute")
+}
+
 enum AppRoute: String, CaseIterable, Identifiable {
     case globalChats
     case scratchpad
+    case publicRecords
     case models
     case diagnostics
     case settings
@@ -15,6 +21,8 @@ enum AppRoute: String, CaseIterable, Identifiable {
             "Global Chats"
         case .scratchpad:
             "ScratchPad"
+        case .publicRecords:
+            "Public Records"
         case .models:
             "Models"
         case .diagnostics:
@@ -30,6 +38,8 @@ enum AppRoute: String, CaseIterable, Identifiable {
             "bubble.left.and.bubble.right"
         case .scratchpad:
             "note.text"
+        case .publicRecords:
+            "building.columns"
         case .models:
             "cpu"
         case .diagnostics:

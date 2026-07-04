@@ -28,6 +28,9 @@ struct MainShellView: View {
                     .frame(minWidth: 640, minHeight: 420)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .supraNavigateToRoute)) { note in
+            if let route = note.object as? AppRoute { selection = .route(route) }
+        }
         .sheet(isPresented: $showNewMatter) {
             MatterEditorSheet(mode: .create, draft: MatterDraft()) { draft in
                 if let created = try? environment.mattersController.createMatter(draft) {
@@ -99,6 +102,8 @@ struct MainShellView: View {
                 documentSetup: environment.documentSetupController,
                 embeddingDownloader: environment.embeddingDownloadController
             )
+        case .publicRecords:
+            PublicRecordsView(controller: environment.publicRecordsController)
         case .diagnostics:
             DiagnosticsView()
         case .settings:

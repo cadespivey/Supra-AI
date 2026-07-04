@@ -66,6 +66,7 @@
 		89AC1CC2D0CFEA61CB407D94 /* ResearchAuthoritiesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDDEEEEA83AAE455AE64D9F5 /* ResearchAuthoritiesUITests.swift */; };
 		92040226CB4C642EDABCE796 /* BillingDraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D443FEB23479EC80411A4759 /* BillingDraftView.swift */; };
 		C8914D48FD9E94ED7FA33488 /* ScratchPadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8792ADFD107281343AFEEA5C /* ScratchPadView.swift */; };
+		D43B113C5FCE7B2343E29B6A /* PublicRecordsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEBC0EB0D3FD3BAFBA6FE8C8 /* PublicRecordsView.swift */; };
 		D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */; };
 		F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */; };
 /* End PBXBuildFile section */
@@ -148,6 +149,7 @@
 		BDDEEEEA83AAE455AE64D9F5 /* ResearchAuthoritiesUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ResearchAuthoritiesUITests.swift; sourceTree = "<group>"; };
 		D443FEB23479EC80411A4759 /* BillingDraftView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BillingDraftView.swift; sourceTree = "<group>"; };
 		D8C3C2791CDAA8C922BB1970 /* SupraAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SupraAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		EEBC0EB0D3FD3BAFBA6FE8C8 /* PublicRecordsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PublicRecordsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -232,6 +234,7 @@
 				7F43C5F55C1C9D84C4CE827A /* SparkleUpdaterController.swift */,
 				AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */,
 				70160F9EC6701AF74DA1E3A5 /* SupraTheme.swift */,
+				EEBC0EB0D3FD3BAFBA6FE8C8 /* PublicRecordsView.swift */,
 			);
 			path = SupraAI;
 			sourceTree = "<group>";
@@ -587,6 +590,7 @@
 				D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */,
 				4E4BB1F8196E2C8E3DDBF739 /* SupraTheme.swift in Sources */,
 				265DA3D6D17CF88EBFE1C27A /* AuthorityReaderView.swift in Sources */,
+				D43B113C5FCE7B2343E29B6A /* PublicRecordsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

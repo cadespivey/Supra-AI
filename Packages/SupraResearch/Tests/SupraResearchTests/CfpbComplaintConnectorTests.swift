@@ -315,6 +315,30 @@ final class CfpbComplaintConnectorTests: XCTestCase {
         XCTAssertTrue(result.sourceLimitations.contains { $0.contains("sub_product") })
     }
 
+    func testSuggestCompaniesResolvesCanonicalNames() async throws {
+        let stub = ScriptedHTTPStub(script: [
+            .success(Data(#"["BANK OF AMERICA, NATIONAL ASSOCIATION","BANK OF AMERICA CORPORATION"]"#.utf8))
+        ])
+        let sut = connector(stub: stub)
+        let names = try await sut.suggestCompanies("bank of america")
+        XCTAssertEqual(names, ["BANK OF AMERICA, NATIONAL ASSOCIATION", "BANK OF AMERICA CORPORATION"])
+        let requests = await stub.requests
+        let request = try XCTUnwrap(requests.first)
+        let url = try XCTUnwrap(request.url?.absoluteString)
+        XCTAssertTrue(url.contains("_suggest_company"), url)
+        XCTAssertTrue(url.contains("text=bank%20of%20america"), url)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), nil)
+    }
+
+    func testSuggestCompaniesBlankInputSkipsNetwork() async throws {
+        let stub = ScriptedHTTPStub(script: [])
+        let sut = connector(stub: stub)
+        let names = try await sut.suggestCompanies("   ")
+        XCTAssertEqual(names, [])
+        let calls = await stub.callCount
+        XCTAssertEqual(calls, 0)
+    }
+
     func testDroppedRecordDoesNotEndPaginationEarly() async throws {
         // Page 1 is FULL (2 raw hits) but one hit has no complaint_id and is
         // dropped — pagination must continue on the RAW count and disclose

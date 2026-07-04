@@ -80,6 +80,58 @@ final class NlrbDataConnectorTests: XCTestCase {
         )
     }
 
+    func testRejectsJavaScriptDownloadTrayButton() {
+        // The live pages' "Download CSV" is a JS tray button whose href is the
+        // page itself (real download sits behind a cookie token). Discovery
+        // must NOT treat it as an importable export.
+        let html = """
+        <a href="/reports/graphs-data/recent-filings" id="download-button" \
+           class="usa-button nlrb-download-button" role="button" \
+           data-typeofreport="recent_filings" data-cacheid="recent_filings_data___abc">Download CSV</a>
+        """
+        XCTAssertNil(NlrbSources.downloadCSVLink(inHTML: html, pageURL: NlrbSources.recentFilingsPage))
+    }
+
+    func testImportLocalCSVDetectsVariantAndImports() async throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let stub = ScriptedHTTPStub(script: [])
+        let sut = connector(stub: stub, store: store)
+
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nlrb-manual-\(UUID().uuidString).csv")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try fixtureText("recent-election-results", ext: "csv").write(to: file, atomically: true, encoding: .utf8)
+
+        let run = try await sut.importLocalCSV(fileURL: file)
+        XCTAssertEqual(run.sourceVariant, .officialRecentElectionResults, "variant is detected from headers")
+        XCTAssertEqual(run.importedRecordCount, 2)
+        XCTAssertNil(run.sourceUrl, "no dataset URL for a manual import")
+        XCTAssertTrue(run.datasetName.contains(file.lastPathComponent))
+        XCTAssertFalse(run.datasetName.contains(FileManager.default.temporaryDirectory.path), "never store the local PATH")
+        let calls = await stub.callCount
+        XCTAssertEqual(calls, 0, "local import must not touch the network")
+
+        let elections = try await sut.getElectionResults()
+        XCTAssertEqual(elections.count, 2)
+    }
+
+    func testImportLocalCSVRejectsUnrecognizableFile() async throws {
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let sut = connector(stub: ScriptedHTTPStub(script: []), store: store)
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nlrb-bogus-\(UUID().uuidString).csv")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try "just,some,columns\n1,2,3\n".write(to: file, atomically: true, encoding: .utf8)
+        do {
+            _ = try await sut.importLocalCSV(fileURL: file)
+            XCTFail("expected validation error")
+        } catch let error as LegalDataConnectorError {
+            XCTAssertEqual(error.kind, .validation)
+        }
+    }
+
     func testCSVParserHandlesQuotedCommasAndCRLF() {
         let csv = "a,b,c\r\n\"one, two\",\"say \"\"hi\"\"\",\r\nplain,,\"multi\nline\"\n"
         let rows = NlrbCSVImporter.parse(csv)
@@ -384,7 +436,16 @@ final class NlrbLiveTests: XCTestCase {
         )
         let sources = try await connector.refreshAvailableDatasets()
         let filings = try XCTUnwrap(sources.first { $0.sourceVariant == .officialRecentFilings })
-        XCTAssertEqual(filings.status, .available, filings.note ?? "")
-        XCTAssertTrue(filings.downloadUrl?.hasPrefix("https://www.nlrb.gov/") == true)
+        switch filings.status {
+        case .available:
+            XCTAssertTrue(filings.downloadUrl?.hasPrefix("https://www.nlrb.gov/") == true)
+        case .unsupported:
+            // Observed 2026-07-04: the official pages serve their CSV through a
+            // cookie-token download tray, which this connector refuses to
+            // automate — unsupported WITH a note is the honest outcome.
+            XCTAssertNotNil(filings.note)
+        case .discoveredButNotImported:
+            XCTFail("recent filings should never be discovery-only")
+        }
     }
 }

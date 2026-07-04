@@ -10,6 +10,15 @@ enum CfpbComplaintEndpoint {
     static let base = URL(string: "https://www.consumerfinance.gov/data-research/consumer-complaints/search/api/v1/")!
 
     /// Public complaint-detail page shown to users as the record's source URL.
+    /// Company-name typeahead: the CCDB `company` filter is EXACT-match
+    /// against canonical names ("BANK OF AMERICA, NATIONAL ASSOCIATION"), so
+    /// user input must be resolved through the official suggest endpoint.
+    static func suggestCompany(text: String) -> URL {
+        var components = URLComponents(url: base.appendingPathComponent("_suggest_company"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "text", value: text)]
+        return components.url!
+    }
+
     static func publicDetailURLString(complaintId: String) -> String {
         // IDs are numeric; filtering (matching NlrbSources.casePageURLString)
         // keeps payload-supplied IDs from smuggling URL metacharacters into
