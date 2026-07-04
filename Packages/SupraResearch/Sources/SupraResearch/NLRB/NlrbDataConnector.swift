@@ -499,8 +499,12 @@ public final class NlrbDataConnector: @unchecked Sendable {
         var lines = [
             "The locally imported NLRB exports contain \(caseCount) matching case records for \(partyName)."
         ]
-        if !categories.isEmpty {
-            let breakdown = categories
+        // Omit the "unknown" bucket from the human-readable breakdown — an
+        // "unknown: N" category is noise, not information (the cases still
+        // count toward the total above; the structured field keeps the count).
+        let namedCategories = categories.filter { $0.key != NlrbCaseTypeCategory.unknown.rawValue }
+        if !namedCategories.isEmpty {
+            let breakdown = namedCategories
                 .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
                 .map { "\($0.key.replacingOccurrences(of: "_", with: " ")): \($0.value)" }
                 .joined(separator: ", ")

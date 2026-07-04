@@ -356,6 +356,25 @@ final class CfpbComplaintConnectorTests: XCTestCase {
         let calls = await stub.callCount
         XCTAssertEqual(calls, 2)
     }
+
+    func testParseTrendCountsConvertsEpochMillisFallback() {
+        // key_as_string present → sliced ISO day. key_as_string absent → the
+        // numeric epoch-millis key is converted to a real day, not a truncated
+        // epoch string.
+        let payload = try! JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"aggregations":{"dateRangeArea":{"dateRangeArea":{"buckets":[
+          {"key":1704085200000,"key_as_string":"2024-01-01T00:00:00.000Z","doc_count":5},
+          {"key":1706763600000,"doc_count":7}
+        ]}}}}
+        """#.utf8))
+        let counts = CfpbComplaintAggregations.parseTrendCounts(payload)
+        XCTAssertEqual(counts.count, 2)
+        XCTAssertEqual(counts[0].day, "2024-01-01")
+        XCTAssertEqual(counts[0].count, 5)
+        // 1706763600000 ms = 2024-02-01 (UTC), not a truncated "1706763600".
+        XCTAssertEqual(counts[1].day, "2024-02-01")
+        XCTAssertEqual(counts[1].count, 7)
+    }
 }
 
 /// OPT-IN live probe — narrow query, tiny page. Skipped by default.

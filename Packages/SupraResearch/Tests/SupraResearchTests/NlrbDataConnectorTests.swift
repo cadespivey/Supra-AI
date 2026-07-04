@@ -295,6 +295,28 @@ final class NlrbDataConnectorTests: XCTestCase {
         XCTAssertEqual(calls, 0, "the off-host URL must never be fetched")
     }
 
+    func testPartyHistorySummaryOmitsUnknownCategoryLabel() {
+        // A party with a recognized ULP case and an unclassifiable one: the
+        // "unknown" bucket must NOT surface as an "unknown: N" category label,
+        // but the unclassifiable case still counts in the total.
+        let text = NlrbDataConnector.historySummaryText(
+            partyName: "Acme",
+            caseCount: 3,
+            categories: ["unfair_labor_practice": 2, "unknown": 1],
+            electionCount: 0
+        )
+        XCTAssertTrue(text.contains("3 matching case records"))
+        XCTAssertTrue(text.contains("unfair labor practice: 2"))
+        XCTAssertFalse(text.contains("unknown"), "the unknown bucket must not appear as a category label: \(text)")
+
+        // All-unknown: the breakdown line is omitted entirely, total preserved.
+        let allUnknown = NlrbDataConnector.historySummaryText(
+            partyName: "Acme", caseCount: 2, categories: ["unknown": 2], electionCount: 0
+        )
+        XCTAssertTrue(allUnknown.contains("2 matching case records"))
+        XCTAssertFalse(allUnknown.contains("By case category"))
+    }
+
     func testEmployerUnionAndPartySearch() async throws {
         let (store, dir) = makeStore()
         defer { try? FileManager.default.removeItem(at: dir) }

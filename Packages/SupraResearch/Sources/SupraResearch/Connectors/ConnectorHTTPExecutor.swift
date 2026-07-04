@@ -2,9 +2,9 @@ import Foundation
 import SupraNetworking
 
 /// Shared request path for the government-data connectors: cache check →
-/// pacing → `sendUnauthenticated` → bounded retry (429/502/503/504/transport)
-/// → status mapping → cache write. Internal on purpose — the public surface is
-/// the connector types, not a general HTTP framework.
+/// pacing → `sendUnauthenticated` → bounded retry (429/5xx/transport) → status
+/// mapping → cache write. Internal on purpose — the public surface is the
+/// connector types, not a general HTTP framework.
 ///
 /// `send` is never used: it is CourtListener-token-specific and must stay that
 /// way. These sources are all public, key-less endpoints.
@@ -26,7 +26,6 @@ struct ConnectorHTTPExecutor: @unchecked Sendable {
     }
 
     private static let maxAttempts = 3
-    private static let retryableStatuses: Set<Int> = [429, 502, 503, 504]
 
     func execute(
         operation: String,
@@ -80,7 +79,10 @@ struct ConnectorHTTPExecutor: @unchecked Sendable {
                 let error = LegalDataConnectorError.fromHTTPStatus(
                     status, connectorName: connectorName, operation: operation, sourceURL: url.absoluteString
                 )
-                guard Self.retryableStatuses.contains(status), attempt < Self.maxAttempts else {
+                // Defer to the taxonomy's own retryable flag — a single source
+                // of truth — so every 5xx (not just 502/503/504) is retried, as
+                // the error it hands the caller already promises.
+                guard error.retryable, attempt < Self.maxAttempts else {
                     throw error
                 }
                 lastError = error

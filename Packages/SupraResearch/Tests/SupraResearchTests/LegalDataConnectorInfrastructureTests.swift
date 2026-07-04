@@ -246,6 +246,27 @@ final class LegalDataConnectorInfrastructureTests: XCTestCase {
         XCTAssertEqual(sendCalls, 0, "connectors must never use the CourtListener-token `send` path")
     }
 
+    func testExecutorRetriesHTTP500Family() async throws {
+        // HTTP 500 (and other 5xx beyond 502/503/504) are taxonomy-retryable
+        // and must actually be retried, not thrown after one attempt.
+        for status in [500, 520] {
+            let stub = ScriptedHTTPStub(script: [
+                .status(status, headers: [:]),
+                .status(status, headers: [:]),
+                .success(Data(#"{"ok": true}"#.utf8))
+            ])
+            let executor = makeExecutor(stub: stub)
+            let response = try await executor.execute(
+                operation: "op",
+                request: URLRequest(url: URL(string: "https://example.gov/five-hundred")!),
+                cacheTTL: nil
+            )
+            XCTAssertEqual(response.httpStatus, 200, "status \(status) should retry to success")
+            let calls = await stub.callCount
+            XCTAssertEqual(calls, 3, "status \(status) should be retried up to maxAttempts")
+        }
+    }
+
     func testExecutorDoesNotRetryValidationOrNotFound() async {
         for status in [400, 404] {
             let stub = ScriptedHTTPStub(script: [.status(status, headers: [:]), .success(Data())])

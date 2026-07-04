@@ -106,8 +106,27 @@ enum CfpbComplaintAggregations {
         let buckets = payload["aggregations"]?["dateRangeArea"]?["dateRangeArea"]?["buckets"]?.arrayValue ?? []
         return buckets.compactMap { bucket in
             guard let count = bucket["doc_count"]?.numberValue else { return nil }
-            guard let key = bucket["key_as_string"]?.stringValue ?? bucket["key"]?.scalarString else { return nil }
-            return (day: String(key.prefix(10)), count: Int(count))
+            // Prefer the ISO `key_as_string`; only if absent fall back to the
+            // numeric `key`, which is epoch-MILLISECONDS. String-slicing that
+            // raw integer would yield a truncated-epoch string, not a day, so
+            // convert it properly (UTC).
+            let day: String
+            if let iso = bucket["key_as_string"]?.stringValue {
+                day = String(iso.prefix(10))
+            } else if let epochMillis = bucket["key"]?.numberValue {
+                day = utcDayFormatter.string(from: Date(timeIntervalSince1970: epochMillis / 1000))
+            } else {
+                return nil
+            }
+            return (day: day, count: Int(count))
         }
     }
+
+    private static let utcDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
 }
