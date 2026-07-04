@@ -152,6 +152,7 @@ final class AppEnvironment: ObservableObject {
         if Self.isDemoMode { seedDemoFixturesIfNeeded() }
         #if DEBUG
         dumpStoreToPasteboardIfRequested()
+        dumpOpinionToPasteboardIfRequested()
         #endif
         await refreshRuntimeStatus()
         // If the runtime already holds a model from a previous session, re-enable
@@ -299,6 +300,51 @@ final class AppEnvironment: ObservableObject {
     }
 
     #if DEBUG
+    /// Debug-only (`-dumpOpinion <id>`): fetches one CourtListener opinion with
+    /// the app's own credentials and puts the raw field lengths + bodyText and
+    /// bestHTML excerpts on the pasteboard, so pagination-marker formats can be
+    /// inspected outside the sandbox. Reads only.
+    func dumpOpinionToPasteboardIfRequested() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flagIndex = arguments.firstIndex(of: "-dumpOpinion"),
+              arguments.count > flagIndex + 1,
+              let opinionID = Int(arguments[flagIndex + 1]) else { return }
+        let tokenStore = EnvironmentBackedTokenStore(primary: KeychainTokenStore())
+        let client = CourtListenerClient(
+            httpClient: AuthorizedHTTPClient(
+                keyStore: tokenStore,
+                policy: NetworkPolicyService(),
+                logger: NetworkRequestLogger(repository: store.networkRequests)
+            )
+        )
+        Task { @MainActor in
+            var dump: [String: Any] = ["opinionID": opinionID]
+            if let detail = try? await client.fetchOpinion(id: opinionID) {
+                dump["plainTextChars"] = detail.plainText?.count ?? 0
+                dump["htmlChars"] = detail.html?.count ?? 0
+                dump["htmlWithCitationsChars"] = detail.htmlWithCitations?.count ?? 0
+                dump["htmlLawboxChars"] = detail.htmlLawbox?.count ?? 0
+                dump["htmlColumbiaChars"] = detail.htmlColumbia?.count ?? 0
+                if let raw = detail.bestHTML {
+                    dump["bestHTMLHead"] = String(raw.prefix(6_000))
+                    dump["bestHTMLMid"] = String(raw.dropFirst(max(0, raw.count / 2)).prefix(3_000))
+                }
+                if let body = detail.bodyText {
+                    dump["bodyTextChars"] = body.count
+                    dump["bodyTextHead"] = String(body.prefix(6_000))
+                    dump["bodyTextMid"] = String(body.dropFirst(max(0, body.count / 2)).prefix(3_000))
+                }
+            } else {
+                dump["error"] = "fetch failed (token? network?)"
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: dump, options: [.prettyPrinted, .sortedKeys]),
+               let json = String(data: data, encoding: .utf8) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(json, forType: .string)
+            }
+        }
+    }
+
     /// Debug-only (`-dumpChats`): serializes every chat, message, citation, and
     /// saved authority to JSON on the general pasteboard, so store contents can be
     /// inspected from outside the sandbox without Full Disk Access. Reads only —

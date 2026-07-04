@@ -456,6 +456,42 @@ final class GroundedRetrievalHardeningTests: XCTestCase {
         XCTAssertEqual(BluebookCitation.recasedCaption("SEC V. W.J. HOWEY CO."), "SEC v. W.J. Howey Co.")
     }
 
+    func testRealFlaggBrosTextYieldsPin() {
+        // Verbatim excerpt of CourtListener's Flagg Bros. bodyText (opinion
+        // 109861) — the exact record that reportedly copied without a pin.
+        let real = """
+        436 U.S. 149 (1978)
+        FLAGG BROS., INC., ET AL.
+        v.
+        BROOKS ET AL.
+        No. 77-25.
+        Supreme Court of the United States.
+        *150 Alvin Altman argued the cause and filed briefs for petitioners in No. 77-25.
+        *152 to the State of New York. The District Court found that the warehouseman's conduct was not that of the State, and dismissed this suit for want of jurisdiction under 28 U. S. C. *153 § 1343 (3). 404 F. Supp. 1059 (SDNY 1975).
+        """
+        let offset = (real as NSString).range(of: "warehouseman's conduct").location
+        XCTAssertEqual(StarPagination.page(at: offset, in: real, firstPage: 149), 152)
+        let selection = StarPagination.pages(
+            forSelectionAt: offset,
+            length: 40,
+            in: real,
+            firstPage: 149
+        )
+        XCTAssertEqual(selection?.0, 152)
+
+        let citation = BluebookCitation(
+            caseName: "FLAGG BROS., INC., Et Al. v. BROOKS Et Al.",
+            citation: "436 U.S. 149",
+            court: "Supreme Court of the United States",
+            courtID: "scotus",
+            year: 1978
+        )
+        XCTAssertEqual(
+            citation.formatted(pinPages: selection),
+            "Flagg Bros., Inc., et al. v. Brooks et al., 436 U.S. 149, 152 (1978)."
+        )
+    }
+
     func testJustiaPageHeadersYieldPinCites() {
         // Old SCOTUS records carry Justia-style "Page 436 U. S. 152" markers
         // (their plain_text is empty; text comes from stripped HTML).
