@@ -285,12 +285,29 @@ struct HTMLFileDocument: FileDocument {
 
 struct OpinionWebView: NSViewRepresentable {
     let html: String
+    /// When set, copying a selection appends this citation (with a star-
+    /// pagination pin located in the page text) — same behavior as the Text
+    /// view. CONTENT JavaScript stays disabled; per Apple's documented model,
+    /// app-injected WKUserScripts still run, so the hook is ours alone and
+    /// third-party opinion markup remains inert.
+    var bluebook: BluebookCitation?
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = false
+        if bluebook != nil {
+            config.userContentController.add(context.coordinator, name: "citedCopy")
+            config.userContentController.addUserScript(
+                WKUserScript(
+                    source: Self.citedCopyScript(firstPage: bluebook?.firstPage ?? 0),
+                    injectionTime: .atDocumentEnd,
+                    forMainFrameOnly: true
+                )
+            )
+        }
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+        context.coordinator.bluebook = bluebook
         context.coordinator.load(Self.document(for: html), into: webView)
         return webView
     }
@@ -298,10 +315,57 @@ struct OpinionWebView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         // Coordinator no-ops if the document is unchanged, so SwiftUI re-renders
         // don't reload (and don't re-issue resource loads).
+        context.coordinator.bluebook = bluebook
         context.coordinator.load(Self.document(for: html), into: webView)
     }
 
+    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+        // The controller retains its message handler strongly — break the cycle.
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "citedCopy")
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// Intercepts copy, locates the reporter pages in force at the selection's
+    /// ends from *NNN star-pagination in the rendered text, and hands the
+    /// selection to native code, which writes selection + citation to the
+    /// pasteboard. On any failure the default copy proceeds untouched.
+    static func citedCopyScript(firstPage: Int) -> String {
+        """
+        (function() {
+          function lastMarker(text) {
+            var re = /\\[?\\*\\s?(\\d{1,5})\\]?/g; var m, last = null;
+            while ((m = re.exec(text)) !== null) {
+              var v = parseInt(m[1], 10);
+              if (\(firstPage) > 0 && (v < \(firstPage) || v > \(firstPage) + 2000)) continue;
+              last = v;
+            }
+            return last;
+          }
+          document.addEventListener('copy', function(e) {
+            var sel = window.getSelection();
+            if (!sel || sel.rangeCount === 0) return;
+            var text = sel.toString();
+            if (!text || !text.trim()) return;
+            var pinStart = null, pinEnd = null;
+            try {
+              var range = sel.getRangeAt(0);
+              var pre = document.createRange();
+              pre.selectNodeContents(document.body);
+              pre.setEnd(range.startContainer, range.startOffset);
+              pinStart = lastMarker(pre.toString());
+              pre.selectNodeContents(document.body);
+              pre.setEnd(range.endContainer, range.endOffset);
+              pinEnd = lastMarker(pre.toString());
+            } catch (err) { pinStart = null; pinEnd = null; }
+            try {
+              window.webkit.messageHandlers.citedCopy.postMessage({ text: text, pinStart: pinStart, pinEnd: pinEnd });
+              e.preventDefault();
+            } catch (err) { /* no native handler: default copy proceeds */ }
+          });
+        })();
+        """
+    }
 
     /// Wraps the opinion HTML in a minimal readable document.
     static func document(for body: String) -> String {
@@ -317,9 +381,31 @@ struct OpinionWebView: NSViewRepresentable {
         """
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         private var loadedDocument: String?
         private var ruleList: WKContentRuleList?
+        var bluebook: BluebookCitation?
+
+        /// The injected copy hook's payload: selection text + optional star-
+        /// pagination pins. Types are validated; anything unexpected is ignored
+        /// (the page can't reach this handler — content JS is disabled — but
+        /// defense in depth costs nothing).
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "citedCopy",
+                  let bluebook,
+                  let body = message.body as? [String: Any],
+                  let raw = body["text"] as? String else { return }
+            let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return }
+            var pins: (Int, Int)?
+            if let start = body["pinStart"] as? Int {
+                let end = body["pinEnd"] as? Int ?? start
+                pins = (start, max(start, end))
+            }
+            let payload = text + "\n\n" + bluebook.formatted(pinPages: pins)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(payload, forType: .string)
+        }
 
         /// Loads the opinion document once, only AFTER installing a content-rule
         /// list that blocks every remote (http/https) load. Third-party opinion

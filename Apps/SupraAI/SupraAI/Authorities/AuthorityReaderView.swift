@@ -341,7 +341,7 @@ struct CaseReaderPanel<Actions: View>: View {
             ?? availableFormats.first
         switch format {
         case .html:
-            if let html { OpinionWebView(html: html) }
+            if let html { OpinionWebView(html: html, bluebook: bluebook) }
         case .pdf:
             if let pdfURL { OpinionPDFView(url: pdfURL) }
         case .text:
