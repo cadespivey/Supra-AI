@@ -27,7 +27,10 @@ let package = Package(
         ),
         .testTarget(
             name: "SupraResearchTests",
-            dependencies: ["SupraResearch"]
+            dependencies: ["SupraResearch"],
+            resources: [
+                .copy("Fixtures")
+            ]
         )
     ]
 )
