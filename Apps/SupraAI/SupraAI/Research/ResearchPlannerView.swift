@@ -19,6 +19,7 @@ struct ResearchPlannerView: View {
     @State private var startDate = Date(timeIntervalSince1970: 1_420_070_400) // 2015-01-01
     @State private var endDate = Date()
     @State private var routingMessage: String?
+    @State private var isGeneratingAndRunning = false
     @State private var selectedCourtID: String
     /// Throwaway sink for the autocomplete field's court binding; the planner
     /// derives its court filter from `selectedCourtID` via `selectedScope`.
@@ -82,15 +83,29 @@ struct ResearchPlannerView: View {
                 }
 
                 Section {
-                    Button { Task { await generate() } } label: {
-                        HStack {
-                            if isGenerating { ProgressView().controlSize(.small) }
-                            Text(isGenerating ? "Generating…" : "Generate Search Plan")
+                    HStack(spacing: 8) {
+                        Button { Task { await generateAndRun() } } label: {
+                            HStack {
+                                if isGeneratingAndRunning { ProgressView().controlSize(.small) }
+                                Text(isGeneratingAndRunning ? "Generating…" : "Generate & Run")
+                            }
                         }
+                        .buttonStyle(.ghostAccent)
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .disabled(!draft.isValid || isGenerating || isGeneratingAndRunning)
+                        .accessibilityIdentifier("planner.generateAndRun")
+                        .help("Generate queries with the assigned model, approve them all, save, and run — one step (⌘Return)")
+                        Button { Task { await generate() } } label: {
+                            HStack {
+                                if isGenerating, !isGeneratingAndRunning { ProgressView().controlSize(.small) }
+                                Text("Generate for Review")
+                            }
+                        }
+                        .buttonStyle(.ghost)
+                        .disabled(!draft.isValid || isGenerating || isGeneratingAndRunning)
+                        .accessibilityIdentifier("planner.generate")
+                        .help("Generate proposed queries and review or edit them before running")
                     }
-                    .buttonStyle(.ghostAccent)
-                    .disabled(!draft.isValid || isGenerating)
-                    .accessibilityIdentifier("planner.generate")
                     routeStatus
                     if let routingMessage {
                         Text(routingMessage).font(.supraCaption).foregroundStyle(.orange)
@@ -217,6 +232,18 @@ struct ResearchPlannerView: View {
         if (try? controller.savePlan(draft: draft)) != nil {
             dismiss()
         }
+    }
+
+    /// One step from issue to running session: generate queries with the
+    /// assigned model (they arrive approved), save, and run. On any
+    /// generation failure the sheet stays open with the routing/plan message
+    /// visible so the user can fall back to review or manual queries.
+    private func generateAndRun() async {
+        isGeneratingAndRunning = true
+        defer { isGeneratingAndRunning = false }
+        await generate()
+        guard controller.canSavePlan else { return }
+        saveAndRun()
     }
 
     /// Saves the plan and immediately starts the run — no reopening the saved
