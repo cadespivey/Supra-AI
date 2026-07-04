@@ -1,3 +1,5 @@
+import AppKit
+import CoreGraphics
 import XCTest
 
 /// End-to-end UI test driving the Research and Authorities tabs with mouse-style
@@ -57,15 +59,13 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         // Fill the issue. (Jurisdiction is pre-filled from the matter.)
         let title = app.textFields["planner.title"]
         XCTAssertTrue(title.waitForExistence(timeout: 10), "Planner sheet did not open")
-        title.click()
-        title.typeText("Trade secret misappropriation")
+        pasteText("Trade secret misappropriation", into: title, app: app)
 
         // The issue field is now a bordered, auto-growing MultilineField (TextEditor),
         // so it surfaces as a textView rather than a textField.
         let issue = app.textViews["planner.issue"]
         XCTAssertTrue(issue.waitForExistence(timeout: 5), "Issue field not found")
-        issue.click()
-        issue.typeText("Whether the NDA covers post-termination use of source code.")
+        pasteText("Whether the NDA covers post-termination use of source code.", into: issue, app: app)
 
         // Generate with no model loaded — this reveals the manual query editor.
         app.buttons["planner.generate"]
@@ -80,8 +80,7 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         let query = app.textFields["planner.query"]
         XCTAssertTrue(query.waitForExistence(timeout: 5), "Query field not found")
         app.sheets.firstMatch.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -420)
-        query.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        query.typeText("trade secret nda source code")
+        pasteText("trade secret nda source code", into: query, app: app)
 
         // Save the plan → creates a research session.
         let save = app.buttons["planner.save"]
@@ -114,6 +113,36 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         )
     }
 
+    func testResearchPlannerTabOrderIsTopToBottom() {
+        let app = launchApp()
+
+        let matter = seededMatterRow(in: app)
+        XCTAssertTrue(matter.waitForExistence(timeout: 20), "Seeded matter did not appear in the sidebar")
+        matter.click()
+
+        selectMatterTab("Research+planner")
+        let title = app.textFields["planner.title"]
+        XCTAssertTrue(
+            title.waitForExistence(timeout: 10),
+            "Research+planner command should open the research planner sheet"
+        )
+        title.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+
+        waitForPlannerFocus("planner.title", in: app)
+        pressTab(in: app)
+        waitForPlannerFocus("planner.issue", in: app)
+        pressTab(in: app)
+        waitForPlannerFocus("planner.jurisdiction", in: app)
+        pressTab(in: app)
+        waitForPlannerFocus("planner.preferredCourts", in: app)
+        pressTab(in: app)
+        waitForPlannerFocus("planner.excludedCourts", in: app)
+        pressTab(in: app)
+        waitForPlannerFocus("planner.dateRange", in: app)
+        pressTab(in: app, shift: true)
+        waitForPlannerFocus("planner.excludedCourts", in: app)
+    }
+
     private func seededMatterRow(in app: XCUIApplication) -> XCUIElement {
         let identifier = "matter.row.\(seededMatterName)"
         return app.descendants(matching: .any)[identifier]
@@ -123,6 +152,46 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         guard let tabCommandURL else { return }
         try? rawValue.write(to: tabCommandURL, atomically: true, encoding: .utf8)
     }
+
+    private func pasteText(
+        _ text: String,
+        into element: XCUIElement,
+        app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(element.waitForExistence(timeout: 5), "Element to receive pasted text did not exist", file: file, line: line)
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        NSPasteboard.general.clearContents()
+        XCTAssertTrue(NSPasteboard.general.setString(text, forType: .string), "Could not seed pasteboard", file: file, line: line)
+        app.activate()
+        app.typeKey("v", modifierFlags: .command)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+    }
+
+    private func waitForPlannerFocus(
+        _ identifier: String,
+        in app: XCUIApplication,
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let marker = app.staticTexts["planner.focused.\(identifier)"]
+        XCTAssertTrue(
+            marker.waitForExistence(timeout: timeout),
+            "Expected planner focus to be \(identifier)",
+            file: file,
+            line: line
+        )
+    }
+
+    private func pressTab(in app: XCUIApplication, shift: Bool = false) {
+        app.activate()
+        let flags: XCUIElement.KeyModifierFlags = shift ? .shift : []
+        app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: flags)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+    }
+
 }
 
 /// End-to-end UI test for the chat citation + export features, driven against the

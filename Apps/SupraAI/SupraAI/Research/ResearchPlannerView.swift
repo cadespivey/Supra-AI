@@ -22,6 +22,7 @@ struct ResearchPlannerView: View {
     @State private var isGeneratingAndRunning = false
     @State private var selectedCourtID: String
     @State private var focusChain = SupraFocusChain()
+    @State private var focusedPlannerControlID = "none"
     /// Throwaway sink for the autocomplete field's court binding; the planner
     /// derives its court filter from `selectedCourtID` via `selectedScope`.
     @State private var jurisdictionCourt = ""
@@ -199,9 +200,33 @@ struct ResearchPlannerView: View {
                 .accessibilityIdentifier("planner.saveAndRun")
         }
         .frame(minWidth: 560, idealWidth: 680, maxWidth: .infinity, minHeight: 640, idealHeight: 780, maxHeight: .infinity)
+        .overlay(alignment: .topLeading) {
+            #if DEBUG
+            if AppEnvironment.isUITestMode {
+                Text(focusedPlannerControlID)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.01)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("planner.focused.\(focusedPlannerControlID)")
+                    .accessibilityLabel(focusedPlannerControlID)
+            }
+            #endif
+        }
         .onAppear {
+            #if DEBUG
+            if AppEnvironment.isUITestMode {
+                focusChain.onFocusChange = { focusedPlannerControlID = $0 ?? "none" }
+                DispatchQueue.main.async { focusChain.noteFirstRegisteredControl() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focusChain.noteFirstRegisteredControl() }
+            }
+            #endif
             library.refresh()
             Task { @MainActor in seedManualQueryIfNeeded() }
+        }
+        .onDisappear {
+            #if DEBUG
+            focusChain.onFocusChange = nil
+            #endif
         }
     }
 

@@ -150,7 +150,9 @@ struct MatterWorkspaceView: View {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if let rawValue, !rawValue.isEmpty, rawValue != lastUITestTabCommand {
                 lastUITestTabCommand = rawValue
-                if let target = MatterTab(rawValue: rawValue) {
+                let parts = rawValue.split(separator: "+").map(String.init)
+                if let first = parts.first, let target = MatterTab(rawValue: first) {
+                    if parts.count > 1, parts[1] == "planner" { autoOpenResearchPlanner = true }
                     tab = target
                 }
             }

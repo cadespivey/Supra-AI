@@ -11,13 +11,15 @@ final class SupraFocusChain {
     private struct Entry {
         weak var view: NSView?
         let order: Int
+        let identifier: String?
     }
 
     private var entries: [ObjectIdentifier: Entry] = [:]
     private var installedInitialFocus = false
+    var onFocusChange: ((String?) -> Void)?
 
-    func register(_ view: NSView, at order: Int) {
-        entries[ObjectIdentifier(view)] = Entry(view: view, order: order)
+    func register(_ view: NSView, at order: Int, identifier: String? = nil) {
+        entries[ObjectIdentifier(view)] = Entry(view: view, order: order, identifier: identifier)
         // The window pointer is nil until the view lands in the hierarchy —
         // finish the window-level setup on the next runloop turn.
         DispatchQueue.main.async { [weak self] in self?.installInitialFocusIfPossible() }
@@ -37,20 +39,32 @@ final class SupraFocusChain {
         focus(from: view, offset: -1)
     }
 
+    func noteFocused(_ view: NSView) {
+        onFocusChange?(entry(for: view)?.identifier)
+    }
+
+    func noteFirstRegisteredControl() {
+        onFocusChange?(orderedEntries().first?.identifier)
+    }
+
     private func focus(from view: NSView, offset: Int) -> Bool {
         let ordered = orderedEntries()
         guard let current = ordered.firstIndex(where: { $0.view === view }) else { return false }
         let nextIndex = current + offset
         guard ordered.indices.contains(nextIndex) else { return false }
         guard let window = view.window ?? ordered[nextIndex].view.window else { return false }
-        return window.makeFirstResponder(ordered[nextIndex].view)
+        let didFocus = window.makeFirstResponder(ordered[nextIndex].view)
+        if didFocus {
+            onFocusChange?(ordered[nextIndex].identifier)
+        }
+        return didFocus
     }
 
-    private func orderedEntries() -> [(view: NSView, order: Int)] {
+    private func orderedEntries() -> [(view: NSView, order: Int, identifier: String?)] {
         entries = entries.filter { $0.value.view != nil }
         return entries.values.compactMap { entry in
             guard let view = entry.view else { return nil }
-            return (view, entry.order)
+            return (view, entry.order, entry.identifier)
         }
         .sorted { lhs, rhs in
             if lhs.order == rhs.order {
@@ -60,14 +74,20 @@ final class SupraFocusChain {
         }
     }
 
+    private func entry(for view: NSView) -> Entry? {
+        entries = entries.filter { $0.value.view != nil }
+        return entries[ObjectIdentifier(view)]
+    }
+
     private func installInitialFocusIfPossible() {
         guard !installedInitialFocus else { return }
-        guard let first = orderedEntries().first?.view, let window = first.window else { return }
+        guard let first = orderedEntries().first, let window = first.view.window else { return }
         installedInitialFocus = true
-        window.initialFirstResponder = first
-        if window.firstResponder !== first {
-            window.makeFirstResponder(first)
+        window.initialFirstResponder = first.view
+        if window.firstResponder !== first.view {
+            window.makeFirstResponder(first.view)
         }
+        onFocusChange?(first.identifier)
     }
 }
 
@@ -177,7 +197,7 @@ private struct MultilineTextEditor: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.setAccessibilityIdentifier(accessibilityID)
         context.coordinator.focusChain = focusChain
-        focusChain?.register(textView, at: focusOrder)
+        focusChain?.register(textView, at: focusOrder, identifier: accessibilityID)
 
         // An enclosing scroll view top-anchors the document text within the (taller)
         // min-height frame; scrollers stay off because the SwiftUI frame grows to fit.
@@ -218,6 +238,11 @@ private struct MultilineTextEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSTextView else { return }
             text.wrappedValue = view.string
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            guard let view = notification.object as? NSTextView else { return }
+            focusChain?.noteFocused(view)
         }
 
         /// Tab/Shift-Tab move focus like every other form field — these are
@@ -303,7 +328,7 @@ struct FocusChainSwitch: NSViewRepresentable {
         control.focusChain = focusChain
         control.setAccessibilityIdentifier(accessibilityID)
         control.setAccessibilityLabel("Limit to a date range")
-        focusChain?.register(control, at: focusOrder)
+        focusChain?.register(control, at: focusOrder, identifier: accessibilityID)
         return control
     }
 
@@ -354,6 +379,14 @@ struct FocusChainSwitch: NSViewRepresentable {
             }
             super.keyDown(with: event)
         }
+
+        override func becomeFirstResponder() -> Bool {
+            let accepted = super.becomeFirstResponder()
+            if accepted {
+                focusChain?.noteFocused(self)
+            }
+            return accepted
+        }
     }
 }
 
@@ -401,7 +434,7 @@ struct LeadingTextField: NSViewRepresentable {
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         context.coordinator.focusChain = focusChain
-        focusChain?.register(field, at: focusOrder)
+        focusChain?.register(field, at: focusOrder, identifier: accessibilityID)
         return field
     }
 
@@ -438,7 +471,11 @@ struct LeadingTextField: NSViewRepresentable {
             guard let field = notification.object as? NSTextField else { return }
             text.wrappedValue = field.stringValue
         }
-        func controlTextDidBeginEditing(_ notification: Notification) { onEditingChanged?(true) }
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            onEditingChanged?(true)
+            guard let field = notification.object as? NSTextField else { return }
+            focusChain?.noteFocused(field)
+        }
         func controlTextDidEndEditing(_ notification: Notification) { onEditingChanged?(false) }
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             guard let focusChain else { return false }
