@@ -21,6 +21,7 @@ struct ResearchPlannerView: View {
     @State private var routingMessage: String?
     @State private var isGeneratingAndRunning = false
     @State private var selectedCourtID: String
+    @State private var focusChain = SupraFocusChain()
     /// Throwaway sink for the autocomplete field's court binding; the planner
     /// derives its court filter from `selectedCourtID` via `selectedScope`.
     @State private var jurisdictionCourt = ""
@@ -51,7 +52,13 @@ struct ResearchPlannerView: View {
         SupraSheetScaffold("New Research Session", doneLabel: "Cancel", onClose: { controller.resetPlan(); dismiss() }) {
             Form {
                 Section("Issue") {
-                    BoxedLeadingTextField(placeholder: "Title", text: $draft.title)
+                    BoxedLeadingTextField(
+                        placeholder: "Title",
+                        text: $draft.title,
+                        focusChain: focusChain,
+                        focusOrder: 10,
+                        accessibilityID: "planner.title"
+                    )
                         .accessibilityIdentifier("planner.title")
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Legal issue or question").font(.subheadline).foregroundStyle(.secondary)
@@ -59,6 +66,8 @@ struct ResearchPlannerView: View {
                             placeholder: "e.g. Does the UCC govern a sale of goods under $500?",
                             text: $draft.issueText,
                             minLines: 4,
+                            focusChain: focusChain,
+                            focusOrder: 20,
                             accessibilityID: "planner.issue"
                         )
                         .accessibilityIdentifier("planner.issue")
@@ -67,15 +76,41 @@ struct ResearchPlannerView: View {
                         jurisdiction: $draft.jurisdiction,
                         court: $jurisdictionCourt,
                         selectedCourtID: $selectedCourtID,
-                        invalid: false
+                        invalid: false,
+                        focusChain: focusChain,
+                        focusOrder: 30,
+                        accessibilityID: "planner.jurisdiction"
                     )
                     .accessibilityIdentifier("planner.jurisdiction")
                 }
 
                 Section("Filters (optional)") {
-                    BoxedLeadingTextField(placeholder: "Additional preferred courts (comma-separated)", text: $preferredCourtsText)
-                    BoxedLeadingTextField(placeholder: "Excluded courts (comma-separated)", text: $excludedCourtsText)
-                    Toggle("Limit to a date range", isOn: $useDateRange)
+                    BoxedLeadingTextField(
+                        placeholder: "Additional preferred courts (comma-separated)",
+                        text: $preferredCourtsText,
+                        focusChain: focusChain,
+                        focusOrder: 40,
+                        accessibilityID: "planner.preferredCourts"
+                    )
+                    .accessibilityIdentifier("planner.preferredCourts")
+                    BoxedLeadingTextField(
+                        placeholder: "Excluded courts (comma-separated)",
+                        text: $excludedCourtsText,
+                        focusChain: focusChain,
+                        focusOrder: 50,
+                        accessibilityID: "planner.excludedCourts"
+                    )
+                    .accessibilityIdentifier("planner.excludedCourts")
+                    HStack {
+                        Text("Limit to a date range")
+                        Spacer()
+                        FocusChainSwitch(
+                            isOn: $useDateRange,
+                            focusChain: focusChain,
+                            focusOrder: 60,
+                            accessibilityID: "planner.dateRange"
+                        )
+                    }
                     if useDateRange {
                         DatePicker("From", selection: $startDate, displayedComponents: .date)
                         DatePicker("To", selection: $endDate, displayedComponents: .date)
@@ -123,7 +158,11 @@ struct ResearchPlannerView: View {
                             HStack(spacing: 8) {
                                 Toggle("Approved", isOn: $query.approved).labelsHidden()
                                     .accessibilityIdentifier("planner.approved")
-                                BoxedLeadingTextField(placeholder: "Query", text: $query.text)
+                                BoxedLeadingTextField(
+                                    placeholder: "Query",
+                                    text: $query.text,
+                                    accessibilityID: "planner.query"
+                                )
                                     .accessibilityIdentifier("planner.query")
                                 Button(role: .destructive) {
                                     controller.deleteQuery(id: query.id)

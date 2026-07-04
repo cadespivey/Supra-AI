@@ -143,6 +143,9 @@ struct JurisdictionAutocompleteField: View {
     @Binding var court: String
     @Binding var selectedCourtID: String
     let invalid: Bool
+    var focusChain: SupraFocusChain? = nil
+    var focusOrder: Int = 0
+    var accessibilityID: String? = nil
 
     @State private var query: String
 
@@ -152,12 +155,18 @@ struct JurisdictionAutocompleteField: View {
         jurisdiction: Binding<String>,
         court: Binding<String>,
         selectedCourtID: Binding<String>,
-        invalid: Bool
+        invalid: Bool,
+        focusChain: SupraFocusChain? = nil,
+        focusOrder: Int = 0,
+        accessibilityID: String? = nil
     ) {
         self._jurisdiction = jurisdiction
         self._court = court
         self._selectedCourtID = selectedCourtID
         self.invalid = invalid
+        self.focusChain = focusChain
+        self.focusOrder = focusOrder
+        self.accessibilityID = accessibilityID
         let initial = JurisdictionCatalog.shared.option(id: selectedCourtID.wrappedValue)?.displayName
             ?? court.wrappedValue.ifEmpty(jurisdiction.wrappedValue)
         self._query = State(initialValue: initial)
@@ -166,7 +175,13 @@ struct JurisdictionAutocompleteField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                BoxedLeadingTextField(placeholder: "Jurisdiction or court", text: queryBinding)
+                BoxedLeadingTextField(
+                    placeholder: "Jurisdiction or court",
+                    text: queryBinding,
+                    focusChain: focusChain,
+                    focusOrder: focusOrder,
+                    accessibilityID: accessibilityID
+                )
                 if isNotApplicable {
                     Button("Clear") { clear() }
                         .buttonStyle(.borderless)

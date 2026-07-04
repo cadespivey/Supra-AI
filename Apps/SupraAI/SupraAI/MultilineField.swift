@@ -1,6 +1,76 @@
 import AppKit
 import SwiftUI
 
+/// Deterministic top-to-bottom Tab order for AppKit-backed fields hosted in
+/// SwiftUI. The window's auto-recalculated key-view loop follows hosting-view
+/// geometry, which does NOT reliably match the visual form order, so forms that
+/// care register each entry field with an explicit order. Native controls outside
+/// the chain keep their normal key-loop behavior after the first/last field.
+@MainActor
+final class SupraFocusChain {
+    private struct Entry {
+        weak var view: NSView?
+        let order: Int
+    }
+
+    private var entries: [ObjectIdentifier: Entry] = [:]
+    private var installedInitialFocus = false
+
+    func register(_ view: NSView, at order: Int) {
+        entries[ObjectIdentifier(view)] = Entry(view: view, order: order)
+        // The window pointer is nil until the view lands in the hierarchy —
+        // finish the window-level setup on the next runloop turn.
+        DispatchQueue.main.async { [weak self] in self?.installInitialFocusIfPossible() }
+    }
+
+    func unregister(_ view: NSView) {
+        entries.removeValue(forKey: ObjectIdentifier(view))
+    }
+
+    @discardableResult
+    func focusNext(after view: NSView) -> Bool {
+        focus(from: view, offset: 1)
+    }
+
+    @discardableResult
+    func focusPrevious(before view: NSView) -> Bool {
+        focus(from: view, offset: -1)
+    }
+
+    private func focus(from view: NSView, offset: Int) -> Bool {
+        let ordered = orderedEntries()
+        guard let current = ordered.firstIndex(where: { $0.view === view }) else { return false }
+        let nextIndex = current + offset
+        guard ordered.indices.contains(nextIndex) else { return false }
+        guard let window = view.window ?? ordered[nextIndex].view.window else { return false }
+        return window.makeFirstResponder(ordered[nextIndex].view)
+    }
+
+    private func orderedEntries() -> [(view: NSView, order: Int)] {
+        entries = entries.filter { $0.value.view != nil }
+        return entries.values.compactMap { entry in
+            guard let view = entry.view else { return nil }
+            return (view, entry.order)
+        }
+        .sorted { lhs, rhs in
+            if lhs.order == rhs.order {
+                return ObjectIdentifier(lhs.view).hashValue < ObjectIdentifier(rhs.view).hashValue
+            }
+            return lhs.order < rhs.order
+        }
+    }
+
+    private func installInitialFocusIfPossible() {
+        guard !installedInitialFocus else { return }
+        guard let first = orderedEntries().first?.view, let window = first.window else { return }
+        installedInitialFocus = true
+        window.initialFirstResponder = first
+        if window.firstResponder !== first {
+            window.makeFirstResponder(first)
+        }
+    }
+}
+
 /// A bordered, auto-growing multi-line text field for prose entry in forms.
 ///
 /// Backed by `TextEditor` (not `TextField(axis: .vertical)`, which on macOS commits —
@@ -14,6 +84,8 @@ struct MultilineField: View {
     /// The collapsed height, in lines of body text. The field grows beyond this to
     /// fit longer input.
     var minLines: Int = 3
+    var focusChain: SupraFocusChain? = nil
+    var focusOrder: Int = 0
     /// Accessibility identifier applied to the underlying text view (so XCUITest can
     /// find it as a `textView`). The SwiftUI `.accessibilityIdentifier` modifier lands
     /// on the host group, not the AppKit text view, so it's threaded explicitly.
@@ -56,7 +128,9 @@ struct MultilineField: View {
             MultilineTextEditor(
                 text: $text,
                 inset: CGSize(width: Self.horizontalInset, height: Self.verticalInset),
-                accessibilityID: accessibilityID
+                accessibilityID: accessibilityID,
+                focusChain: focusChain,
+                focusOrder: focusOrder
             )
             .frame(height: max(minHeight, contentHeight))
         }
@@ -81,6 +155,8 @@ private struct MultilineTextEditor: NSViewRepresentable {
     @Binding var text: String
     var inset: CGSize
     var accessibilityID: String?
+    var focusChain: SupraFocusChain? = nil
+    var focusOrder: Int = 0
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = NSTextView()
@@ -100,6 +176,8 @@ private struct MultilineTextEditor: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.setAccessibilityIdentifier(accessibilityID)
+        context.coordinator.focusChain = focusChain
+        focusChain?.register(textView, at: focusOrder)
 
         // An enclosing scroll view top-anchors the document text within the (taller)
         // min-height frame; scrollers stay off because the SwiftUI frame grows to fit.
@@ -117,13 +195,26 @@ private struct MultilineTextEditor: NSViewRepresentable {
         if textView.string != text { textView.string = text }
         textView.textContainerInset = inset
         textView.setAccessibilityIdentifier(accessibilityID)
+        context.coordinator.focusChain = focusChain
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        if let textView = scrollView.documentView as? NSTextView {
+            coordinator.focusChain?.unregister(textView)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text, focusChain: focusChain) }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         private let text: Binding<String>
-        init(text: Binding<String>) { self.text = text }
+        var focusChain: SupraFocusChain?
+
+        init(text: Binding<String>, focusChain: SupraFocusChain?) {
+            self.text = text
+            self.focusChain = focusChain
+        }
+
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSTextView else { return }
             text.wrappedValue = view.string
@@ -135,9 +226,11 @@ private struct MultilineTextEditor: NSViewRepresentable {
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             switch commandSelector {
             case #selector(NSTextView.insertTab(_:)):
+                if focusChain?.focusNext(after: textView) == true { return true }
                 textView.window?.selectNextKeyView(nil)
                 return true
             case #selector(NSTextView.insertBacktab(_:)):
+                if focusChain?.focusPrevious(before: textView) == true { return true }
                 textView.window?.selectPreviousKeyView(nil)
                 return true
             default:
@@ -166,10 +259,18 @@ private struct HeightKey: PreferenceKey {
 struct BoxedLeadingTextField: View {
     let placeholder: String
     @Binding var text: String
+    var focusChain: SupraFocusChain? = nil
+    var focusOrder: Int = 0
+    var accessibilityID: String? = nil
     @State private var focused = false
 
     var body: some View {
-        LeadingTextField(text: $text, placeholder: placeholder, onEditingChanged: { focused = $0 })
+        LeadingTextField(
+            text: $text, placeholder: placeholder,
+            onEditingChanged: { focused = $0 },
+            focusChain: focusChain, focusOrder: focusOrder,
+            accessibilityID: accessibilityID
+        )
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -185,6 +286,74 @@ struct BoxedLeadingTextField: View {
                     )
             )
             .animation(.easeOut(duration: 0.12), value: focused)
+    }
+}
+
+struct FocusChainSwitch: NSViewRepresentable {
+    @Binding var isOn: Bool
+    var focusChain: SupraFocusChain? = nil
+    var focusOrder: Int = 0
+    var accessibilityID: String? = nil
+
+    func makeNSView(context: Context) -> NSSwitch {
+        let control = ChainedSwitch()
+        control.state = isOn ? .on : .off
+        control.target = context.coordinator
+        control.action = #selector(Coordinator.changed(_:))
+        control.focusChain = focusChain
+        control.setAccessibilityIdentifier(accessibilityID)
+        control.setAccessibilityLabel("Limit to a date range")
+        focusChain?.register(control, at: focusOrder)
+        return control
+    }
+
+    func updateNSView(_ nsView: NSSwitch, context: Context) {
+        nsView.state = isOn ? .on : .off
+        nsView.setAccessibilityIdentifier(accessibilityID)
+        context.coordinator.isOn = $isOn
+        context.coordinator.focusChain = focusChain
+        if let chained = nsView as? ChainedSwitch {
+            chained.focusChain = focusChain
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSSwitch, coordinator: Coordinator) {
+        coordinator.focusChain?.unregister(nsView)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isOn: $isOn, focusChain: focusChain)
+    }
+
+    final class Coordinator: NSObject {
+        var isOn: Binding<Bool>
+        var focusChain: SupraFocusChain?
+
+        init(isOn: Binding<Bool>, focusChain: SupraFocusChain?) {
+            self.isOn = isOn
+            self.focusChain = focusChain
+        }
+
+        @objc func changed(_ sender: NSSwitch) {
+            isOn.wrappedValue = sender.state == .on
+        }
+    }
+
+    final class ChainedSwitch: NSSwitch {
+        weak var focusChain: SupraFocusChain?
+
+        override func keyDown(with event: NSEvent) {
+            guard event.keyCode == 48 else {
+                super.keyDown(with: event)
+                return
+            }
+            if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.shift) {
+                if focusChain?.focusPrevious(before: self) == true { return }
+            } else if focusChain?.focusNext(after: self) == true {
+                return
+            }
+            super.keyDown(with: event)
+        }
     }
 }
 
@@ -213,6 +382,9 @@ struct LeadingTextField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String
     var onEditingChanged: ((Bool) -> Void)? = nil
+    var focusChain: SupraFocusChain? = nil
+    var focusOrder: Int = 0
+    var accessibilityID: String? = nil
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField(string: text)
@@ -225,24 +397,42 @@ struct LeadingTextField: NSViewRepresentable {
         field.lineBreakMode = .byTruncatingTail
         field.cell?.usesSingleLineMode = true
         field.delegate = context.coordinator
+        field.setAccessibilityIdentifier(accessibilityID)
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        context.coordinator.focusChain = focusChain
+        focusChain?.register(field, at: focusOrder)
         return field
     }
 
     func updateNSView(_ nsView: NSTextField, context: Context) {
         if nsView.stringValue != text { nsView.stringValue = text }
         nsView.placeholderString = placeholder
+        nsView.setAccessibilityIdentifier(accessibilityID)
+        context.coordinator.focusChain = focusChain
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text, onEditingChanged: onEditingChanged) }
+    static func dismantleNSView(_ nsView: NSTextField, coordinator: Coordinator) {
+        coordinator.focusChain?.unregister(nsView)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onEditingChanged: onEditingChanged, focusChain: focusChain)
+    }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         private let text: Binding<String>
         private let onEditingChanged: ((Bool) -> Void)?
-        init(text: Binding<String>, onEditingChanged: ((Bool) -> Void)?) {
+        var focusChain: SupraFocusChain?
+
+        init(
+            text: Binding<String>,
+            onEditingChanged: ((Bool) -> Void)?,
+            focusChain: SupraFocusChain?
+        ) {
             self.text = text
             self.onEditingChanged = onEditingChanged
+            self.focusChain = focusChain
         }
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
@@ -250,5 +440,16 @@ struct LeadingTextField: NSViewRepresentable {
         }
         func controlTextDidBeginEditing(_ notification: Notification) { onEditingChanged?(true) }
         func controlTextDidEndEditing(_ notification: Notification) { onEditingChanged?(false) }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard let focusChain else { return false }
+            switch commandSelector {
+            case #selector(NSTextView.insertTab(_:)):
+                return focusChain.focusNext(after: control)
+            case #selector(NSTextView.insertBacktab(_:)):
+                return focusChain.focusPrevious(before: control)
+            default:
+                return false
+            }
+        }
     }
 }
