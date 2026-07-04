@@ -32,7 +32,13 @@ public final class NetworkPolicyService: NetworkPolicyServiceProtocol, @unchecke
             // section because a section's text never cites itself). Token-free.
             "www.govinfo.gov",
             "v3.openstates.org",      // state/federal bills
-            "api.regulations.gov"     // federal rulemaking dockets
+            "api.regulations.gov",    // federal rulemaking dockets
+            // Government-records connectors — public, key-less, token-free.
+            // Only hosts the client actually FETCHES are listed; filing URLs
+            // built for the user's browser (www.sec.gov archives) are not.
+            "data.sec.gov",           // SEC EDGAR submissions + XBRL APIs
+            "www.consumerfinance.gov", // CFPB consumer-complaint database API
+            "www.nlrb.gov"            // NLRB official CSV exports
         ]
     ) {
         self.allowedHosts = Set(allowedHosts.map { $0.lowercased() })

@@ -289,4 +289,21 @@ private extension Array {
     var single: Element? {
         count == 1 ? first : nil
     }
+
+    func testGovernmentRecordsConnectorHostsAreAllowListedSafely() throws {
+        let policy = NetworkPolicyService()
+        // Exactly the hosts the connectors FETCH — HTTPS only.
+        XCTAssertTrue(policy.isAllowed(try XCTUnwrap(URL(string: "https://data.sec.gov/submissions/CIK0000320193.json"))))
+        XCTAssertTrue(policy.isAllowed(try XCTUnwrap(URL(string: "https://www.consumerfinance.gov/data-research/consumer-complaints/search/api/v1/"))))
+        XCTAssertTrue(policy.isAllowed(try XCTUnwrap(URL(string: "https://www.nlrb.gov/reports/graphs-data/recent-filings"))))
+        // Plain HTTP is rejected.
+        XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "http://data.sec.gov/submissions/CIK0000320193.json"))))
+        // Embedded credentials are rejected.
+        XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "https://user:pass@www.consumerfinance.gov/api/v1/"))))
+        // Unlisted subdomains and apex domains stay denied (default-deny).
+        XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "https://example.nlrb.gov/x"))))
+        XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "https://sec.gov/x"))))
+        XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "https://www.sec.gov/Archives/edgar/data/320193/x"))))
+        XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "https://catalog.data.gov/dataset"))))
+    }
 }

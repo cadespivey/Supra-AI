@@ -65,6 +65,9 @@ need an explicit, documented justification.
   - Key'd legal-data APIs (the key is read from the Keychain): `api.govinfo.gov`
     (U.S. Code), `v3.openstates.org` (bills), `api.regulations.gov`
     (federal rulemaking dockets).
+  - Government-records connectors, public and key-less: `data.sec.gov`
+    (SEC EDGAR APIs), `www.consumerfinance.gov` (CFPB consumer-complaint
+    database), `www.nlrb.gov` (NLRB official CSV exports). Always token-free.
   - The CourtListener token is gated to the CourtListener hosts and is **never** sent to
     any other allow-listed host.
 - Plain `http`, embedded credentials, and non-allow-listed hosts are rejected.
