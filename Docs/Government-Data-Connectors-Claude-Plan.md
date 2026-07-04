@@ -1341,3 +1341,61 @@ Use small commits if committing is requested:
 3. CFPB complaint connector, tests, docs.
 4. NLRB data connector, tests, docs.
 5. Final docs and env example cleanup.
+
+## Claude Review Amendments (2026-07-03)
+
+Reviewed against the live codebase before execution. The following amendments
+override the corresponding sections above; everything else stands.
+
+1. **Network allow-list is narrower than planned.** Only the hosts the client
+   actually fetches this milestone are added: `data.sec.gov`,
+   `www.consumerfinance.gov`, `www.nlrb.gov`. NOT added: `sec.gov`/`www.sec.gov`
+   (filing/archive URLs are BUILT for the user's browser, never fetched by the
+   client), bare `nlrb.gov`/`consumerfinance.gov` apex domains, and
+   `catalog.data.gov`/`www.data.gov`/`catalog.archives.gov` (CATS/CHIPS remains
+   discovery-only, so nothing is fetched from them). Default-deny means hosts
+   are added when a fetch exists, not in anticipation. `SECURITY.md`'s
+   allow-list section must be updated in the same commit as the policy change —
+   repo practice the plan omitted.
+
+2. **Per-connector HTTP clients with source-tuned rate trackers.** The plan
+   missed that `AuthorizedHTTPClient` enforces a LOCAL rolling budget via
+   `RateLimitTracker` defaulting to 5/min / 50/hr / 125/day — tuned for
+   CourtListener, and per-client (see memory: one client per provider). A
+   connector on the default tracker starves after one pagination pass. Each
+   connector therefore constructs (or is injected) its OWN client, and app-side
+   construction must pass a tracker tuned to the source: SEC 120/min, 600/hr
+   (well under SEC's 10 req/s fair-access ceiling, which the per-second pacer
+   enforces); CFPB 60/min, 300/hr; NLRB 30/min, 120/hr. Tests inject stubs, so
+   this only binds the future app wiring — but the connector docs must state it
+   and the connector init must accept the client rather than build one.
+
+3. **Error shape: struct + `Kind` enum, not a 9-case enum.** Nine cases each
+   carrying eight associated values duplicates the payload nine times and makes
+   `Equatable`/pattern-matching clumsy. `LegalDataConnectorError` is a struct
+   with a `Kind` enum (`config`, `validation`, `rateLimit`, `sourceUnavailable`,
+   `download`, `notFound`, `parse`, `importFailed`, `transport`) plus the
+   planned fields. Same semantic contract, same mapping table.
+
+4. **Environment variables take the repo's `SUPRA_` prefix**:
+   `SUPRA_SEC_EDGAR_USER_AGENT`, `SUPRA_SEC_EDGAR_RATE_LIMIT_PER_SECOND`,
+   `SUPRA_CFPB_RATE_LIMIT_PER_SECOND`, `SUPRA_NLRB_RATE_LIMIT_PER_SECOND`,
+   `SUPRA_LEGAL_DATA_CACHE_DIR`, `SUPRA_NLRB_LOCAL_DATA_DIR`,
+   `SUPRA_LEGAL_DATA_CONNECTORS_ENABLE_LIVE_TESTS`. Every existing env var in
+   `.env.example` carries the prefix; unprefixed names would be the odd ones
+   out.
+
+5. **`.env.example` cleanup rides along**: the stale `SUPRA_LEGISCAN_API_KEY`
+   line is removed (LegiScan support was dropped 2026-07-02).
+
+6. **Confirmed absences** (searched before building): no existing `JSONValue`
+   or RFC-4180 CSV parser in `SupraResearch` or its dependencies — both are
+   built as planned. Billing CSV code in `SupraSessions` is export-only and in
+   the wrong package to reuse.
+
+7. **XBRL summaries are bounded**: flattened company-facts/concept/frame
+   summaries cap at 500 facts per response (raw payload still preserved in
+   full); the cap is documented in the connector doc.
+
+8. **Baseline recorded**: SupraResearch 166 tests green, SupraNetworking green,
+   app builds — immediately before connector work started.
