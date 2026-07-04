@@ -1,0 +1,9 @@
+{
+  "hits": {
+    "total": {"value": 2, "relation": "eq"},
+    "hits": [
+      {"_id": "8001001", "_source": {"complaint_id": "8001001", "company": null, "product": "Debt collection", "issue": null, "state": null, "date_received": null, "tags": null}},
+      {"_id": "8001002", "_source": {"complaint_id": 8001002, "product": "", "timely": ""}}
+    ]
+  }
+}

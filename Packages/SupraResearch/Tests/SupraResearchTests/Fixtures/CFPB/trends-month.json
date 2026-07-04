@@ -1,0 +1,13 @@
+{
+  "aggregations": {
+    "dateRangeArea": {
+      "dateRangeArea": {
+        "buckets": [
+          {"key_as_string": "2024-01-01T00:00:00-05:00", "key": 1704085200000, "doc_count": 42},
+          {"key_as_string": "2024-02-01T00:00:00-05:00", "key": 1706763600000, "doc_count": 35},
+          {"key_as_string": "2024-03-01T00:00:00-05:00", "key": 1709269200000, "doc_count": 51}
+        ]
+      }
+    }
+  }
+}

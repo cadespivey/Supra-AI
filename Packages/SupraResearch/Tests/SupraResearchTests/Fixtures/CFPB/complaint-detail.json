@@ -1,0 +1,8 @@
+{
+  "hits": {
+    "total": {"value": 1, "relation": "eq"},
+    "hits": [
+      {"_id": "7001001", "_source": {"complaint_id": "7001001", "company": "EXAMPLE BANK, N.A.", "product": "Checking or savings account", "sub_product": "Checking account", "issue": "Managing an account", "sub_issue": "Deposits and withdrawals", "state": "FL", "zip_code": "331XX", "date_received": "2024-03-11T12:00:00-05:00", "company_response": "Closed with explanation", "complaint_what_happened": "I deposited a check and the funds were held for fourteen days without a hold notice being provided to me.", "submitted_via": "Web", "tags": ["Servicemember"], "timely": "Yes", "has_narrative": true}}
+    ]
+  }
+}
