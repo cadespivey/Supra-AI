@@ -283,6 +283,12 @@ private struct ResearchCaseReader: View {
             html: opinion?.bestHTML,
             text: opinion?.bodyText ?? result.snippet,
             highlight: result.snippet,
+            bluebook: BluebookCitation(
+                caseName: result.caseNameFull ?? result.caseName,
+                citation: result.citation,
+                court: result.court,
+                year: result.dateFiled.map { Calendar.current.component(.year, from: $0) }
+            ),
             isLoading: loadingOpinion,
             onClose: onClose
         ) {

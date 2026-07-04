@@ -334,6 +334,77 @@ final class GroundedRetrievalHardeningTests: XCTestCase {
         )
     }
 
+    // MARK: - Bluebook citation formatting + star pagination
+
+    func testBluebookFormattingAcrossCourts() {
+        let scotus = BluebookCitation(
+            caseName: "Rush v. Savchuk, 444 U.S. 320",
+            citation: "444 U.S. 320",
+            court: "Supreme Court of the United States",
+            courtID: "scotus",
+            year: 1980
+        )
+        XCTAssertEqual(scotus.formatted(pinPages: (328, 328)), "Rush v. Savchuk, 444 U.S. 320, 328 (1980).")
+        XCTAssertEqual(scotus.formatted(), "Rush v. Savchuk, 444 U.S. 320 (1980).")
+
+        let circuit = BluebookCitation(
+            caseName: "SunTrust Bank v. Houghton Mifflin Co.",
+            citation: "268 F.3d 1257",
+            court: "United States Court of Appeals for the Eleventh Circuit",
+            year: 2001
+        )
+        XCTAssertEqual(
+            circuit.formatted(pinPages: (1260, 1261)),
+            "SunTrust Bank v. Houghton Mifflin Co., 268 F.3d 1257, 1260–61 (11th Cir. 2001)."
+        )
+
+        let district = BluebookCitation(
+            caseName: "Adams v. Fritz Martin Cabinetry LLC",
+            citation: "300 F. Supp. 3d 1300",
+            court: "United States District Court for the Middle District of Florida",
+            year: 2018
+        )
+        XCTAssertEqual(
+            district.formatted(),
+            "Adams v. Fritz Martin Cabinetry LLC, 300 F. Supp. 3d 1300 (M.D. Fla. 2018)."
+        )
+
+        let stateHigh = BluebookCitation(
+            caseName: "Smith v. Jones",
+            citation: "123 So. 3d 456",
+            court: "Supreme Court of Florida",
+            year: 2013
+        )
+        XCTAssertEqual(stateHigh.formatted(), "Smith v. Jones, 123 So. 3d 456 (Fla. 2013).")
+
+        // Unknown court degrades to a year-only parenthetical, never a guess.
+        let unknown = BluebookCitation(caseName: "In re Doe", citation: "77 X.Y.Z. 1", court: "Tribal Court of Appeals", year: 1999)
+        XCTAssertEqual(unknown.formatted(), "In re Doe, 77 X.Y.Z. 1 (1999).")
+    }
+
+    func testStarPaginationPinLookup() {
+        let text = "Intro before pagination. *321 The first page of substance. More words here. *322 Second page text with the holding language."
+        let holdingOffset = (text as NSString).range(of: "holding language").location
+        XCTAssertEqual(StarPagination.page(at: holdingOffset, in: text, firstPage: 320), 322)
+        let earlyOffset = (text as NSString).range(of: "first page").location
+        XCTAssertEqual(StarPagination.page(at: earlyOffset, in: text, firstPage: 320), 321)
+        // Before any marker, or with no markers at all → nil (no guessed pin).
+        XCTAssertNil(StarPagination.page(at: 3, in: text, firstPage: 320))
+        XCTAssertNil(StarPagination.page(at: 50, in: "No pagination markers anywhere in this text.", firstPage: 320))
+        // A stray "*3" footnote star is rejected by the first-page bound.
+        XCTAssertNil(StarPagination.page(at: 30, in: "A footnote *3 reference only, way out of range.", firstPage: 320))
+
+        // Selection spanning pages yields a range.
+        let span = StarPagination.pages(
+            forSelectionAt: (text as NSString).range(of: "first page").location,
+            length: text.count - (text as NSString).range(of: "first page").location - 1,
+            in: text,
+            firstPage: 320
+        )
+        XCTAssertEqual(span?.0, 321)
+        XCTAssertEqual(span?.1, 322)
+    }
+
     func testStateReferenceResolution() {
         XCTAssertEqual(StatutoryJurisdictionMapper.postalCode(forStateReference: "Fla."), "FL")
         XCTAssertEqual(StatutoryJurisdictionMapper.postalCode(forStateReference: "N.Y."), "NY")

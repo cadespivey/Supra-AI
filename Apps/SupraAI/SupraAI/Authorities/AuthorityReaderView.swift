@@ -1,3 +1,5 @@
+import AppKit
+import SupraResearch
 import SupraSessions
 import SwiftUI
 
@@ -80,39 +82,19 @@ struct AuthorityReaderView: View {
         }
     }
 
-    /// The opinion as paragraphs, scrolled to (and highlighting) the first paragraph
-    /// containing the cited passage.
+    /// The opinion rendered by the shared citation-copying reader, scrolled to
+    /// the cited passage.
     private func opinionText(_ text: String) -> some View {
-        let paragraphs = Self.paragraphs(of: text)
-        let highlightIndex = Self.highlightIndex(in: paragraphs, matching: model.highlight)
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
-                        Text(paragraph)
-                            .supraReadingBody(measure: nil)
-                            .textSelection(.enabled)
-                            .padding(.horizontal, 6)
-                            .background(
-                                index == highlightIndex
-                                    ? Color.yellow.opacity(0.22)
-                                    : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 4)
-                            )
-                            .id(index)
-                    }
-                }
-                .padding()
-            }
-            .onAppear {
-                if let highlightIndex {
-                    // Anchor the cited passage near the top so its context reads on.
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(highlightIndex, anchor: UnitPoint(x: 0, y: 0.15))
-                    }
-                }
-            }
-        }
+        OpinionParagraphsView(text: text, highlight: model.highlight, citation: readerCitation)
+    }
+
+    private var readerCitation: BluebookCitation {
+        BluebookCitation(
+            caseName: model.caseName,
+            citation: model.citationText,
+            court: model.court,
+            year: BluebookCitation.year(fromDateFiled: model.dateFiled)
+        )
     }
 
     static func paragraphs(of text: String) -> [String] {
@@ -150,53 +132,115 @@ struct AuthorityReaderView: View {
     }
 }
 
-/// The opinion body as selectable reading-typography paragraphs, scrolled to
-/// (and highlighting) the cited passage. Shared by the chat's `[A#]` reader and
-/// the Research/Authorities case readers.
-struct OpinionParagraphsView: View {
+/// The opinion body as selectable reading text. Copy (⌘C, or the context
+/// menu) puts the SELECTION plus the full Bluebook citation — with a pin cite
+/// derived from the opinion's star pagination — on the clipboard, so a quote
+/// pulled here drops into a brief already cited. Shared by the chat's `[A#]`
+/// reader and the Research/Authorities case readers.
+struct OpinionParagraphsView: NSViewRepresentable {
     let text: String
     var highlight: String?
+    var citation: BluebookCitation?
 
-    var body: some View {
-        let paragraphs = AuthorityReaderView.paragraphs(of: text)
-        let highlightIndex = AuthorityReaderView.highlightIndex(in: paragraphs, matching: highlight)
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
-                        Text(paragraph)
-                            .supraReadingBody(measure: nil)
-                            .textSelection(.enabled)
-                            .padding(.horizontal, 6)
-                            .background(
-                                index == highlightIndex
-                                    ? Color.yellow.opacity(0.22)
-                                    : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 4)
-                            )
-                            .id(index)
-                    }
-                }
-                .padding()
+    func makeNSView(context: Context) -> NSScrollView {
+        let textView = CitationCopyingTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(width: 20, height: 16)
+        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.documentView = textView
+        apply(to: textView)
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let textView = scroll.documentView as? CitationCopyingTextView else { return }
+        apply(to: textView)
+    }
+
+    private func apply(to textView: CitationCopyingTextView) {
+        textView.bluebook = citation
+        guard textView.string != text else { return }
+        textView.textStorage?.setAttributedString(Self.attributed(text))
+        if let range = Self.highlightRange(in: text, matching: highlight) {
+            textView.textStorage?.addAttribute(
+                .backgroundColor,
+                value: NSColor.systemYellow.withAlphaComponent(0.25),
+                range: range
+            )
+            DispatchQueue.main.async {
+                textView.scrollRangeToVisible(range)
             }
-            .onAppear {
-                if let highlightIndex {
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(highlightIndex, anchor: UnitPoint(x: 0, y: 0.15))
-                    }
-                }
-            }
-            // The common path renders the snippet first and swaps in the full
-            // opinion when the fetch lands — re-anchor on the swap, or the
-            // "scrolled to the cited passage" promise fails exactly then.
-            .onChange(of: text) {
-                if let highlightIndex {
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(highlightIndex, anchor: UnitPoint(x: 0, y: 0.15))
-                    }
-                }
+        } else {
+            DispatchQueue.main.async {
+                textView.scroll(.zero)
             }
         }
+    }
+
+    static func attributed(_ text: String) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 3
+        paragraph.paragraphSpacing = 8
+        return NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 14),
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: paragraph
+            ]
+        )
+    }
+
+    /// The paragraph containing the best phrase match for the cited snippet
+    /// (same sliding-phrase approach as the paragraph-index variant).
+    static func highlightRange(in text: String, matching highlight: String?) -> NSRange? {
+        guard let highlight, !highlight.isEmpty else { return nil }
+        let words = highlight
+            .replacingOccurrences(of: "…", with: " ")
+            .split(separator: " ")
+            .map(String.init)
+        guard !words.isEmpty else { return nil }
+        for phraseLength in [8, 5, 3] where words.count >= phraseLength {
+            let start = max(0, (words.count - phraseLength) / 2)
+            let phrase = words[start..<min(words.count, start + phraseLength)].joined(separator: " ")
+            if let found = text.range(of: phrase, options: [.caseInsensitive, .diacriticInsensitive]) {
+                return (text as NSString).paragraphRange(for: NSRange(found, in: text))
+            }
+        }
+        return nil
+    }
+}
+
+/// NSTextView whose copy appends the Bluebook cite (+ star-pagination pin) to
+/// the selection. Plain copy semantics are preserved when no citation context
+/// exists or nothing is selected.
+final class CitationCopyingTextView: NSTextView {
+    var bluebook: BluebookCitation?
+
+    override func copy(_ sender: Any?) {
+        let range = selectedRange()
+        guard let bluebook, range.length > 0 else { return super.copy(sender) }
+        let selected = (string as NSString).substring(with: range)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selected.isEmpty else { return super.copy(sender) }
+        let pin = StarPagination.pages(
+            forSelectionAt: range.location,
+            length: range.length,
+            in: string,
+            firstPage: bluebook.firstPage
+        )
+        let payload = selected + "\n\n" + bluebook.formatted(pinPages: pin)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(payload, forType: .string)
     }
 }
 
@@ -219,6 +263,7 @@ struct CaseReaderPanel<Actions: View>: View {
     var pdfURL: URL?
     var text: String?
     var highlight: String?
+    var bluebook: BluebookCitation?
     var isLoading = false
     let onClose: () -> Void
     @ViewBuilder let actions: () -> Actions
@@ -300,7 +345,7 @@ struct CaseReaderPanel<Actions: View>: View {
         case .pdf:
             if let pdfURL { OpinionPDFView(url: pdfURL) }
         case .text:
-            if let text { OpinionParagraphsView(text: text, highlight: highlight) }
+            if let text { OpinionParagraphsView(text: text, highlight: highlight, citation: bluebook) }
         case nil:
             if isLoading {
                 VStack(spacing: 8) {

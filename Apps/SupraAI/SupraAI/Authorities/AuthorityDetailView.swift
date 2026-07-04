@@ -73,6 +73,12 @@ struct AuthorityDetailView: View {
             html: opinion?.bestHTML,
             pdfURL: pdfURL,
             text: storedText ?? opinion?.bodyText,
+            bluebook: BluebookCitation(
+                caseName: authority.caseNameFull ?? authority.caseName,
+                citation: authority.preferredCitation ?? authority.citations.first,
+                court: authority.court,
+                year: authority.dateFiled.map { Calendar.current.component(.year, from: $0) }
+            ),
             isLoading: loadingOpinion || downloadingPDF,
             onClose: { showReader = false }
         ) {
