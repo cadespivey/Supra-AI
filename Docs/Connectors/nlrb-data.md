@@ -27,8 +27,8 @@ is true, that conduct was unlawful, or that a party committed violations.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `SUPRA_NLRB_RATE_LIMIT_PER_SECOND` | 1 | Clamped 0.1–10. |
-| `SUPRA_NLRB_LOCAL_DATA_DIR` | `~/Library/Application Support/SupraAI/LegalDataConnectors/NLRB` | Local record store root. |
+| `SUPRA_NLRB_RATE_LIMIT_PER_SECOND` | 1 | Clamped 0.05–5. |
+| `SUPRA_NLRB_LOCAL_DATA_DIR` | `{SUPRA_LEGAL_DATA_CACHE_DIR}/NLRBData` (i.e. `~/Library/Caches/SupraAI/LegalDataConnectors/NLRBData`) | Local record store root. Set this when imported records should survive OS cache eviction — app wiring should point it at Application Support. |
 | `SUPRA_LEGAL_DATA_CACHE_DIR` | `~/Library/Caches/SupraAI/LegalDataConnectors` | Response cache root. |
 
 No key. App wiring should give this connector its OWN `AuthorizedHTTPClient`
@@ -49,7 +49,17 @@ with an NLRB-tuned `RateLimitTracker` (suggested 30/min, 120/hr).
   saves the raw payload (`raw/{variant}/{sha256}.csv`) and an import-run
   record with counts, warnings, and errors.
 - **Idempotency**: dedup keys (case: variant+caseNumber+recordType; election:
-  +unitId+tallyDate) make re-imports no-ops — search results never double.
+  +unitId+tallyDate, falling back to the raw-row content hash when both are
+  absent) make re-imports no-ops — search results never double. There is no
+  record-level upsert in this milestone: a later export row that shares a
+  dedup key with an already-imported row (e.g. a corrected tally for the
+  same case, unit, and tally date) is treated as a duplicate; refreshing
+  such corrections requires clearing the local store and re-importing.
+- **Indexes**: the store keeps case-number and dedup sidecar indexes only.
+  Party/employer/union, region, date, status, and case-type searches scan
+  the locally imported JSONL records — bounded, local-only work at this
+  milestone's dataset sizes; the plan's additional sidecar indexes are
+  deferred until a dataset shows the need.
 - **Classification**: case-type code comes from an explicit `Case Type`
   column when present, else the case-number middle segment. CA/CB/CC/CD/CE/
   CG/CP → unfair-labor-practice; RC/RD/RM → representation; UC, UD, AC have
@@ -73,6 +83,9 @@ with an NLRB-tuned `RateLimitTracker` (suggested 30/min, 120/hr).
 
 - Requests go only to `www.nlrb.gov` (allow-listed in `SupraNetworking`) via
   `sendUnauthenticated` — no Authorization header, no key, no cookies.
+- `importDataset` re-asserts the `https://www.nlrb.gov` pin on the download
+  URL itself: dataset sources are plain Codable values, so a tampered or
+  hand-built one cannot point the importer at another allow-listed host.
 - Error messages and health metadata never include local paths, raw payloads,
   or raw user query terms.
 - `healthCheck()` is non-network: configuration validity + import-run count.
@@ -88,10 +101,12 @@ status fields are reported "per the export", never inferred.
 
 ## Tests
 
-`NlrbDataConnectorTests` (16) cover: CSV-link discovery for both pages
+`NlrbDataConnectorTests` (17) cover: CSV-link discovery for both pages
 (including off-host decoy rejection and entity-encoded hrefs), RFC-4180
-parsing, filings and election normalization, classifier known/unknown codes,
-normalized case-number lookup, employer/union/party search, date-range and
-region filtering, RAG neutrality and omitted-field behavior, party-history
-neutrality, provenance, idempotent re-import, and import-run warnings/errors.
+parsing, filings and election normalization, classifier known/unknown codes
+and unrecognized-explicit-type fallback, normalized case-number lookup,
+employer/union/party search (including `partyName`/`caseType` filters),
+date-range and region filtering, off-host import rejection, RAG neutrality
+and omitted-field behavior, party-history neutrality, provenance, idempotent
+re-import, and import-run warnings/errors.
 Fixtures live in `Tests/SupraResearchTests/Fixtures/NLRB/`.

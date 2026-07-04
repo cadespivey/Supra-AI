@@ -22,15 +22,23 @@ public actor ConnectorPacer {
         self.sleeper = sleeper
     }
 
-    /// Waits out the remainder of the pacing window, then records the attempt.
+    /// Reserves the next slot BEFORE suspending, then waits it out. Reserving
+    /// first is what keeps the contract under actor reentrancy: while one
+    /// caller is suspended in `sleeper`, the actor is free to admit another —
+    /// each claims the next sequential slot instead of re-reading a stale
+    /// `lastAttempt` and firing simultaneously.
     public func pace() async {
+        let currentTime = now()
+        let slot: Date
         if let lastAttempt {
-            let elapsed = now().timeIntervalSince(lastAttempt)
-            let remaining = minimumDelay - elapsed
-            if remaining > 0 {
-                await sleeper(remaining)
-            }
+            slot = max(currentTime, lastAttempt.addingTimeInterval(minimumDelay))
+        } else {
+            slot = currentTime
         }
-        lastAttempt = now()
+        lastAttempt = slot
+        let remaining = slot.timeIntervalSince(currentTime)
+        if remaining > 0 {
+            await sleeper(remaining)
+        }
     }
 }

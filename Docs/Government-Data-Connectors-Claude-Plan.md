@@ -1397,5 +1397,15 @@ override the corresponding sections above; everything else stands.
    summaries cap at 500 facts per response (raw payload still preserved in
    full); the cap is documented in the connector doc.
 
+9. **Shared record store deferred.** Phase 1's
+   `LEGAL_DATA_CACHE_DIR/{connectorName}/records/{sourceRecordIdHash}.json` and
+   shared `dedup-index.json` are NOT built this milestone: SEC and CFPB
+   records flow to the app's ingestion pipeline as `LegalDataIngestionRecord`
+   values (which carry the specified hashes), and NLRB has its own purpose-
+   built local store with dedup and case-number indexes. A shared record
+   store would be dead code until an app-side consumer exists; the response
+   cache, canonical cache keys, SHA-256 hashing, and atomic-write rules are
+   implemented exactly as specified.
+
 8. **Baseline recorded**: SupraResearch 166 tests green, SupraNetworking green,
    app builds — immediately before connector work started.

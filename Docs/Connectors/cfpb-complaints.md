@@ -35,8 +35,12 @@ with a CFPB-tuned `RateLimitTracker` (suggested 60/min, 300/hr).
   fetched pages, and every use records that limitation on the result.
 - **Pagination**: `frm` offsets; `size` clamped 1–1000 (default 100);
   `maxPages` default 5, capped at 20 (100 with `allowsLargeExport`) — never
-  unbounded. Stops early on a short page. When the source-reported total
-  exceeds the fetch, the result says so.
+  unbounded. Stops early on a short page, judged by the RAW page count so a
+  record that fails normalization cannot end the walk early (dropped records
+  are disclosed in the limitations). Pagination also stops before
+  `frm + size` exceeds the source's 10,000-offset result window, with a
+  limitation noting deeper results need narrower filters. When the
+  source-reported total exceeds the fetch, the result says so.
 - **Complaint by ID** accepts numeric strings only, validated before network.
 - **Normalization** tolerates the Elasticsearch envelope
   (`hits.hits[]._source`), bare arrays, and single objects; timestamps

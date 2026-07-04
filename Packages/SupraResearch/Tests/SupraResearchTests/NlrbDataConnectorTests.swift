@@ -166,10 +166,18 @@ final class NlrbDataConnectorTests: XCTestCase {
         let (code, category) = NlrbCaseClassifier.classify(caseNumber: "01-ZZ-000001", explicitCaseType: nil)
         XCTAssertEqual(code, "ZZ", "unknown codes survive verbatim")
         XCTAssertEqual(category, .unknown)
-        // An explicit source field wins over the case number.
+        // A recognized explicit source field wins over the case number.
         let (explicit, explicitCategory) = NlrbCaseClassifier.classify(caseNumber: "01-RC-389901", explicitCaseType: " CA ")
         XCTAssertEqual(explicit, "CA")
         XCTAssertEqual(explicitCategory, .unfairLaborPractice)
+        // An UNRECOGNIZED explicit value must not block the case-number fallback.
+        let (fallback, fallbackCategory) = NlrbCaseClassifier.classify(caseNumber: "01-CA-345678", explicitCaseType: "Charge")
+        XCTAssertEqual(fallback, "CA")
+        XCTAssertEqual(fallbackCategory, .unfairLaborPractice)
+        // Neither recognized: the explicit value survives verbatim.
+        let (verbatim, verbatimCategory) = NlrbCaseClassifier.classify(caseNumber: "nonsense", explicitCaseType: "XQ")
+        XCTAssertEqual(verbatim, "XQ")
+        XCTAssertEqual(verbatimCategory, .unknown)
     }
 
     func testCaseNumberSearchUsesNormalizedKey() async throws {
@@ -180,6 +188,31 @@ final class NlrbDataConnectorTests: XCTestCase {
         XCTAssertEqual(found?.caseNumber, "01-CA-345678", "case-number keys uppercase and preserve dashes")
         let missing = try await sut.getCaseByNumber("99-CA-000000")
         XCTAssertNil(missing)
+    }
+
+    func testImportRejectsOffHostDownloadUrl() async throws {
+        // Dataset sources are plain Codable values — a hand-built or tampered
+        // one must not be able to point the importer at another allow-listed
+        // host and launder its payload as an official NLRB export.
+        let (store, dir) = makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let stub = ScriptedHTTPStub(script: [])
+        let sut = connector(stub: stub, store: store)
+        let tampered = NlrbDatasetSource(
+            name: "Recent filings",
+            sourceVariant: .officialRecentFilings,
+            status: .available,
+            downloadUrl: "https://api.regulations.gov/v4/documents",
+            pageUrl: nil, note: nil, discoveredAt: Date()
+        )
+        do {
+            _ = try await sut.importDataset(tampered)
+            XCTFail("expected validation error")
+        } catch let error as LegalDataConnectorError {
+            XCTAssertEqual(error.kind, .validation)
+        }
+        let calls = await stub.callCount
+        XCTAssertEqual(calls, 0, "the off-host URL must never be fetched")
     }
 
     func testEmployerUnionAndPartySearch() async throws {
@@ -201,6 +234,17 @@ final class NlrbDataConnectorTests: XCTestCase {
 
         let representation = try await sut.searchRepresentationCases(filters: .init())
         XCTAssertEqual(representation.map(\.caseNumber), ["01-RC-389901"])
+
+        // partyName and caseType filters actually narrow (regression: they
+        // were silently ignored).
+        var partyFilters = NlrbCaseFilters()
+        partyFilters.partyName = "Teamsters Local 25"
+        let byPartyFilter = try await sut.searchUnfairLaborPracticeCases(filters: partyFilters)
+        XCTAssertEqual(byPartyFilter.map(\.caseNumber), ["01-CA-345678"])
+        var typeFilters = NlrbCaseFilters()
+        typeFilters.caseType = "cb"
+        let byType = try await sut.searchUnfairLaborPracticeCases(filters: typeFilters)
+        XCTAssertEqual(byType.map(\.caseNumber), ["19-CB-112233"])
     }
 
     func testDateRangeAndRegionFiltering() async throws {

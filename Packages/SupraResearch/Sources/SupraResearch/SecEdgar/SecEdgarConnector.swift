@@ -98,7 +98,9 @@ public final class SecEdgarConnector: @unchecked Sendable {
             )
         }
         let cleaned = despaced.replacingOccurrences(of: "-", with: "")
-        guard !cleaned.isEmpty, cleaned.count <= 10, cleaned.allSatisfy(\.isNumber) else {
+        // ASCII digits only: Character.isNumber accepts Unicode digits that
+        // Int() rejects and SEC URLs cannot carry.
+        guard !cleaned.isEmpty, cleaned.count <= 10, cleaned.allSatisfy({ $0.isASCII && $0.isNumber }) else {
             throw SecEdgarErrorMapping.validationError(
                 operation: "normalizeCik",
                 message: "A CIK must be 1–10 digits (whitespace and internal hyphens are tolerated; letters and punctuation are not)."
@@ -216,7 +218,9 @@ public final class SecEdgarConnector: @unchecked Sendable {
     private func filingsForForms(cik: String, forms: [String], filters: SecFilingFilters) async throws -> [SecFilingRecord] {
         var merged = filters
         if merged.formTypes.isEmpty {
-            merged.formTypes = forms
+            // The family list is connector-injected, not caller-explicit, so
+            // includeAmendments=false strips its /A members.
+            merged.formTypes = filters.includeAmendments ? forms : forms.filter { !$0.hasSuffix("/A") }
         } else {
             let allowed = Set(forms.map { $0.uppercased() })
             merged.formTypes = merged.formTypes.filter { allowed.contains($0.trimmingCharacters(in: .whitespaces).uppercased()) }
@@ -277,7 +281,8 @@ public final class SecEdgarConnector: @unchecked Sendable {
         let operation = "buildFilingUrl"
         let normalized = try normalizeCik(cik)
         let undashed = try undashedAccession(accessionNumber, operation: operation)
-        let cikWithoutZeros = String(Int(normalized) ?? 0)
+        let stripped = normalized.drop { $0 == "0" }
+        let cikWithoutZeros = stripped.isEmpty ? "0" : String(stripped)
         let filingUrl = SecEdgarEndpoint.filingArchiveURLString(
             cikWithoutLeadingZeros: cikWithoutZeros,
             undashedAccession: undashed
@@ -293,7 +298,7 @@ public final class SecEdgarConnector: @unchecked Sendable {
         let undashed = accession
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "-", with: "")
-        guard undashed.count == 18, undashed.allSatisfy(\.isNumber) else {
+        guard undashed.count == 18, undashed.allSatisfy({ $0.isASCII && $0.isNumber }) else {
             throw SecEdgarErrorMapping.validationError(
                 operation: operation,
                 message: "An accession number must be 18 digits (dashes are tolerated)."
@@ -313,11 +318,10 @@ public final class SecEdgarConnector: @unchecked Sendable {
         var result = filings.filter { filing in
             let form = filing.form?.uppercased() ?? ""
             if !forms.isEmpty {
+                // An explicitly requested amended form wins over
+                // includeAmendments=false (plan filter semantics).
                 guard forms.contains(form) else { return false }
             } else if !filters.includeAmendments, form.hasSuffix("/A") {
-                return false
-            }
-            if !forms.isEmpty, !filters.includeAmendments, form.hasSuffix("/A"), !forms.contains(form) {
                 return false
             }
             if let start = filters.startDate {

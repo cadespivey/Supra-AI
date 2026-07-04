@@ -41,12 +41,18 @@ public actor NlrbLocalRecordStore {
             .joined(separator: "|")
     }
 
-    /// Election: adds unitId + tallyDate when present.
+    /// Election: adds unitId + tallyDate when present. When BOTH are absent
+    /// there is no discriminator left, so distinct rows for the same case
+    /// would collide — fall back to the raw-row content hash.
     static func dedupKey(for record: NlrbElectionResultRecord) -> String {
-        [
+        var parts = [
             record.source, record.sourceVariant.rawValue, normalizedCaseNumber(record.caseNumber),
             record.sourceRecordType, record.unitId ?? "", record.tallyDate ?? ""
-        ].joined(separator: "|")
+        ]
+        if record.unitId == nil, record.tallyDate == nil {
+            parts.append(ConnectorHashing.sha256Hex(Data(record.raw.canonicalJSONString().utf8)))
+        }
+        return parts.joined(separator: "|")
     }
 
     /// Case-number keys uppercase and PRESERVE dashes; party keys lowercase,
@@ -81,8 +87,8 @@ public actor NlrbLocalRecordStore {
             }
         }
         if !fresh.isEmpty {
-            for record in fresh {
-                try appendLine(record, to: recordsFile(variant: record.sourceVariant, kind: "cases"))
+            for (variant, records) in Dictionary(grouping: fresh, by: { $0.sourceVariant }) {
+                try appendBlob(records, to: recordsFile(variant: variant, kind: "cases"))
             }
             try saveDedupKeys(keys)
             try updateCaseNumberIndex(with: fresh.map { (Self.normalizedCaseNumber($0.caseNumber), $0.sourceVariant.rawValue) })
@@ -103,8 +109,8 @@ public actor NlrbLocalRecordStore {
             }
         }
         if !fresh.isEmpty {
-            for record in fresh {
-                try appendLine(record, to: recordsFile(variant: record.sourceVariant, kind: "elections"))
+            for (variant, records) in Dictionary(grouping: fresh, by: { $0.sourceVariant }) {
+                try appendBlob(records, to: recordsFile(variant: variant, kind: "elections"))
             }
             try saveDedupKeys(keys)
             cachedElections = nil
@@ -176,18 +182,26 @@ public actor NlrbLocalRecordStore {
         root.appendingPathComponent("records/\(variant.rawValue)-\(kind).jsonl")
     }
 
-    private func appendLine<T: Encodable>(_ record: T, to file: URL) throws {
+    /// One write per import keeps the mid-append failure window minimal, and
+    /// the create path is taken ONLY when the file does not exist — a failed
+    /// open on existing data must surface as an error, never truncate the
+    /// dataset via an atomic rewrite.
+    private func appendBlob<T: Encodable>(_ records: [T], to file: URL) throws {
         try FileManager.default.createDirectory(
             at: file.deletingLastPathComponent(), withIntermediateDirectories: true
         )
-        var line = try encoder.encode(record)
-        line.append(Data("\n".utf8))
-        if let handle = try? FileHandle(forWritingTo: file) {
+        var blob = Data()
+        for record in records {
+            blob.append(try encoder.encode(record))
+            blob.append(Data("\n".utf8))
+        }
+        if FileManager.default.fileExists(atPath: file.path) {
+            let handle = try FileHandle(forWritingTo: file)
             defer { try? handle.close() }
             try handle.seekToEnd()
-            try handle.write(contentsOf: line)
+            try handle.write(contentsOf: blob)
         } else {
-            try line.write(to: file, options: .atomic)
+            try blob.write(to: file, options: .atomic)
         }
     }
 

@@ -48,10 +48,16 @@ enum NlrbCaseClassifier {
     /// (raw code, category): the explicit field is trimmed and preferred; the
     /// case number is the fallback.
     static func classify(caseNumber: String, explicitCaseType: String?) -> (code: String?, category: NlrbCaseTypeCategory) {
-        if let explicit = explicitCaseType?.trimmingCharacters(in: .whitespacesAndNewlines), !explicit.isEmpty {
-            return (explicit, category(forCode: explicit))
-        }
         let derived = code(fromCaseNumber: caseNumber)
+        if let explicit = explicitCaseType?.trimmingCharacters(in: .whitespacesAndNewlines), !explicit.isEmpty {
+            let explicitCategory = category(forCode: explicit)
+            // A recognized explicit value always wins; an unrecognized one
+            // must not BLOCK the case-number fallback. Only when neither is
+            // recognized does the explicit value survive verbatim.
+            if explicitCategory != .unknown || category(forCode: derived) == .unknown {
+                return (explicit, explicitCategory)
+            }
+        }
         return (derived, category(forCode: derived))
     }
 }

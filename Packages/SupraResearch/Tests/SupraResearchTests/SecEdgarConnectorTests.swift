@@ -361,4 +361,28 @@ final class SecEdgarConnectorTests: XCTestCase {
         XCTAssertEqual(material.count, 1)
         XCTAssertEqual(material.first?.form, "8-K")
     }
+
+    func testIncludeAmendmentsFalseExcludesAmendedForms() throws {
+        func record(_ form: String) -> SecFilingRecord {
+            SecFilingRecord(
+                cik: "0000320193", accessionNumber: "0000320193-24-00000\(form.count)",
+                form: form, filingUrl: "https://www.sec.gov/x", sourceUrl: "https://www.sec.gov/x",
+                retrievedAt: Date(timeIntervalSince1970: 1_750_000_000), raw: .object([:])
+            )
+        }
+        let filings = [record("10-K"), record("10-K/A"), record("8-K")]
+
+        // No explicit forms: /A excluded when includeAmendments is false.
+        var filters = SecFilingFilters()
+        filters.includeAmendments = false
+        let withoutAmendments = try SecEdgarConnector.apply(filters, to: filings, operation: "test")
+        XCTAssertEqual(withoutAmendments.map(\.form), ["10-K", "8-K"])
+
+        // Explicitly requested amended forms win over includeAmendments=false.
+        var explicit = SecFilingFilters()
+        explicit.includeAmendments = false
+        explicit.formTypes = ["10-K/A"]
+        let explicitAmendment = try SecEdgarConnector.apply(explicit, to: filings, operation: "test")
+        XCTAssertEqual(explicitAmendment.map(\.form), ["10-K/A"])
+    }
 }

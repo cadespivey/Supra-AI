@@ -87,6 +87,17 @@ struct ConnectorHTTPExecutor: @unchecked Sendable {
                 await retrySleeper(retryDelay(response: response, attempt: attempt))
             } catch let error as LegalDataConnectorError {
                 throw error
+            } catch NetworkPolicyError.localRateLimitExceeded {
+                // The app-side rolling budget, not the remote source — report
+                // it as the retryable rate limit it is, not a policy block.
+                throw LegalDataConnectorError(
+                    kind: .rateLimit,
+                    connectorName: connectorName,
+                    operation: operation,
+                    sourceURL: url.absoluteString,
+                    retryable: true,
+                    message: "The local rate budget for this source is exhausted; retry shortly."
+                )
             } catch is NetworkPolicyError {
                 throw LegalDataConnectorError(
                     kind: .sourceUnavailable,

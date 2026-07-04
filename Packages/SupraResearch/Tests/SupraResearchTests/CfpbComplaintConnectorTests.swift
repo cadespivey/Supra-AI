@@ -314,6 +314,24 @@ final class CfpbComplaintConnectorTests: XCTestCase {
         XCTAssertTrue(result.complaints.allSatisfy { $0.subProduct == "Checking account" })
         XCTAssertTrue(result.sourceLimitations.contains { $0.contains("sub_product") })
     }
+
+    func testDroppedRecordDoesNotEndPaginationEarly() async throws {
+        // Page 1 is FULL (2 raw hits) but one hit has no complaint_id and is
+        // dropped — pagination must continue on the RAW count and disclose
+        // the omission. Page 2 is short, ending the walk.
+        let page1 = Data(#"{"hits":{"total":{"value":3,"relation":"eq"},"hits":[{"_source":{"complaint_id":"9001001","product":"Debt collection","state":"FL","date_received":"2024-01-05T12:00:00-05:00"}},{"_source":{"product":"Mortgage"}}]}}"#.utf8)
+        let page2 = Data(#"{"hits":{"total":{"value":3,"relation":"eq"},"hits":[{"_source":{"complaint_id":"9001003","product":"Mortgage","state":"FL","date_received":"2024-01-07T12:00:00-05:00"}}]}}"#.utf8)
+        let stub = ScriptedHTTPStub(script: [.success(page1), .success(page2)])
+        let sut = connector(stub: stub)
+        let result = try await sut.searchComplaints(CfpbComplaintQuery(
+            options: .init(size: 2, maxPages: 5)
+        ))
+        XCTAssertEqual(result.pagesFetched, 2)
+        XCTAssertEqual(result.complaints.map(\.complaintId), ["9001001", "9001003"])
+        XCTAssertTrue(result.sourceLimitations.contains { $0.contains("could not be normalized") })
+        let calls = await stub.callCount
+        XCTAssertEqual(calls, 2)
+    }
 }
 
 /// OPT-IN live probe — narrow query, tiny page. Skipped by default.

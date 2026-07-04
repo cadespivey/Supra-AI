@@ -11,7 +11,11 @@ enum CfpbComplaintEndpoint {
 
     /// Public complaint-detail page shown to users as the record's source URL.
     static func publicDetailURLString(complaintId: String) -> String {
-        "https://www.consumerfinance.gov/data-research/consumer-complaints/search/detail/\(complaintId)"
+        // IDs are numeric; filtering (matching NlrbSources.casePageURLString)
+        // keeps payload-supplied IDs from smuggling URL metacharacters into
+        // the citation surface.
+        let safe = complaintId.filter { $0.isASCII && $0.isNumber }
+        return "https://www.consumerfinance.gov/data-research/consumer-complaints/search/detail/\(safe)"
     }
 
     static func search(query: CfpbComplaintQuery, frm: Int, size: Int) -> URL {

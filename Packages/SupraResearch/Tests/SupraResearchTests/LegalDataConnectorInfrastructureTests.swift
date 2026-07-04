@@ -177,6 +177,54 @@ final class LegalDataConnectorInfrastructureTests: XCTestCase {
         XCTAssertEqual(sleeps[0], 0.4, accuracy: 0.01)
     }
 
+    func testPacerSerializesConcurrentCallersUnderReentrancy() async {
+        // While the first caller is suspended in the sleeper the actor can
+        // admit a second — slot reservation must hand it the NEXT slot, not a
+        // stale read of `lastAttempt` that lets both fire simultaneously.
+        let recorder = SleepRecorder()
+        let clock = TestClock(start: Date(timeIntervalSince1970: 1_000))
+        let pacer = ConnectorPacer(
+            requestsPerSecond: 2,   // 0.5s window
+            now: { clock.now() },
+            sleeper: { await recorder.record($0) }
+        )
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await pacer.pace() }
+            group.addTask { await pacer.pace() }
+        }
+        let sleeps = await recorder.sleeps
+        XCTAssertEqual(sleeps.count, 1, "exactly one of the two concurrent callers must wait")
+        XCTAssertEqual(sleeps[0], 0.5, accuracy: 0.01)
+    }
+
+    func testExecutorReportsLocalRateBudgetAsRateLimit() async {
+        // Local budget exhaustion is a retryable rate limit, not a
+        // non-retryable "blocked by network policy".
+        let snapshot = RateLimitTracker.Snapshot(
+            requestsLastMinute: 5, requestsLastHour: 5, requestsLastDay: 5,
+            limits: RateLimitTracker.Limits()
+        )
+        let stub = ScriptedHTTPStub(script: [
+            .failure(NetworkPolicyError.localRateLimitExceeded(snapshot))
+        ])
+        let executor = makeExecutor(stub: stub)
+        do {
+            _ = try await executor.execute(
+                operation: "op",
+                request: URLRequest(url: URL(string: "https://example.gov/limited")!),
+                cacheTTL: nil
+            )
+            XCTFail("expected a rate-limit error")
+        } catch let error as LegalDataConnectorError {
+            XCTAssertEqual(error.kind, .rateLimit)
+            XCTAssertTrue(error.retryable)
+        } catch {
+            XCTFail("wrong error type: \(error)")
+        }
+        let calls = await stub.callCount
+        XCTAssertEqual(calls, 1, "budget exhaustion must not burn retry attempts")
+    }
+
     // MARK: - Executor retry + no-`send` guarantee
 
     func testExecutorRetriesTransientAndHonorsRetryAfter() async throws {
@@ -281,6 +329,7 @@ actor ScriptedHTTPStub: AuthorizedHTTPClientProtocol {
     enum Step {
         case success(Data)
         case status(Int, headers: [String: String])
+        case failure(Error)
     }
 
     private var script: [Step]
@@ -313,6 +362,8 @@ actor ScriptedHTTPStub: AuthorizedHTTPClientProtocol {
             return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         case .status(let code, let headers):
             return (Data(), HTTPURLResponse(url: url, statusCode: code, httpVersion: nil, headerFields: headers)!)
+        case .failure(let error):
+            throw error
         }
     }
 }

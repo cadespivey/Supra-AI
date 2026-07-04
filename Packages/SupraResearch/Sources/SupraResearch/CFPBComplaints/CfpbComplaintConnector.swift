@@ -81,7 +81,13 @@ public final class CfpbComplaintConnector: @unchecked Sendable {
         var pagesFetched = 0
 
         for page in 0..<maxPages {
-            let url = CfpbComplaintEndpoint.search(query: query, frm: page * size, size: size)
+            let frm = page * size
+            if frm + size > 10_000 {
+                // Elasticsearch result-window bound: from + size <= 10,000.
+                limitations.append("The source's offset pagination is capped at 10,000 records; results beyond that require narrower filters.")
+                break
+            }
+            let url = CfpbComplaintEndpoint.search(query: query, frm: frm, size: size)
             let response = try await executor.execute(
                 operation: operation,
                 request: jsonRequest(url),
@@ -89,11 +95,16 @@ public final class CfpbComplaintConnector: @unchecked Sendable {
             )
             let payload = try parse(response.data, operation: operation, url: url)
             if totalCount == nil { totalCount = CfpbComplaintNormalizer.reportedTotal(in: payload) }
-            let pageRecords = CfpbComplaintNormalizer.complaintObjects(in: payload)
-                .compactMap { CfpbComplaintNormalizer.record(from: $0, retrievedAt: now()) }
+            let rawObjects = CfpbComplaintNormalizer.complaintObjects(in: payload)
+            let pageRecords = rawObjects.compactMap { CfpbComplaintNormalizer.record(from: $0, retrievedAt: now()) }
+            if pageRecords.count < rawObjects.count {
+                limitations.append("\(rawObjects.count - pageRecords.count) source record(s) on page \(page + 1) could not be normalized and were omitted.")
+            }
             complaints.append(contentsOf: pageRecords)
             pagesFetched = page + 1
-            if pageRecords.count < size { break }
+            // Early-stop on the RAW page count — one unparseable record must
+            // not silently end pagination.
+            if rawObjects.count < size { break }
         }
         if let totalCount, complaints.count < totalCount {
             limitations.append("The source reports \(totalCount) matching complaints; \(complaints.count) were retrieved within the page bound.")

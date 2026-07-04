@@ -125,6 +125,19 @@ public final class NlrbDataConnector: @unchecked Sendable {
                 message: "Only datasets with a confirmed official download URL can be imported; this one is discovery-only or unsupported."
             )
         }
+        // Re-assert the pin downloadCSVLink enforces at discovery: dataset
+        // sources are plain Codable values, so a tampered or hand-built one
+        // must not be able to point the importer at any other allow-listed
+        // host and launder its payload as an official NLRB export.
+        guard url.scheme?.lowercased() == "https", url.host?.lowercased() == "www.nlrb.gov" else {
+            throw LegalDataConnectorError(
+                kind: .validation,
+                connectorName: Self.connectorName,
+                operation: operation,
+                sourceVariant: datasetSource.sourceVariant.rawValue,
+                message: "Only https://www.nlrb.gov download URLs can be imported."
+            )
+        }
         guard datasetSource.sourceVariant == .officialRecentFilings
                 || datasetSource.sourceVariant == .officialRecentElectionResults else {
             throw LegalDataConnectorError(
@@ -203,7 +216,7 @@ public final class NlrbDataConnector: @unchecked Sendable {
         }
 
         let run = NlrbImportRun(
-            id: String(payloadHash.prefix(16)) + "-" + String(Int(now().timeIntervalSince1970)),
+            id: String(payloadHash.prefix(16)) + "-" + String(Int(now().timeIntervalSince1970)) + "-" + String(UUID().uuidString.prefix(8)),
             sourceVariant: datasetSource.sourceVariant,
             datasetName: datasetSource.name,
             sourceUrl: url.absoluteString,
@@ -287,11 +300,11 @@ public final class NlrbDataConnector: @unchecked Sendable {
     }
 
     public func searchUnfairLaborPracticeCases(filters: NlrbCaseFilters) async throws -> [NlrbCaseRecord] {
-        await filteredCases(filters, category: .unfairLaborPractice)
+        try await filteredCases(filters, category: .unfairLaborPractice)
     }
 
     public func searchRepresentationCases(filters: NlrbCaseFilters) async throws -> [NlrbCaseRecord] {
-        await filteredCases(filters, category: .representation)
+        try await filteredCases(filters, category: .representation)
     }
 
     public func getElectionResults(filters: NlrbElectionFilters = .init()) async throws -> [NlrbElectionResultRecord] {
@@ -316,10 +329,10 @@ public final class NlrbDataConnector: @unchecked Sendable {
         if let state = filters.state {
             results = results.filter { $0.state?.caseInsensitiveCompare(state) == .orderedSame }
         }
-        if let start = NlrbNormalizer.parseDay(filters.tallyStartDate) {
+        if let start = try Self.dayFilter(filters.tallyStartDate, field: "tallyStartDate", operation: "getElectionResults") {
             results = results.filter { NlrbNormalizer.parseDay($0.tallyDate).map { $0 >= start } ?? false }
         }
-        if let end = NlrbNormalizer.parseDay(filters.tallyEndDate) {
+        if let end = try Self.dayFilter(filters.tallyEndDate, field: "tallyEndDate", operation: "getElectionResults") {
             results = results.filter { NlrbNormalizer.parseDay($0.tallyDate).map { $0 <= end } ?? false }
         }
         return Array(results.prefix(limit))
@@ -332,10 +345,10 @@ public final class NlrbDataConnector: @unchecked Sendable {
         options: NlrbHistoryOptions = .init()
     ) async throws -> NlrbPartyHistorySummary {
         var cases = try await searchByPartyName(partyName, options: .init(limit: 1_000))
-        if let start = NlrbNormalizer.parseDay(options.dateRangeStart) {
+        if let start = try Self.dayFilter(options.dateRangeStart, field: "dateRangeStart", operation: "summarizePartyNlrbHistory") {
             cases = cases.filter { NlrbNormalizer.parseDay($0.dateFiled).map { $0 >= start } ?? false }
         }
-        if let end = NlrbNormalizer.parseDay(options.dateRangeEnd) {
+        if let end = try Self.dayFilter(options.dateRangeEnd, field: "dateRangeEnd", operation: "summarizePartyNlrbHistory") {
             cases = cases.filter { NlrbNormalizer.parseDay($0.dateFiled).map { $0 <= end } ?? false }
         }
         let limit = min(max(options.limit, 1), 1_000)
@@ -361,10 +374,13 @@ public final class NlrbDataConnector: @unchecked Sendable {
             .sorted { (NlrbNormalizer.parseDay($0.dateFiled) ?? .distantPast) > (NlrbNormalizer.parseDay($1.dateFiled) ?? .distantPast) }
             .prefix(limit)
         let variants = Set(cases.map { $0.sourceVariant.rawValue } + elections.map { $0.sourceVariant.rawValue })
-        let limitations = [
+        var limitations = [
             "Counts describe matching case records in locally imported official NLRB exports; they are not findings, adjudications, or violations.",
             "Coverage is limited to the datasets imported so far."
         ]
+        if cases.count >= 1_000 {
+            limitations.append("Counts reflect the first 1,000 matching case records; the true total may be higher.")
+        }
         let summary = NlrbPartyHistorySummary(
             partyName: partyName,
             totalMatchingCaseRecords: cases.count,
@@ -463,7 +479,7 @@ public final class NlrbDataConnector: @unchecked Sendable {
 
     // MARK: - Shared
 
-    private func filteredCases(_ filters: NlrbCaseFilters, category: NlrbCaseTypeCategory) async -> [NlrbCaseRecord] {
+    private func filteredCases(_ filters: NlrbCaseFilters, category: NlrbCaseTypeCategory) async throws -> [NlrbCaseRecord] {
         var cases = await localStore.allCases().filter { $0.caseTypeCategory == category }
         if let query = filters.query {
             let needle = NlrbLocalRecordStore.normalizedPartyKey(query)
@@ -485,6 +501,20 @@ public final class NlrbDataConnector: @unchecked Sendable {
             let needle = NlrbLocalRecordStore.normalizedPartyKey(union)
             cases = cases.filter { $0.union.map { NlrbLocalRecordStore.normalizedPartyKey($0).contains(needle) } ?? false }
         }
+        if let partyName = filters.partyName {
+            let needle = NlrbLocalRecordStore.normalizedPartyKey(partyName)
+            cases = cases.filter { record in
+                [record.employer, record.union, record.caseName]
+                    .compactMap { $0 }
+                    .contains { NlrbLocalRecordStore.normalizedPartyKey($0).contains(needle) }
+            }
+        }
+        if let caseType = filters.caseType?.trimmingCharacters(in: .whitespacesAndNewlines), !caseType.isEmpty {
+            cases = cases.filter { $0.caseType?.caseInsensitiveCompare(caseType) == .orderedSame }
+        }
+        if let categoryFilter = filters.caseTypeCategory?.trimmingCharacters(in: .whitespacesAndNewlines), !categoryFilter.isEmpty {
+            cases = cases.filter { $0.caseTypeCategory.rawValue.caseInsensitiveCompare(categoryFilter) == .orderedSame }
+        }
         if let region = filters.region {
             let needle = region.lowercased()
             cases = cases.filter { $0.region?.lowercased().contains(needle) == true }
@@ -492,13 +522,28 @@ public final class NlrbDataConnector: @unchecked Sendable {
         if let status = filters.status {
             cases = cases.filter { $0.status?.caseInsensitiveCompare(status) == .orderedSame }
         }
-        if let start = NlrbNormalizer.parseDay(filters.startDate) {
+        if let start = try Self.dayFilter(filters.startDate, field: "startDate", operation: "searchCases") {
             cases = cases.filter { NlrbNormalizer.parseDay($0.dateFiled).map { $0 >= start } ?? false }
         }
-        if let end = NlrbNormalizer.parseDay(filters.endDate) {
+        if let end = try Self.dayFilter(filters.endDate, field: "endDate", operation: "searchCases") {
             cases = cases.filter { NlrbNormalizer.parseDay($0.dateFiled).map { $0 <= end } ?? false }
         }
         return cases
+    }
+
+    /// A nil/blank filter is "no filter"; a non-blank unparseable one throws —
+    /// silently dropping it would silently WIDEN the search.
+    private static func dayFilter(_ value: String?, field: String, operation: String) throws -> Date? {
+        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard let parsed = NlrbNormalizer.parseDay(value) else {
+            throw LegalDataConnectorError(
+                kind: .validation,
+                connectorName: Self.connectorName,
+                operation: operation,
+                message: "The \(field) filter must be an ISO date (yyyy-MM-dd) or an NLRB display date (MM/dd/yyyy)."
+            )
+        }
+        return parsed
     }
 
     private func bounded(_ records: [NlrbCaseRecord], options: NlrbSearchOptions) -> [NlrbCaseRecord] {
