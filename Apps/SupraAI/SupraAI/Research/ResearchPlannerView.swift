@@ -24,10 +24,20 @@ struct ResearchPlannerView: View {
     /// derives its court filter from `selectedCourtID` via `selectedScope`.
     @State private var jurisdictionCourt = ""
 
-    init(controller: ResearchSessionController, library: ModelLibrary, matter: MatterSummary) {
+    /// Called after Save & Run persists the session and kicks off the run,
+    /// so the parent can navigate straight into the session detail.
+    var onSaveAndRun: ((String) -> Void)?
+
+    init(
+        controller: ResearchSessionController,
+        library: ModelLibrary,
+        matter: MatterSummary,
+        onSaveAndRun: ((String) -> Void)? = nil
+    ) {
         self.controller = controller
         self.library = library
         self.matter = matter
+        self.onSaveAndRun = onSaveAndRun
         let selected = JurisdictionCatalog.shared.bestMatch(jurisdiction: matter.jurisdiction, court: matter.court)
         _draft = State(initialValue: ResearchPlanDraft(
             jurisdiction: matter.jurisdiction,
@@ -126,9 +136,13 @@ struct ResearchPlannerView: View {
             }
             Button("Save Plan") { save() }
                 .buttonStyle(.ghost)
-                .keyboardShortcut(.defaultAction)
                 .disabled(!controller.canSavePlan)
                 .accessibilityIdentifier("planner.save")
+            Button("Save & Run") { saveAndRun() }
+                .buttonStyle(.ghostAccent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!controller.canSavePlan)
+                .accessibilityIdentifier("planner.saveAndRun")
         }
         .frame(minWidth: 560, idealWidth: 680, maxWidth: .infinity, minHeight: 640, idealHeight: 780, maxHeight: .infinity)
         .onAppear {
@@ -203,6 +217,18 @@ struct ResearchPlannerView: View {
         if (try? controller.savePlan(draft: draft)) != nil {
             dismiss()
         }
+    }
+
+    /// Saves the plan and immediately starts the run — no reopening the saved
+    /// session just to press Run. The parent navigates into the session so the
+    /// user watches results (or the token/run message) arrive.
+    private func saveAndRun() {
+        syncFilters()
+        guard let sessionID = try? controller.savePlan(draft: draft) else { return }
+        controller.openSession(sessionID)
+        dismiss()
+        onSaveAndRun?(sessionID)
+        Task { await controller.runApprovedSearches() }
     }
 
     private func seedManualQueryIfNeeded() {

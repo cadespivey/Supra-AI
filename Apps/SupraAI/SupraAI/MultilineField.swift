@@ -128,6 +128,22 @@ private struct MultilineTextEditor: NSViewRepresentable {
             guard let view = notification.object as? NSTextView else { return }
             text.wrappedValue = view.string
         }
+
+        /// Tab/Shift-Tab move focus like every other form field — these are
+        /// prose fields in FORMS, not code editors, so a literal tab character
+        /// has no value and trapping keyboard users in the field is worse.
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            switch commandSelector {
+            case #selector(NSTextView.insertTab(_:)):
+                textView.window?.selectNextKeyView(nil)
+                return true
+            case #selector(NSTextView.insertBacktab(_:)):
+                textView.window?.selectPreviousKeyView(nil)
+                return true
+            default:
+                return false
+            }
+        }
     }
 }
 

@@ -13,9 +13,11 @@ struct MatterResearchView: View {
     var autoOpenPlanner: Binding<Bool>? = nil
 
     @State private var showPlanner = false
+    /// Programmatic navigation into a session (Save & Run opens it directly).
+    @State private var navigationPath: [String] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             MatterTabScaffold("Research Sessions") {
                 Button { showPlanner = true } label: {
                     Label("New Research Session", systemImage: "plus")
@@ -29,7 +31,10 @@ struct MatterResearchView: View {
             }
         }
         .sheet(isPresented: $showPlanner) {
-            ResearchPlannerView(controller: controller, library: library, matter: matter)
+            ResearchPlannerView(controller: controller, library: library, matter: matter) { sessionID in
+                controller.loadSessions()
+                navigationPath = [sessionID]
+            }
         }
         .onAppear {
             controller.loadSessions()

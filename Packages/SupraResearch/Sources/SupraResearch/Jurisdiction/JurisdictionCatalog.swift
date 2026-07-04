@@ -743,11 +743,25 @@ private extension JurisdictionCatalog {
     }
 
     static func normalized(_ value: String) -> String {
-        value
+        let cleaned = value
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             .lowercased()
             .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Lawyers type circuits and districts by NUMBER ("11th Circuit",
+        // "2d Cir", "5 DCA") while the catalog spells them out ("Eleventh
+        // Circuit") — normalize numeric-ordinal tokens (suffixed or bare,
+        // including Bluebook "2d"/"3d") to the spelled word on BOTH the query
+        // and haystack sides so either form matches either.
+        return cleaned
+            .split(separator: " ")
+            .map { token -> String in
+                guard let match = token.wholeMatch(of: /([0-9]{1,2})(st|nd|rd|th|d)?/),
+                      let _ = Int(match.1) else { return String(token) }
+                let spelled = ordinalName(String(match.1))
+                return spelled == String(match.1) ? String(token) : spelled.lowercased()
+            }
+            .joined(separator: " ")
     }
 
     static func ordinalName(_ number: String) -> String {
@@ -763,6 +777,10 @@ private extension JurisdictionCatalog {
         case "9": "Ninth"
         case "10": "Tenth"
         case "11": "Eleventh"
+        case "12": "Twelfth"
+        case "13": "Thirteenth"
+        case "14": "Fourteenth"
+        case "15": "Fifteenth"
         default: number
         }
     }
