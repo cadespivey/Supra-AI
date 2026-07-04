@@ -1,0 +1,29 @@
+{
+  "cik": 320193,
+  "entityName": "Apple Inc.",
+  "facts": {
+    "dei": {
+      "EntityCommonStockSharesOutstanding": {
+        "label": "Entity Common Stock, Shares Outstanding",
+        "description": "Indicate number of shares outstanding of each of the registrant's classes of common stock.",
+        "units": {
+          "shares": [
+            {"end": "2023-10-20", "val": 15552752000, "accn": "0000320193-23-000106", "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2023-11-03", "frame": "CY2023Q3I"}
+          ]
+        }
+      }
+    },
+    "us-gaap": {
+      "AccountsPayableCurrent": {
+        "label": "Accounts Payable, Current",
+        "description": "Carrying value as of the balance sheet date of liabilities incurred.",
+        "units": {
+          "USD": [
+            {"end": "2022-09-24", "val": 64115000000, "accn": "0000320193-22-000108", "fy": 2022, "fp": "FY", "form": "10-K", "filed": "2022-10-28"},
+            {"end": "2023-09-30", "val": 62611000000, "accn": "0000320193-23-000106", "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2023-11-03", "frame": "CY2023Q3I"}
+          ]
+        }
+      }
+    }
+  }
+}

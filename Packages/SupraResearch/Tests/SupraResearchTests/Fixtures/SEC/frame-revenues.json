@@ -1,0 +1,14 @@
+{
+  "taxonomy": "us-gaap",
+  "tag": "RevenueFromContractWithCustomerExcludingAssessedTax",
+  "ccp": "CY2023",
+  "uom": "USD",
+  "label": "Revenue from Contract with Customer, Excluding Assessed Tax",
+  "description": "Amount, excluding tax collected from customer, of revenue from satisfaction of performance obligation.",
+  "pts": 3,
+  "data": [
+    {"accn": "0000320193-23-000106", "cik": 320193, "entityName": "Apple Inc.", "loc": "US-CA", "start": "2022-09-25", "end": "2023-09-30", "val": 383285000000},
+    {"accn": "0000789019-23-000014", "cik": 789019, "entityName": "MICROSOFT CORPORATION", "loc": "US-WA", "start": "2022-07-01", "end": "2023-06-30", "val": 211915000000},
+    {"accn": "0001652044-24-000022", "cik": 1652044, "entityName": "Alphabet Inc.", "loc": "US-CA", "start": "2023-01-01", "end": "2023-12-31", "val": 307394000000}
+  ]
+}

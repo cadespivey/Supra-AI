@@ -1,0 +1,45 @@
+{
+  "cik": "0000320193",
+  "entityType": "operating",
+  "sic": "3571",
+  "sicDescription": "Electronic Computers",
+  "insiderTransactionForOwnerExists": 0,
+  "insiderTransactionForIssuerExists": 1,
+  "name": "Apple Inc.",
+  "tickers": ["AAPL"],
+  "exchanges": ["Nasdaq"],
+  "ein": "942404110",
+  "category": "Large accelerated filer",
+  "fiscalYearEnd": "0928",
+  "stateOfIncorporation": "CA",
+  "stateOfIncorporationDescription": "CA",
+  "addresses": {
+    "mailing": {"street1": "ONE APPLE PARK WAY", "city": "CUPERTINO", "stateOrCountry": "CA", "zipCode": "95014"},
+    "business": {"street1": "ONE APPLE PARK WAY", "city": "CUPERTINO", "stateOrCountry": "CA", "zipCode": "95014"}
+  },
+  "phone": "(408) 996-1010",
+  "formerNames": [
+    {"name": "APPLE COMPUTER INC", "from": "1994-01-26", "to": "2007-01-04"}
+  ],
+  "filings": {
+    "recent": {
+      "accessionNumber": ["0000320193-23-000106", "0000320193-23-000077", "0000320193-23-000064", "0001140361-23-023909"],
+      "filingDate": ["2023-11-03", "2023-08-04", "2023-05-05", "2023-05-10"],
+      "reportDate": ["2023-09-30", "2023-07-01", "2023-04-01", ""],
+      "acceptanceDateTime": ["2023-11-02T18:08:27.000Z", "2023-08-03T18:04:43.000Z", "2023-05-04T18:03:52.000Z", "2023-05-10T16:31:00.000Z"],
+      "act": ["34", "34", "34", "34"],
+      "form": ["10-K", "10-Q", "10-Q", "8-K"],
+      "fileNumber": ["001-36743", "001-36743", "001-36743", "001-36743"],
+      "filmNumber": ["231373899", "231141522", "23889810", "23906818"],
+      "items": ["", "", "", "2.02,9.01"],
+      "size": [23383605, 6109926, 6060395, 425904],
+      "isXBRL": [1, 1, 1, 1],
+      "isInlineXBRL": [1, 1, 1, 1],
+      "primaryDocument": ["aapl-20230930.htm", "aapl-20230701.htm", "aapl-20230401.htm", "ny20007635x4_8k.htm"],
+      "primaryDocDescription": ["10-K", "10-Q", "10-Q", "FORM 8-K"]
+    },
+    "files": [
+      {"name": "CIK0000320193-submissions-001.json", "filingCount": 1000, "filingFrom": "1994-01-26", "filingTo": "2005-03-14"}
+    ]
+  }
+}

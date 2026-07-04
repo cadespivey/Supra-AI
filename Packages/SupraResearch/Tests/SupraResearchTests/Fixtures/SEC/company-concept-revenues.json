@@ -1,0 +1,14 @@
+{
+  "cik": 320193,
+  "taxonomy": "us-gaap",
+  "tag": "RevenueFromContractWithCustomerExcludingAssessedTax",
+  "label": "Revenue from Contract with Customer, Excluding Assessed Tax",
+  "description": "Amount, excluding tax collected from customer, of revenue from satisfaction of performance obligation.",
+  "entityName": "Apple Inc.",
+  "units": {
+    "USD": [
+      {"start": "2021-09-26", "end": "2022-09-24", "val": 394328000000, "accn": "0000320193-22-000108", "fy": 2022, "fp": "FY", "form": "10-K", "filed": "2022-10-28", "frame": "CY2022"},
+      {"start": "2022-09-25", "end": "2023-09-30", "val": 383285000000, "accn": "0000320193-23-000106", "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2023-11-03", "frame": "CY2023"}
+    ]
+  }
+}
