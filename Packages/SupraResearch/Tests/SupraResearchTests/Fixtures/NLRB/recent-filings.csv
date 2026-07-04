@@ -1,0 +1,5 @@
+Case Number,Case Name,Case Type,Region Assigned,Date Filed,Status,Employer,Union,City,State,Allegations,Reason Closed
+01-CA-345678,"Riverside Logistics, Inc.",CA,"Region 01, Boston",03/11/2024,Open,"Riverside Logistics, Inc.","Teamsters Local 25",Boston,MA,"8(a)(1) Coercive Statements; 8(a)(3) Discharge",
+01-RC-389901,"Harbor Coffee Workers United",,"Region 01, Boston",02/28/2024,Open,"Harbor Coffee Company","Harbor Coffee Workers United",Salem,MA,,
+19-CB-112233,"Warehouse Workers Local 9 (Cascade Grocers)",CB,"Region 19, Seattle",01/15/2024,Closed,"Cascade Grocers","Warehouse Workers Local 9",Seattle,WA,"8(b)(1)(A) Duty of Fair Representation","Withdrawal Adjusted"
+,No Case Number Row,CA,Region 10,01/01/2024,Open,Ghost Employer,,,GA,,
