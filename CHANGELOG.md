@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.0.1] - 2026-07-04
+
+Public government records land in the app: SEC filings, CFPB complaints, and NLRB
+case records — key-less, official-source-only, and neutrally framed.
+
+### Added
+
+- **Public Records** — a new sidebar destination (⌘3) searching three official
+  government data sources with no API keys: SEC EDGAR company filings by CIK
+  (annual/quarterly/current-report scopes, links to the official archive), the
+  CFPB consumer-complaint database (company, state, and product filters), and
+  NLRB case records. Every record links to its official source page, and
+  complaints and filings are always presented as allegations as filed — never
+  as findings.
+- **CFPB company matching** — free-text company names are resolved through the
+  CFPB's official name-suggestion service (its database matches exact canonical
+  names), and the resolution is disclosed with the results.
+- **NLRB dataset import** — official recent-filings and election-results
+  exports import into a local store and search offline (party history, case
+  lookup, employer/union search). When the NLRB site keeps its CSV behind an
+  interactive download, the app says so honestly and accepts the
+  browser-downloaded file via Import Downloaded CSV, detecting the dataset
+  type from its headers.
+- **Go menu** — keyboard navigation to every sidebar destination (⌘1–⌘6).
+
+### Fixed
+
+- SEC filing rows no longer show raw document filenames when EDGAR omits a
+  description.
+
 ## [2.0.0] - 2026-07-02
 
 Grounded answers become interactive and tiered: citations you can click, sources and
