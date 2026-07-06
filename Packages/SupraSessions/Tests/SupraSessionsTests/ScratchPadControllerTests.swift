@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import GRDB
 import SupraCore
@@ -223,5 +224,33 @@ final class ScratchPadControllerTests: XCTestCase {
         reopened.load()
         XCTAssertEqual(reopened.entries.map(\.text), ["First note #drafting"])
         XCTAssertEqual(reopened.entries.first?.seq, 1)
+    }
+
+    // MARK: - Live @matter registry
+
+    /// A matter created while the pad is already open must appear in the `@`
+    /// autocomplete registry immediately, without reopening the pad or restarting —
+    /// the regression `observeMatters(_:)` fixes.
+    func testObserveMattersUpdatesChipsWhenMatterCreatedWhilePadOpen() throws {
+        let store = try makeStore()
+        let subject = CurrentValueSubject<[MatterSummary], Never>([])
+        let controller = ScratchPadController(store: store, now: fixedNow)
+        controller.observeMatters(subject.eraseToAnyPublisher())
+        controller.load()
+        pumpMainRunLoop()
+        XCTAssertTrue(controller.matterChips.isEmpty, "No matters yet, so no @ suggestions")
+
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        subject.send([MatterSummary(record: matter)])
+        pumpMainRunLoop()
+
+        XCTAssertEqual(controller.matterChips.map(\.id), [matter.id])
+        XCTAssertEqual(controller.matterChips.map(\.name), ["McKernon Motors v. Liberty Rail"])
+    }
+
+    /// Drains blocks scheduled on the main run loop (Combine's `.receive(on:)`)
+    /// so an assertion sees the delivered value.
+    private func pumpMainRunLoop() {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
 }

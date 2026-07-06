@@ -135,6 +135,10 @@ final class AppEnvironment: ObservableObject {
             documentQueue: queue,
             isImportReady: { documentSetup.isReadyForImport }
         )
+        // Keep the ScratchPad `@matter` autocomplete in lockstep with the matter list,
+        // so a matter created while the app is running is mentionable right away
+        // instead of only after a restart.
+        self.scratchPadController.observeMatters(self.mattersController.mattersPublisher)
         if Self.isUITestMode {
             seedUITestFixturesIfNeeded()
         }

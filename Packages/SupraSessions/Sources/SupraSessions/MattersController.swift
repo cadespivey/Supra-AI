@@ -161,6 +161,13 @@ public final class MattersController: ObservableObject {
         return matters.first { $0.id == selectedMatterID }
     }
 
+    /// Publishes the matter list (its current value, then every change) for observers
+    /// that must stay in lockstep with it — e.g. the ScratchPad `@matter` autocomplete
+    /// registry, so a matter created while the app is running is mentionable at once.
+    public var mattersPublisher: AnyPublisher<[MatterSummary], Never> {
+        $matters.eraseToAnyPublisher()
+    }
+
     public func loadMatters() {
         reload()
         if let selectedMatterID, matters.contains(where: { $0.id == selectedMatterID }) {

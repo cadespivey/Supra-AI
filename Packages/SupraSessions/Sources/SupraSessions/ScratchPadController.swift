@@ -89,6 +89,7 @@ public final class ScratchPadController: ObservableObject {
     private let store: SupraStore
     private let now: () -> Date
     private let attachmentService: ScratchPadAttachmentService
+    private var matterObserver: AnyCancellable?
 
     public init(
         store: SupraStore,
@@ -101,6 +102,20 @@ public final class ScratchPadController: ObservableObject {
     }
 
     public var isCurrentDayLocked: Bool { currentDay?.isLocked ?? false }
+
+    /// Keeps the `@` autocomplete registry (`matterChips`) live: subscribes to the
+    /// app's matter list so a matter created, renamed, or removed while the pad is
+    /// open updates the suggestions immediately — no reopening the pad or restarting
+    /// (the registry was a one-time snapshot before). `load()`/`selectDay(id:)`/
+    /// `selectDate(_:)` still seed the chips synchronously, so a controller used
+    /// without an observer (e.g. in tests) is unaffected.
+    public func observeMatters(_ publisher: AnyPublisher<[MatterSummary], Never>) {
+        matterObserver = publisher
+            .receive(on: RunLoop.main)
+            .sink { [weak self] summaries in
+                self?.matterChips = summaries.map { MatterChip(id: $0.id, name: $0.name) }
+            }
+    }
 
     /// Loads (or creates) today's pad and the recent-day list.
     public func load() {
