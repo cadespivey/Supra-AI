@@ -4,7 +4,7 @@ const navItems = [
   { href: "/product", label: "Product" },
   { href: "/privacy-security", label: "Privacy & Security" },
   { href: "/download", label: "Download", accent: true },
-  { href: "/disclaimer", label: "Disclaimer" },
+  { href: "/legal", label: "Legal" },
 ];
 
 export function SiteHeader() {

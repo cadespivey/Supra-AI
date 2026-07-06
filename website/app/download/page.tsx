@@ -45,7 +45,7 @@ export default function DownloadPage() {
     <PageShell
       eyebrow="Download"
       title="Download Supra AI for macOS"
-      intro="Supra AI is a public beta for legal professionals on Apple Silicon Macs. Choose the format you prefer — both contain the same app."
+      intro="Supra AI runs on Apple Silicon Macs. Choose the format you prefer — both contain the same app."
     >
       <div className="space-y-12">
         <section className="border-t-2 border-supra-gold/60 pt-7">
@@ -113,7 +113,7 @@ export default function DownloadPage() {
         </div>
 
         <section className="border-t border-supra-border pt-6">
-          <h2 className="text-xl text-supra-white">Beta feedback</h2>
+          <h2 className="text-xl text-supra-white">Feedback</h2>
           <div className="mt-5">
             <FeedbackWarning />
           </div>

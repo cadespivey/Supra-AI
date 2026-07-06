@@ -1,43 +1,34 @@
-import { DraftNotice } from "@/components/DraftNotice";
 import { FeedbackWarning } from "@/components/FeedbackWarning";
 import { PageShell } from "@/components/PageShell";
 
 const sections = [
   {
-    title: "Website data",
-    body: "This website is a static site hosted on GitHub Pages. It sets no cookies and runs no analytics or tracking scripts. GitHub, as host, may automatically log standard technical request data such as IP addresses and user-agent strings to operate and protect the service.",
+    title: "We don't see or control your data",
+    body: "There is no Supra AI account, server, or cloud backend that receives your work. Your matter documents, prompts, embeddings, chats, and generated work product are created and stored on your Mac. We have no way to read, collect, or control any of it.",
   },
   {
-    title: "Download data",
-    body: "When you download the app from GitHub Releases, GitHub may record aggregate download counts and standard server logs. We do not add separate download trackers or marketing pixels.",
+    title: "Everything runs on your device",
+    body: "Generation, document extraction and indexing, embeddings, semantic search, drafting, and timekeeping all run locally on your machine. Nothing about your matters leaves your Mac for us or for a cloud model.",
   },
   {
-    title: "Local app data",
-    body: "The Supra AI app is designed to run locally. Your matter documents, prompts, embeddings, and generated work product are processed on your Mac and are not sent to us. We operate no server that receives your matter content.",
+    title: "Your work never trains a model",
+    body: "Because nothing you do leaves your Mac, your prompts, documents, and generated work are never used to train, fine-tune, or improve any model. The local models come already trained; new versions arrive only if and when you choose to download a provider update. Your inputs and outputs are never harvested as training data — by us or by anyone.",
   },
   {
-    title: "CourtListener research",
-    body: "When you enable CourtListener research, the app sends your search queries to the CourtListener API to retrieve authority. This is the opt-in network feature for legal research. Review CourtListener’s own terms and privacy policy for how they handle requests.",
+    title: "The one exception: research you run",
+    body: "The only time information leaves your Mac is when you run a legal-research or public-records search — case law and dockets through CourtListener, statutes and regulations through official government sources, and public records through SEC EDGAR, the CFPB complaint database, and the NLRB. Those requests carry your search terms, never your documents or work product, and they go directly to the source you queried.",
   },
   {
-    title: "Model downloads and updates",
-    body: "On first launch the app downloads local model weights, and it may check GitHub for new releases so it can tell you when an update is available. These send only the information needed to fetch software and check versions — not your matter content.",
+    title: "Searches you can see and adjust",
+    body: "Research searches are sent as ordinary query terms — the words and connectors that make up the search — which you can review and adjust before and after you run them. You choose which connectors to enable; several need no key at all, and any API keys you add are stored in the macOS Keychain and sent only to the provider they belong to.",
   },
   {
-    title: "Cookies and analytics",
-    body: "Neither the website nor the app uses advertising cookies or third-party analytics by default. If this changes before launch, this policy will be updated to describe what is collected and why.",
+    title: "Software downloads and updates",
+    body: "To run, the app downloads its local model weights the first time you use them and can check for new versions so it can tell you when an update is available. These requests fetch software and check versions only — they never include your matter content.",
   },
   {
-    title: "Data you should not submit",
-    body: "Do not place privileged, confidential, or client-identifying information into any public channel such as GitHub Issues. See the public-feedback warning below.",
-  },
-  {
-    title: "Changes to this policy",
-    body: "This policy is a pre-launch draft and may change as the product matures. Material changes will be reflected here, and the version published at launch will govern.",
-  },
-  {
-    title: "Contact",
-    body: "For privacy questions during the beta, open a non-sensitive issue on GitHub. A dedicated contact address will be published before general release.",
+    title: "This website",
+    body: "This site is static, hosted on GitHub Pages. It sets no cookies and runs no analytics or tracking. As host, GitHub may log ordinary technical request data such as IP addresses to operate the service.",
   },
 ];
 
@@ -46,19 +37,16 @@ export default function PrivacyPage() {
     <PageShell
       eyebrow="Privacy"
       title="Privacy Policy"
-      intro="Supra AI is built around local processing. This policy explains the limited data the website and app touch."
+      intro="The short version: we don't see or control your data. Almost everything you do in Supra AI happens on your own Mac."
     >
-      <DraftNotice />
       <div className="mb-12 border-l-2 border-supra-gold/60 pl-5">
         <p className="font-caps text-xs uppercase text-supra-gold">
-          The short version
+          In one sentence
         </p>
         <p className="measure-wide mt-2 text-lg leading-[1.5] text-supra-white">
-          The app processes your matter documents and generated work locally on
-          your Mac and does not send them to us. Aside from fetching the app and
-          its models and checking for updates, optional CourtListener research is
-          the only feature that uses the network. This website is static, with no
-          cookies or analytics; its host may log ordinary request data.
+          Everything you do runs on your device, except the legal-research and
+          public-records searches you choose to run — and those send only the
+          query terms you can see and adjust, never your documents.
         </p>
       </div>
 

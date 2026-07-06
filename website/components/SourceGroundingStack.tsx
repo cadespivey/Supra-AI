@@ -22,33 +22,32 @@ function StackLayer({
 export function SourceGroundingStack() {
   return (
     <Section className="bg-supra-navyDeep">
-      <div className="grid gap-12 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+      <div className="grid gap-x-12 gap-y-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
         <div>
           <p className="font-caps text-xs uppercase text-supra-gold">
             Source grounding
           </p>
-          <h2 className="mt-4 text-3xl leading-[1.15] text-supra-white">
+          <h2 className="mt-3 text-3xl leading-[1.15] text-supra-white">
             See Supra.
           </h2>
-          <p className="measure mt-6 text-lg leading-[1.5] text-supra-muted">
-            In legal writing, <span className="italic">supra</span> points back
-            to authority already supplied above. Supra AI applies the same
-            principle to legal AI: the answer should never be severed from the
-            source that supports it.
+          <p className="measure mt-4 text-lg leading-[1.5] text-supra-muted">
+            In legal writing, <span className="italic">supra</span> points to
+            authority already on the page. Supra AI works the same way: an answer
+            never stands apart from the source behind it.
           </p>
         </div>
 
-        <div className="space-y-6">
-          <StackLayer label="Layer 1" title="Authority above">
-            Retrieved authority, document excerpts, and source material remain
-            visible before the analysis that depends on them.
+        <div className="space-y-4">
+          <StackLayer label="01" title="The answer">
+            Responses read like an ordinary chat answer — clear prose, not a wall
+            of hedged citations.
           </StackLayer>
 
-          <div aria-hidden="true" className="ml-px h-6 w-px bg-supra-gold/70" />
+          <div aria-hidden="true" className="ml-px h-3 w-px bg-supra-gold/70" />
 
-          <StackLayer label="Layer 2" title="Answer below">
-            The response is framed as analysis tied to the source packet, not as
-            an unsupported assertion from model memory.
+          <StackLayer label="02" title="Its sources, right below">
+            Every source behind the answer is listed beneath it, each linking to
+            the exact passage of the document or opinion it came from.
           </StackLayer>
         </div>
       </div>

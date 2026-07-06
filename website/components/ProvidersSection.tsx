@@ -4,62 +4,60 @@ type Provider = {
   name: string;
   url: string;
   role: string;
-  note: string;
   support?: { label: string; url: string };
 };
 
-const nonprofits: Provider[] = [
+const sources: Provider[] = [
   {
-    name: "Free Law Project — CourtListener & RECAP",
+    name: "CourtListener — Free Law Project",
     url: "https://www.courtlistener.com",
-    role: "Case law, oral arguments, and federal docket (PACER/RECAP) data",
-    note: "A 501(c)(3) nonprofit that has spent over a decade making court records free. Supra AI's case-law search, docket lookups, and citation verification run on CourtListener's API.",
+    role: "Case law, oral arguments, and federal dockets (PACER/RECAP). A 501(c)(3) nonprofit that has made court records free for over a decade.",
     support: { label: "Donate to Free Law Project", url: "https://free.law/donate/" },
   },
   {
     name: "Open Legal Codes",
     url: "https://openlegalcodes.org",
-    role: "United States Code, CFR, and state statutes",
-    note: "A free, key-less statutory backbone covering federal and all fifty states' codes — the convenience tier behind Supra AI's statute lookups.",
+    role: "A free, key-less backbone for the U.S. Code, the CFR, and all fifty states' statutes.",
   },
   {
     name: "OpenStates",
     url: "https://openstates.org",
-    role: "State legislation and bill tracking",
-    note: "Open data on legislators, bills, and votes across every state legislature, powering Supra AI's state legislative-developments tracking.",
-  },
-];
-
-const official: Provider[] = [
-  {
-    name: "CourtListener API",
-    url: "https://www.courtlistener.com/help/api/",
-    role: "Opinions · dockets · citation lookup",
-    note: "",
-  },
-  {
-    name: "eCFR",
-    url: "https://www.ecfr.gov",
-    role: "Code of Federal Regulations, with effective dates",
-    note: "",
+    role: "Open data on state legislators, bills, and votes — powering state legislative tracking.",
   },
   {
     name: "GovInfo",
     url: "https://www.govinfo.gov",
-    role: "Official United States Code section text",
-    note: "",
+    role: "Official United States Code section text.",
+  },
+  {
+    name: "eCFR",
+    url: "https://www.ecfr.gov",
+    role: "Code of Federal Regulations, with effective dates.",
   },
   {
     name: "Federal Register",
     url: "https://www.federalregister.gov",
-    role: "Rules, proposed rules, and notices",
-    note: "",
+    role: "Federal rules, proposed rules, and notices.",
   },
   {
     name: "Regulations.gov",
     url: "https://www.regulations.gov",
-    role: "Rulemaking dockets and comments",
-    note: "",
+    role: "Rulemaking dockets and public comments.",
+  },
+  {
+    name: "SEC EDGAR",
+    url: "https://www.sec.gov/edgar",
+    role: "Public company filings — 10-K, 10-Q, and 8-K.",
+  },
+  {
+    name: "CFPB",
+    url: "https://www.consumerfinance.gov/data-research/consumer-complaints/",
+    role: "The consumer-complaint database.",
+  },
+  {
+    name: "NLRB",
+    url: "https://www.nlrb.gov",
+    role: "Labor-case records and election results.",
   },
 ];
 
@@ -68,18 +66,17 @@ export function ProvidersSection() {
     <Section id="providers">
       <div className="measure-wide">
         <p className="font-caps text-xs uppercase text-supra-gold">
-          Research providers
+          Research sources
         </p>
         <h2 className="mt-4 text-3xl leading-[1.15] text-supra-white">
           Standing on the shoulders of open law.
         </h2>
         <p className="mt-6 text-lg leading-[1.5] text-supra-muted">
-          Supra AI doesn&rsquo;t resell legal data. Its research runs on public
-          sources — nonprofits and government services working to make the law
-          freely accessible to everyone, not just to firms with database
-          contracts. If Supra AI is useful to you, these organizations are why.{" "}
+          Supra AI doesn&rsquo;t resell legal data. Its case-law, statutory, and
+          public-records research runs on public sources — nonprofits and
+          government services making the law free to everyone.{" "}
           <span className="text-supra-white">
-            Please consider supporting their work.
+            If Supra AI is useful to you, please consider supporting them.
           </span>
         </p>
       </div>
@@ -99,71 +96,41 @@ export function ProvidersSection() {
         </figcaption>
       </figure>
 
-      <div className="mt-14 grid gap-x-10 gap-y-8 lg:grid-cols-2">
-        {nonprofits.map((provider) => (
-          <article
-            key={provider.name}
-            className="border-t border-supra-border pt-5"
-          >
-            <h3 className="text-xl text-supra-white">
+      <dl className="mt-14 grid gap-x-12 gap-y-8 sm:grid-cols-2">
+        {sources.map((source) => (
+          <div key={source.name} className="border-t border-supra-border pt-5">
+            <dt className="text-lg text-supra-white">
               <a
-                href={provider.url}
+                href={source.url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="link"
               >
-                {provider.name}
+                {source.name}
               </a>
-            </h3>
-            <p className="mt-1 font-caps text-xs uppercase text-supra-gold">
-              {provider.role}
-            </p>
-            <p className="mt-3 text-base leading-[1.55] text-supra-muted">
-              {provider.note}
-            </p>
-            {provider.support && (
+            </dt>
+            <dd className="mt-2 text-base leading-[1.55] text-supra-muted">
+              {source.role}
+            </dd>
+            {source.support && (
               <a
-                href={provider.support.url}
+                href={source.support.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="link mt-3 inline-block text-base"
+                className="link mt-2 inline-block text-sm"
               >
-                {provider.support.label} →
+                {source.support.label} →
               </a>
             )}
-          </article>
+          </div>
         ))}
-      </div>
+      </dl>
 
-      <div className="mt-16 border-t border-supra-border pt-8">
-        <p className="font-caps text-xs uppercase text-supra-gold">
-          Official government sources
-        </p>
-        <dl className="mt-6 grid gap-x-10 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-          {official.map((source) => (
-            <div key={source.name}>
-              <dt className="text-base text-supra-white">
-                <a
-                  href={source.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="link"
-                >
-                  {source.name}
-                </a>
-              </dt>
-              <dd className="mt-1 text-sm leading-[1.5] text-supra-muted">
-                {source.role}
-              </dd>
-            </div>
-          ))}
-        </dl>
-        <p className="mt-8 max-w-3xl text-sm leading-[1.55] text-supra-muted">
-          Every network request the app makes is limited to these hosts, logged
-          locally for your audit trail, and rate-limited to be a good citizen of
-          services that keep the law open.
-        </p>
-      </div>
+      <p className="mt-12 max-w-3xl text-sm leading-[1.55] text-supra-muted">
+        Every network request the app makes is limited to these hosts, logged
+        locally for your audit trail, and rate-limited to stay a good citizen of
+        the services that keep the law open.
+      </p>
     </Section>
   );
 }

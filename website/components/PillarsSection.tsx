@@ -3,10 +3,11 @@ import { Section } from "./Section";
 const pillars = [
   {
     label: "Privacy",
-    title: "Your file never leaves the building.",
+    title: "Your file never leaves your device.",
     points: [
-      "Generation, document indexing, embeddings, and drafting all run locally on Apple Silicon. Prompts, matter documents, and work product are never sent to a cloud model.",
-      "The only network traffic is what you can point to: model downloads, the legal-data lookups described below, and the update check. Legal research requests carry search terms — never your documents.",
+      "Generation, indexing, embeddings, and drafting all run locally on Apple Silicon — prompts, documents, and work product are never sent to a cloud model.",
+      "Your work is never training data. The models arrive already trained and change only when you install a provider update — because nothing you type or generate leaves your Mac, it can never be folded into anyone's training set.",
+      "The only network traffic is what you can point to: model downloads, the research lookups below, and the update check — each carrying search terms, never your documents.",
       "Research queries are privileged work product, so even the app's own network log redacts query terms by default.",
     ],
   },
@@ -15,7 +16,7 @@ const pillars = [
     title: "Built like it holds a client file — because it does.",
     points: [
       "Sandboxed, hardened-runtime, and notarized by Apple. The model runtime runs in a separate isolated process.",
-      "Networking is default-deny: the app can only reach a short allow-list of official legal-data hosts. There is no analytics endpoint, no telemetry, and nothing phoning home.",
+      "Networking is default-deny: only a short allow-list of official legal-data hosts. No analytics, no telemetry, nothing phoning home.",
       "Your optional API keys live in the macOS Keychain — never in files, never bundled, never transmitted anywhere but the provider they belong to.",
     ],
   },

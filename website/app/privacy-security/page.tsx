@@ -11,14 +11,16 @@ const panels = [
       "Local embeddings",
       "Saved authorities & opinion text",
       "Generated work product",
+      "Never used to train a model",
     ],
   },
   {
     title: "External research boundary",
     items: [
-      "Legal-data lookups only when you ask",
-      "Default-deny host allow-list (courts, statutes, registers)",
+      "Case-law and public-records lookups only when you ask",
+      "Default-deny host allow-list (courts, statutes, registers, public records)",
       "Search terms only — documents never leave",
+      "Query terms you can see and adjust",
       "Query terms redacted in the local network log",
       "API keys stored in the macOS Keychain",
       "No general cloud generation",

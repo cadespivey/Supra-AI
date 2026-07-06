@@ -18,7 +18,7 @@ function Shot({
   title,
   image,
   alt,
-  caption = "Actual app — no client data",
+  caption = "No client data",
   flip = false,
   children,
 }: ShotProps) {
@@ -55,42 +55,24 @@ function Shot({
 export function ScreenshotShowcase() {
   return (
     <Section id="inside-the-app">
-      <div className="measure-wide">
-        <p className="font-caps text-xs uppercase text-supra-gold">
-          Inside the app
-        </p>
-        <h2 className="mt-4 text-3xl leading-[1.15] text-supra-white">
-          See what&rsquo;s behind the curtain before you download.
-        </h2>
-        <p className="mt-6 text-lg leading-[1.5] text-supra-muted">
-          Every screenshot below is the real application working a demonstration
-          matter built from <span className="italic">public court records</span>{" "}
-          and real case law — no client data anywhere.
-        </p>
-      </div>
-
-      <div className="mt-16 space-y-24">
+      <div className="space-y-24">
         <Shot
           label="Grounded answers"
-          title="Every assertion carries a clickable citation."
+          title="The answer up top, its sources right below."
           image="/screenshots/hero-grounded-chat.png"
-          alt="A matter chat answering who the parties are, citing [S2] and [S3] document sources, with the cited court filing open beside the conversation at the supporting page."
-          caption="Actual app · public court records — no client data"
+          alt="A matter chat answering who the parties are, with the sources it relied on listed below the answer and the cited court filing open beside the conversation at the supporting page."
+          caption="Public court records — no client data"
         >
           <p>
-            Ask about your matter&rsquo;s documents and the answer is built only
-            from retrieved passages — each one cited inline as{" "}
-            <span className="text-supra-gold">[S2]</span>,{" "}
-            <span className="text-supra-gold">[S3]</span>, and so on. Click a
-            citation and the filing itself opens beside the conversation at the
-            cited page.
+            Ask about your matter&rsquo;s documents and you get a normal chat
+            answer — with every source it relied on listed right below it. Click
+            one and the filing opens beside the conversation at the exact passage.
           </p>
           <p>
-            Answers are honest about their depth, too: a fast pass over the most
-            relevant passages comes back in seconds, labeled{" "}
-            <span className="italic">Preliminary</span>, with a full search of
-            every document one click away. If the documents don&rsquo;t support
-            an answer, Supra AI says so instead of improvising one.
+            Answers are honest about depth, too: a fast pass returns in seconds,
+            labeled <span className="italic">Preliminary</span>, with a
+            full-document search one click away. If the documents don&rsquo;t
+            support an answer, Supra AI says so instead of improvising.
           </p>
         </Shot>
 
@@ -99,20 +81,23 @@ export function ScreenshotShowcase() {
           title="Plan the search. Review every result. Keep what holds up."
           image="/screenshots/research-session.png"
           alt="A research session showing search queries and retrieved Supreme Court cases with review status badges, and a detail card for one case showing its citation, court, docket number, and excerpt."
-          caption="Actual app · real case law"
+          caption="Real case law"
           flip
         >
           <p>
-            Research runs as an auditable session: real search queries you
-            approve, and an explicit review decision on every result — saved to
-            the matter&rsquo;s authority library, marked potentially adverse, or
-            skipped. Each case carries its citation, court, date, docket, and
-            the matching excerpt.
+            Research runs as an auditable session: queries you approve, then a
+            keep-or-skip decision on every result. Each case carries its
+            citation, court, date, docket, and matching excerpt.
           </p>
           <p>
-            Authorities you save keep their full text on your Mac, so follow-up
-            research answers from your own library first — offline — and only
-            reaches for the network when you ask for a wider search.
+            Saved authorities keep their full text on your Mac, so follow-up
+            research answers from your own library first — offline — reaching the
+            network only when you ask for a wider search.
+          </p>
+          <p>
+            The same workflow reaches beyond case law to public records — SEC
+            EDGAR filings, CFPB complaints, and NLRB records — each shown as a
+            sourced filing, never a finding.
           </p>
         </Shot>
 
@@ -121,19 +106,17 @@ export function ScreenshotShowcase() {
           title="Read the opinion without leaving the app."
           image="/screenshots/opinion-reader.png"
           alt="The full text of a Supreme Court opinion open inside the app, with a Download HTML option."
-          caption="Actual app · real case law"
+          caption="Real case law"
         >
           <p>
-            Any retrieved case — and any{" "}
-            <span className="text-supra-gold">[A#]</span> citation in a research
-            answer — opens as the full opinion inside the app: the court&rsquo;s
-            own text, the cited passage highlighted, a download option, and a
-            one-click path to the case on CourtListener.
+            Any retrieved case — or{" "}
+            <span className="text-supra-gold">[A#]</span> citation — opens as the
+            full opinion inside the app: the court&rsquo;s own text, the cited
+            passage highlighted, and a link to the case on CourtListener.
           </p>
           <p>
-            Cited answers are verified against this same retrieved text. A cite
-            the sources don&rsquo;t support is flagged — or the answer is
-            blocked outright — before you ever rely on it.
+            Cited answers are verified against that same text: an unsupported
+            cite is flagged, or the answer blocked, before you rely on it.
           </p>
         </Shot>
 
@@ -146,9 +129,9 @@ export function ScreenshotShowcase() {
         >
           <p>
             Download open-weight MLX models once and assign them per task —
-            deep reasoning for research, an instruct model for drafting, a
-            critic for review. The runtime loads them on your Apple Silicon; no
-            prompt or document ever leaves for a cloud model.
+            reasoning for research, an instruct model for drafting, a critic for
+            review. They run on your Apple Silicon; nothing leaves for a cloud
+            model.
           </p>
           <p>
             That&rsquo;s the whole subscription story: hardware you own running

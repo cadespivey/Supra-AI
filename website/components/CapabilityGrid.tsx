@@ -2,8 +2,12 @@ import { Section } from "./Section";
 
 const capabilities = [
   {
-    title: "Source-grounded research",
-    body: "Answers cite retrieved authority, never model memory. Matters with saved authorities answer from your own library first; a wider CourtListener search is always one explicit click away. Party and docket questions search real federal filings.",
+    title: "Case-law research",
+    body: "Answers cite retrieved authority, never model memory. A matter answers from its saved authorities first; a wider CourtListener search is one click away. Party and docket questions hit real PACER/RECAP filings.",
+  },
+  {
+    title: "Public records search",
+    body: "Search official government data alongside case law: SEC EDGAR filings (10-K, 10-Q, 8-K), the CFPB complaint database, and NLRB labor records — shown as sourced filings and allegations as filed, never findings, and never fed to the model as fact.",
   },
   {
     title: "Citation verification",
@@ -11,27 +15,27 @@ const capabilities = [
   },
   {
     title: "Document intelligence",
-    body: "Import matter documents and ask questions answered only from their text — fast preliminary answers with an explicit full-file pass, and every [S#] cite opens the source at the supporting passage.",
+    body: "Import matter documents and ask questions answered only from their text — a fast preliminary answer with a full-file pass one click away, and every [S#] cite opening the source at the supporting passage.",
   },
   {
     title: "Primary law from official text",
-    body: "Statutory and regulatory questions ground in the official sources themselves — U.S. Code section text from GovInfo, CFR sections with effective dates from eCFR — with currency caveats whenever a source can't vouch for freshness.",
-  },
-  {
-    title: "Matter workspace",
-    body: "Organize research, drafts, documents, authorities, outputs, billing, and a full audit trail by matter — with an in-app reader for saved opinions that works offline.",
-  },
-  {
-    title: "Legislative & regulatory tracking",
-    body: "Pending bills and rulemaking relevant to a question appear as clearly-labeled tracking context — sourced from the Federal Register, Regulations.gov, and OpenStates — and are never passed off as citable authority.",
-  },
-  {
-    title: "Document drafting",
-    body: "Draft directly inside a matter's chat: a Draft button opens a sheet for the caption parties, client, and service recipients, then renders a downloadable Word document — open it, reveal it in Finder, or save a copy. The signature block prints the bar admission that matches the filing's court. Every recited fact traces back to the matter, and unverified citations appear as visible placeholders to review before filing.",
+    body: "Statutory and regulatory questions ground in the official text itself — U.S. Code from GovInfo, CFR with effective dates from eCFR — with a currency caveat when a source can't vouch for freshness.",
   },
   {
     title: "Timekeeping & billing",
-    body: "ScratchPad turns a day's notes and work product into reviewable, defensible time entries with UTBMS codes — exportable to LEDES 1998B, CSV, or the clipboard. Tag an entry #Note to keep it out of billing entirely; excluded notes and their attachments never reach the billing model, and the review banner reports exactly what was left out. Nothing bills automatically; every line cites its evidence.",
+    body: "ScratchPad captures the day as you work — quick notes tagged with @matter and #activity — then generates polished, UTBMS-coded billing narratives you review before anything counts. Tag an entry #Note to keep it out of billing entirely. Export to LEDES 1998B, CSV, or the clipboard.",
+  },
+  {
+    title: "Matter workspace",
+    body: "Organize research, drafts, documents, authorities, billing, and a full audit trail by matter — with an in-app reader for saved opinions that works offline.",
+  },
+  {
+    title: "Legislative & regulatory tracking",
+    body: "Pending bills and rulemaking appear as clearly-labeled tracking context — from the Federal Register, Regulations.gov, and OpenStates — never passed off as citable authority.",
+  },
+  {
+    title: "Document drafting",
+    body: "Draft inside a matter's chat: a Draft button collects the caption parties, client, and service recipients, then renders a downloadable Word document with a signature block matched to the filing's court. Every recited fact traces to the matter, and unverified citations appear as visible placeholders to review before filing.",
   },
 ];
 
@@ -46,8 +50,9 @@ export function CapabilityGrid() {
           Built for legal work that stays grounded.
         </h2>
         <p className="mt-6 text-lg leading-[1.5] text-supra-muted">
-          Supra AI combines local generation with legal research, document
-          intelligence, and review workflows designed for attorneys.
+          Supra AI combines local generation with case-law and public-records
+          research, document intelligence, drafting, timekeeping, and review
+          workflows designed for attorneys.
         </p>
       </div>
 
