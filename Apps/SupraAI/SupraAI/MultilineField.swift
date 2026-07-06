@@ -332,6 +332,7 @@ struct FocusChainSwitch: NSViewRepresentable {
     var focusChain: SupraFocusChain? = nil
     var focusOrder: Int = 0
     var accessibilityID: String? = nil
+    var accessibilityLabelText: String = "Limit to a date range"
 
     func makeNSView(context: Context) -> NSSwitch {
         let control = ChainedSwitch()
@@ -340,7 +341,7 @@ struct FocusChainSwitch: NSViewRepresentable {
         control.action = #selector(Coordinator.changed(_:))
         control.focusChain = focusChain
         control.setAccessibilityIdentifier(accessibilityID)
-        control.setAccessibilityLabel("Limit to a date range")
+        control.setAccessibilityLabel(accessibilityLabelText)
         focusChain?.register(control, at: focusOrder, identifier: accessibilityID)
         return control
     }

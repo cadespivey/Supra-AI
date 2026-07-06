@@ -22,6 +22,13 @@ final class AppEnvironment: ObservableObject {
     /// the first-run model-download flow. Set in `bootstrap()`; cleared once the user
     /// finishes or skips onboarding. Always false under UI tests.
     @Published private(set) var shouldShowOnboarding = false
+    /// Drives the launch splash. Shown once per process launch: starts true and is
+    /// set false when the timed splash dismissal fires. Because AppEnvironment is a
+    /// `@StateObject` on the App scene it outlives any single window, so closing the
+    /// window (red X) and reopening from the Dock — the app never quit — goes straight
+    /// to the shell instead of replaying the splash. Only a true cold launch (a new
+    /// process, hence a new AppEnvironment) shows it again.
+    @Published var isShowingSplash = true
 
     /// App-settings key recording when first-run onboarding was completed/skipped.
     private static let onboardingCompletedKey = "onboarding.completedAt"
@@ -134,6 +141,9 @@ final class AppEnvironment: ObservableObject {
         if Self.isDemoMode {
             seedDemoFixturesIfNeeded()
         }
+        // Let speculative pre-warms back off while a generation is running, so they
+        // never evict the model out from under an in-flight answer.
+        modelLibrary.isRuntimeGenerating = { [weak self] in self?.runtimeServiceState == .generating }
     }
 
     /// Loads persisted state and refreshes runtime status on launch.
@@ -167,6 +177,11 @@ final class AppEnvironment: ObservableObject {
         modelLibrary.reconcileLoadedModel(runtimeStatusController.loadedModelID)
         autoLoadStartupModelIfNeeded()
         await documentSetupController.refreshAll()
+        // Warm the embedding model now that its selection/verification is known. It
+        // lives in a separate runtime slot from the chat model, so this never evicts
+        // the chat model — and it removes the first-use wait on Document Q&A, semantic
+        // search, and import indexing.
+        if !Self.isUITestMode { documentSetupController.prewarmEmbeddingModel() }
         // Reconcile any document job interrupted by a previous quit (plan §5.4).
         documentQueue.bootstrap()
         // Auto-purge documents and chats soft-deleted past the retention window
@@ -194,11 +209,20 @@ final class AppEnvironment: ObservableObject {
     /// their assigned role model before generation. Skipped when a model is already
     /// loaded or in UI tests.
     private func autoLoadStartupModelIfNeeded() {
-        guard !Self.isUITestMode,
-              case .idle = modelLibrary.loadState,
-              let startupModelID = modelLibrary.startupModelID() else { return }
+        guard !Self.isUITestMode, case .idle = modelLibrary.loadState else { return }
+        // The app opens on the chat screen, so warm the model chat will actually use —
+        // the pinned model, else the Autoselect legal-reasoning model — instead of the
+        // heavier high-quality reasoning model, which plain chat doesn't route to and
+        // which would force a reload on the first message. Fall back to the generic
+        // startup model only when no chat role is assigned yet.
+        let forced = modelLibrary.forcedModelID?.rawValue.uuidString
+        let forcedExists = forced.map { id in modelLibrary.models.contains { $0.id == id } } ?? false
+        let target = (forcedExists ? forced : nil)
+            ?? modelLibrary.preferredModelID(for: .legalReasoning)?.rawValue.uuidString
+            ?? modelLibrary.startupModelID()
+        guard let target else { return }
         Task {
-            await modelLibrary.activateAndLoad(modelID: startupModelID)
+            await modelLibrary.activateAndLoad(modelID: target)
             // bootstrap()'s refreshAll() likely ran while the model was still
             // loading and cached chatModelLoaded = false. Re-query once the
             // background load settles so the Settings checklist reflects the

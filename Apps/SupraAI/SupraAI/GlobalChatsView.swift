@@ -73,6 +73,10 @@ struct GlobalChatsView: View {
             if listStyle == .picker { inputFocused = true }
             matters?.loadMatters()
             if suggestions.isEmpty { suggestions = ChatSuggestions.sample() }
+            // Warm the chat model when the chat opens (safety net over the launch
+            // preload) so the first message doesn't wait on the load — e.g. after the
+            // model was unloaded, or in a matter chat opened before any message.
+            if !AppEnvironment.isUITestMode { library.prewarmChatModel() }
         }
         // Rotate the example prompts every time the chat window goes blank/empty
         // (new chat, deleted chat, or a moved chat) so they don't get stale.
@@ -983,10 +987,17 @@ struct GlobalChatsView: View {
     /// The model readout doubles as a picker: Autoselect (per-route Models-tab
     /// preference) by default, or force a specific model for every request. The choice
     /// is app-wide and shared by all chats; "Autoselect" is shown when nothing is pinned.
+    /// Pins (or clears) the chat model and immediately warms the new choice, so the
+    /// next message doesn't wait on the model switch.
+    private func forceModel(_ modelID: ModelID?) {
+        library.setForcedModel(modelID)
+        if !AppEnvironment.isUITestMode { library.prewarmChatModel() }
+    }
+
     private var modelSelector: some View {
         Menu {
             Button {
-                library.setForcedModel(nil)
+                forceModel(nil)
             } label: {
                 Label(
                     "Autoselect (Models preferences)",
@@ -997,7 +1008,7 @@ struct GlobalChatsView: View {
                 Section("Force a model") {
                     ForEach(library.models) { model in
                         Button {
-                            library.setForcedModel(UUID(uuidString: model.id).map(ModelID.init))
+                            forceModel(UUID(uuidString: model.id).map(ModelID.init))
                         } label: {
                             if library.forcedModelID?.rawValue.uuidString == model.id {
                                 Label(model.displayName, systemImage: "checkmark")

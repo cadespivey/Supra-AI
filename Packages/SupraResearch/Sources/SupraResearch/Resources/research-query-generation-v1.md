@@ -15,9 +15,20 @@ precision for the issue. Make them genuinely diverse — not five rephrasings of
 
 Query-writing rules:
 
-- Put double quotes around multi-word terms of art so they match as a phrase
-  (e.g. "absolute priority rule", "new value exception").
-- You may combine terms with AND / OR and group with parentheses; keep each query focused.
+- CourtListener ANDs your terms together and treats each quoted phrase as an exact
+  match, so over-quoting is the single fastest way to get ZERO results. Quote sparingly.
+- Quote ONLY genuine multi-word terms of art (2–4 words) that appear verbatim in
+  opinions — e.g. "statute of frauds", "sale of goods", "absolute priority rule". Use
+  at most one or two quoted phrases in a query.
+- NEVER quote ordinary descriptive wording, dollar amounts or numbers, procedural
+  boilerplate, or a whole clause — write those as bare keywords, because courts phrase
+  them many ways and an exact match excludes almost everything.
+  (Bad: "over $500" "value of goods" "governed by UCC" "UCC applicability".
+   Good: "sale of goods" 500 statute of frauds.)
+- Keep each query short — a handful of words. A few well-chosen terms recall far more
+  than a long chain of required phrases.
+- Prefer OR between alternative phrasings a court might use, and group with parentheses;
+  reserve AND (or bare adjacency) for terms that genuinely must co-occur.
 - Prefer the precise vocabulary courts actually use over lay phrasing.
 - Do NOT include citations or reporter names unless the user provided a citation.
 - Do NOT invent case names.

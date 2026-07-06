@@ -880,6 +880,7 @@ public final class GlobalChatController: ObservableObject {
                         generationID: session.id,
                         metrics: storedMetrics(from: finalMetrics)
                     )
+                    logGenerationTiming(finalMetrics, generationID: session.id)
                     let citations = persistSourceCitations(
                         messageID: assistant.id,
                         answer: answerText,
@@ -3237,6 +3238,24 @@ public final class GlobalChatController: ObservableObject {
             }
         }
         return labels
+    }
+
+    /// Records generation latency (first-token + throughput) as a `performance`
+    /// diagnostic for the Diagnostics timings readout. Best-effort.
+    private func logGenerationTiming(_ metrics: RuntimeMetrics?, generationID: String) {
+        guard let metrics else { return }
+        var parts: [String] = []
+        if let ftl = metrics.firstTokenLatencyMs { parts.append("first token \(ModelLibrary.formatMilliseconds(ftl))") }
+        if let tps = metrics.tokensPerSecond { parts.append(String(format: "%.0f tok/s", tps)) }
+        guard !parts.isEmpty else { return }
+        try? store.diagnostics.recordDiagnosticEvent(
+            DiagnosticEventRecord(
+                severity: "info",
+                category: "performance",
+                message: "Generated — " + parts.joined(separator: ", "),
+                generationID: generationID
+            )
+        )
     }
 
     private func storedMetrics(from metrics: RuntimeMetrics?) -> StoredRuntimeMetrics {

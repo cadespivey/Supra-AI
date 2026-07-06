@@ -148,6 +148,10 @@ struct JurisdictionAutocompleteField: View {
     var accessibilityID: String? = nil
 
     @State private var query: String
+    /// Cached search results, refreshed off the render path by `.task(id: query)`
+    /// below. Holding these in state (rather than a computed property the body reads
+    /// several times per keystroke) is what keeps typing responsive.
+    @State private var suggestions: [JurisdictionOption] = []
 
     private let catalog = JurisdictionCatalog.shared
 
@@ -222,6 +226,15 @@ struct JurisdictionAutocompleteField: View {
 
             footer
         }
+        .task(id: query) {
+            // Debounce so a burst of keystrokes recomputes once, then refresh
+            // suggestions off the render path. `.task(id:)` cancels the prior run on
+            // each change, so only the latest query's results land.
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            suggestions = trimmed.isEmpty ? [] : catalog.search(query, limit: 6)
+        }
     }
 
     @ViewBuilder
@@ -264,10 +277,6 @@ struct JurisdictionAutocompleteField: View {
                 court = ""
             }
         )
-    }
-
-    private var suggestions: [JurisdictionOption] {
-        catalog.search(query, limit: 6)
     }
 
     private var showSuggestions: Bool {

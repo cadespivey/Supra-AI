@@ -178,9 +178,43 @@ public final class ResearchSessionController: ObservableObject {
     /// Fetches a result's full opinion (text + HTML) from CourtListener's
     /// allow-listed opinion-detail endpoint, for a longer passage and HTML view.
     /// Returns nil when there's no opinion id or the fetch fails.
+    /// In-memory cache of fetched opinions (by CourtListener opinion id), shared by the
+    /// reader and the post-run prefetch so opening a result is instant.
+    private var opinionCache: [Int: CourtListenerOpinionDetailDTO] = [:]
+
     public func fetchOpinionDetail(opinionID: String?) async -> CourtListenerOpinionDetailDTO? {
         guard let opinionID, let id = Int(opinionID) else { return nil }
-        return try? await courtListenerClient.fetchOpinion(id: id)
+        if let cached = opinionCache[id] { return cached }
+        guard let dto = try? await courtListenerClient.fetchOpinion(id: id) else { return nil }
+        opinionCache[id] = dto
+        return dto
+    }
+
+    /// Best-effort background prefetch of the first few results' opinions after a run,
+    /// so opening the reader is instant. Bounded + sequential to respect the client's
+    /// rate budget; already-cached opinions are skipped.
+    private func prefetchTopOpinions(limit: Int = 3) {
+        guard hasCourtListenerToken else { return }
+        var seen = Set<Int>()
+        var targets: [Int] = []
+        for query in sessionQueries {
+            for result in resultsByQuery[query.id] ?? [] {
+                guard let id = result.opinionID.flatMap(Int.init),
+                      opinionCache[id] == nil, !seen.contains(id) else { continue }
+                seen.insert(id)
+                targets.append(id)
+                if targets.count >= limit { break }
+            }
+            if targets.count >= limit { break }
+        }
+        guard !targets.isEmpty else { return }
+        Task {
+            for id in targets where opinionCache[id] == nil {
+                if let dto = try? await courtListenerClient.fetchOpinion(id: id) {
+                    opinionCache[id] = dto
+                }
+            }
+        }
     }
 
     public func loadSessions() {
@@ -222,6 +256,11 @@ public final class ResearchSessionController: ObservableObject {
     /// model returns fewer than five — never throws to the UI (spec §9.4 parser
     /// rule).
     public func generatePlan(draft: ResearchPlanDraft, modelID: ModelID?, route: ModelRoute? = nil) async {
+        // Single generation at a time: the runtime serialises generation, and the
+        // planner may pre-run this speculatively while the user types. A second call
+        // (e.g. the explicit commit landing while the speculative run is still going)
+        // is a no-op — the caller waits out the in-flight run and reuses its queries.
+        if case .generating = planState { return }
         let effectiveRoute = route ?? ModelRouter().route(for: .legalResearch)
         guard let modelID else {
             if plannedQueries.isEmpty {
@@ -366,51 +405,9 @@ public final class ResearchSessionController: ObservableObject {
         var anySuccess = false
         var lastFailureMessage: String?
         for query in approved {
-            let request = CourtListenerSearchRequest(
-                query: query.text,
-                highlight: true,
-                courtIDs: JurisdictionCatalog.courtFilterIDs(from: query.courtFilter),
-                dateFiledAfter: Self.courtListenerDateString(query.dateFiledAfter),
-                dateFiledBefore: Self.courtListenerDateString(query.dateFiledBefore)
-            )
-            let requestMeta = requestMeta(request)
-            try? store.research.updateQueryExecution(queryID: query.id, status: .running, executedAt: nil)
-            do {
-                let response = try await courtListenerClient.searchOpinions(
-                    request,
-                    relatedResearchSessionID: sessionID
-                )
-                for dto in response.results {
-                    _ = try? store.research.insertResult(makeResultRecord(dto, queryID: query.id))
-                }
-                if response.droppedResultCount > 0 {
-                    // Best-effort decoding silently skipped malformed results — make
-                    // the partial-page loss visible rather than hidden.
-                    try? store.diagnostics.recordDiagnosticEvent(
-                        DiagnosticEventRecord(
-                            severity: "warning",
-                            category: "research",
-                            message: "\(response.droppedResultCount) CourtListener result(s) were skipped because their format could not be decoded.",
-                            technicalDetails: "Query fingerprint: \(Self.fingerprint(query.text))"
-                        )
-                    )
-                }
-                try? store.research.updateQueryExecution(
-                    queryID: query.id, status: .completed,
-                    resultCount: response.count, nextURL: response.next, executedAt: Date(),
-                    requestMetadataJSON: requestMeta,
-                    responseMetadataJSON: Self.responseMeta(response)
-                )
-                anySuccess = true
-            } catch {
-                try? store.research.updateQueryExecution(
-                    queryID: query.id, status: .failed, executedAt: Date(),
-                    requestMetadataJSON: requestMeta,
-                    errorMessage: error.localizedDescription
-                )
-                recordNetworkDiagnostic(error, queryText: query.text)
-                lastFailureMessage = error.localizedDescription
-            }
+            let outcome = await executeQuery(query, sessionID: sessionID)
+            if outcome.success { anySuccess = true }
+            if let message = outcome.failureMessage { lastFailureMessage = message }
         }
 
         let finalStatus: ResearchSessionStatus = anySuccess ? .resultsReady : .failed
@@ -433,6 +430,91 @@ public final class ResearchSessionController: ObservableObject {
         isRunning = false
         loadSessions()
         reloadOpenSession()
+        prefetchTopOpinions()
+    }
+
+    /// Runs one query through CourtListener, storing its results and execution status.
+    /// Shared by the batch run and single-query re-runs. Returns whether it succeeded
+    /// and any failure message.
+    private func executeQuery(
+        _ query: SessionQuery, sessionID: String
+    ) async -> (success: Bool, failureMessage: String?) {
+        let request = CourtListenerSearchRequest(
+            query: query.text,
+            highlight: true,
+            courtIDs: JurisdictionCatalog.courtFilterIDs(from: query.courtFilter),
+            dateFiledAfter: Self.courtListenerDateString(query.dateFiledAfter),
+            dateFiledBefore: Self.courtListenerDateString(query.dateFiledBefore)
+        )
+        let requestMeta = requestMeta(request)
+        try? store.research.updateQueryExecution(queryID: query.id, status: .running, executedAt: nil)
+        do {
+            let response = try await courtListenerClient.searchOpinions(request, relatedResearchSessionID: sessionID)
+            for dto in response.results {
+                _ = try? store.research.insertResult(makeResultRecord(dto, queryID: query.id))
+            }
+            if response.droppedResultCount > 0 {
+                // Best-effort decoding silently skipped malformed results — make the
+                // partial-page loss visible rather than hidden.
+                try? store.diagnostics.recordDiagnosticEvent(
+                    DiagnosticEventRecord(
+                        severity: "warning",
+                        category: "research",
+                        message: "\(response.droppedResultCount) CourtListener result(s) were skipped because their format could not be decoded.",
+                        technicalDetails: "Query fingerprint: \(Self.fingerprint(query.text))"
+                    )
+                )
+            }
+            try? store.research.updateQueryExecution(
+                queryID: query.id, status: .completed,
+                resultCount: response.count, nextURL: response.next, executedAt: Date(),
+                requestMetadataJSON: requestMeta,
+                responseMetadataJSON: Self.responseMeta(response)
+            )
+            return (true, nil)
+        } catch {
+            try? store.research.updateQueryExecution(
+                queryID: query.id, status: .failed, executedAt: Date(),
+                requestMetadataJSON: requestMeta,
+                errorMessage: error.localizedDescription
+            )
+            recordNetworkDiagnostic(error, queryText: query.text)
+            return (false, error.localizedDescription)
+        }
+    }
+
+    /// Edits a saved query's text from the results view (review now lives with the
+    /// results, not a pre-run gate). Resets the query to approved and clears its prior
+    /// results so a re-run replaces them rather than mixing old and new.
+    public func updateSessionQueryText(queryID: String, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try? store.research.updateQueryText(queryID: queryID, text: trimmed)
+        try? store.research.deleteResults(queryID: queryID)
+        reloadOpenSession()
+    }
+
+    /// Re-runs a single (typically just-edited) query, replacing its stored results.
+    public func rerunQuery(queryID: String) async {
+        guard let sessionID = openSessionID, !isRunning,
+              let query = sessionQueries.first(where: { $0.id == queryID }) else { return }
+        guard hasCourtListenerToken else {
+            runMessage = "Add a CourtListener API token in Settings to run searches."
+            return
+        }
+        isRunning = true
+        runMessage = nil
+        try? store.research.deleteResults(queryID: queryID)
+        let outcome = await executeQuery(query, sessionID: sessionID)
+        if outcome.success {
+            try? store.research.updateSessionStatus(sessionID: sessionID, status: .resultsReady)
+        } else {
+            runMessage = outcome.failureMessage
+        }
+        isRunning = false
+        loadSessions()
+        reloadOpenSession()
+        prefetchTopOpinions()
     }
 
     /// Fetches the next page for a completed query using its stored cursor URL

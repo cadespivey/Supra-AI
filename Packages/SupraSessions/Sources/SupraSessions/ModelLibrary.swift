@@ -32,6 +32,10 @@ public final class ModelLibrary: ObservableObject {
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
     private var hasPersistedRoleAssignments: Bool
+    /// Whether the runtime is mid-generation. Speculative pre-warms consult this so
+    /// they never evict the model out from under an in-flight generation; wired by the
+    /// app to the runtime status (defaults to "not generating" for tests/headless).
+    public var isRuntimeGenerating: () -> Bool = { false }
 
     public init(store: SupraStore, runtimeClient: any RuntimeClientProtocol) {
         self.store = store
@@ -163,6 +167,26 @@ public final class ModelLibrary: ObservableObject {
         try? store.appSettings.setSetting(
             Self.forcedChatModelSettingsKey, value: modelID?.rawValue.uuidString ?? ""
         )
+    }
+
+    /// Fire-and-forget warm of the model a plain chat message would use — the pinned
+    /// model, else the Autoselect legal-reasoning model — so the first message (or the
+    /// message right after a model switch) doesn't wait on the multi-second load. A
+    /// no-op when that model is already loaded, or a load is already in flight.
+    public func prewarmChatModel(configuration: LegalModelConfiguration = .fromEnvironment()) {
+        if case .loading = loadState { return }
+        if isRuntimeGenerating() { return }
+        Task { _ = await ensureLoadedChatModelID(for: .legalReasoning, configuration: configuration) }
+    }
+
+    /// Fire-and-forget warm of a role's assigned model (drafting, high-quality
+    /// reasoning, etc.) ahead of an operation that will need it — call it when the
+    /// feature's screen opens so the load hides behind the user's setup time. Ignores
+    /// the chat forced-pin (that's chat-only). No-op while a load is in flight.
+    public func prewarm(role: ModelRole, configuration: LegalModelConfiguration = .fromEnvironment()) {
+        if case .loading = loadState { return }
+        if isRuntimeGenerating() { return }
+        Task { _ = await ensureLoadedRoutedModelID(for: role, configuration: configuration) }
     }
 
     /// Chat model resolution honoring the user's forced-model pin: if a model is
@@ -444,12 +468,33 @@ public final class ModelLibrary: ObservableObject {
             switch response.status {
             case .loaded:
                 loadState = .loaded(modelID: record.id)
+                logLoadTiming(modelName: record.displayName, modelID: record.id, metrics: response.metrics)
             case .failed:
                 loadState = .failed(message: Self.failureMessage(response.error))
             }
         } catch {
             loadState = .failed(message: error.localizedDescription)
         }
+    }
+
+    /// Records a load's duration as a `performance` diagnostic so the Diagnostics tab
+    /// can show where the waits are (and confirm pre-warming hides them). Best-effort.
+    private func logLoadTiming(modelName: String, modelID: String, metrics: RuntimeMetrics?) {
+        guard let ms = metrics?.loadTimeMs else { return }
+        try? store.diagnostics.recordDiagnosticEvent(
+            DiagnosticEventRecord(
+                severity: "info",
+                category: "performance",
+                message: "Loaded \(modelName) in \(Self.formatMilliseconds(ms))",
+                technicalDetails: metrics?.peakMemoryMb.map { "Peak memory ~\($0) MB" },
+                modelID: modelID
+            )
+        )
+    }
+
+    /// "820 ms" / "4.2 s" — compact, human-readable durations for the timings readout.
+    static func formatMilliseconds(_ ms: Int) -> String {
+        ms < 1000 ? "\(ms) ms" : String(format: "%.1f s", Double(ms) / 1000)
     }
 
     /// Surfaces the runtime's technical detail (the real cause) alongside the

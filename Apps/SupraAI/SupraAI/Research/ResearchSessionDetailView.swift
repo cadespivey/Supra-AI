@@ -143,11 +143,7 @@ struct ResearchSessionDetailView: View {
                             .disabled(controller.isRunning)
                     }
                 } header: {
-                    HStack {
-                        Text(query.text).font(.supraHeadline)
-                        Spacer()
-                        Text(statusLabel(query)).font(.supraCaption).foregroundStyle(.secondary)
-                    }
+                    EditableQueryHeader(controller: controller, query: query)
                 }
             }
         }
@@ -181,11 +177,6 @@ struct ResearchSessionDetailView: View {
         .padding(.vertical, 2)
     }
 
-    private func statusLabel(_ query: ResearchSessionController.SessionQuery) -> String {
-        if let count = query.resultCount { return "\(query.status) · \(count)" }
-        return query.status
-    }
-
     private func emptyText(for query: ResearchSessionController.SessionQuery) -> String {
         switch query.status {
         case "completed": "No results."
@@ -193,6 +184,63 @@ struct ResearchSessionDetailView: View {
         case "running": "Running…"
         default: "Not run yet."
         }
+    }
+}
+
+/// The query row header in the results list. Review now lives with the results
+/// (not a pre-run gate in the planner), so this shows the query + its run status and
+/// lets the user edit the query text and re-run it in place.
+private struct EditableQueryHeader: View {
+    @ObservedObject var controller: ResearchSessionController
+    let query: ResearchSessionController.SessionQuery
+
+    @State private var isEditing = false
+    @State private var text = ""
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if isEditing {
+                TextField("Query", text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(commit)
+                    .accessibilityIdentifier("session.query.edit")
+                Button("Save & Re-run", action: commit)
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || controller.isRunning)
+                Button("Cancel") { isEditing = false }
+                    .buttonStyle(.plain)
+            } else {
+                Text(query.text).font(.supraHeadline)
+                Spacer()
+                Text(statusLabel).font(.supraCaption).foregroundStyle(.secondary)
+                Button { text = query.text; isEditing = true } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.plain)
+                .help("Edit this query")
+                .accessibilityIdentifier("session.query.editButton")
+                Button { Task { await controller.rerunQuery(queryID: query.id) } } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .disabled(controller.isRunning || !controller.hasCourtListenerToken)
+                .help("Re-run this query")
+            }
+        }
+    }
+
+    /// Commits the edited text (which resets the query to approved and clears its old
+    /// results) and immediately re-runs it.
+    private func commit() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        controller.updateSessionQueryText(queryID: query.id, text: trimmed)
+        isEditing = false
+        Task { await controller.rerunQuery(queryID: query.id) }
+    }
+
+    private var statusLabel: String {
+        if let count = query.resultCount { return "\(query.status) · \(count)" }
+        return query.status
     }
 }
 

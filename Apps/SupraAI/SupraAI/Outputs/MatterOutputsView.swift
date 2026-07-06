@@ -199,6 +199,9 @@ private struct NewOutputSheet: View {
             if selectedModelID.isEmpty || !library.models.contains(where: { $0.id == selectedModelID }) {
                 selectedModelID = routeModel?.id ?? library.models.first?.id ?? ""
             }
+            // Warm the routed model (structured outputs often use the high-quality
+            // reasoning role) while the user fills the form.
+            if !AppEnvironment.isUITestMode, let role = route?.role { library.prewarm(role: role) }
         }
         // Re-default when the output type changes the routed model (only if the user
         // hasn't picked something still valid).

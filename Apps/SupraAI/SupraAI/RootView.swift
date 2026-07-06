@@ -4,7 +4,6 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var environment: AppEnvironment
-    @State private var showSplash = true
 
     var body: some View {
         ZStack {
@@ -14,7 +13,11 @@ struct RootView: View {
             // on top of a still-mounted shell let the sidebar/chrome bleed through.
             // Swapping (shell absent until the splash dismisses) removes the vibrancy
             // source entirely; the transitions still cross-fade the reveal.
-            if !showSplash {
+            //
+            // The splash-visible flag lives on AppEnvironment (not @State here) so it
+            // survives a window close/reopen while the process keeps running — the
+            // splash then shows only on a true cold launch, not every Dock re-open.
+            if !environment.isShowingSplash {
                 if environment.shouldShowOnboarding {
                     FirstRunOnboardingView(
                         library: environment.modelLibrary,
@@ -30,17 +33,17 @@ struct RootView: View {
                 }
             }
 
-            if showSplash {
+            if environment.isShowingSplash {
                 SplashView()
                     .transition(.opacity)
                     .zIndex(1)
                     .task {
                         try? await Task.sleep(nanoseconds: 1_600_000_000)
-                        withAnimation(.easeOut(duration: 0.45)) { showSplash = false }
+                        withAnimation(.easeOut(duration: 0.45)) { environment.isShowingSplash = false }
                     }
             }
         }
-        .background(showSplash ? BrandColors.navy : Color.clear)
+        .background(environment.isShowingSplash ? BrandColors.navy : Color.clear)
         .task { await environment.bootstrap() }
     }
 }

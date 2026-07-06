@@ -140,6 +140,39 @@ public final class ResearchRepository: @unchecked Sendable {
         }
     }
 
+    /// Edits a saved query's text (results-view review). Resets its run state to
+    /// `approved` and clears the prior run's counters so a re-run replaces, rather
+    /// than layers on top of, the old outcome.
+    public func updateQueryText(queryID: String, text: String) throws {
+        let text = try Self.requireNonEmpty(text, fieldName: "query_text")
+        try writer.write { db in
+            try db.execute(
+                sql: """
+                UPDATE research_queries
+                SET query_text = ?,
+                    status = ?,
+                    result_count = NULL,
+                    next_url = NULL,
+                    error_message = NULL,
+                    executed_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                arguments: [text, ResearchQueryStatus.approved.rawValue, Date(), queryID]
+            )
+        }
+    }
+
+    /// Clears a query's stored results so a re-run starts clean.
+    public func deleteResults(queryID: String) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "DELETE FROM research_results WHERE research_query_id = ?",
+                arguments: [queryID]
+            )
+        }
+    }
+
     public func updateResultReviewState(
         resultID: String,
         reviewState: ResearchResultReviewState

@@ -67,14 +67,10 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         XCTAssertTrue(issue.waitForExistence(timeout: 5), "Issue field not found")
         pasteText("Whether the NDA covers post-termination use of source code.", into: issue, app: app)
 
-        // Generate with no model loaded — this reveals the manual query editor.
-        app.buttons["planner.generate"]
-            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .click()
-
-        // Add an approved query (Add Query defaults to approved = true) and type it.
+        // With no model assigned the manual query editor is shown automatically
+        // (no separate Generate step). Add an approved query and type it.
         let addQuery = app.buttons["planner.addQuery"]
-        XCTAssertTrue(addQuery.waitForExistence(timeout: 10), "Query editor did not appear after Generate")
+        XCTAssertTrue(addQuery.waitForExistence(timeout: 10), "Manual query editor did not appear when no model is assigned")
         addQuery.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         let query = app.textFields["planner.query"]
@@ -82,10 +78,11 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         app.sheets.firstMatch.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -420)
         pasteText("trade secret nda source code", into: query, app: app)
 
-        // Save the plan → creates a research session.
-        let save = app.buttons["planner.save"]
+        // Save the plan → creates a research session. With no model the primary action
+        // reads "Save" (it becomes "Generate + Save" once a model is assigned).
+        let save = app.buttons["planner.generateSave"]
         XCTAssertTrue(save.waitForExistence(timeout: 5))
-        XCTAssertTrue(save.isEnabled, "Save Plan should enable once an approved query has text")
+        XCTAssertTrue(save.isEnabled, "Save should enable once an approved query has text")
         save.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         // The new session appears in the Research list.
@@ -128,11 +125,12 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         )
         title.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
+        // Jurisdiction is now a segmented picker and the court-scope control a plain
+        // toggle — neither joins the text-field focus chain, so Tab runs
+        // title → issue → preferred → excluded → date range.
         waitForPlannerFocus("planner.title", in: app)
         pressTab(in: app)
         waitForPlannerFocus("planner.issue", in: app)
-        pressTab(in: app)
-        waitForPlannerFocus("planner.jurisdiction", in: app)
         pressTab(in: app)
         waitForPlannerFocus("planner.preferredCourts", in: app)
         pressTab(in: app)

@@ -93,7 +93,12 @@ struct MatterWorkspaceView: View {
             }
             Spacer()
             if controller.draftingController != nil {
-                Button { showDraftSheet = true } label: { Label("Draft", systemImage: "doc.badge.plus") }
+                Button {
+                    // Warm the drafting model while the user picks a type and fills the
+                    // form, so generation doesn't wait on the (role-switch) load.
+                    if !AppEnvironment.isUITestMode { library.prewarm(role: .drafting) }
+                    showDraftSheet = true
+                } label: { Label("Draft", systemImage: "doc.badge.plus") }
                     .buttonStyle(.ghost)
             }
             Button { showEditor = true } label: { Label("Edit", systemImage: "pencil") }

@@ -1,3 +1,4 @@
+import AppKit
 import SupraDesignSystem
 import SupraSessions
 import SwiftUI
@@ -57,6 +58,13 @@ struct MainShellView: View {
             set: { newValue in
                 selection = newValue
                 if case let .matter(id) = newValue {
+                    // Clear any control that still holds keyboard focus — chiefly the
+                    // Global Chats composer, which auto-focuses at launch. Left focused,
+                    // its text-field edit session lingers into the matter workspace and
+                    // eats the first click on a matter tab (finalizing the edit instead
+                    // of switching tabs); the second click then works. Dropping first
+                    // responder here means the first tab click lands on the first try.
+                    NSApp.keyWindow?.makeFirstResponder(nil)
                     Task { @MainActor in
                         environment.mattersController.select(matterID: id)
                     }
@@ -129,7 +137,8 @@ struct MainShellView: View {
             ScratchPadView(
                 controller: environment.scratchPadController,
                 billing: environment.billingDraftController,
-                billingSettings: environment.billingSettingsController
+                billingSettings: environment.billingSettingsController,
+                library: environment.modelLibrary
             )
         case .models:
             ModelsView(

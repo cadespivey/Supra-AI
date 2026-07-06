@@ -282,6 +282,40 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
         reloadLocalState()
     }
 
+    private var embeddingWarmInFlight = false
+    private var warmedEmbeddingModelID: String?
+
+    /// Fire-and-forget warm of the selected embedding model into its (separate) runtime
+    /// slot, so the first Document Q&A / semantic search / import indexing doesn't wait
+    /// on the load. Runs quietly — no busy/verify state, no audit — and only once per
+    /// model per session (the embedding slot is independent of the chat model, so this
+    /// never evicts it). No-op unless a verified embedding model is selected.
+    public func prewarmEmbeddingModel() {
+        guard !isBusy, !embeddingWarmInFlight,
+              warmedEmbeddingModelID != selectedEmbeddingModel?.id,
+              let model = selectedEmbeddingModel,
+              embeddingTestPassed,
+              let path = model.localPath, !path.isEmpty else { return }
+        embeddingWarmInFlight = true
+        warmedEmbeddingModelID = model.id
+        let request = LoadEmbeddingModelRequest(
+            embeddingModelID: DocumentEmbeddingModelID(UUID(uuidString: model.id) ?? UUID()),
+            modelPath: path,
+            displayName: model.displayName,
+            revision: model.revision,
+            expectedDimension: model.dimension > 0 ? model.dimension : nil,
+            modelBookmark: try? URL(fileURLWithPath: path, isDirectory: true).bookmarkData(options: [])
+        )
+        Task {
+            defer { embeddingWarmInFlight = false }
+            do {
+                _ = try await runtimeClient.loadEmbeddingModel(request)
+            } catch {
+                warmedEmbeddingModelID = nil // allow a retry on the next trigger
+            }
+        }
+    }
+
     /// Kept for compatibility with older callers. Setup completion is now automatic.
     @discardableResult
     public func completeSetup() -> Bool {

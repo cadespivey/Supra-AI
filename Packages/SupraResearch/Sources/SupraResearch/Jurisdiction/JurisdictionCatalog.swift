@@ -152,11 +152,47 @@ public struct JurisdictionCatalog: Sendable {
 
     public let options: [JurisdictionOption]
     private let optionByID: [String: JurisdictionOption]
+    /// The per-state jurisdiction aggregates (one per state/territory), sorted by name —
+    /// the "State" side of a segmented jurisdiction picker.
+    public let stateJurisdictions: [JurisdictionOption]
+    /// SCOTUS and the U.S. Courts of Appeals, in hierarchy order — the "Federal" side of
+    /// a segmented picker. Capped at appellate level: trial/district/bankruptcy courts
+    /// aren't precedential, so they're not useful research-scope targets.
+    public let federalAppellateCourts: [JurisdictionOption]
+    /// Per-option normalized search keys, computed ONCE at init. `normalized()` is
+    /// regex-heavy, and `search`/`score` used to re-normalize every option's fields on
+    /// every keystroke (across ~2,900 options, several times per render) — the source
+    /// of the typing lag/pinwheel. Precomputing here makes each search a plain
+    /// substring scan over cached strings.
+    private let searchIndex: [IndexEntry]
+
+    private struct IndexEntry {
+        let option: JurisdictionOption
+        let searchable: String
+        let display: String
+        let court: String
+        let jurisdiction: String
+    }
 
     public init(text: String? = nil) {
         let parsed = Self.parse(text ?? Self.loadBundledCourtList())
         self.options = parsed
         self.optionByID = Dictionary(uniqueKeysWithValues: parsed.map { ($0.id, $0) })
+        self.searchIndex = parsed.map { option in
+            IndexEntry(
+                option: option,
+                searchable: Self.normalized(option.searchableText),
+                display: Self.normalized(option.displayName),
+                court: Self.normalized(option.courtName),
+                jurisdiction: Self.normalized(option.jurisdictionName)
+            )
+        }
+        self.stateJurisdictions = parsed
+            .filter { $0.system == .state && $0.level == .jurisdiction }
+            .sorted { $0.jurisdictionName.localizedStandardCompare($1.jurisdictionName) == .orderedAscending }
+        // Parse order is the natural hierarchy (SCOTUS, then the circuits), so preserve it.
+        self.federalAppellateCourts = parsed
+            .filter { $0.system == .federal && ($0.level == .supreme || $0.level == .federalAppellate) }
     }
 
     public func option(id: String) -> JurisdictionOption? {
@@ -169,17 +205,16 @@ public struct JurisdictionCatalog: Sendable {
             return Array(options.prefix(limit))
         }
         let terms = normalized.split(separator: " ").map(String.init)
-        let matches = options.filter { option in
-            let haystack = Self.normalized(option.searchableText)
-            return terms.allSatisfy { haystack.contains($0) }
+        let matches = searchIndex.filter { entry in
+            terms.allSatisfy { entry.searchable.contains($0) }
         }
         .sorted { lhs, rhs in
             let left = score(lhs, query: normalized)
             let right = score(rhs, query: normalized)
             if left != right { return left > right }
-            return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+            return lhs.option.displayName.localizedStandardCompare(rhs.option.displayName) == .orderedAscending
         }
-        return Array(matches.prefix(limit))
+        return matches.prefix(limit).map(\.option)
     }
 
     public func bestMatch(jurisdiction: String, court: String? = nil) -> JurisdictionOption? {
@@ -372,15 +407,14 @@ public struct JurisdictionCatalog: Sendable {
         return nil
     }
 
-    private func score(_ option: JurisdictionOption, query: String) -> Int {
-        let display = Self.normalized(option.displayName)
-        let court = Self.normalized(option.courtName)
-        let jurisdiction = Self.normalized(option.jurisdictionName)
-        if display == query || court == query || jurisdiction == query { return 100 }
-        if display.hasPrefix(query) || court.hasPrefix(query) { return 80 }
-        if option.level == .jurisdiction { return 50 }
-        if option.level == .supreme || option.level == .intermediateAppellate || option.level == .federalAppellate { return 40 }
-        return 10
+    private func score(_ entry: IndexEntry, query: String) -> Int {
+        if entry.display == query || entry.court == query || entry.jurisdiction == query { return 100 }
+        if entry.display.hasPrefix(query) || entry.court.hasPrefix(query) { return 80 }
+        switch entry.option.level {
+        case .jurisdiction: return 50
+        case .supreme, .intermediateAppellate, .federalAppellate: return 40
+        default: return 10
+        }
     }
 }
 

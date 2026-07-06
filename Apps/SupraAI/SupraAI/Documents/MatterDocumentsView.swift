@@ -668,7 +668,12 @@ struct DocumentQASheet: View {
                 .disabled(qa.isGenerating || routeModel == nil || question.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .frame(minWidth: 520, idealWidth: 620, maxWidth: .infinity, minHeight: 460, idealHeight: 600, maxHeight: .infinity)
-        .onAppear { library.refresh() }
+        .onAppear {
+            library.refresh()
+            // Warm the model this Q&A / chronology will use while the user types the
+            // question, so generation doesn't wait on the load.
+            if !AppEnvironment.isUITestMode, let role = route?.role { library.prewarm(role: role) }
+        }
     }
 
     private var qaContent: some View {

@@ -10,6 +10,7 @@ struct ScratchPadView: View {
     @ObservedObject var controller: ScratchPadController
     @ObservedObject var billing: BillingDraftController
     @ObservedObject var billingSettings: BillingSettingsController
+    @ObservedObject var library: ModelLibrary
 
     enum Tab: Hashable { case note, draft }
     @State private var tab: Tab = .note
@@ -40,6 +41,7 @@ struct ScratchPadView: View {
             case .draft:
                 BillingDraftView(
                     billing: billing,
+                    library: library,
                     dayID: controller.currentDay?.id,
                     isLocked: controller.isCurrentDayLocked
                 )

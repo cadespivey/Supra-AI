@@ -9,6 +9,7 @@ import SwiftUI
 /// see the day reconciliation, regenerate (manual edits preserved), and export.
 struct BillingDraftView: View {
     @ObservedObject var billing: BillingDraftController
+    @ObservedObject var library: ModelLibrary
     let dayID: String?
     let isLocked: Bool
 
@@ -33,7 +34,12 @@ struct BillingDraftView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onAppear { billing.bind(dayID: dayID) }
+        .onAppear {
+            billing.bind(dayID: dayID)
+            // The billing draft tab is open → warm the drafting model so "Generate"
+            // doesn't wait on the (role-switch) load.
+            if !AppEnvironment.isUITestMode { library.prewarm(role: .drafting) }
+        }
         .onChange(of: dayID) { _, newID in billing.bind(dayID: newID) }
         .sheet(item: $editing) { line in
             EditLineSheet(line: line, codeSet: billing.codeSet(forLine: line)) { narrative, hours, task, activity in
