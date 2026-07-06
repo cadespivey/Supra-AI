@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.1.0] - 2026-07-05
+
+Faster research and chat: a rebuilt jurisdiction picker, a streamlined research
+planner, and proactive model loading that cuts the wait before results.
+
+### Added
+
+- **Segmented jurisdiction picker** — choose Federal or State and drill to the
+  court, capped at appellate levels (trial-court opinions aren't precedential).
+  Replaces the free-text search and folds the court-scoping choices in beside it.
+- **Speculative query generation** — the research planner drafts your CourtListener
+  queries while you type, so they're ready the moment you run the plan.
+- **Model pre-warming** — the app loads the model you're about to use ahead of time:
+  the chat model at launch and on model switch, the embedding model at launch, and
+  the drafting / Q&A / outputs / billing models when you open those screens.
+- **Editable, re-runnable queries** in the research results view.
+- **Recent Timings** in Diagnostics — model-load and generation latency, so you can
+  see the pre-warming at work.
+
+### Changed
+
+- **Research planner is now two clicks, not four** — Generate + Save (return to
+  Research) or Generate + Run (open the results). Query review moved into the
+  results view.
+- **Research searches run across all courts by default** — the jurisdiction still
+  shapes the query wording; a toggle restricts the search to the jurisdiction's
+  courts when you want it.
+- **Faster jurisdiction search** — the court catalog is indexed once at startup,
+  eliminating the typing lag.
+
+### Fixed
+
+- **Zero-results research sessions** — over-restrictive court filtering and
+  over-quoted queries could return nothing; both are corrected.
+- **Splash screen** now appears only on a true cold launch, not every time the
+  window is reopened.
+- **First click on a matter tab** is no longer swallowed right after opening the app.
+
 ## [2.0.1] - 2026-07-04
 
 Public government records land in the app: SEC filings, CFPB complaints, and NLRB
