@@ -376,12 +376,15 @@ public struct BodyStyle: Codable, Sendable, Equatable {
     public var firstLineIndentTwips: Int
     public var blankBreakIsSingleLine: Bool
     public var justify: Bool
+    /// Numbered-allegation glyph (§4.2 #25). Default `.numberDot` ⇒ "N." — today's literal.
+    public var numberFormat: NumberFormat
 
-    public init(lineSpacing: LineSpacing = .double, firstLineIndentTwips: Int = 720, blankBreakIsSingleLine: Bool = true, justify: Bool = true) {
+    public init(lineSpacing: LineSpacing = .double, firstLineIndentTwips: Int = 720, blankBreakIsSingleLine: Bool = true, justify: Bool = true, numberFormat: NumberFormat = .numberDot) {
         self.lineSpacing = lineSpacing
         self.firstLineIndentTwips = firstLineIndentTwips
         self.blankBreakIsSingleLine = blankBreakIsSingleLine
         self.justify = justify
+        self.numberFormat = numberFormat
     }
 }
 
@@ -393,6 +396,13 @@ public struct CaptionStyle: Codable, Sendable, Equatable {
     public var singleSpaced: Bool
     public var closingRuleEndsInSlash: Bool
     public var headerBoldCentered: Bool
+    // Lifted literals (§4.2 #8–13); defaults equal today's baked strings/geometry.
+    public var partySeparator: String        // #8
+    public var closingRuleGlyph: String      // #9
+    public var caseNumberLabel: String       // #10
+    public var divisionLabel: String         // #11
+    public var judgeLabel: String            // #12
+    public var designationIndentTwips: Int   // #13
 
     public init(
         tableWidthTwips: Int = 9360,
@@ -401,7 +411,13 @@ public struct CaptionStyle: Codable, Sendable, Equatable {
         cellMarginTwips: Int = 10,
         singleSpaced: Bool = true,
         closingRuleEndsInSlash: Bool = true,
-        headerBoldCentered: Bool = true
+        headerBoldCentered: Bool = true,
+        partySeparator: String = "v.",
+        closingRuleGlyph: String = "/",
+        caseNumberLabel: String = "CASE NO.: ",
+        divisionLabel: String = "DIVISION: ",
+        judgeLabel: String = "JUDGE: ",
+        designationIndentTwips: Int = 720
     ) {
         self.tableWidthTwips = tableWidthTwips
         self.leftCellWidthTwips = leftCellWidthTwips
@@ -410,14 +426,23 @@ public struct CaptionStyle: Codable, Sendable, Equatable {
         self.singleSpaced = singleSpaced
         self.closingRuleEndsInSlash = closingRuleEndsInSlash
         self.headerBoldCentered = headerBoldCentered
+        self.partySeparator = partySeparator
+        self.closingRuleGlyph = closingRuleGlyph
+        self.caseNumberLabel = caseNumberLabel
+        self.divisionLabel = divisionLabel
+        self.judgeLabel = judgeLabel
+        self.designationIndentTwips = designationIndentTwips
     }
 }
 
 public struct HeadingLadder: Codable, Sendable, Equatable {
     public var baseIndentTwips: Int
+    /// Point-heading space-after (§4.2 #29). Default 240 twips == today's literal.
+    public var spaceAfterTwips: Int
 
-    public init(baseIndentTwips: Int = 720) {
+    public init(baseIndentTwips: Int = 720, spaceAfterTwips: Int = 240) {
         self.baseIndentTwips = baseIndentTwips
+        self.spaceAfterTwips = spaceAfterTwips
     }
 }
 
@@ -425,11 +450,14 @@ public struct ESignatureStyle: Codable, Sendable, Equatable {
     public var italic: Bool
     public var underline: Bool
     public var underlineTabStopTwips: Int
+    /// E-signature mark (§4.2 #14). Default "/s/ " == today's literal.
+    public var mark: String
 
-    public init(italic: Bool = true, underline: Bool = true, underlineTabStopTwips: Int = 2880) {
+    public init(italic: Bool = true, underline: Bool = true, underlineTabStopTwips: Int = 2880, mark: String = "/s/ ") {
         self.italic = italic
         self.underline = underline
         self.underlineTabStopTwips = underlineTabStopTwips
+        self.mark = mark
     }
 }
 
@@ -439,13 +467,44 @@ public struct SignatureStyle: Codable, Sendable, Equatable {
     public var firmNameBoldCaps: Bool
     public var representationLineItalic: Bool
     public var eSignature: ESignatureStyle
+    // Lifted literals (§4.2 #15–21); defaults equal today's baked strings.
+    public var byPrefix: String                  // #15
+    public var submittedLabel: String            // #16
+    public var representationPrefix: String       // #17
+    public var barNumberLabel: String            // #18 ("" ⇒ today's no-label behavior)
+    public var phoneLabel: String                // #19
+    public var faxLabel: String                  // #20
+    public var emailLabel: String                // #21
+    public var emailLabelWithSecondary: String   // #21
 
-    public init(leftIndentTwips: Int = 4680, singleSpaced: Bool = true, firmNameBoldCaps: Bool = true, representationLineItalic: Bool = true, eSignature: ESignatureStyle = ESignatureStyle()) {
+    public init(
+        leftIndentTwips: Int = 4680,
+        singleSpaced: Bool = true,
+        firmNameBoldCaps: Bool = true,
+        representationLineItalic: Bool = true,
+        eSignature: ESignatureStyle = ESignatureStyle(),
+        byPrefix: String = "By: ",
+        submittedLabel: String = "Respectfully submitted: ",
+        representationPrefix: String = "Attorneys for ",
+        barNumberLabel: String = "",
+        phoneLabel: String = "Telephone: ",
+        faxLabel: String = "Facsimile: ",
+        emailLabel: String = "Primary E-Mail: ",
+        emailLabelWithSecondary: String = "Primary and Secondary E-Mail: "
+    ) {
         self.leftIndentTwips = leftIndentTwips
         self.singleSpaced = singleSpaced
         self.firmNameBoldCaps = firmNameBoldCaps
         self.representationLineItalic = representationLineItalic
         self.eSignature = eSignature
+        self.byPrefix = byPrefix
+        self.submittedLabel = submittedLabel
+        self.representationPrefix = representationPrefix
+        self.barNumberLabel = barNumberLabel
+        self.phoneLabel = phoneLabel
+        self.faxLabel = faxLabel
+        self.emailLabel = emailLabel
+        self.emailLabelWithSecondary = emailLabelWithSecondary
     }
 }
 
@@ -465,6 +524,12 @@ public struct CertificateStyle: Codable, Sendable, Equatable {
     public var counselLineItalic: Bool
     public var signOffNamePlainSentenceCase: Bool
     public var serviceMethodClause: ServiceMethodClause
+    // Lifted literals (§4.2 #22–24); defaults equal today's baked strings.
+    public var heading: String              // #22
+    public var attestationPrefix: String    // #23
+    public var attestationSuffix: String    // #23 (middle connective ", I " stays hardcoded)
+    /// Per-clause rewording (#24). Empty / missing key ⇒ built-in FL boilerplate (unchanged).
+    public var clauseText: [ServiceMethodClause: String]
 
     public init(
         headingCenteredBoldCaps: Bool = true,
@@ -473,7 +538,11 @@ public struct CertificateStyle: Codable, Sendable, Equatable {
         serviceListSingleSpaced: Bool = true,
         counselLineItalic: Bool = true,
         signOffNamePlainSentenceCase: Bool = true,
-        serviceMethodClause: ServiceMethodClause = .flEPortal
+        serviceMethodClause: ServiceMethodClause = .flEPortal,
+        heading: String = "CERTIFICATE OF SERVICE",
+        attestationPrefix: String = "I HEREBY CERTIFY that on ",
+        attestationSuffix: String = " to the following:",
+        clauseText: [ServiceMethodClause: String] = [:]
     ) {
         self.headingCenteredBoldCaps = headingCenteredBoldCaps
         self.bodySingleSpaced = bodySingleSpaced
@@ -482,6 +551,10 @@ public struct CertificateStyle: Codable, Sendable, Equatable {
         self.counselLineItalic = counselLineItalic
         self.signOffNamePlainSentenceCase = signOffNamePlainSentenceCase
         self.serviceMethodClause = serviceMethodClause
+        self.heading = heading
+        self.attestationPrefix = attestationPrefix
+        self.attestationSuffix = attestationSuffix
+        self.clauseText = clauseText
     }
 }
 
@@ -491,13 +564,20 @@ public struct LetterheadBlock: Codable, Sendable, Equatable {
     public var contactHalfPoints: Int
     public var separator: String
     public var bottomRule: Bool
+    // Lifted literals (§4.2 #1–3); defaults equal today's baked strings.
+    public var tagline: String        // #1
+    public var phoneLabel: String     // #2
+    public var faxLabel: String       // #3
 
-    public init(firmNameHalfPoints: Int = 32, taglineHalfPoints: Int = 20, contactHalfPoints: Int = 20, separator: String = " • ", bottomRule: Bool = true) {
+    public init(firmNameHalfPoints: Int = 32, taglineHalfPoints: Int = 20, contactHalfPoints: Int = 20, separator: String = " • ", bottomRule: Bool = true, tagline: String = "Attorneys at Law", phoneLabel: String = "Telephone: ", faxLabel: String = "Facsimile: ") {
         self.firmNameHalfPoints = firmNameHalfPoints
         self.taglineHalfPoints = taglineHalfPoints
         self.contactHalfPoints = contactHalfPoints
         self.separator = separator
         self.bottomRule = bottomRule
+        self.tagline = tagline
+        self.phoneLabel = phoneLabel
+        self.faxLabel = faxLabel
     }
 }
 
@@ -516,6 +596,12 @@ public struct LetterheadStyle: Codable, Sendable, Equatable {
     public var signatureIndentTwips: Int
     public var signatureGapLines: Int
     public var pageNumbers: Bool
+    // Lifted literals (§4.2 #4–7); defaults equal today's baked strings/geometry.
+    public var reLabel: String            // #4
+    public var reIndentTwips: Int         // #5
+    public var reHangingTwips: Int        // #5
+    public var enclosurePrefix: String    // #6
+    public var ccPrefix: String           // #7 (note double space)
 
     public init(
         headerBlock: LetterheadBlock = LetterheadBlock(),
@@ -526,7 +612,12 @@ public struct LetterheadStyle: Codable, Sendable, Equatable {
         closing: String = "Respectfully,",
         signatureIndentTwips: Int = 4680,
         signatureGapLines: Int = 2,
-        pageNumbers: Bool = false
+        pageNumbers: Bool = false,
+        reLabel: String = "RE:",
+        reIndentTwips: Int = 1440,
+        reHangingTwips: Int = 720,
+        enclosurePrefix: String = "Enclosure: ",
+        ccPrefix: String = "cc:  "
     ) {
         self.headerBlock = headerBlock
         self.bodyLineSpacing = bodyLineSpacing
@@ -537,6 +628,11 @@ public struct LetterheadStyle: Codable, Sendable, Equatable {
         self.signatureIndentTwips = signatureIndentTwips
         self.signatureGapLines = signatureGapLines
         self.pageNumbers = pageNumbers
+        self.reLabel = reLabel
+        self.reIndentTwips = reIndentTwips
+        self.reHangingTwips = reHangingTwips
+        self.enclosurePrefix = enclosurePrefix
+        self.ccPrefix = ccPrefix
     }
 }
 

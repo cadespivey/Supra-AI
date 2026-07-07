@@ -420,10 +420,10 @@ for a task to be DONE.
 | Task ID | Description | Gating Tests | Tests RED observed | Code done | Tests GREEN observed | Parity OK | Status |
 |---|---|---|---|---|---|---|---|
 | M1-T0 | Freeze pre-lift baseline goldens (notice/letter/motion) | (parity oracle) | n/a | ☐ | n/a | n/a | not started |
-| M1-T1 | `FirmStyleProfile` + `NumberFormat` (2 cases) DTO | T-CODEC-01..04 | ☐ | ☐ | ☐ | ☐ | not started |
-| M1-T4 | Add 29 style fields (defaults=literals) | T-DEFAULT-01 | ☐ | ☐ | ☐ | ☐ | not started |
-| M1-T2 | `resolved(over:)` merge (+bodyJustify) | T-RESOLVE-01, T-RESOLVE-02, T-BODY-04 | ☐ | ☐ | ☐ | ☐ | not started |
-| M1-T3 | `clampedToFloor()` (2.520(a)) | T-FLOOR-01..04 | ☐ | ☐ | ☐ | ☐ | not started |
+| M1-T1 | `FirmStyleProfile` + `NumberFormat` (2 cases) DTO | T-CODEC-01..04 | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
+| M1-T4 | Add 29 style fields (defaults=literals) | T-DEFAULT-01 | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
+| M1-T2 | `resolved(over:)` merge (+bodyJustify) | T-RESOLVE-01, T-RESOLVE-02, T-BODY-04³ | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
+| M1-T3 | `clampedToFloor()` (2.520(a)) | T-FLOOR-01..04 | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
 | M1-T5 | CourtFLRenderer wire-up | T-CAP-01..08, T-SIG-01..10, T-CERT-01..04, T-BODY-01..03, T-PARITY-01, T-PARITY-03 | ☐ | ☐ | ☐ | ☐ | not started |
 | M1-T6 | LetterheadRenderer wire-up (+bodyParagraphStyle) | T-LH-01..09, T-PARITY-02 | ☐ | ☐ | ☐ | ☐ | not started |
 | M1-T7 | Controller `effectiveStyle()` (internal) + inject raw `firmStyleProfile`; swap :160/:307 | T-CTRL-01..04 | ☐ | ☐ | ☐ | ☐ | not started |
@@ -434,6 +434,16 @@ for a task to be DONE.
 | M3-T3 | Review/confirm UI + preview determinism | T-PARSE-09 (+UI-manual) | ☐ | ☐ | ☐ | ☐ | not started |
 | M4-T1 | Enrich `AssistantVoiceProfile.registerNotes` | T-VOICE-01 (+T-VOICE-02 standing guard) | ☐ | ☐ | ☐ | ☐ | not started |
 
+> ¹ RED is *observable in git history*: the foundation tests were committed one commit **before**
+> the implementation, so `git checkout <tests-commit> && cd Packages/SupraDraftingCore && swift test`
+> fails to compile with the named undefined symbols (`FirmStyleProfile`, `resolved(over:)`,
+> `clampedToFloor`, `NumberFormat`, the new style members) — the recorded RED reason. The dev
+> environment has no Swift toolchain, so this observation is a human macOS step.
+> ² GREEN + Parity await the same macOS `swift test` run on the implementation commit.
+> ³ `T-BODY-04` (bodyJustify overlay) is authored with the M1-T5/T6 wire-proof suite
+> (`FirmStyleWireProofTests.swift`, next increment); the resolver + `bodyJustify` field it needs
+> already exist here, so its RED is the *renderer-suite compile* step, not this foundation commit.
+>
 > Legend: ☐ = pending human sign-off on macOS; **Parity OK** = `T-PARITY-01/02/03` re-run GREEN
 > after the task's code landed. A task moves to **done** only when every cell in its row is
 > checked (or `n/a`). `T-VOICE-02`'s "Tests RED observed" cell is `n/a (standing guard,
