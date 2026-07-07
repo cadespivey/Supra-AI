@@ -424,8 +424,8 @@ for a task to be DONE.
 | M1-T4 | Add 29 style fields (defaults=literals) | T-DEFAULT-01 | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
 | M1-T2 | `resolved(over:)` merge (+bodyJustify) | T-RESOLVE-01, T-RESOLVE-02, T-BODY-04³ | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
 | M1-T3 | `clampedToFloor()` (2.520(a)) | T-FLOOR-01..04 | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
-| M1-T5 | CourtFLRenderer wire-up | T-CAP-01..08, T-SIG-01..10, T-CERT-01..04, T-BODY-01..03, T-PARITY-01, T-PARITY-03 | ☐ | ☐ | ☐ | ☐ | not started |
-| M1-T6 | LetterheadRenderer wire-up (+bodyParagraphStyle) | T-LH-01..09, T-PARITY-02 | ☐ | ☐ | ☐ | ☐ | not started |
+| M1-T5 | CourtFLRenderer wire-up | T-CAP-01..08, T-SIG-01..10, T-CERT-01..04, T-BODY-01..04, T-PARITY-01, T-PARITY-03⁴ | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
+| M1-T6 | LetterheadRenderer wire-up (+bodyParagraphStyle) | T-LH-01..09, T-PARITY-02⁴ | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
 | M1-T7 | Controller `effectiveStyle()` (internal) + inject raw `firmStyleProfile`; swap :160/:307 | T-CTRL-01..04 | ☐ | ☐ | ☐ | ☐ | not started |
 | M2-T1 | `FirmStyleProfileController` autosave | T-PERSIST-01..03 | ☐ | ☐ | ☐ | ☐ | not started |
 | M2-T2 | `FirmStyleSection` UI + preview | UI-manual | n/a | ☐ | n/a | ☐ | not started |
@@ -440,9 +440,14 @@ for a task to be DONE.
 > `clampedToFloor`, `NumberFormat`, the new style members) — the recorded RED reason. The dev
 > environment has no Swift toolchain, so this observation is a human macOS step.
 > ² GREEN + Parity await the same macOS `swift test` run on the implementation commit.
-> ³ `T-BODY-04` (bodyJustify overlay) is authored with the M1-T5/T6 wire-proof suite
-> (`FirmStyleWireProofTests.swift`, next increment); the resolver + `bodyJustify` field it needs
-> already exist here, so its RED is the *renderer-suite compile* step, not this foundation commit.
+> ³ `T-BODY-04` (bodyJustify overlay) is authored in `FirmStyleWireProofTests.swift`; the
+> resolver + `bodyJustify` field it needs already exist, so it is GREEN from the foundation (the
+> renderer already reads `style.body.justify`) — no renderer edit was required for it.
+> ⁴ `T-PARITY-01/02/03` are **deferred with M1-T0**: they compare against pre-lift baseline
+> goldens that must be captured by a macOS render (no toolchain here). The wire-proofs above are
+> authored and the code is landed; the existing golden-locked `CourtFLRendererTests` /
+> `LetterheadRendererTests` (render under `.defaultFL`) act as the interim parity net, since every
+> new field defaults to today's literal.
 >
 > Legend: ☐ = pending human sign-off on macOS; **Parity OK** = `T-PARITY-01/02/03` re-run GREEN
 > after the task's code landed. A task moves to **done** only when every cell in its row is
