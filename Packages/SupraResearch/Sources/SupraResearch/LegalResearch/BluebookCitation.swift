@@ -245,13 +245,22 @@ public struct BluebookCitation: Sendable, Equatable {
         return nil
     }
 
-    private static func ordinal(_ number: Int) -> String {
-        switch number {
-        case 1: "1st"
-        case 2: "2d"
-        case 3: "3d"
-        default: "\(number)th"
+    /// Bluebook ordinal suffixes (Rule 6.2(b)): "1st", "2d", "3d", "4th"… — note the
+    /// bare "d" for 2 and 3 (never "2nd"/"3rd"), and the 11th/12th/13th teens
+    /// exception. Keyed off the last one/two digits so higher numbers read "21st",
+    /// "22d", "23d" rather than the naive "21th"/"22th"/"23th". Federal circuits only
+    /// reach 11 today, but the rule is general so the helper stays correct if a caller
+    /// ever formats a larger ordinal.
+    static func ordinal(_ number: Int) -> String {
+        let magnitude = abs(number)
+        let suffix: String
+        switch (magnitude % 100, magnitude % 10) {
+        case (11...13, _): suffix = "th"
+        case (_, 1): suffix = "st"
+        case (_, 2), (_, 3): suffix = "d"
+        default: suffix = "th"
         }
+        return "\(number)\(suffix)"
     }
 
     private static func ordinalNumber(fromWord word: String) -> Int? {
