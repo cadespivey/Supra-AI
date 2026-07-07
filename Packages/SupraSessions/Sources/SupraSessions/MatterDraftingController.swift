@@ -83,18 +83,32 @@ public final class MatterDraftingController: ObservableObject {
     /// Present when the app can call the on-device model — required for the LLM-backed
     /// kinds (`letterDemand`). The deterministic notice path works without it.
     private let runtimeClient: (any RuntimeClientProtocol)?
+    /// The firm's structural style overrides (letterhead/caption/signature/…), or nil to use the
+    /// house default. Injected as the raw value type; in the app, `FirmStyleProfileController`
+    /// (M2) supplies its `.profile` here. `nil` ⇒ output is byte-for-byte `.defaultFL`.
+    private let firmStyleProfile: FirmStyleProfile?
 
     public init(
         store: SupraStore,
         runtimeClient: (any RuntimeClientProtocol)? = nil,
         storage: DocumentStorage = .makeDefault(),
+        firmStyleProfile: FirmStyleProfile? = nil,
         pipelineFactory: (@Sendable () -> DraftPipeline)? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.storage = storage
+        self.firmStyleProfile = firmStyleProfile
         // Default: deterministic verifier + the court/letter renderers. Injectable for tests.
         self.pipelineFactory = pipelineFactory ?? { DraftPipeline.makeDefault() }
+    }
+
+    /// The effective house style sheet for this matter's drafts: the firm's overrides resolved
+    /// over `.defaultFL`, then clamped to the Fla. R. Jud. Admin. 2.520(a) floor so a firm can
+    /// never push below 12 pt / 1" margins. `internal` (reachable via `@testable`), not `private`.
+    /// With no `firmStyleProfile` set, this is exactly `.defaultFL` (invariant 5).
+    func effectiveStyle() -> HouseStyleSheet {
+        (firmStyleProfile ?? FirmStyleProfile()).resolved(over: .defaultFL).clampedToFloor()
     }
 
     // MARK: - Public entry point
@@ -157,7 +171,7 @@ public final class MatterDraftingController: ObservableObject {
         let pipeline = pipelineFactory()
         let result: DraftResult
         do {
-            result = try await pipeline.runNotice(inputs, profile: firm, style: .defaultFL)
+            result = try await pipeline.runNotice(inputs, profile: firm, style: effectiveStyle())
         } catch let error as SupraDraftingCore.DraftError {
             return .failure(.renderFailed(error.localizedDescription))
         } catch {
@@ -304,7 +318,7 @@ public final class MatterDraftingController: ObservableObject {
 
         let result: DraftResult
         do {
-            result = try await pipelineFactory().runLetter(inputs, generated: generated, profile: firm, style: .defaultFL)
+            result = try await pipelineFactory().runLetter(inputs, generated: generated, profile: firm, style: effectiveStyle())
         } catch let error as SupraDraftingCore.DraftError {
             return .failure(.renderFailed(error.localizedDescription))
         } catch {

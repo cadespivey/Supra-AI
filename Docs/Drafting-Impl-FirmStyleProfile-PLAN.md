@@ -426,7 +426,7 @@ for a task to be DONE.
 | M1-T3 | `clampedToFloor()` (2.520(a)) | T-FLOOR-01..04 | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
 | M1-T5 | CourtFLRenderer wire-up | T-CAP-01..08, T-SIG-01..10, T-CERT-01..04, T-BODY-01..04, T-PARITY-01, T-PARITY-03⁴ | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
 | M1-T6 | LetterheadRenderer wire-up (+bodyParagraphStyle) | T-LH-01..09, T-PARITY-02⁴ | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
-| M1-T7 | Controller `effectiveStyle()` (internal) + inject raw `firmStyleProfile`; swap :160/:307 | T-CTRL-01..04 | ☐ | ☐ | ☐ | ☐ | not started |
+| M1-T7 | Controller `effectiveStyle()` (internal) + inject raw `firmStyleProfile`; swap :160/:307 | T-CTRL-01..04 | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS |
 | M2-T1 | `FirmStyleProfileController` autosave | T-PERSIST-01..03 | ☐ | ☐ | ☐ | ☐ | not started |
 | M2-T2 | `FirmStyleSection` UI + preview | UI-manual | n/a | ☐ | n/a | ☐ | not started |
 | M3-T1 | `ExemplarKind` + extraction DTOs | (via T-PARSE-01 RED; DTOs precede parser) | ☐ | ☐ | ☐ | n/a | not started |
