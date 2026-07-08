@@ -301,7 +301,7 @@ public final class MatterDraftingController: ObservableObject {
 
         let firm = Self.firmProfile(from: profile, jurisdiction: matter.court ?? matter.jurisdiction)
         let facts = Self.letterFacts(from: input, claim: claim)
-        let voice = AssistantVoiceProfile(registerNotes: Self.toneRegister(input.tone))
+        let voice = AssistantVoiceProfile(registerNotes: Self.voiceRegister(tone: input.tone, profile: profile))
         let parts = LetterDemand.promptParts(facts: facts, profile: voice)
         let inputs = Self.letterInputs(from: input)
 
@@ -392,6 +392,30 @@ public final class MatterDraftingController: ObservableObject {
         case "measured": return "professional and measured, leaving room to resolve"
         default: return "firm but professional"
         }
+    }
+
+    /// The letter's tone/register cue, enriched from the attorney's saved writing-style surface
+    /// (SPEC §8, Track B). Prose voice ONLY — never facts, never structure; the enrichment rides
+    /// the same "match the register only" prompt line the canned phrase does. An unconfigured
+    /// profile (balanced formality/length, no notes) yields exactly the canned tone phrase, so
+    /// existing prompts are byte-for-byte unchanged (prompt parity). `internal` for @testable.
+    nonisolated static func voiceRegister(tone: String, profile: AssistantProfile) -> String {
+        var parts = [toneRegister(tone)]
+        switch profile.formality {
+        case .formal: parts.append("formal register")
+        case .plainSpoken: parts.append("plain-spoken, minimal legalese")
+        case .balanced: break
+        }
+        switch profile.length {
+        case .concise: parts.append("concise — no filler")
+        case .thorough: parts.append("thorough and complete")
+        case .balanced: break
+        }
+        let notes = profile.voiceNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !notes.isEmpty {
+            parts.append("the attorney's style notes: \(notes)")
+        }
+        return parts.joined(separator: "; ")
     }
 
     nonisolated private static func letterInputs(from input: LetterDraftInput) -> LetterDemand.Inputs {

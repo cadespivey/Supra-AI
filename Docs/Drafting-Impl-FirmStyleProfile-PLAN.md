@@ -432,7 +432,7 @@ for a task to be DONE.
 | M3-T1 | `ExemplarKind` + extraction DTOs | (via T-PARSE-01 RED; DTOs precede parser) | ☐ | ☐ | ☐ | n/a | not started |
 | M3-T2 | `FirmStyleExemplarParser` + guardrails (+needsOCR) | T-PARSE-01..08, T-PARSE-10 | ☐ | ☐ | ☐ | ☐ | not started |
 | M3-T3 | Review/confirm UI + preview determinism | T-PARSE-09 (+UI-manual) | ☐ | ☐ | ☐ | ☐ | not started |
-| M4-T1 | Enrich `AssistantVoiceProfile.registerNotes` | T-VOICE-01 (+T-VOICE-02 standing guard) | ☐ | ☐ | ☐ | ☐ | not started |
+| M4-T1 | Enrich `AssistantVoiceProfile.registerNotes` | T-VOICE-01 (+T-VOICE-02 standing guard) | ☐¹ | ☑ | ☐² | n/a | code done — awaiting macOS |
 
 > ¹ RED is *observable in git history*: the foundation tests were committed one commit **before**
 > the implementation, so `git checkout <tests-commit> && cd Packages/SupraDraftingCore && swift test`
