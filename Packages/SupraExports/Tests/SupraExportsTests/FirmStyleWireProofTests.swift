@@ -26,11 +26,12 @@ final class FirmStyleWireProofTests: XCTestCase {
     }
 
     private func signature(respectfullySubmitted: DateOnly? = nil,
+                           barNumber: String = "Florida Bar No. 100847",
                            secondary: [String] = ["litdocket@pearsonspecterlitt.example"]) -> SignatureBlockModel {
         SignatureBlockModel(
             respectfullySubmitted: respectfullySubmitted, firmName: "Pearson Specter Litt",
             signingAttorney: "Harvey Specter",
-            attorneys: [AttorneyLine(name: "Harvey Specter", barNumber: "Florida Bar No. 100847")],
+            attorneys: [AttorneyLine(name: "Harvey Specter", barNumber: barNumber)],
             office: OfficeBlock(street: "200 West Forsyth Street", suite: "Suite 1400",
                                 city: "Jacksonville", state: "Florida", zip: "32202",
                                 phone: "(904) 555-0142", fax: "(904) 555-0143"),
@@ -209,12 +210,24 @@ final class FirmStyleWireProofTests: XCTestCase {
         XCTAssertFalse(xml.contains(#"<w:t xml:space="preserve">Attorneys for Defendant</w:t>"#))
     }
 
-    // T-SIG-05 — barNumberLabel. The EXACT default run breaks when the prefix is prepended, so
-    // the absence assert is satisfiable (a loose substring would not be).
-    func testBarNumberLabelIsWired() throws {
-        let xml = try CourtFLRenderer().documentXML(noticeModel, style: style { $0.signatureBarNumberLabel = "Fla. Bar No. " })
-        XCTAssertTrue(xml.contains(#"<w:t xml:space="preserve">Fla. Bar No. Florida Bar No. 100847</w:t>"#))
-        XCTAssertFalse(xml.contains(#"<w:t xml:space="preserve">Florida Bar No. 100847</w:t>"#))
+    // T-SIG-05 (revised per PR #50 review) — the bar-number label applies ONLY to a BARE number.
+    // The notice assembler pre-labels the slot ("\(barLabel) \(barNumber)" ⇒
+    // "Florida Bar No. 100847"), so an unconditional prefix would duplicate the jurisdiction
+    // label ("Fla. Bar No. Florida Bar No. 100847"). RED: the pre-labeled render still carries
+    // the duplicated prefix.
+    func testBarNumberLabelAppliesOnlyToBareNumbers() throws {
+        // Pre-labeled slot (the real notice path): the style label must NOT double-prefix.
+        let labeled = try CourtFLRenderer().documentXML(noticeModel, style: style { $0.signatureBarNumberLabel = "Fla. Bar No. " })
+        XCTAssertTrue(labeled.contains(#"<w:t xml:space="preserve">Florida Bar No. 100847</w:t>"#))
+        XCTAssertFalse(labeled.contains("Fla. Bar No. Florida Bar No."))
+
+        // Bare-number slot: the label IS applied — the wire-proof for §4.2 #18.
+        let bareModel = DocumentModel(caption: captionModel(), title: "NOTICE OF APPEARANCE",
+                                      body: [.paragraph("PLEASE TAKE NOTICE that the undersigned attorney appears.")],
+                                      signature: signature(barNumber: "100847"), certificate: certificate())
+        let bare = try CourtFLRenderer().documentXML(bareModel, style: style { $0.signatureBarNumberLabel = "Fla. Bar No. " })
+        XCTAssertTrue(bare.contains(#"<w:t xml:space="preserve">Fla. Bar No. 100847</w:t>"#))
+        XCTAssertFalse(bare.contains(#"<w:t xml:space="preserve">100847</w:t>"#))
     }
 
     // T-SIG-06 — signature phone label.
