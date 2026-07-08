@@ -109,6 +109,25 @@ final class FirmStyleExemplarParserTests: XCTestCase {
         XCTAssertFalse(encoded.contains("John Q"))
     }
 
+    // T-PARSE-11 (PR #50 review) — a signer NAME inside the extracted e-signature mark must be
+    // rejected, not stored: "/s/ Jane Doe" carries no digits/@ so the generic label guard passes
+    // it, but storing it would render the exemplar's name before the real signer on every future
+    // signature (invariant 4). The mark gets a stricter guard; a clean sibling field survives.
+    // RED: candidate.signatureESignatureMark == "/s/ Jane Doe" (name accepted).
+    func testSignerNameInESignatureMarkIsRejected() async {
+        let sut = parser(replies: [#"{"eSignatureMark":"/s/ Jane Doe","byPrefix":"BY: "}"#])
+        let outcome = await sut.parse(kind: .signature, text: "BY: /s/ Jane Doe", needsOCR: false)
+        XCTAssertNil(outcome.candidate.signatureESignatureMark)      // name-bearing mark rejected
+        XCTAssertEqual(outcome.candidate.signatureByPrefix, "BY: ")  // clean sibling still captured
+    }
+
+    // T-PARSE-12 — real marks still pass the stricter mark guard exactly (trailing space kept).
+    func testPlainMarksSurviveTheMarkGuard() async {
+        let sut = parser(replies: [#"{"eSignatureMark":"s/ "}"#])
+        let outcome = await sut.parse(kind: .signature, text: "s/ Harvey Specter", needsOCR: false)
+        XCTAssertEqual(outcome.candidate.signatureESignatureMark, "s/ ")
+    }
+
     // T-PARSE-07 — empty extraction ⇒ "No text was found" message, no model call at all.
     func testEmptyExtractionShowsNoTextMessageNoCall() async {
         let box = PromptBox()
