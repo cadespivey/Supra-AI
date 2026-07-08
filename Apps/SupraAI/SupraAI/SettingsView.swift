@@ -13,12 +13,13 @@ struct SettingsView: View {
     @ObservedObject var update: SparkleUpdaterController
     @ObservedObject var billing: BillingSettingsController
     @ObservedObject var firmStyle: FirmStyleProfileController
+    let parseExemplar: @MainActor (ExemplarKind, URL) async -> ExemplarParseOutcome
 
     var body: some View {
         Form {
             AssistantProfileSection(profile: profile, billing: billing)
 
-            FirmStyleSection(firmStyle: firmStyle)
+            FirmStyleSection(firmStyle: firmStyle, parseExemplar: parseExemplar)
 
             ScratchPadBillingSection(billing: billing)
 
@@ -936,6 +937,21 @@ struct EmbeddingModelSetupView: View {
 /// (T-CTRL-01..05). The rendered .docx preview ships with M3-T3.
 private struct FirmStyleSection: View {
     @ObservedObject var firmStyle: FirmStyleProfileController
+    /// Resolves the drafting model and parses an exemplar into a candidate profile (M3).
+    let parseExemplar: @MainActor (ExemplarKind, URL) async -> ExemplarParseOutcome
+
+    @State private var exemplarKind: ExemplarKind = .letterhead
+    @State private var isImportingExemplar = false
+    @State private var isParsing = false
+    @State private var parseOutcome: ExemplarParseOutcome?
+
+    /// File types accepted for exemplars (same set the writing-sample importer handles).
+    private static let exemplarTypes: [UTType] = {
+        var types: [UTType] = [.pdf, .rtf, .plainText, .text]
+        if let docx = UTType("org.openxmlformats.wordprocessingml.document") { types.append(docx) }
+        if let doc = UTType("com.microsoft.word.doc") { types.append(doc) }
+        return types
+    }()
 
     /// Bridges an optional override to a text field: blank ⇄ nil (inherit the house default).
     private func text(_ keyPath: WritableKeyPath<FirmStyleProfile, String?>) -> Binding<String> {
@@ -1012,6 +1028,52 @@ private struct FirmStyleSection: View {
                 Text("Certificate of Service").font(.headline)
                 LabeledTextField(label: "Heading", text: text(\.certificateHeading), prompt: "CERTIFICATE OF SERVICE")
 
+                // Learn from an exemplar (M3): parsed ONCE into the reviewable fields below —
+                // the document's text never becomes prompt context and identity is never captured.
+                Text("Learn From an Exemplar").font(.headline)
+                Text("Upload a document that shows just your letterhead, caption, or signature block. The style labels are read out of it once for you to review — names, numbers, and addresses are never captured, and the document itself is not kept.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Picker("Element", selection: $exemplarKind) {
+                        Text("Letterhead").tag(ExemplarKind.letterhead)
+                        Text("Caption").tag(ExemplarKind.caption)
+                        Text("Signature block").tag(ExemplarKind.signature)
+                    }
+                    .frame(maxWidth: 260)
+                    Button(isParsing ? "Reading exemplar…" : "Upload exemplar…") {
+                        isImportingExemplar = true
+                    }
+                    .disabled(isParsing)
+                    Spacer()
+                    Button("Preview a sample filing…") { openPreview() }
+                }
+                if let outcome = parseOutcome {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let message = outcome.message {
+                            Text(message).font(.callout).foregroundStyle(.secondary)
+                        }
+                        if capturedFields.isEmpty {
+                            Text("No style fields were captured — set your choices manually above.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        } else {
+                            Text("Captured from the exemplar — review, then apply:").font(.callout)
+                            ForEach(capturedFields, id: \.label) { field in
+                                HStack {
+                                    Text(field.label).font(.callout).foregroundStyle(.secondary)
+                                    Text("\u{201C}\(field.value)\u{201D}").font(.system(.callout, design: .monospaced))
+                                }
+                            }
+                            HStack {
+                                Button("Apply to firm style") { apply(outcome.candidate) }
+                                Button("Discard") { parseOutcome = nil }
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+                }
+
                 if firmStyle.message != nil || hasOverrides {
                     HStack {
                         if let message = firmStyle.message {
@@ -1029,6 +1091,83 @@ private struct FirmStyleSection: View {
             .padding(.vertical, 4)
         } header: {
             Text("Firm Style")
+        }
+        .fileImporter(isPresented: $isImportingExemplar,
+                      allowedContentTypes: Self.exemplarTypes,
+                      allowsMultipleSelection: false) { result in
+            if case let .success(urls) = result, let url = urls.first {
+                Task {
+                    isParsing = true
+                    let accessed = url.startAccessingSecurityScopedResource()
+                    parseOutcome = await parseExemplar(exemplarKind, url)
+                    if accessed { url.stopAccessingSecurityScopedResource() }
+                    isParsing = false
+                }
+            }
+        }
+    }
+
+    /// The candidate's captured (non-nil) fields for the review list.
+    private var capturedFields: [(label: String, value: String)] {
+        guard let c = parseOutcome?.candidate else { return [] }
+        var rows: [(label: String, value: String)] = []
+        func add(_ label: String, _ value: String?) {
+            if let value { rows.append((label, value)) }
+        }
+        add("Tagline", c.letterheadTagline)
+        add("Letterhead phone label", c.letterheadPhoneLabel)
+        add("Letterhead fax label", c.letterheadFaxLabel)
+        add("RE: label", c.letterheadRELabel)
+        add("Enclosure prefix", c.letterheadEnclosurePrefix)
+        add("cc prefix", c.letterheadCCPrefix)
+        add("Party separator", c.captionPartySeparator)
+        add("Case number label", c.captionCaseNumberLabel)
+        add("Division label", c.captionDivisionLabel)
+        add("Judge label", c.captionJudgeLabel)
+        add("Signature prefix", c.signatureByPrefix)
+        add("E-signature mark", c.signatureESignatureMark)
+        add("Representation prefix", c.signatureRepresentationPrefix)
+        add("Bar number label", c.signatureBarNumberLabel)
+        add("Signature phone label", c.signaturePhoneLabel)
+        add("Signature fax label", c.signatureFaxLabel)
+        return rows
+    }
+
+    /// Confirm: merge only the fields the exemplar captured into the saved profile (one
+    /// assignment ⇒ one autosave via the controller's didSet), leaving unrelated overrides alone.
+    private func apply(_ candidate: FirmStyleProfile) {
+        var updated = firmStyle.profile
+        if let v = candidate.letterheadTagline { updated.letterheadTagline = v }
+        if let v = candidate.letterheadPhoneLabel { updated.letterheadPhoneLabel = v }
+        if let v = candidate.letterheadFaxLabel { updated.letterheadFaxLabel = v }
+        if let v = candidate.letterheadRELabel { updated.letterheadRELabel = v }
+        if let v = candidate.letterheadEnclosurePrefix { updated.letterheadEnclosurePrefix = v }
+        if let v = candidate.letterheadCCPrefix { updated.letterheadCCPrefix = v }
+        if let v = candidate.captionPartySeparator { updated.captionPartySeparator = v }
+        if let v = candidate.captionCaseNumberLabel { updated.captionCaseNumberLabel = v }
+        if let v = candidate.captionDivisionLabel { updated.captionDivisionLabel = v }
+        if let v = candidate.captionJudgeLabel { updated.captionJudgeLabel = v }
+        if let v = candidate.signatureByPrefix { updated.signatureByPrefix = v }
+        if let v = candidate.signatureESignatureMark { updated.signatureESignatureMark = v }
+        if let v = candidate.signatureRepresentationPrefix { updated.signatureRepresentationPrefix = v }
+        if let v = candidate.signatureBarNumberLabel { updated.signatureBarNumberLabel = v }
+        if let v = candidate.signaturePhoneLabel { updated.signaturePhoneLabel = v }
+        if let v = candidate.signatureFaxLabel { updated.signatureFaxLabel = v }
+        firmStyle.profile = updated
+        parseOutcome = nil
+    }
+
+    /// Renders the fictional sample notice under the current effective sheet and opens it.
+    private func openPreview() {
+        do {
+            let data = try firmStyle.previewDocx()
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("Firm-Style-Preview-\(UUID().uuidString)")
+                .appendingPathExtension("docx")
+            try data.write(to: url)
+            NSWorkspace.shared.open(url)
+        } catch {
+            firmStyle.message = "Couldn't render the preview. \(error.localizedDescription)"
         }
     }
 }

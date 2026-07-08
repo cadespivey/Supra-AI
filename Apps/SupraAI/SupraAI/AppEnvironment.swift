@@ -3,6 +3,7 @@ import Combine
 import Foundation
 import SupraCore
 import SupraDocuments
+import SupraDraftingCore
 import SupraNetworking
 import SupraResearch
 import SupraRuntimeClient
@@ -41,6 +42,10 @@ final class AppEnvironment: ObservableObject {
     let assistantProfileController: AssistantProfileController
     /// Firm structural style (Track A): letterhead/caption/signature wording + geometry.
     let firmStyleProfileController: FirmStyleProfileController
+    /// Resolves/loads the drafting model, then parses a firm-style exemplar document into a
+    /// candidate profile for the Settings review pane (M3). Fails soft with a message when no
+    /// drafting model is available.
+    let parseFirmStyleExemplar: @MainActor (ExemplarKind, URL) async -> ExemplarParseOutcome
     let sparkleUpdater: SparkleUpdaterController
     let mattersController: MattersController
     let recycleBinController: RecycleBinController
@@ -83,6 +88,19 @@ final class AppEnvironment: ObservableObject {
         // Firm structural style: autosaves to the store; MatterDraftingController reads the
         // persisted profile fresh at draft time via effectiveStyle(), so no threading is needed.
         self.firmStyleProfileController = FirmStyleProfileController(store: store)
+        // Exemplar parsing rides the drafting model route (same resolution as letter drafting).
+        self.parseFirmStyleExemplar = { kind, url in
+            let router = ModelRouter(configuration: .fromEnvironment())
+            switch await modelLibrary.ensureLoadedRoutedModelID(
+                for: router.route(for: .drafting).role, configuration: router.configuration
+            ) {
+            case let .success(loadedModelID):
+                return await FirmStyleExemplarParser(runtimeClient: runtimeClient, modelID: loadedModelID)
+                    .parse(kind: kind, fileURL: url)
+            case let .failure(issue):
+                return ExemplarParseOutcome(candidate: FirmStyleProfile(), message: issue.message)
+            }
+        }
         self.sparkleUpdater = SparkleUpdaterController()
         self.recycleBinController = RecycleBinController(store: store)
         self.scratchPadController = ScratchPadController(store: store)

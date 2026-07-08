@@ -431,7 +431,7 @@ for a task to be DONE.
 | M2-T2 | `FirmStyleSection` UI + preview | UI-manual (+T-CTRL-05 store-fallback) | ☐¹ | ☑ | ☐² | ☐² | code done — awaiting macOS build + click-through; rendered preview deferred to M3-T3 |
 | M3-T1 | `ExemplarKind` + extraction DTOs | (via T-PARSE-01 RED; DTOs precede parser) | ☐¹ | ☑ | ☐² | n/a | code done — awaiting macOS |
 | M3-T2 | `FirmStyleExemplarParser` + guardrails (+needsOCR) | T-PARSE-01..08, T-PARSE-10 | ☐¹ | ☑ | ☐² | n/a | code done — awaiting macOS |
-| M3-T3 | Review/confirm UI + preview determinism | T-PARSE-09 (+UI-manual) | ☐ | ☐ | ☐ | ☐ | not started |
+| M3-T3 | Review/confirm UI + preview determinism | T-PARSE-09 (+UI-manual) | ☐¹ | ☑ | ☐² | n/a | code done — awaiting macOS (preview determinism pinned at WML-content level; zip timestamps are ZIPFoundation's) |
 | M4-T1 | Enrich `AssistantVoiceProfile.registerNotes` | T-VOICE-01 (+T-VOICE-02 standing guard) | ☐¹ | ☑ | ☐² | n/a | code done — awaiting macOS |
 
 > ¹ RED is *observable in git history*: the foundation tests were committed one commit **before**
