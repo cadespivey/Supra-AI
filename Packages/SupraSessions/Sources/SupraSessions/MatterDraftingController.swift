@@ -106,9 +106,14 @@ public final class MatterDraftingController: ObservableObject {
     /// The effective house style sheet for this matter's drafts: the firm's overrides resolved
     /// over `.defaultFL`, then clamped to the Fla. R. Jud. Admin. 2.520(a) floor so a firm can
     /// never push below 12 pt / 1" margins. `internal` (reachable via `@testable`), not `private`.
-    /// With no `firmStyleProfile` set, this is exactly `.defaultFL` (invariant 5).
+    ///
+    /// Precedence: an injected `firmStyleProfile` (tests / explicit override) wins; otherwise the
+    /// profile persisted by `FirmStyleProfileController` is read FRESH from the store — the same
+    /// read-at-draft-time pattern `AssistantProfile` uses — so a Settings edit applies to the very
+    /// next draft. With neither present, this is exactly `.defaultFL` (invariant 5).
     func effectiveStyle() -> HouseStyleSheet {
-        (firmStyleProfile ?? FirmStyleProfile()).resolved(over: .defaultFL).clampedToFloor()
+        let stored = try? store.appSettings.getSetting(FirmStyleProfile.profileKey, as: FirmStyleProfile.self)
+        return (firmStyleProfile ?? stored ?? FirmStyleProfile()).resolved(over: .defaultFL).clampedToFloor()
     }
 
     // MARK: - Public entry point
