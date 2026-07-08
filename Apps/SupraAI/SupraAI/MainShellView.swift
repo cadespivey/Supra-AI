@@ -156,7 +156,9 @@ struct MainShellView: View {
                 settings: environment.settingsController,
                 profile: environment.assistantProfileController,
                 update: environment.sparkleUpdater,
-                billing: environment.billingSettingsController
+                billing: environment.billingSettingsController,
+                firmStyle: environment.firmStyleProfileController,
+                parseExemplar: environment.parseFirmStyleExemplar
             )
         }
     }

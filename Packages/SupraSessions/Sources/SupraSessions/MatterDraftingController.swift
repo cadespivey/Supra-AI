@@ -83,18 +83,37 @@ public final class MatterDraftingController: ObservableObject {
     /// Present when the app can call the on-device model — required for the LLM-backed
     /// kinds (`letterDemand`). The deterministic notice path works without it.
     private let runtimeClient: (any RuntimeClientProtocol)?
+    /// The firm's structural style overrides (letterhead/caption/signature/…), or nil to use the
+    /// house default. Injected as the raw value type; in the app, `FirmStyleProfileController`
+    /// (M2) supplies its `.profile` here. `nil` ⇒ output is byte-for-byte `.defaultFL`.
+    private let firmStyleProfile: FirmStyleProfile?
 
     public init(
         store: SupraStore,
         runtimeClient: (any RuntimeClientProtocol)? = nil,
         storage: DocumentStorage = .makeDefault(),
+        firmStyleProfile: FirmStyleProfile? = nil,
         pipelineFactory: (@Sendable () -> DraftPipeline)? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.storage = storage
+        self.firmStyleProfile = firmStyleProfile
         // Default: deterministic verifier + the court/letter renderers. Injectable for tests.
         self.pipelineFactory = pipelineFactory ?? { DraftPipeline.makeDefault() }
+    }
+
+    /// The effective house style sheet for this matter's drafts: the firm's overrides resolved
+    /// over `.defaultFL`, then clamped to the Fla. R. Jud. Admin. 2.520(a) floor so a firm can
+    /// never push below 12 pt / 1" margins. `internal` (reachable via `@testable`), not `private`.
+    ///
+    /// Precedence: an injected `firmStyleProfile` (tests / explicit override) wins; otherwise the
+    /// profile persisted by `FirmStyleProfileController` is read FRESH from the store — the same
+    /// read-at-draft-time pattern `AssistantProfile` uses — so a Settings edit applies to the very
+    /// next draft. With neither present, this is exactly `.defaultFL` (invariant 5).
+    func effectiveStyle() -> HouseStyleSheet {
+        let stored = try? store.appSettings.getSetting(FirmStyleProfile.profileKey, as: FirmStyleProfile.self)
+        return (firmStyleProfile ?? stored ?? FirmStyleProfile()).resolved(over: .defaultFL).clampedToFloor()
     }
 
     // MARK: - Public entry point
@@ -157,7 +176,7 @@ public final class MatterDraftingController: ObservableObject {
         let pipeline = pipelineFactory()
         let result: DraftResult
         do {
-            result = try await pipeline.runNotice(inputs, profile: firm, style: .defaultFL)
+            result = try await pipeline.runNotice(inputs, profile: firm, style: effectiveStyle())
         } catch let error as SupraDraftingCore.DraftError {
             return .failure(.renderFailed(error.localizedDescription))
         } catch {
@@ -287,7 +306,7 @@ public final class MatterDraftingController: ObservableObject {
 
         let firm = Self.firmProfile(from: profile, jurisdiction: matter.court ?? matter.jurisdiction)
         let facts = Self.letterFacts(from: input, claim: claim)
-        let voice = AssistantVoiceProfile(registerNotes: Self.toneRegister(input.tone))
+        let voice = AssistantVoiceProfile(registerNotes: Self.voiceRegister(tone: input.tone, profile: profile))
         let parts = LetterDemand.promptParts(facts: facts, profile: voice)
         let inputs = Self.letterInputs(from: input)
 
@@ -304,7 +323,7 @@ public final class MatterDraftingController: ObservableObject {
 
         let result: DraftResult
         do {
-            result = try await pipelineFactory().runLetter(inputs, generated: generated, profile: firm, style: .defaultFL)
+            result = try await pipelineFactory().runLetter(inputs, generated: generated, profile: firm, style: effectiveStyle())
         } catch let error as SupraDraftingCore.DraftError {
             return .failure(.renderFailed(error.localizedDescription))
         } catch {
@@ -378,6 +397,30 @@ public final class MatterDraftingController: ObservableObject {
         case "measured": return "professional and measured, leaving room to resolve"
         default: return "firm but professional"
         }
+    }
+
+    /// The letter's tone/register cue, enriched from the attorney's saved writing-style surface
+    /// (SPEC §8, Track B). Prose voice ONLY — never facts, never structure; the enrichment rides
+    /// the same "match the register only" prompt line the canned phrase does. An unconfigured
+    /// profile (balanced formality/length, no notes) yields exactly the canned tone phrase, so
+    /// existing prompts are byte-for-byte unchanged (prompt parity). `internal` for @testable.
+    nonisolated static func voiceRegister(tone: String, profile: AssistantProfile) -> String {
+        var parts = [toneRegister(tone)]
+        switch profile.formality {
+        case .formal: parts.append("formal register")
+        case .plainSpoken: parts.append("plain-spoken, minimal legalese")
+        case .balanced: break
+        }
+        switch profile.length {
+        case .concise: parts.append("concise — no filler")
+        case .thorough: parts.append("thorough and complete")
+        case .balanced: break
+        }
+        let notes = profile.voiceNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !notes.isEmpty {
+            parts.append("the attorney's style notes: \(notes)")
+        }
+        return parts.joined(separator: "; ")
     }
 
     nonisolated private static func letterInputs(from input: LetterDraftInput) -> LetterDemand.Inputs {

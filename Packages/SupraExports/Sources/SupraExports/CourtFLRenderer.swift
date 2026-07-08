@@ -38,11 +38,12 @@ public struct CourtFLRenderer: Renderer {
     private func bodyElements(_ model: DocumentModel, style: HouseStyleSheet) -> [BodyElement] {
         var elements: [BodyElement] = []
 
-        // 1. Court header — centered bold, one paragraph per line.
+        // 1. Court header — centered bold (or plain when the firm disables it), one paragraph per line.
+        let headerBold = style.caption.headerBoldCentered
         for line in model.caption.courtHeader.split(separator: "\n", omittingEmptySubsequences: false) {
             elements.append(.paragraph(OoxmlParagraph(
-                props: ParaProps(jc: .center),
-                runs: [.text(String(line), props: RunProps(bold: true))]
+                props: ParaProps(jc: headerBold ? .center : nil),
+                runs: [.text(String(line), props: RunProps(bold: headerBold))]
             )))
         }
         elements.append(.paragraph(.empty))
@@ -105,33 +106,35 @@ public struct CourtFLRenderer: Renderer {
             // Party name (plain).
             leftCell.append(OoxmlParagraph(runs: [.text(party.name)]))
             leftCell.append(.empty)
-            // Designation indented 720.
+            // Designation indented.
             leftCell.append(OoxmlParagraph(
-                props: ParaProps(indLeftTwips: 720),
+                props: ParaProps(indLeftTwips: c.designationIndentTwips),
                 runs: [.text(party.designation)]
             ))
-            // Between parties: blank + "v." + blank (only between, not after the last).
+            // Between parties: blank + separator + blank (only between, not after the last).
             if index < caption.parties.count - 1 {
                 leftCell.append(.empty)
-                leftCell.append(OoxmlParagraph(runs: [.text("v.")]))
+                leftCell.append(OoxmlParagraph(runs: [.text(c.partySeparator)]))
                 leftCell.append(.empty)
             }
         }
-        // Closing rule to the ½ mark ending in "/".
-        leftCell.append(.empty)
-        leftCell.append(OoxmlParagraph(
-            props: ParaProps(jc: .right, bottomBorder: .rule),
-            runs: [.text("/")]
-        ))
+        // Closing rule to the ½ mark, ending in the closing glyph (firms may disable it).
+        if c.closingRuleEndsInSlash {
+            leftCell.append(.empty)
+            leftCell.append(OoxmlParagraph(
+                props: ParaProps(jc: .right, bottomBorder: .rule),
+                runs: [.text(c.closingRuleGlyph)]
+            ))
+        }
 
         var rightCell: [OoxmlParagraph] = [
-            OoxmlParagraph(runs: [.text("CASE NO.: \(caption.caseNumber)")])
+            OoxmlParagraph(runs: [.text("\(c.caseNumberLabel)\(caption.caseNumber)")])
         ]
         if let division = caption.division, !division.isEmpty {
-            rightCell.append(OoxmlParagraph(runs: [.text("DIVISION: \(division)")]))
+            rightCell.append(OoxmlParagraph(runs: [.text("\(c.divisionLabel)\(division)")]))
         }
         if let judge = caption.judge, !judge.isEmpty {
-            rightCell.append(OoxmlParagraph(runs: [.text("JUDGE: \(judge)")]))
+            rightCell.append(OoxmlParagraph(runs: [.text("\(c.judgeLabel)\(judge)")]))
         }
 
         return OoxmlTable(
@@ -160,21 +163,23 @@ public struct CourtFLRenderer: Renderer {
                 runs: [.text(text)]
             )
         case let .numberedAllegation(number, text):
-            // Number at margin, tab to 0.5", text at 0.5", continuation to margin (Exports §4.4).
+            // Number at margin, tab to the base indent, text there, continuation to margin (Exports §4.4).
+            let numText = style.body.numberFormat == .numberParen ? "\(number))" : "\(number)."
             return OoxmlParagraph(
                 props: ParaProps(jc: style.body.justify ? .both : nil,
                                  spacingLineUnits: bodyLine, spacingLineRule: "auto",
-                                 tabStops: [TabStop(positionTwips: 720)]),
-                runs: [.text("\(number)."), OoxmlRun(.tab), .text(text)]
+                                 tabStops: [TabStop(positionTwips: style.headings.baseIndentTwips)]),
+                runs: [.text(numText), OoxmlRun(.tab), .text(text)]
             )
         case let .pointHeading(level, numeral, text):
-            // Hanging-indent point heading (Exports §4.3): ind left=n·720 hanging=720, tab at n·720,
-            // spacing after=240. Level-1 numerals bold+caps; deeper bold title-case.
-            let pos = level * 720
+            // Hanging-indent point heading (Exports §4.3): ind left=n·base hanging=base, tab at n·base,
+            // spacing after=spaceAfter. Level-1 numerals bold+caps; deeper bold title-case.
+            let base = style.headings.baseIndentTwips
+            let pos = level * base
             let headingProps = RunProps(bold: true, caps: level == 1)
             return OoxmlParagraph(
-                props: ParaProps(indLeftTwips: pos, hangingTwips: 720,
-                                 spaceAfterTwips: 240, tabStops: [TabStop(positionTwips: pos)]),
+                props: ParaProps(indLeftTwips: pos, hangingTwips: base,
+                                 spaceAfterTwips: style.headings.spaceAfterTwips, tabStops: [TabStop(positionTwips: pos)]),
                 runs: [.text(numeral, props: RunProps(bold: true)), OoxmlRun(.tab),
                        .text(text, props: headingProps)]
             )
@@ -197,22 +202,26 @@ public struct CourtFLRenderer: Renderer {
         if let date = sig.respectfullySubmitted {
             paras.append(OoxmlParagraph(
                 props: ParaProps(indFirstLineTwips: style.body.firstLineIndentTwips),
-                runs: [.text("Respectfully submitted: \(format(date))")]
+                runs: [.text("\(style.signature.submittedLabel)\(format(date))")]
             ))
         }
 
-        // Firm name — bold caps.
+        // Firm name — bold caps (unless the firm disables it).
+        let firmBoldCaps = style.signature.firmNameBoldCaps
         paras.append(OoxmlParagraph(
             props: ParaProps(indLeftTwips: indent),
-            runs: [.text(sig.firmName, props: RunProps(bold: true, caps: true))]
+            runs: [.text(sig.firmName, props: RunProps(bold: firmBoldCaps, caps: firmBoldCaps))]
         ))
         // "By: " + e-signature line.
-        paras.append(eSignatureLine(name: sig.signingAttorney, indent: indent, style: style, prefix: "By: "))
+        paras.append(eSignatureLine(name: sig.signingAttorney, indent: indent, style: style, prefix: style.signature.byPrefix))
         // Attorney name — plain.
         paras.append(simpleIndented(sig.signingAttorney, indent: indent))
-        // Bar number.
+        // Bar number. The style label applies ONLY to a bare number: the notice assembler
+        // already composes "\(barLabel) \(barNumber)" into this slot, so prefixing that would
+        // duplicate the jurisdiction label ("Fla. Bar No. Florida Bar No. 100847").
         if let bar = sig.attorneys.first {
-            paras.append(simpleIndented(bar.barNumber, indent: indent))
+            let label = bar.barNumber.first?.isNumber == true ? style.signature.barNumberLabel : ""
+            paras.append(simpleIndented("\(label)\(bar.barNumber)", indent: indent))
         }
         // Office lines.
         paras.append(simpleIndented(sig.firmName, indent: indent))
@@ -220,13 +229,13 @@ public struct CourtFLRenderer: Renderer {
         if let suite = sig.office.suite, !suite.isEmpty { streetLine += ", \(suite)" }
         paras.append(simpleIndented(streetLine, indent: indent))
         paras.append(simpleIndented("\(sig.office.city), \(sig.office.state) \(sig.office.zip)", indent: indent))
-        paras.append(simpleIndented("Telephone: \(sig.office.phone)", indent: indent))
+        paras.append(simpleIndented("\(style.signature.phoneLabel)\(sig.office.phone)", indent: indent))
         if let fax = sig.office.fax, !fax.isEmpty {
-            paras.append(simpleIndented("Facsimile: \(fax)", indent: indent))
+            paras.append(simpleIndented("\(style.signature.faxLabel)\(fax)", indent: indent))
         }
 
         // E-mail designation — bold label + primary, secondaries each on their own line.
-        let emailLabel = sig.emails.secondary.isEmpty ? "Primary E-Mail: " : "Primary and Secondary E-Mail: "
+        let emailLabel = sig.emails.secondary.isEmpty ? style.signature.emailLabel : style.signature.emailLabelWithSecondary
         paras.append(OoxmlParagraph(
             props: ParaProps(indLeftTwips: indent),
             runs: [.text(emailLabel, props: RunProps(bold: true)), .text(sig.emails.primary)]
@@ -235,10 +244,10 @@ public struct CourtFLRenderer: Renderer {
             paras.append(simpleIndented(secondary, indent: indent))
         }
 
-        // "Attorneys for [party]" — italic, LAST line.
+        // "Attorneys for [party]" — italic (unless disabled), LAST line.
         paras.append(OoxmlParagraph(
             props: ParaProps(indLeftTwips: indent),
-            runs: [.text("Attorneys for \(sig.partyRepresented)", props: RunProps(italic: true))]
+            runs: [.text("\(style.signature.representationPrefix)\(sig.partyRepresented)", props: RunProps(italic: style.signature.representationLineItalic))]
         ))
         return paras
     }
@@ -248,15 +257,16 @@ public struct CourtFLRenderer: Renderer {
     private func certificateBlock(_ cert: CertificateModel, style: HouseStyleSheet) -> [OoxmlParagraph] {
         var paras: [OoxmlParagraph] = []
 
-        // Heading — centered bold caps underline.
+        // Heading — centered bold caps underline (firms may disable the centered-bold-caps styling).
+        let certHeadingBoldCaps = style.certificate.headingCenteredBoldCaps
         paras.append(OoxmlParagraph(
-            props: ParaProps(jc: .center),
-            runs: [.text("CERTIFICATE OF SERVICE", props: RunProps(bold: true, underline: true, caps: true))]
+            props: ParaProps(jc: certHeadingBoldCaps ? .center : nil),
+            runs: [.text(style.certificate.heading, props: RunProps(bold: certHeadingBoldCaps, underline: true, caps: certHeadingBoldCaps))]
         ))
         paras.append(.empty)
 
-        // Body — single-spaced, first-line indent.
-        let body = "I HEREBY CERTIFY that on \(format(cert.date)), I \(clauseText(cert.clause)) to the following:"
+        // Body — single-spaced, first-line indent. Middle connective ", I " stays fixed (§4.2 #23).
+        let body = "\(style.certificate.attestationPrefix)\(format(cert.date)), I \(clauseText(cert.clause, style: style))\(style.certificate.attestationSuffix)"
         paras.append(OoxmlParagraph(
             props: ParaProps(indFirstLineTwips: style.certificate.bodyFirstLineIndentTwips),
             runs: [.text(body)]
@@ -293,7 +303,7 @@ public struct CourtFLRenderer: Renderer {
         let sigProps = RunProps(italic: style.signature.eSignature.italic, underline: style.signature.eSignature.underline)
         var runs: [OoxmlRun] = []
         if let prefix { runs.append(.text(prefix)) }
-        runs.append(.text("/s/ \(name)", props: sigProps))
+        runs.append(.text("\(style.signature.eSignature.mark)\(name)", props: sigProps))
         runs.append(OoxmlRun(.tab, props: sigProps))
         return OoxmlParagraph(
             props: ParaProps(indLeftTwips: indent, tabStops: [TabStop(positionTwips: tabPos)]),
@@ -312,7 +322,8 @@ public struct CourtFLRenderer: Renderer {
         return "\(month) \(date.day), \(date.year)"
     }
 
-    private func clauseText(_ clause: ServiceMethodClause) -> String {
+    private func clauseText(_ clause: ServiceMethodClause, style: HouseStyleSheet) -> String {
+        if let override = style.certificate.clauseText[clause] { return override }
         switch clause {
         case .flEPortal:
             return "electronically filed the foregoing with the Clerk of Court using the Florida Courts E-Filing Portal, which will send a Notice of Electronic Filing"

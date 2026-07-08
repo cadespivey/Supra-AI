@@ -488,4 +488,181 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertNil(DraftRequestParser.parse("summarize the deposition transcript"))
         XCTAssertNil(DraftRequestParser.parse(""))
     }
+
+    // MARK: - M1-T7: effectiveStyle() + firmStyleProfile injection (controller wiring)
+
+    // T-CTRL-01 — no profile ⇒ effectiveStyle() is exactly .defaultFL (invariant 5).
+    // RED: undefined member `effectiveStyle` / `firmStyleProfile`.
+    @MainActor
+    func testEffectiveStyleWithoutProfileIsDefaultFL() throws {
+        let store = try makeStore()
+        let controller = MatterDraftingController(store: store, storage: makeStorage())
+        XCTAssertEqual(controller.effectiveStyle(), HouseStyleSheet.defaultFL)
+    }
+
+    // T-CTRL-04 — a below-floor profile is clamped to 24/1440 through the controller (invariant 1).
+    @MainActor
+    func testBelowFloorProfileClampedThroughController() throws {
+        let store = try makeStore()
+        var p = FirmStyleProfile()
+        p.pageFontHalfPoints = 20
+        p.pageMarginTwips = EdgeInsets(top: 720, leading: 720, bottom: 720, trailing: 720)
+        let controller = MatterDraftingController(store: store, storage: makeStorage(), firmStyleProfile: p)
+        XCTAssertEqual(controller.effectiveStyle().page.fontHalfPoints, 24)
+        XCTAssertNotEqual(controller.effectiveStyle().page.fontHalfPoints, 20)
+        XCTAssertEqual(controller.effectiveStyle().page.marginTwips.leading, 1440)
+    }
+
+    // T-CTRL-05 — the APP path: with NO injected profile, effectiveStyle() falls back to the
+    // profile PERSISTED in the store (FirmStyleProfileController's autosave target), read fresh
+    // so Settings edits apply at the next draft without reconstructing the controller.
+    // WIRE-PROOF at the fallback layer. RED: effectiveStyle() ignores the store ⇒ "CASE NO.: ".
+    @MainActor
+    func testEffectiveStyleFallsBackToStoredProfile() throws {
+        let store = try makeStore()
+        var p = FirmStyleProfile()
+        p.captionCaseNumberLabel = "CASE NUMBER: "
+        try store.appSettings.setSetting(FirmStyleProfile.profileKey, value: p)
+
+        let controller = MatterDraftingController(store: store, storage: makeStorage()) // no injection
+        XCTAssertEqual(controller.effectiveStyle().caption.caseNumberLabel, "CASE NUMBER: ")
+        XCTAssertNotEqual(controller.effectiveStyle().caption.caseNumberLabel, "CASE NO.: ")
+    }
+
+    // T-CTRL-02 — the Notice path passes effectiveStyle() (not .defaultFL) into runNotice.
+    // WIRE-PROOF: a non-default caseNumberLabel is captured by a spy renderer.
+    @MainActor
+    func testNoticePassesEffectiveStyleToRunNotice() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(
+            name: "McKernon Motors v. Liberty Rail",
+            court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+            judge: "CV-G",
+            docketNumber: "2026-CA-001847"
+        )
+        let spy = StyleSpyRenderer()
+        var p = FirmStyleProfile()
+        p.captionCaseNumberLabel = "CASE NUMBER: "
+        let controller = MatterDraftingController(
+            store: store, storage: makeStorage(), firmStyleProfile: p,
+            pipelineFactory: { DraftPipeline(verifier: DraftVerifier(), renderer: spy) })
+
+        let result = await controller.draftNoticeOfAppearance(
+            matterID: matter.id, parties: sampleParties(),
+            partyRepresented: "Defendant", representedPartyName: "Liberty Rail, LLC",
+            recipients: sampleRecipients(), serviceDate: DateOnly(year: 2026, month: 6, day: 25))
+        if case let .failure(error) = result { XCTFail("draft failed before render: \(error)") }
+
+        let captured = try XCTUnwrap(spy.captured, "renderer never received a style")
+        XCTAssertEqual(captured.caption.caseNumberLabel, "CASE NUMBER: ")   // effectiveStyle reached the renderer
+        XCTAssertNotEqual(captured.caption.caseNumberLabel, "CASE NO.: ")   // not the default sheet
+    }
+
+    // T-CTRL-03 — the Letter path passes effectiveStyle() into runLetter. WIRE-PROOF via tagline.
+    @MainActor
+    func testLetterPassesEffectiveStyleToRunLetter() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let body = "This firm represents the claimant regarding the unpaid balance.\n\nGovern yourself accordingly."
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([.event(request, 0, .token, token: body), .event(request, 1, .generationCompleted)])
+        })
+        let spy = StyleSpyRenderer()
+        var p = FirmStyleProfile()
+        p.letterheadTagline = "Counselors at Law"
+        let controller = MatterDraftingController(
+            store: store, runtimeClient: runtime, storage: makeStorage(), firmStyleProfile: p,
+            pipelineFactory: { DraftPipeline(verifier: DraftVerifier(), renderer: spy) })
+
+        let input = LetterDraftInput(
+            recipientName: "Daniel Hardman, Esq.", recipientStreet: "1 Independent Drive",
+            recipientCity: "Jacksonville", recipientState: "Florida", recipientZip: "32202",
+            reSubject: "Unpaid invoice #4471",
+            claimSummary: "The defendant has not paid the $42,000 invoice due under the supply agreement.",
+            demandAmount: "$42,000", responseDeadline: "July 15, 2026", tone: "firm")
+        let result = await controller.draftLetterDemand(
+            matterID: matter.id, input: input, modelID: ModelID(),
+            route: ModelRouter().route(for: .drafting))
+        if case let .failure(error) = result { XCTFail("draft failed before render: \(error)") }
+
+        let captured = try XCTUnwrap(spy.captured, "renderer never received a style")
+        XCTAssertEqual(captured.letterhead?.headerBlock.tagline, "Counselors at Law")
+        XCTAssertNotEqual(captured.letterhead?.headerBlock.tagline, "Attorneys at Law")
+    }
+
+    // MARK: - M4-T1: Track B voice (prose register only — never structure)
+
+    // T-VOICE-01a — the register helper enriches from the saved AssistantProfile style surface;
+    // an unconfigured profile yields exactly the canned tone phrase (prompt parity).
+    // RED: undefined `MatterDraftingController.voiceRegister(tone:profile:)`.
+    func testRegisterNotesEnrichedFromAssistantProfile() {
+        var styled = completeProfile()
+        styled.voiceNotes = "terse, aggressive"
+        styled.formality = .plainSpoken
+        let enriched = MatterDraftingController.voiceRegister(tone: "firm", profile: styled)
+        XCTAssertTrue(enriched.contains("terse"))                          // voiceNotes present
+        XCTAssertTrue(enriched.contains("firm but professional"))          // base tone kept
+
+        let plain = MatterDraftingController.voiceRegister(tone: "firm", profile: .empty)
+        XCTAssertEqual(plain, "firm but professional")                     // unconfigured ⇒ unchanged
+        XCTAssertFalse(plain.contains("terse"))
+    }
+
+    // T-VOICE-01b — WIRE-PROOF through the real letter path: the drafting prompt the runtime
+    // receives carries the attorney's voiceNotes cue. If the generation closure never fires,
+    // the draft fails ("no letter body") and the XCTFail below trips — no silent skip.
+    @MainActor
+    func testLetterPromptCarriesEnrichedRegister() async throws {
+        let store = try makeStore()
+        var styled = completeProfile()
+        styled.voiceNotes = "terse, aggressive"
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: styled)
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let runtime = StubRuntimeClient(outcome: { request in
+            XCTAssertTrue(request.prompt.contains("terse"),
+                          "drafting prompt must carry the attorney's voiceNotes register cue")
+            return .events([
+                .event(request, 0, .token, token: "Demand is made for $42,000."),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+        let controller = MatterDraftingController(store: store, runtimeClient: runtime, storage: makeStorage())
+
+        let input = LetterDraftInput(
+            recipientName: "Daniel Hardman, Esq.", recipientStreet: "1 Independent Drive",
+            recipientCity: "Jacksonville", recipientState: "Florida", recipientZip: "32202",
+            reSubject: "Unpaid invoice #4471",
+            claimSummary: "The defendant has not paid the $42,000 invoice due under the supply agreement.",
+            demandAmount: "$42,000", responseDeadline: "July 15, 2026", tone: "firm")
+        let result = await controller.draftLetterDemand(
+            matterID: matter.id, input: input, modelID: ModelID(),
+            route: ModelRouter().route(for: .drafting))
+        if case let .failure(error) = result { XCTFail("draft failed: \(error)") }
+    }
+
+    // T-VOICE-02 — STANDING GUARD (GREEN from HEAD, no pre-implementation RED — justified in the
+    // TESTPLAN): the voice carrier and the generation output must never grow a structural field.
+    // Fails only if a future change adds one (invariant 3: no model-originated structure).
+    func testVoiceCarriesNoStructure() {
+        let voice = AssistantVoiceProfile(registerNotes: "x")
+        XCTAssertEqual(Mirror(reflecting: voice).children.compactMap(\.label), ["registerNotes"])
+
+        let letter = GeneratedLetter(paragraphs: [], assertedFacts: [], citesUsed: [])
+        XCTAssertEqual(Mirror(reflecting: letter).children.compactMap(\.label),
+                       ["paragraphs", "assertedFacts", "citesUsed"])
+    }
+}
+
+/// Captures the `style:` argument the pipeline forwards to the renderer, so the controller
+/// wiring tests can prove `effectiveStyle()` (not `.defaultFL`) reaches the render call. Returns
+/// dummy bytes — the tests inspect the captured sheet, not the document. `@unchecked Sendable`
+/// is safe here: the render happens on the controller's @MainActor and the test awaits it.
+final class StyleSpyRenderer: Renderer, @unchecked Sendable {
+    private(set) var captured: HouseStyleSheet?
+    func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {
+        captured = style
+        return Data()
+    }
 }
