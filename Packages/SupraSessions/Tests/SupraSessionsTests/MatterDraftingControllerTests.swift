@@ -513,6 +513,22 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertEqual(controller.effectiveStyle().page.marginTwips.leading, 1440)
     }
 
+    // T-CTRL-05 — the APP path: with NO injected profile, effectiveStyle() falls back to the
+    // profile PERSISTED in the store (FirmStyleProfileController's autosave target), read fresh
+    // so Settings edits apply at the next draft without reconstructing the controller.
+    // WIRE-PROOF at the fallback layer. RED: effectiveStyle() ignores the store ⇒ "CASE NO.: ".
+    @MainActor
+    func testEffectiveStyleFallsBackToStoredProfile() throws {
+        let store = try makeStore()
+        var p = FirmStyleProfile()
+        p.captionCaseNumberLabel = "CASE NUMBER: "
+        try store.appSettings.setSetting(FirmStyleProfile.profileKey, value: p)
+
+        let controller = MatterDraftingController(store: store, storage: makeStorage()) // no injection
+        XCTAssertEqual(controller.effectiveStyle().caption.caseNumberLabel, "CASE NUMBER: ")
+        XCTAssertNotEqual(controller.effectiveStyle().caption.caseNumberLabel, "CASE NO.: ")
+    }
+
     // T-CTRL-02 — the Notice path passes effectiveStyle() (not .defaultFL) into runNotice.
     // WIRE-PROOF: a non-default caseNumberLabel is captured by a spy renderer.
     @MainActor
