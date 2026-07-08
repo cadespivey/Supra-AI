@@ -2,12 +2,9 @@ import Foundation
 import SupraDraftingCore
 import XCTest
 
-/// FOUNDATION — Codable round-trip, resolver identity/overlay, floor clamp, default parity.
-/// RED-first: every method below fails to COMPILE until FirmStyleProfile / NumberFormat /
-/// resolved(over:) / clampedToFloor() exist (SPEC §4.1, §4.3, §10; PLAN M1-T1..T4).
-///
-/// Gates PLAN tasks: M1-T1 (T-CODEC-*), M1-T4 (T-DEFAULT-01), M1-T2 (T-RESOLVE-*),
-/// M1-T3 (T-FLOOR-*). See Docs/Drafting-Impl-FirmStyleProfile-TESTPLAN.md.
+/// FOUNDATION — Codable round-trip, resolver identity/overlay, floor clamp, default parity
+/// for the firm style profile: an empty profile must resolve to `.defaultFL` exactly, and the
+/// Fla. R. Jud. Admin. 2.520(a) floor (12 pt / 1" margins) must be un-overridable.
 final class FirmStyleProfileTests: XCTestCase {
 
     // T-CODEC-01 — empty profile round-trips. RED: undefined symbol `FirmStyleProfile`.
