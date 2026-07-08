@@ -210,7 +210,7 @@ public struct FirmStyleExemplarParser {
         case .signature:
             guard let d = try? JSONDecoder().decode(SignatureExtraction.self, from: data) else { return nil }
             candidate.signatureByPrefix = sanitizedLabel(d.byPrefix)
-            candidate.signatureESignatureMark = sanitizedLabel(d.eSignatureMark)
+            candidate.signatureESignatureMark = sanitizedMark(d.eSignatureMark)
             candidate.signatureRepresentationPrefix = sanitizedLabel(d.representationPrefix)
             candidate.signatureBarNumberLabel = sanitizedLabel(d.barNumberLabel)
             candidate.signaturePhoneLabel = sanitizedLabel(d.phoneLabel)
@@ -234,6 +234,19 @@ public struct FirmStyleExemplarParser {
         }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, value.count <= 60 else { return nil }
+        return value
+    }
+
+    /// Stricter guard for the e-signature mark (PR #50 review). Marks are tiny tokens —
+    /// "/s/ ", "s/ ", "-s- " — but names carry no digits/@, so `sanitizedLabel` alone would let a
+    /// leaky "/s/ Jane Doe" become the firm-wide mark and print the exemplar signer's name
+    /// before the REAL signer on every future signature. Accept at most one letter cluster of
+    /// ≤ 2 letters within ≤ 8 characters; anything wordier is rejected outright (never truncated
+    /// to a guess — the user can type an unusual mark manually in Settings).
+    static func sanitizedMark(_ raw: String?) -> String? {
+        guard let value = sanitizedLabel(raw), value.count <= 8 else { return nil }
+        let clusters = value.split(whereSeparator: { !$0.isLetter })
+        guard clusters.count <= 1, clusters.allSatisfy({ $0.count <= 2 }) else { return nil }
         return value
     }
 }
