@@ -85,6 +85,12 @@ plus a definition of done and a validation suite. The M3 plan also keeps a **pro
 with per-work-order status and any deviations from the literal plan (and why). If you take on
 a milestone-sized change, follow the same pattern: write the plan, then implement against it.
 
+Tests are written **before** the code they gate, and are designed so they cannot pass without
+exercising their target — wire-proofs with non-default values, frozen goldens, recorded RED
+reasons, no silent skips. The full discipline (and why each rule exists) is in
+[`Docs/Test-First-Methodology.md`](Docs/Test-First-Methodology.md); follow it for any change
+that adds or modifies behavior.
+
 ## Branching, commits, and pull requests
 
 - **Branch from `main`** using a type prefix that matches existing history:
