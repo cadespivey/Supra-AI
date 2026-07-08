@@ -205,7 +205,7 @@ All are defined in the ready-to-paste harness below.
 | T-SIG-02 | `testByPrefixIsWired` | byPrefix (#15) | noticeModel | `"BY: "` | `<w:t xml:space="preserve">BY: </w:t>` | `<w:t xml:space="preserve">By: </w:t>` | Y | `By: ` run present | M1-T5 | §4.2 |
 | T-SIG-03 | `testSubmittedLabelIsWired` | submittedLabel (#16) | **motionModel** (`respectfullySubmitted` set) | `"Respectfully yours: "` | `<w:t xml:space="preserve">Respectfully yours: June 25, 2026</w:t>` | `<w:t xml:space="preserve">Respectfully submitted: June 25, 2026</w:t>` | Y | old submitted run present | M1-T5 | §4.2 |
 | T-SIG-04 | `testRepresentationPrefixIsWired` | representationPrefix (#17) | noticeModel | `"Counsel for "` | `<w:t xml:space="preserve">Counsel for Defendant</w:t>` | `<w:t xml:space="preserve">Attorneys for Defendant</w:t>` | Y | `Attorneys for Defendant` present | M1-T5 | §4.2 |
-| T-SIG-05 | `testBarNumberLabelIsWired` | barNumberLabel (#18) | noticeModel | `"Fla. Bar No. "` | `<w:t xml:space="preserve">Fla. Bar No. Florida Bar No. 100847</w:t>` | `<w:t xml:space="preserve">Florida Bar No. 100847</w:t>` (bare bar run) | Y | bare bar-number run present | M1-T5 | §4.2 |
+| T-SIG-05 | `testBarNumberLabelAppliesOnlyToBareNumbers` (revised per PR #50 review) | barNumberLabel (#18) | noticeModel (pre-labeled) + bare-number variant (`barNumber: "100847"`) | `"Fla. Bar No. "` | bare: `<w:t xml:space="preserve">Fla. Bar No. 100847</w:t>`; pre-labeled: `<w:t xml:space="preserve">Florida Bar No. 100847</w:t>` unchanged | pre-labeled: `Fla. Bar No. Florida Bar No.` (no double prefix); bare: `<w:t xml:space="preserve">100847</w:t>` | Y | pre-labeled render carries the duplicated prefix | M1-T5 | §4.2 |
 | T-SIG-06 | `testSignaturePhoneLabelIsWired` | phoneLabel (#19) | noticeModel | `"Tel: "` | `<w:t xml:space="preserve">Tel: (904) 555-0142</w:t>` | `<w:t xml:space="preserve">Telephone: (904) 555-0142</w:t>` | Y | `Telephone:` run present | M1-T5 | §4.2 |
 | T-SIG-07 | `testSignatureFaxLabelIsWired` | faxLabel (#20) | noticeModel | `"Fax: "` | `<w:t xml:space="preserve">Fax: (904) 555-0143</w:t>` | `<w:t xml:space="preserve">Facsimile: (904) 555-0143</w:t>` | Y | `Facsimile:` run present | M1-T5 | §4.2 |
 | T-SIG-08 | `testEmailLabelsAreWired` | emailLabel/WithSecondary (#21) | **two renders:** noticeModel (secondary present) + noSecondaryEmailModel (primary-only) | `"E1/E2: "` / `"E: "` | render1 `<w:t xml:space="preserve">E1/E2: </w:t>`; render2 `<w:t xml:space="preserve">E: </w:t>` | render1 `Primary and Secondary E-Mail: `; render2 `Primary E-Mail: ` | Y | old email labels present (each branch) | M1-T5 | §4.2 |
@@ -229,13 +229,13 @@ All are defined in the ready-to-paste harness below.
 > lift and **not** "still justified" at M1-T5. It is removed from M1-T5's gating set and gates
 > M1-T2/M1-T4 instead.
 
-> **T-SIG-05 note.** `barNumber` value `"Florida Bar No. 100847"` comes from the model slot. Today
-> it renders as its own run `<w:t xml:space="preserve">Florida Bar No. 100847</w:t>`; wiring the
-> label prefix produces `<w:t xml:space="preserve">Fla. Bar No. Florida Bar No. 100847</w:t>`. The
-> **default's exact run** is genuinely absent once the prefix is prepended (the prefix breaks that
-> exact element), so the absence assert is satisfiable — a loose substring `Florida Bar No. 100847`
-> would remain a substring of the wired output and could never go green. Use the exact `<w:t>`
-> elements, not substrings.
+> **T-SIG-05 note (revised per PR #50 review).** `barNumber` arrives at the renderer ALREADY
+> labeled: `NoticeAppearance.assemble` composes `"\(profile.barLabel) \(profile.barNumber)"` into
+> the slot (`"Florida Bar No. 100847"`). An unconditional style prefix would therefore duplicate
+> the jurisdiction label (`"Fla. Bar No. Florida Bar No. 100847"`). The renderer applies
+> `barNumberLabel` **only when the slot is a bare number** (first character is a digit), so the
+> wire-proof uses a bare-number fixture; the pre-labeled fixture doubles as the no-double-prefix
+> regression guard. Default parity is unaffected (`barNumberLabel` defaults to `""`).
 
 ### M1 — LetterheadRenderer wire-proofs (SupraExportsTests, `@testable`)
 
@@ -643,12 +643,20 @@ final class FirmStyleWireProofTests: XCTestCase {
         XCTAssertFalse(xml.contains(#"<w:t xml:space="preserve">Attorneys for Defendant</w:t>"#))
     }
 
-    // T-SIG-05 — barNumberLabel. The EXACT default run breaks when the prefix is prepended, so
-    // the absence assert is satisfiable (a loose substring would not be). RED: bare bar run present.
-    func testBarNumberLabelIsWired() throws {
-        let xml = try CourtFLRenderer().documentXML(noticeModel, style: style { $0.signatureBarNumberLabel = "Fla. Bar No. " })
-        XCTAssertTrue(xml.contains(#"<w:t xml:space="preserve">Fla. Bar No. Florida Bar No. 100847</w:t>"#))
-        XCTAssertFalse(xml.contains(#"<w:t xml:space="preserve">Florida Bar No. 100847</w:t>"#))
+    // T-SIG-05 (revised per PR #50 review) — barNumberLabel applies ONLY to a BARE number: the
+    // notice assembler pre-labels the slot, so an unconditional prefix would duplicate the
+    // jurisdiction label. RED: the pre-labeled render carries the duplicated prefix.
+    func testBarNumberLabelAppliesOnlyToBareNumbers() throws {
+        let labeled = try CourtFLRenderer().documentXML(noticeModel, style: style { $0.signatureBarNumberLabel = "Fla. Bar No. " })
+        XCTAssertTrue(labeled.contains(#"<w:t xml:space="preserve">Florida Bar No. 100847</w:t>"#))
+        XCTAssertFalse(labeled.contains("Fla. Bar No. Florida Bar No."))
+
+        let bareModel = DocumentModel(caption: captionModel(), title: "NOTICE OF APPEARANCE",
+                                      body: [.paragraph("PLEASE TAKE NOTICE that the undersigned attorney appears.")],
+                                      signature: signature(barNumber: "100847"), certificate: certificate())
+        let bare = try CourtFLRenderer().documentXML(bareModel, style: style { $0.signatureBarNumberLabel = "Fla. Bar No. " })
+        XCTAssertTrue(bare.contains(#"<w:t xml:space="preserve">Fla. Bar No. 100847</w:t>"#))
+        XCTAssertFalse(bare.contains(#"<w:t xml:space="preserve">100847</w:t>"#))
     }
 
     // T-SIG-08 — email labels: TWO renders so BOTH branches (primary-only + with-secondary) are proven.

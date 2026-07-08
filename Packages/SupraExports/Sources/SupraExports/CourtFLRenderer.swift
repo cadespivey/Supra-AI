@@ -216,9 +216,12 @@ public struct CourtFLRenderer: Renderer {
         paras.append(eSignatureLine(name: sig.signingAttorney, indent: indent, style: style, prefix: style.signature.byPrefix))
         // Attorney name — plain.
         paras.append(simpleIndented(sig.signingAttorney, indent: indent))
-        // Bar number (optionally label-prefixed).
+        // Bar number. The style label applies ONLY to a bare number: the notice assembler
+        // already composes "\(barLabel) \(barNumber)" into this slot, so prefixing that would
+        // duplicate the jurisdiction label ("Fla. Bar No. Florida Bar No. 100847").
         if let bar = sig.attorneys.first {
-            paras.append(simpleIndented("\(style.signature.barNumberLabel)\(bar.barNumber)", indent: indent))
+            let label = bar.barNumber.first?.isNumber == true ? style.signature.barNumberLabel : ""
+            paras.append(simpleIndented("\(label)\(bar.barNumber)", indent: indent))
         }
         // Office lines.
         paras.append(simpleIndented(sig.firmName, indent: indent))
