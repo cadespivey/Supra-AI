@@ -39,6 +39,8 @@ final class AppEnvironment: ObservableObject {
     let modelDownloadController: ModelDownloadController
     let settingsController: SettingsController
     let assistantProfileController: AssistantProfileController
+    /// Firm structural style (Track A): letterhead/caption/signature wording + geometry.
+    let firmStyleProfileController: FirmStyleProfileController
     let sparkleUpdater: SparkleUpdaterController
     let mattersController: MattersController
     let recycleBinController: RecycleBinController
@@ -78,6 +80,9 @@ final class AppEnvironment: ObservableObject {
         )
         self.settingsController = SettingsController(store: store, appVersion: appVersion)
         self.assistantProfileController = AssistantProfileController(store: store, basePrompt: systemPrompt)
+        // Firm structural style: autosaves to the store; MatterDraftingController reads the
+        // persisted profile fresh at draft time via effectiveStyle(), so no threading is needed.
+        self.firmStyleProfileController = FirmStyleProfileController(store: store)
         self.sparkleUpdater = SparkleUpdaterController()
         self.recycleBinController = RecycleBinController(store: store)
         self.scratchPadController = ScratchPadController(store: store)

@@ -1,5 +1,6 @@
 import AppKit
 import SupraCore
+import SupraDraftingCore
 import SupraNetworking
 import SupraSessions
 import SwiftUI
@@ -11,10 +12,13 @@ struct SettingsView: View {
     @ObservedObject var profile: AssistantProfileController
     @ObservedObject var update: SparkleUpdaterController
     @ObservedObject var billing: BillingSettingsController
+    @ObservedObject var firmStyle: FirmStyleProfileController
 
     var body: some View {
         Form {
             AssistantProfileSection(profile: profile, billing: billing)
+
+            FirmStyleSection(firmStyle: firmStyle)
 
             ScratchPadBillingSection(billing: billing)
 
@@ -916,6 +920,115 @@ struct EmbeddingModelSetupView: View {
             Text(message).font(.supraCaption).foregroundStyle(.red)
         case .idle:
             EmptyView()
+        }
+    }
+}
+
+/// Settings section for the firm's structural document style (Track A): the letterhead,
+/// caption, signature-block, and certificate wording/geometry that render deterministically
+/// into every draft. Every field is optional — blank ⇒ the Florida house default, shown as the
+/// field's placeholder — and every edit autosaves through `FirmStyleProfileController`. Font
+/// size and margins are floor-clamped to Fla. R. Jud. Admin. 2.520(a) (≥ 12 pt, ≥ 1″) before
+/// any render, so nothing set here can make a filing non-compliant.
+///
+/// M2-T2 (manual gate — no app unit-test target): persistence rides the tested
+/// `FirmStyleProfileController` (T-PERSIST-*), and application rides `effectiveStyle()`
+/// (T-CTRL-01..05). The rendered .docx preview ships with M3-T3.
+private struct FirmStyleSection: View {
+    @ObservedObject var firmStyle: FirmStyleProfileController
+
+    /// Bridges an optional override to a text field: blank ⇄ nil (inherit the house default).
+    private func text(_ keyPath: WritableKeyPath<FirmStyleProfile, String?>) -> Binding<String> {
+        Binding(
+            get: { firmStyle.profile[keyPath: keyPath] ?? "" },
+            set: { firmStyle.profile[keyPath: keyPath] = $0.isEmpty ? nil : $0 }
+        )
+    }
+
+    /// Bridges an optional toggle: nil reads as the house default (`true` for all of these).
+    private func flag(_ keyPath: WritableKeyPath<FirmStyleProfile, Bool?>) -> Binding<Bool> {
+        Binding(
+            get: { firmStyle.profile[keyPath: keyPath] ?? true },
+            set: { firmStyle.profile[keyPath: keyPath] = $0 }
+        )
+    }
+
+    private var hasOverrides: Bool { firmStyle.profile != FirmStyleProfile() }
+
+    var body: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("How your firm's documents are put together — letterhead wording, caption labels, signature-block labels, and the certificate of service. These are structural settings applied mechanically to every draft (they never pass through the model). Leave a field blank to use the Florida house default shown in gray. Font size and margins can never go below the Fla. R. Jud. Admin. 2.520(a) floor (12 pt, 1″ margins).")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                // Letterhead (letters only).
+                Text("Letterhead").font(.headline)
+                HStack(alignment: .bottom, spacing: 12) {
+                    LabeledTextField(label: "Tagline", text: text(\.letterheadTagline), prompt: "Attorneys at Law")
+                    LabeledTextField(label: "RE: label", text: text(\.letterheadRELabel), prompt: "RE:")
+                }
+                HStack(alignment: .bottom, spacing: 12) {
+                    LabeledTextField(label: "Phone label", text: text(\.letterheadPhoneLabel), prompt: "Telephone: ")
+                    LabeledTextField(label: "Fax label", text: text(\.letterheadFaxLabel), prompt: "Facsimile: ")
+                }
+                HStack(alignment: .bottom, spacing: 12) {
+                    LabeledTextField(label: "Enclosure prefix", text: text(\.letterheadEnclosurePrefix), prompt: "Enclosure: ")
+                    LabeledTextField(label: "cc prefix", text: text(\.letterheadCCPrefix), prompt: "cc:  ")
+                }
+                Toggle("Rule under the letterhead", isOn: flag(\.letterheadBottomRule))
+
+                // Caption (court filings).
+                Text("Caption").font(.headline)
+                HStack(alignment: .bottom, spacing: 12) {
+                    LabeledTextField(label: "Case number label", text: text(\.captionCaseNumberLabel), prompt: "CASE NO.: ")
+                    LabeledTextField(label: "Division label", text: text(\.captionDivisionLabel), prompt: "DIVISION: ")
+                }
+                HStack(alignment: .bottom, spacing: 12) {
+                    LabeledTextField(label: "Judge label", text: text(\.captionJudgeLabel), prompt: "JUDGE: ")
+                    LabeledTextField(label: "Party separator", text: text(\.captionPartySeparator), prompt: "v.")
+                }
+                Toggle("Court header bold and centered", isOn: flag(\.captionHeaderBoldCentered))
+                Toggle("End the party box with the closing rule", isOn: flag(\.captionClosingRuleEndsInSlash))
+
+                // Signature block.
+                Text("Signature Block").font(.headline)
+                HStack(alignment: .bottom, spacing: 12) {
+                    LabeledTextField(label: "Signature prefix", text: text(\.signatureByPrefix), prompt: "By: ")
+                    LabeledTextField(label: "E-signature mark", text: text(\.signatureESignatureMark), prompt: "/s/ ")
+                }
+                HStack(alignment: .bottom, spacing: 12) {
+                    LabeledTextField(label: "Representation prefix", text: text(\.signatureRepresentationPrefix), prompt: "Attorneys for ")
+                    LabeledTextField(label: "Bar number label", text: text(\.signatureBarNumberLabel), prompt: "(none)")
+                }
+                HStack(alignment: .bottom, spacing: 12) {
+                    LabeledTextField(label: "Phone label", text: text(\.signaturePhoneLabel), prompt: "Telephone: ")
+                    LabeledTextField(label: "Fax label", text: text(\.signatureFaxLabel), prompt: "Facsimile: ")
+                }
+                Toggle("Firm name in bold capitals", isOn: flag(\.signatureFirmNameBoldCaps))
+                Toggle("\u{201C}Attorneys for\u{201D} line in italics", isOn: flag(\.signatureRepresentationLineItalic))
+
+                // Certificate of service.
+                Text("Certificate of Service").font(.headline)
+                LabeledTextField(label: "Heading", text: text(\.certificateHeading), prompt: "CERTIFICATE OF SERVICE")
+
+                if firmStyle.message != nil || hasOverrides {
+                    HStack {
+                        if let message = firmStyle.message {
+                            Text(message).font(.callout).foregroundStyle(.red)
+                        }
+                        Spacer()
+                        if hasOverrides {
+                            Button("Reset to house defaults", role: .destructive) {
+                                firmStyle.profile = FirmStyleProfile()
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Firm Style")
         }
     }
 }
