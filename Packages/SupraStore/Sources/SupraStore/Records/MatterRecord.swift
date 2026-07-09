@@ -20,6 +20,10 @@ public struct MatterRecord: Codable, FetchableRecord, PersistableRecord, Sendabl
     /// LEDES `CLIENT_MATTER_ID` — the client's matter identifier for e-billing (Milestone 4).
     public var clientMatterID: String?
     public var notes: String?
+    /// Position for the sidebar's manual sort mode; nil = never manually placed.
+    public var sortOrder: Int?
+    /// When the matter was pinned to the top of the sidebar; nil = not pinned.
+    public var pinnedAt: Date?
     public var createdAt: Date
     public var updatedAt: Date
     public var deletedAt: Date?
@@ -39,6 +43,8 @@ public struct MatterRecord: Codable, FetchableRecord, PersistableRecord, Sendabl
         clientID: String? = nil,
         clientMatterID: String? = nil,
         notes: String? = nil,
+        sortOrder: Int? = nil,
+        pinnedAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         deletedAt: Date? = nil
@@ -57,6 +63,8 @@ public struct MatterRecord: Codable, FetchableRecord, PersistableRecord, Sendabl
         self.clientID = clientID
         self.clientMatterID = clientMatterID
         self.notes = notes
+        self.sortOrder = sortOrder
+        self.pinnedAt = pinnedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.deletedAt = deletedAt
@@ -77,6 +85,8 @@ public struct MatterRecord: Codable, FetchableRecord, PersistableRecord, Sendabl
         case clientID = "client_id"
         case clientMatterID = "client_matter_id"
         case notes
+        case sortOrder = "sort_order"
+        case pinnedAt = "pinned_at"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case deletedAt = "deleted_at"

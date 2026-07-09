@@ -158,6 +158,101 @@ public final class MattersRepository: @unchecked Sendable {
         }
     }
 
+    /// One (client number, client-name spelling) pair as used by live matters,
+    /// with how many matters use it and how recently. The client directory is
+    /// derived from these — there is no separate clients table to keep in sync.
+    public struct ClientUsageRow: Sendable, Equatable {
+        public let clientID: String?
+        public let clientNames: String?
+        public let matterCount: Int
+        public let lastUsedAt: Date
+
+        public init(clientID: String?, clientNames: String?, matterCount: Int, lastUsedAt: Date) {
+            self.clientID = clientID
+            self.clientNames = clientNames
+            self.matterCount = matterCount
+            self.lastUsedAt = lastUsedAt
+        }
+    }
+
+    /// Every distinct (client number, client-name spelling) pair across live
+    /// matters. Rows where both are empty are skipped — they carry no client.
+    public func fetchClientUsage() throws -> [ClientUsageRow] {
+        try writer.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                SELECT client_id, client_names, COUNT(*) AS matter_count, MAX(updated_at) AS last_used_at
+                FROM matters
+                WHERE deleted_at IS NULL AND (client_id IS NOT NULL OR client_names IS NOT NULL)
+                GROUP BY client_id, client_names
+                """
+            ).map { row in
+                ClientUsageRow(
+                    clientID: row["client_id"],
+                    clientNames: row["client_names"],
+                    matterCount: row["matter_count"],
+                    lastUsedAt: row["last_used_at"]
+                )
+            }
+        }
+    }
+
+    /// One practice-area spelling as used by live matters, with how many matters
+    /// use it. Feeds the matter form's practice-area suggestions.
+    public struct PracticeAreaUsageRow: Sendable, Equatable {
+        public let name: String
+        public let matterCount: Int
+
+        public init(name: String, matterCount: Int) {
+            self.name = name
+            self.matterCount = matterCount
+        }
+    }
+
+    /// Every distinct practice-area spelling across live matters.
+    public func fetchPracticeAreaUsage() throws -> [PracticeAreaUsageRow] {
+        try writer.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                SELECT practice_area, COUNT(*) AS matter_count
+                FROM matters
+                WHERE deleted_at IS NULL AND practice_area IS NOT NULL
+                GROUP BY practice_area
+                """
+            ).map { row in
+                PracticeAreaUsageRow(name: row["practice_area"], matterCount: row["matter_count"])
+            }
+        }
+    }
+
+    /// Persists a manual sidebar ordering: each matter's `sort_order` becomes its
+    /// index in `orderedIDs`. Leaves `updated_at` alone — reordering isn't a content
+    /// edit and must not perturb the date-modified sort.
+    public func updateMatterSortOrder(orderedIDs: [String]) throws {
+        try writer.write { db in
+            for (index, id) in orderedIDs.enumerated() {
+                try db.execute(
+                    sql: "UPDATE matters SET sort_order = ? WHERE id = ?",
+                    arguments: [index, id]
+                )
+            }
+        }
+    }
+
+    /// Pins (or unpins) a matter to the top of the sidebar. Leaves `updated_at`
+    /// alone — pinning isn't a content edit and must not perturb the
+    /// date-modified sort.
+    public func setMatterPinned(id: String, pinned: Bool, at date: Date = Date()) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE matters SET pinned_at = ? WHERE id = ? AND deleted_at IS NULL",
+                arguments: [pinned ? date : nil, id]
+            )
+        }
+    }
+
     public func softDeleteMatter(id: String, deletedAt: Date = Date()) throws {
         try writer.write { db in
             try db.execute(
@@ -214,8 +309,11 @@ public final class MattersRepository: @unchecked Sendable {
                 arguments: [id]
             ) else { return false }
             let now = Date()
+            // sort_order is cleared: the manual list was densely reindexed while
+            // this matter was deleted, so its old index would land it at an
+            // arbitrary spot. Never-placed matters predictably join the end.
             try db.execute(
-                sql: "UPDATE matters SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+                sql: "UPDATE matters SET deleted_at = NULL, updated_at = ?, sort_order = NULL WHERE id = ?",
                 arguments: [now, id]
             )
             for table in ["document_folders", "matter_documents", "structured_outputs"] {

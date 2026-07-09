@@ -922,6 +922,23 @@ public enum SupraMigrator {
             }
         }
 
+        migrator.registerMigration("v053_add_matter_sort_order") { db in
+            // Position for the sidebar's manual sort mode. Nil = never manually
+            // placed (such matters list after positioned ones).
+            try db.alter(table: "matters") { table in
+                table.add(column: "sort_order", .integer)
+            }
+        }
+
+        migrator.registerMigration("v054_add_matter_pinned_at") { db in
+            // When the matter was pinned to the top of the sidebar; nil = not
+            // pinned. A timestamp (not a flag) so `updated_at` stays untouched
+            // and the date-modified sort is never perturbed by pinning.
+            try db.alter(table: "matters") { table in
+                table.add(column: "pinned_at", .datetime)
+            }
+        }
+
         return migrator
     }
 

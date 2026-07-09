@@ -272,6 +272,33 @@ final class Milestone3SchemaTests: XCTestCase {
         XCTAssertTrue(resolved.contains(undated.id), "a document with no extracted date must not be silently dropped by a date filter")
     }
 
+    func testFolderScopeIncludesSubfolderDocuments() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let discovery = try store.documentLibrary.createFolder(matterID: matter.id, name: "Discovery")
+        let depositions = try store.documentLibrary.createFolder(matterID: matter.id, name: "Depositions", parentFolderID: discovery.id)
+        let other = try store.documentLibrary.createFolder(matterID: matter.id, name: "Pleadings")
+
+        func insert(_ name: String, folderID: String?) throws -> MatterDocumentRecord {
+            let blob = try store.documentLibrary.upsertBlob(
+                DocumentBlobRecord(sha256: name, byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/\(name).txt")
+            ).blob
+            return try store.documentLibrary.insertDocument(
+                MatterDocumentRecord(matterID: matter.id, blobID: blob.id, folderID: folderID, displayName: name)
+            )
+        }
+        let inParent = try insert("rfp.txt", folderID: discovery.id)
+        let inChild = try insert("calloway-depo.txt", folderID: depositions.id)
+        let elsewhere = try insert("answer.txt", folderID: other.id)
+
+        // Scoping to the parent folder covers its subfolders' documents too —
+        // with nested folders, "Discovery" must include Discovery/Depositions.
+        let resolved = try store.documentLibrary.resolveScopeDocumentIDs(matterID: matter.id, folderIDs: [discovery.id])
+        XCTAssertTrue(resolved.contains(inParent.id))
+        XCTAssertTrue(resolved.contains(inChild.id), "subfolder documents must be inside the parent folder's scope")
+        XCTAssertFalse(resolved.contains(elsewhere.id))
+    }
+
     func testSearchExcludesSoftDeletedDocuments() throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")

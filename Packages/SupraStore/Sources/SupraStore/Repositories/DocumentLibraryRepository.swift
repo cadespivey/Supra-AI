@@ -84,6 +84,27 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
         }
     }
 
+    /// The live folder with this exact parent and (case-insensitive) name, if
+    /// one exists — used by imports to reuse seeded/existing folders instead of
+    /// creating same-named duplicates.
+    public func findFolder(matterID: String, parentFolderID: String?, name: String) throws -> DocumentFolderRecord? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return try writer.read { db in
+            try DocumentFolderRecord.fetchOne(
+                db,
+                sql: """
+                SELECT * FROM document_folders
+                WHERE matter_id = ?
+                  AND deleted_at IS NULL
+                  AND name = ? COLLATE NOCASE
+                  AND parent_folder_id \(parentFolderID == nil ? "IS NULL" : "= ?")
+                """,
+                arguments: parentFolderID == nil ? [matterID, trimmed] : [matterID, trimmed, parentFolderID]
+            )
+        }
+    }
+
     public func renameFolder(id: String, name: String) throws {
         let trimmed = try Self.requireNonEmpty(name, fieldName: "name")
         try writer.write { db in
@@ -539,8 +560,16 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                 arguments.append(contentsOf: tagIDs)
             }
             if let folderIDs, !folderIDs.isEmpty {
-                clauses.append("d.folder_id IN (\(databaseQuestionMarks(count: folderIDs.count)))")
-                arguments.append(contentsOf: folderIDs)
+                // A folder scope covers the folder AND its subfolders — with
+                // nested folders, scoping to "Discovery" must include documents
+                // filed in "Discovery/Depositions". Silent under-inclusion is
+                // the dangerous failure for a legal research scope.
+                var expanded: Set<String> = []
+                for folderID in folderIDs {
+                    expanded.formUnion(try Self.folderSubtreeIDs(db, rootID: folderID))
+                }
+                clauses.append("d.folder_id IN (\(databaseQuestionMarks(count: expanded.count)))")
+                arguments.append(contentsOf: Array(expanded))
             }
             if let documentIDs, !documentIDs.isEmpty {
                 clauses.append("d.id IN (\(databaseQuestionMarks(count: documentIDs.count)))")

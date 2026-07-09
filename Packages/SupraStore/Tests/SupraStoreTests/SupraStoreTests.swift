@@ -41,6 +41,76 @@ final class SupraStoreTests: XCTestCase {
         XCTAssertTrue(tableNames.contains("audit_events"))
     }
 
+    func testFetchClientUsageAggregatesLiveMatters() throws {
+        let store = try makeStore()
+
+        _ = try store.matters.createMatter(name: "A1", clientNames: "Fritz Martin Cabinetry LLC", clientID: "100")
+        _ = try store.matters.createMatter(name: "A2", clientNames: "Fritz Martin Cabinetry LLC", clientID: "100")
+        _ = try store.matters.createMatter(name: "B1", clientNames: "Fritz Martin Cabinetry", clientID: "100")
+        _ = try store.matters.createMatter(name: "C1", clientNames: "VyStar Credit Union")
+        let deleted = try store.matters.createMatter(name: "D1", clientNames: "Gone Co.", clientID: "999")
+        try store.matters.softDeleteMatter(id: deleted.id)
+        _ = try store.matters.createMatter(name: "E1")
+
+        let rows = try store.matters.fetchClientUsage()
+
+        // One row per (number, spelling) pair; deleted and clientless matters skipped.
+        XCTAssertEqual(rows.count, 3)
+        let dominant = rows.first { $0.clientID == "100" && $0.clientNames == "Fritz Martin Cabinetry LLC" }
+        XCTAssertEqual(dominant?.matterCount, 2)
+        XCTAssertEqual(rows.first { $0.clientID == "100" && $0.clientNames == "Fritz Martin Cabinetry" }?.matterCount, 1)
+        XCTAssertEqual(rows.first { $0.clientID == nil }?.clientNames, "VyStar Credit Union")
+        XCTAssertFalse(rows.contains { $0.clientID == "999" })
+    }
+
+    func testFetchPracticeAreaUsageAggregatesLiveMatters() throws {
+        let store = try makeStore()
+
+        _ = try store.matters.createMatter(name: "A", practiceArea: "Commercial Litigation")
+        _ = try store.matters.createMatter(name: "B", practiceArea: "Commercial Litigation")
+        _ = try store.matters.createMatter(name: "C", practiceArea: "Real Estate")
+        _ = try store.matters.createMatter(name: "D")
+        let deleted = try store.matters.createMatter(name: "E", practiceArea: "Tax")
+        try store.matters.softDeleteMatter(id: deleted.id)
+
+        let rows = try store.matters.fetchPracticeAreaUsage()
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.first { $0.name == "Commercial Litigation" }?.matterCount, 2)
+        XCTAssertEqual(rows.first { $0.name == "Real Estate" }?.matterCount, 1)
+    }
+
+    func testRestoreMatterClearsManualSortOrder() throws {
+        let store = try makeStore()
+        let a = try store.matters.createMatter(name: "A")
+        let b = try store.matters.createMatter(name: "B")
+        try store.matters.updateMatterSortOrder(orderedIDs: [a.id, b.id])
+
+        try store.matters.softDeleteMatter(id: a.id)
+        try store.matters.updateMatterSortOrder(orderedIDs: [b.id])
+        try store.matters.restoreMatter(id: a.id)
+
+        // The manual list was reindexed while A was deleted; its stale index
+        // must not collide, so restore clears it (never-placed → joins the end).
+        let restored = try store.matters.fetchMatter(id: a.id)
+        XCTAssertNil(restored?.sortOrder)
+        XCTAssertEqual(try store.matters.fetchMatter(id: b.id)?.sortOrder, 0)
+    }
+
+    func testFindFolderMatchesCaseInsensitivelyWithinParent() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "M")
+        let research = try store.documentLibrary.createFolder(matterID: matter.id, name: "Research")
+        let nested = try store.documentLibrary.createFolder(matterID: matter.id, name: "research", parentFolderID: research.id)
+
+        XCTAssertEqual(try store.documentLibrary.findFolder(matterID: matter.id, parentFolderID: nil, name: "RESEARCH")?.id, research.id)
+        XCTAssertEqual(try store.documentLibrary.findFolder(matterID: matter.id, parentFolderID: research.id, name: "Research")?.id, nested.id)
+        XCTAssertNil(try store.documentLibrary.findFolder(matterID: matter.id, parentFolderID: nil, name: "Pleadings"))
+
+        // Trashed folders are not reuse candidates.
+        try store.documentLibrary.softDeleteFolder(id: research.id)
+        XCTAssertNil(try store.documentLibrary.findFolder(matterID: matter.id, parentFolderID: nil, name: "Research"))
+    }
+
     func testMatterChatsAreScopedSeparatelyFromGlobalChats() throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
