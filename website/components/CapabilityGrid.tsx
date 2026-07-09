@@ -27,7 +27,7 @@ const capabilities = [
   },
   {
     title: "Matter workspace",
-    body: "Organize research, drafts, documents, authorities, billing, and a full audit trail by matter — with an in-app reader for saved opinions that works offline.",
+    body: "Organize research, drafts, documents, authorities, billing, and a full audit trail by matter — sorted by client, practice area, name, or date (or pinned and hand-ordered), with documents in nested folders and an in-app reader for saved opinions that works offline.",
   },
   {
     title: "Legislative & regulatory tracking",
@@ -35,7 +35,7 @@ const capabilities = [
   },
   {
     title: "Document drafting",
-    body: "Draft inside a matter's chat: a Draft button collects the caption parties, client, and service recipients, then renders a downloadable Word document with a signature block matched to the filing's court. Every recited fact traces to the matter, and unverified citations appear as visible placeholders to review before filing.",
+    body: "Draft inside a matter's chat: a Draft button collects the required details, then renders a downloadable Word document — a Florida Notice of Appearance or a demand letter — with the signature block matched to the filing's court and your firm's letterhead, caption, and signature styling applied. Every recited fact traces to the matter, and unverified citations appear as visible placeholders to review before filing.",
   },
 ];
 

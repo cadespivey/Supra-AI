@@ -29,14 +29,20 @@ unverified authority as settled law.
   and quarantined behind a "do not rely" banner rather than shown as good law.
 - **Document intelligence.** Import files and folders (PDF, DOCX, XLSX, RTF, EML, images), with OCR,
   chunking, on-device embeddings, hybrid retrieval, source-cited Q&A, fact chronologies, and
-  exportable structured outputs — all scoped per matter.
+  exportable structured outputs — all scoped per matter and organized into nested folders (new
+  matters start with a folder set matched to their practice area).
 - **Matter workspace.** Organize chats, research sessions, authorities, documents, outputs, and
-  per-matter billing rules by matter, with an audit trail.
-- **In-matter drafting.** A **Draft** button in a matter's chat opens a guided input sheet
-  (caption parties, client represented, service recipients) and generates a downloadable `.docx`
-  Notice of Appearance. Required slots are validated before rendering, and the signature block prints
-  the bar admission whose jurisdiction matches the filing's court — configured as a multi-jurisdiction
-  bar-admissions list in **Settings**. (Notice of Appearance is currently Florida-only.)
+  per-matter billing rules by matter, with an audit trail. Sort the matter sidebar by client
+  (grouped under the client's name), practice area, name, or date — or pin matters to the top and
+  drag your own order — and the matter form suggests known clients and practice areas as you type,
+  so the same client is never entered two different ways.
+- **In-matter drafting.** A **Draft** button in a matter's chat opens a guided input sheet and
+  generates a downloadable `.docx` — a Notice of Appearance (currently Florida-only) or a demand
+  letter. Required slots are validated before rendering, and the signature block prints the bar
+  admission whose jurisdiction matches the filing's court — configured as a multi-jurisdiction
+  bar-admissions list in **Settings**. A per-firm **style profile** (also in Settings) applies your
+  letterhead, caption, and signature-block conventions to every draft, and can be captured by
+  parsing an uploaded exemplar document for review.
 - **Timekeeping → defensible billing (ScratchPad).** Keep one running daily note — `@matter` /
   `#issue` tags, with work product, emails, and filings attached inline to the note they support.
   Tag an entry `#Note` to keep it out of billing entirely (the text and its attachments never reach

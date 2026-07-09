@@ -15,12 +15,12 @@ const steps = [
   {
     id: "matter",
     title: "Open a matter",
-    body: "Keep matter chats, research sessions, authorities, documents, structured outputs, timekeeping, and audit history in one workspace.",
+    body: "Keep matter chats, research sessions, authorities, documents, structured outputs, timekeeping, and audit history in one workspace. Sort the sidebar by client, practice area, name, or date — or pin the matters you're working and drag your own order — and the matter form fills in known clients and practice areas as you type.",
   },
   {
     id: "documents",
     title: "Import documents",
-    body: "Bring in matter files for OCR, extraction, chunking, local embedding search, cited Q&A, and fact chronologies.",
+    body: "Bring in matter files for OCR, extraction, chunking, local embedding search, cited Q&A, and fact chronologies — organized into nested folders, with new matters preloaded with a starter set matched to their practice area.",
   },
   {
     id: "research",
@@ -40,7 +40,7 @@ const steps = [
   {
     id: "draft",
     title: "Draft, critique, or export",
-    body: "Turn reviewed research and document context into attorney-edited drafts, critique passes, chronologies, and exportable work product. In a matter, the Draft button generates a downloadable Word document — a Florida Notice of Appearance today, with the signature block matched to the filing's court — to open, reveal in Finder, or save a copy of.",
+    body: "Turn reviewed research and document context into attorney-edited drafts, critique passes, chronologies, and exportable work product. In a matter, the Draft button generates a downloadable Word document — a Florida Notice of Appearance or a demand letter today, with the signature block matched to the filing's court and your firm's letterhead, caption, and signature styling applied — to open, reveal in Finder, or save a copy of.",
   },
 ];
 
