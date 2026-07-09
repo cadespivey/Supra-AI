@@ -28,16 +28,30 @@ struct MatterEditorSheet: View {
 
     let mode: Mode
     @State private var draft: MatterDraft
+    /// Known clients from existing matters; recommends the matching number when
+    /// a name is typed (and vice versa) so client identities stay consistent.
+    private let clientDirectory: ClientDirectory
+    /// Known practice areas from existing matters; recommends an existing
+    /// spelling as one is typed.
+    private let practiceAreaDirectory: PracticeAreaDirectory
     private let onSave: (MatterDraft) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var showValidation = false
     @State private var selectedCourtID: String
 
-    init(mode: Mode, draft: MatterDraft, onSave: @escaping (MatterDraft) -> Void) {
+    init(
+        mode: Mode,
+        draft: MatterDraft,
+        clientDirectory: ClientDirectory = .empty,
+        practiceAreaDirectory: PracticeAreaDirectory = .empty,
+        onSave: @escaping (MatterDraft) -> Void
+    ) {
         let selected = JurisdictionCatalog.shared.bestMatch(jurisdiction: draft.jurisdiction, court: draft.court)
         self.mode = mode
         self._draft = State(initialValue: draft)
+        self.clientDirectory = clientDirectory
+        self.practiceAreaDirectory = practiceAreaDirectory
         self._selectedCourtID = State(initialValue: selected?.id ?? "")
         self.onSave = onSave
     }
@@ -76,6 +90,15 @@ struct MatterEditorSheet: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Client name(s)").font(.supraCaption).foregroundStyle(.secondary)
                         MultilineField(placeholder: "Client name(s)", text: $draft.clientNames, minLines: 2)
+                        SuggestionList(
+                            suggestions: nameSuggestions,
+                            title: { $0.name ?? "" },
+                            detail: { entry in
+                                let parts = [entry.clientID.map { "Client ID \($0)" }, matterCountLabel(entry)]
+                                return parts.compactMap(\.self).joined(separator: " · ")
+                            },
+                            onSelect: applyClient
+                        )
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Matter description").font(.supraCaption).foregroundStyle(.secondary)
@@ -84,7 +107,15 @@ struct MatterEditorSheet: View {
                     LabeledTextField(label: "Court", text: $draft.court)
                     LabeledTextField(label: "Judge", text: $draft.judge)
                     LabeledTextField(label: "Case number", text: $draft.docketNumber)
-                    LabeledTextField(label: "Practice area", text: $draft.practiceArea)
+                    VStack(alignment: .leading, spacing: 4) {
+                        LabeledTextField(label: "Practice area", text: $draft.practiceArea)
+                        SuggestionList(
+                            suggestions: practiceAreaSuggestions,
+                            title: { $0.name },
+                            detail: { $0.matterCount == 1 ? "1 matter" : "\($0.matterCount) matters" },
+                            onSelect: { draft.practiceArea = $0.name }
+                        )
+                    }
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Notes").font(.supraCaption).foregroundStyle(.secondary)
                         MultilineField(placeholder: "Notes", text: $draft.notes, minLines: 3)
@@ -93,7 +124,18 @@ struct MatterEditorSheet: View {
 
                 Section {
                     LabeledTextField(label: "Firm matter ID", text: $draft.internalMatterID, prompt: "LAW_FIRM_MATTER_ID")
-                    LabeledTextField(label: "Client ID", text: $draft.clientID, prompt: "CLIENT_ID")
+                    VStack(alignment: .leading, spacing: 4) {
+                        LabeledTextField(label: "Client ID", text: $draft.clientID, prompt: "CLIENT_ID")
+                        SuggestionList(
+                            suggestions: numberSuggestions,
+                            title: { $0.clientID ?? "" },
+                            detail: { entry in
+                                let parts = [entry.name, matterCountLabel(entry)]
+                                return parts.compactMap(\.self).joined(separator: " · ")
+                            },
+                            onSelect: applyClient
+                        )
+                    }
                     LabeledTextField(label: "Client matter ID", text: $draft.clientMatterID, prompt: "CLIENT_MATTER_ID")
                 } header: {
                     Text("E-billing (LEDES)")
@@ -102,6 +144,38 @@ struct MatterEditorSheet: View {
                 }
             }
             .formStyle(.grouped)
+    }
+
+    /// Known clients matching the typed name. The entry already carried by the
+    /// fields drops out (nothing left to recommend for it), but OTHER matches
+    /// stay visible — two clients sharing a name is exactly when the list must
+    /// keep disambiguating.
+    private var nameSuggestions: [ClientDirectoryEntry] {
+        clientDirectory.suggestions(forName: draft.clientNames)
+            .filter { !clientDirectory.isApplied($0, number: draft.clientID, name: draft.clientNames) }
+    }
+
+    private var numberSuggestions: [ClientDirectoryEntry] {
+        clientDirectory.suggestions(forNumber: draft.clientID)
+            .filter { !clientDirectory.isApplied($0, number: draft.clientID, name: draft.clientNames) }
+    }
+
+    /// Known practice areas matching the typed text; the exact spelling already
+    /// in the field drops out, other matches stay visible.
+    private var practiceAreaSuggestions: [PracticeAreaDirectory.Entry] {
+        practiceAreaDirectory.suggestions(for: draft.practiceArea)
+            .filter { !practiceAreaDirectory.isApplied($0, text: draft.practiceArea) }
+    }
+
+    /// Fills both client fields from a recommendation, leaving a field alone
+    /// when the entry has nothing for it (a name-only client keeps a typed ID).
+    private func applyClient(_ entry: ClientDirectoryEntry) {
+        if let name = entry.name { draft.clientNames = name }
+        if let number = entry.clientID { draft.clientID = number }
+    }
+
+    private func matterCountLabel(_ entry: ClientDirectoryEntry) -> String {
+        entry.matterCount == 1 ? "1 matter" : "\(entry.matterCount) matters"
     }
 
     private var nameInvalid: Bool {
@@ -133,6 +207,44 @@ struct MatterEditorSheet: View {
         dismiss()
     }
 
+}
+
+/// Click-to-fill recommendations under a form field (known clients, practice
+/// areas), styled after the jurisdiction suggestion list.
+private struct SuggestionList<Item: Identifiable>: View {
+    let suggestions: [Item]
+    let title: (Item) -> String
+    let detail: (Item) -> String
+    let onSelect: (Item) -> Void
+
+    var body: some View {
+        if !suggestions.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, entry in
+                    if index > 0 { Divider() }
+                    Button { onSelect(entry) } label: {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(title(entry))
+                                .foregroundStyle(.primary)
+                            let detailText = detail(entry)
+                            if !detailText.isEmpty {
+                                Text(detailText)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.secondary.opacity(0.08)))
+        }
+    }
 }
 
 /// Single-field jurisdiction picker for the New Matter form: type to get live

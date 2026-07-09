@@ -46,7 +46,9 @@ struct MatterWorkspaceView: View {
         .sheet(isPresented: $showEditor) {
             MatterEditorSheet(
                 mode: .edit,
-                draft: controller.draft(forMatter: matter.id) ?? MatterDraft()
+                draft: controller.draft(forMatter: matter.id) ?? MatterDraft(),
+                clientDirectory: controller.clientDirectory(),
+                practiceAreaDirectory: controller.practiceAreaDirectory()
             ) { draft in
                 try? controller.updateMatter(id: matter.id, draft: draft)
             }

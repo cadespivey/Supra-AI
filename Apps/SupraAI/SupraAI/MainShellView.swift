@@ -41,7 +41,12 @@ struct MainShellView: View {
         }
         #endif
         .sheet(isPresented: $showNewMatter) {
-            MatterEditorSheet(mode: .create, draft: MatterDraft()) { draft in
+            MatterEditorSheet(
+                mode: .create,
+                draft: MatterDraft(),
+                clientDirectory: environment.mattersController.clientDirectory(),
+                practiceAreaDirectory: environment.mattersController.practiceAreaDirectory()
+            ) { draft in
                 if let created = try? environment.mattersController.createMatter(draft) {
                     environment.mattersController.select(matterID: created.id)
                     selection = .matter(created.id)

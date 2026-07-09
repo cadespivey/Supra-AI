@@ -20,6 +20,9 @@ struct MatterDocumentsView: View {
     @State private var showImporter = false
     @State private var newFolderName = ""
     @State private var showNewFolder = false
+    /// Where the New Folder popover files the folder: a specific parent (via a
+    /// folder row's "New Subfolder") or nil to follow the sidebar selection.
+    @State private var newFolderParentID: String?
     @State private var showTrash = false
     @State private var showQA = false
     @State private var showChronology = false
@@ -151,17 +154,44 @@ struct MatterDocumentsView: View {
 
     // MARK: - Sidebar
 
+    /// The folder tree flattened for a plain List: depth drives indentation, so
+    /// subfolders read as nested without disclosure chevrons.
+    private var flattenedFolders: [(folder: DocumentFolderRecord, depth: Int)] {
+        // Roots are the top-level folders PLUS any live folder whose parent
+        // isn't live — a subfolder restored from Trash while its parent is
+        // still trashed must stay visible, or the restore looks like it failed.
+        // (It re-nests automatically when the parent is restored.)
+        let liveIDs = Set(controller.folders.map(\.id))
+        var visited = Set<String>()
+        func walk(_ folder: DocumentFolderRecord, _ depth: Int) -> [(DocumentFolderRecord, Int)] {
+            guard visited.insert(folder.id).inserted else { return [] }
+            return [(folder, depth)] + controller.subfolders(of: folder.id).flatMap { walk($0, depth + 1) }
+        }
+        let roots = controller.folders.filter { folder in
+            folder.parentFolderID.map { !liveIDs.contains($0) } ?? true
+        }
+        return roots.flatMap { walk($0, 0) }
+    }
+
     private var folderSidebar: some View {
         List(selection: $controller.selectedSidebarID) {
             Label("All Documents", systemImage: "tray.full")
                 .tag(MatterDocumentsController.allDocumentsTag)
                 .dropDestination(for: String.self) { ids, _ in moveDropped(ids, toFolderID: nil); return true }
             Section("Folders") {
-                ForEach(controller.folders) { folder in
-                    Label(folder.name, systemImage: "folder").tag(folder.id)
-                        .dropDestination(for: String.self) { ids, _ in moveDropped(ids, toFolderID: folder.id); return true }
+                ForEach(flattenedFolders, id: \.folder.id) { item in
+                    Label(item.folder.name, systemImage: "folder")
+                        .padding(.leading, CGFloat(item.depth) * 14)
+                        .tag(item.folder.id)
+                        .dropDestination(for: String.self) { ids, _ in moveDropped(ids, toFolderID: item.folder.id); return true }
                         .contextMenu {
-                            Button(role: .destructive) { controller.deleteFolder(id: folder.id) } label: {
+                            Button {
+                                newFolderParentID = item.folder.id
+                                showNewFolder = true
+                            } label: {
+                                Label("New Subfolder", systemImage: "folder.badge.plus")
+                            }
+                            Button(role: .destructive) { controller.deleteFolder(id: item.folder.id) } label: {
                                 Label("Delete Folder", systemImage: "trash")
                             }
                         }
@@ -169,13 +199,17 @@ struct MatterDocumentsView: View {
             }
         }
         .popover(isPresented: $showNewFolder) {
-            SupraPopoverFrame("New Folder", width: 260) {
+            SupraPopoverFrame(newFolderTitle, width: 260) {
                 TextField("Folder name", text: $newFolderName).supraField()
                 HStack {
                     Spacer()
                     Button("Create") {
-                        controller.createFolder(name: newFolderName, parentFolderID: controller.selectedFolderID)
+                        controller.createFolder(
+                            name: newFolderName,
+                            parentFolderID: newFolderParentID ?? controller.selectedFolderID
+                        )
                         newFolderName = ""
+                        newFolderParentID = nil
                         showNewFolder = false
                     }
                     .buttonStyle(.ghost)
@@ -183,6 +217,19 @@ struct MatterDocumentsView: View {
                 }
             }
         }
+        .onChange(of: showNewFolder) { _, shown in
+            // The popover can be dismissed without creating; don't let a stale
+            // parent leak into the next toolbar-triggered New Folder.
+            if !shown { newFolderParentID = nil }
+        }
+    }
+
+    /// Names the destination so "New Subfolder" reads differently from a
+    /// root-level New Folder.
+    private var newFolderTitle: String {
+        let parentID = newFolderParentID ?? controller.selectedFolderID
+        guard let parent = controller.folders.first(where: { $0.id == parentID }) else { return "New Folder" }
+        return "New Subfolder in “\(parent.name)”"
     }
 
     // MARK: - Main content
