@@ -192,8 +192,11 @@ final class FirmStyleExemplarParserTests: XCTestCase {
         let outcome = await sut.parse(kind: .letterhead, text: "Attorneys at Law", needsOCR: true)
         XCTAssertTrue(outcome.message?.contains("letterhead text but not a logo image") == true)
         XCTAssertEqual(outcome.candidate.letterheadTagline, "Attorneys at Law")
+        // Exact type comparison, not `is Data?` — a nil optional of ANY type
+        // (e.g. Optional<String>.none in Any) satisfies `is Data?` because nil
+        // casts into every optional type, which false-fails this on Swift 6.2.
         let hasDataField = Mirror(reflecting: outcome.candidate).children
-            .contains { $0.value is Data || $0.value is Data? }
+            .contains { $0.value is Data || type(of: $0.value) == Optional<Data>.self }
         XCTAssertFalse(hasDataField, "FirmStyleProfile must never carry image bytes")
     }
 }

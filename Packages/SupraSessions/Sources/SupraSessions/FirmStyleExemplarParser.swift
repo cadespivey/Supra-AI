@@ -2,6 +2,7 @@ import Foundation
 import SupraCore
 import SupraDocuments
 import SupraDraftingCore
+import SupraRuntimeClient
 import SupraRuntimeInterface
 
 /// Which structural element an uploaded exemplar demonstrates (SPEC §5).
@@ -17,6 +18,11 @@ public enum ExemplarKind: String, Sendable, Equatable {
 public struct ExemplarParseOutcome: Sendable, Equatable {
     public var candidate: FirmStyleProfile
     public var message: String?
+
+    public init(candidate: FirmStyleProfile, message: String? = nil) {
+        self.candidate = candidate
+        self.message = message
+    }
 }
 
 /// LLM-assisted STRUCTURED extraction of style labels from an uploaded exemplar document
@@ -28,7 +34,7 @@ public struct ExemplarParseOutcome: Sendable, Equatable {
 /// deterministic, not just prompt-side: every captured value passes `sanitizedLabel`, which
 /// truncates at the first digit/@ so phone numbers, bar numbers, and e-mail addresses can never
 /// reach the candidate even if the model leaks them (invariant 4: identity is slot-only).
-public struct FirmStyleExemplarParser {
+public struct FirmStyleExemplarParser: Sendable {
     private let runtimeClient: any RuntimeClientProtocol
     private let modelID: ModelID
     private let extraction: ExtractionService

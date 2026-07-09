@@ -80,9 +80,9 @@ final class FirmStyleWireProofTests: XCTestCase {
         DocumentModel(
             caption: captionModel(), title: "DEFENDANT'S MOTION TO DISMISS",
             body: [
-                .numberedAllegation(1, "Plaintiff filed its complaint on June 1, 2026."),
-                .numberedAllegation(2, "The complaint fails to state a cause of action."),
-                .pointHeading(1, "I.", "THE COMPLAINT FAILS TO STATE A CLAIM"),
+                .numberedAllegation(number: 1, text: "Plaintiff filed its complaint on June 1, 2026."),
+                .numberedAllegation(number: 2, text: "The complaint fails to state a cause of action."),
+                .pointHeading(level: 1, numeral: "I.", text: "THE COMPLAINT FAILS TO STATE A CLAIM"),
                 .paragraph("For these reasons the motion should be granted.")
             ],
             signature: signature(respectfullySubmitted: DateOnly(year: 2026, month: 6, day: 25)),
