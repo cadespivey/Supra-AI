@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.1.1] - 2026-07-09
+
+Matter organization: sort and pin the sidebar, consistent client and
+practice-area details as you type, and subfolders for each matter's documents.
+
+### Added
+
+- **Sidebar sorting** — sort matters by client (grouped under the client's
+  name, ordered by client number), practice area, name, date created, date
+  modified, or drag them into your own manual order. The choice persists.
+- **Pinned matters** — right-click a matter to pin it to the top of the
+  sidebar; pins hold in every sort mode.
+- **Client and practice-area suggestions** — the matter form recommends known
+  clients (typing the name fills the client number and vice versa) and
+  existing practice-area spellings, so the same client is never entered two
+  different ways.
+- **Document subfolders** — create nested folders in a matter's Documents tab
+  (right-click a folder for "New Subfolder"). New matters are preloaded with
+  starter folders matched to their practice area (e.g. Pleadings, Discovery,
+  Motions, and Exhibits for litigation).
+- **Firm style profile** — Settings can now capture your firm's letterhead,
+  caption, and signature-block styling for drafted documents, including
+  parsing an uploaded exemplar for review before anything is saved.
+
+### Fixed
+
+- **Folder-scoped answers** — limiting Document Q&A or the fact chronology to
+  a folder now includes documents filed in its subfolders.
+- **Bluebook ordinals** — correct suffixes for reporter ordinals ending in
+  1, 2, or 3 (21st, 42nd, 33rd).
+- **Duplicate folders on import** — importing a directory whose name matches
+  an existing folder now files into it instead of creating a duplicate.
+
 ## [2.1.0] - 2026-07-05
 
 Faster research and chat: a rebuilt jurisdiction picker, a streamlined research
