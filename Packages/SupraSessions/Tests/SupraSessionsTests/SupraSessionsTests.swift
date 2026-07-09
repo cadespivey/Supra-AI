@@ -1753,6 +1753,248 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertNil(controller.selectedMatterID)
     }
 
+    func testMattersSortModesOrderTheList() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let defaults = try makeScratchDefaults()
+        let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
+
+        // Distinct creation instants so the date sorts have something to order.
+        let zebra = try controller.createMatter(
+            MatterDraft(name: "Zebra Holdings v. Apex", jurisdiction: "Florida", clientNames: "Landau Corp.", clientID: "10")
+        )
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let acme = try controller.createMatter(
+            MatterDraft(name: "Acme v. Widgets", jurisdiction: "Florida", clientNames: "Yost Industries", clientID: "9")
+        )
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let noClient = try controller.createMatter(
+            MatterDraft(name: "Middleton Estate", jurisdiction: "Florida")
+        )
+
+        // Default is date-modified (newest first) — matches the pre-sort behavior.
+        XCTAssertEqual(controller.sortMode, .dateModified)
+        XCTAssertEqual(controller.matters.map(\.id), [noClient.id, acme.id, zebra.id])
+
+        // Touching the oldest matter surfaces it under date-modified…
+        try await Task.sleep(nanoseconds: 30_000_000)
+        var draft = try XCTUnwrap(controller.draft(forMatter: zebra.id))
+        draft.notes = "touched"
+        try controller.updateMatter(id: zebra.id, draft: draft)
+        XCTAssertEqual(controller.matters.map(\.id), [zebra.id, noClient.id, acme.id])
+
+        // …but date-created still reflects creation order (newest first).
+        controller.setSortMode(.dateCreated)
+        XCTAssertEqual(controller.matters.map(\.id), [noClient.id, acme.id, zebra.id])
+
+        controller.setSortMode(.name)
+        XCTAssertEqual(controller.matters.map(\.id), [acme.id, noClient.id, zebra.id])
+
+        // Client sort: numeric-aware on client number (9 before 10), clientless last.
+        controller.setSortMode(.client)
+        XCTAssertEqual(controller.matters.map(\.id), [acme.id, zebra.id, noClient.id])
+        XCTAssertEqual(controller.matters.map(\.clientDisplayName), ["Yost Industries", "Landau Corp.", nil])
+
+        // The chosen mode survives a fresh controller over the same defaults.
+        let revived = MattersController(store: store, runtimeClient: stub, defaults: defaults)
+        revived.loadMatters()
+        XCTAssertEqual(revived.sortMode, .client)
+        XCTAssertEqual(revived.matters.map(\.id), [acme.id, zebra.id, noClient.id])
+    }
+
+    func testMattersManualSortBakesCurrentOrderAndPersistsMoves() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let defaults = try makeScratchDefaults()
+        let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
+
+        let first = try controller.createMatter(name: "First")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let second = try controller.createMatter(name: "Second")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let third = try controller.createMatter(name: "Third")
+
+        // Entering manual mode keeps the order the user was looking at
+        // (date-modified: newest first).
+        controller.setSortMode(.manual)
+        XCTAssertEqual(controller.matters.map(\.id), [third.id, second.id, first.id])
+
+        // Reordering while in a derived sort is refused.
+        controller.setSortMode(.name)
+        controller.moveMatters(fromOffsets: IndexSet(integer: 0), toOffset: 3)
+        XCTAssertEqual(controller.matters.map(\.id), [first.id, second.id, third.id])
+
+        // Back in manual mode, the baked order returns and drags persist: move
+        // the top row to the bottom.
+        controller.setSortMode(.manual)
+        XCTAssertEqual(controller.matters.map(\.id), [third.id, second.id, first.id])
+        controller.moveMatters(fromOffsets: IndexSet(integer: 0), toOffset: 3)
+        XCTAssertEqual(controller.matters.map(\.id), [second.id, first.id, third.id])
+
+        // The manual order survives a "restart", and a matter created afterwards
+        // (never manually placed) trails the placed ones.
+        let revived = MattersController(store: store, runtimeClient: stub, defaults: defaults)
+        revived.loadMatters()
+        XCTAssertEqual(revived.sortMode, .manual)
+        XCTAssertEqual(revived.matters.map(\.id), [second.id, first.id, third.id])
+        let fourth = try revived.createMatter(name: "Fourth")
+        XCTAssertEqual(revived.matters.map(\.id), [second.id, first.id, third.id, fourth.id])
+    }
+
+    func testCreateMatterPreloadsPracticeAreaFolders() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let controller = MattersController(store: store, runtimeClient: stub)
+
+        let litigation = try controller.createMatter(
+            MatterDraft(name: "Hessington Oil v. Gillis", jurisdiction: "Florida", practiceArea: "Commercial Litigation")
+        )
+        let folders = try store.documentLibrary.fetchFolders(matterID: litigation.id)
+        XCTAssertEqual(
+            folders.map(\.name).sorted(),
+            ["Correspondence", "Discovery", "Drafts", "Exhibits", "Motions", "Pleadings", "Research"]
+        )
+        XCTAssertTrue(folders.allSatisfy { $0.parentFolderID == nil })
+
+        // No practice area still seeds the general starter set.
+        let generic = try controller.createMatter(name: "Middleton Estate")
+        XCTAssertEqual(
+            try store.documentLibrary.fetchFolders(matterID: generic.id).map(\.name).sorted(),
+            PracticeAreaFolderTemplates.generalFolders.sorted()
+        )
+    }
+
+    func testMattersSortByPracticeAreaGroupsAlphabetically() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let defaults = try makeScratchDefaults()
+        let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
+
+        let zoning = try controller.createMatter(
+            MatterDraft(name: "Zoning Appeal", jurisdiction: "Florida", practiceArea: "Real Estate")
+        )
+        let breach = try controller.createMatter(
+            MatterDraft(name: "Breach Suit", jurisdiction: "Florida", practiceArea: "commercial litigation")
+        )
+        let injunction = try controller.createMatter(
+            MatterDraft(name: "Injunction", jurisdiction: "Florida", practiceArea: "Commercial Litigation")
+        )
+        let untyped = try controller.createMatter(MatterDraft(name: "Aardvark Misc.", jurisdiction: "Florida"))
+
+        controller.setSortMode(.practiceArea)
+        // Areas alphabetical (case-insensitive, so both litigation spellings
+        // group together), untyped matters last, names alphabetical within.
+        XCTAssertEqual(
+            controller.matters.map(\.id),
+            [breach.id, injunction.id, zoning.id, untyped.id]
+        )
+    }
+
+    func testSidebarClientGroupingMergesNameOnlyMatterIntoNumberedClient() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let defaults = try makeScratchDefaults()
+        let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
+
+        // One matter carries the client number, the other only the (differently
+        // cased) name — the sidebar must treat them as one client, matching the
+        // directory's identity rules.
+        let numbered = try controller.createMatter(
+            MatterDraft(name: "Quiet Title Action", jurisdiction: "Florida", clientNames: "First American Title Insurance Company", clientID: "1207764")
+        )
+        let nameOnly = try controller.createMatter(
+            MatterDraft(name: "Escrow Dispute", jurisdiction: "Florida", clientNames: "first american title insurance company")
+        )
+
+        controller.setSortMode(.client)
+        XCTAssertEqual(Set(controller.matters.map(\.clientGroupKey)), ["id:1207764"])
+        XCTAssertEqual(Set(controller.matters.map(\.clientGroupLabel)), ["First American Title Insurance Company"])
+        // One group, alphabetical within it.
+        XCTAssertEqual(controller.matters.map(\.id), [nameOnly.id, numbered.id])
+    }
+
+    func testPracticeAreaGroupLabelUsesDominantSpelling() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let defaults = try makeScratchDefaults()
+        let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
+
+        _ = try controller.createMatter(MatterDraft(name: "A", jurisdiction: "FL", practiceArea: "Commercial Litigation"))
+        _ = try controller.createMatter(MatterDraft(name: "B", jurisdiction: "FL", practiceArea: "Commercial Litigation"))
+        _ = try controller.createMatter(MatterDraft(name: "C", jurisdiction: "FL", practiceArea: "commercial litigation"))
+
+        // All three share one folded group, labeled with the majority spelling —
+        // including the minority-spelled matter.
+        XCTAssertEqual(Set(controller.matters.map(\.practiceAreaGroupKey)).count, 1)
+        XCTAssertEqual(Set(controller.matters.map(\.practiceAreaGroupLabel)), ["Commercial Litigation"])
+    }
+
+    func testMattersPinnedFloatToTopAcrossSortModes() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let defaults = try makeScratchDefaults()
+        let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
+
+        let alpha = try controller.createMatter(name: "Alpha")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let bravo = try controller.createMatter(name: "Bravo")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let charlie = try controller.createMatter(name: "Charlie")
+
+        controller.setSortMode(.name)
+        XCTAssertEqual(controller.matters.map(\.id), [alpha.id, bravo.id, charlie.id])
+
+        // Pinned matters float to the top; within the pinned run the active
+        // sort still applies.
+        controller.setPinned(matterID: charlie.id, pinned: true)
+        XCTAssertEqual(controller.matters.map(\.id), [charlie.id, alpha.id, bravo.id])
+        controller.setPinned(matterID: bravo.id, pinned: true)
+        XCTAssertEqual(controller.matters.map(\.id), [bravo.id, charlie.id, alpha.id])
+
+        // Switching modes reorders both halves but keeps pinned on top
+        // (date-created is newest first).
+        controller.setSortMode(.dateCreated)
+        XCTAssertEqual(controller.matters.map(\.id), [charlie.id, bravo.id, alpha.id])
+        XCTAssertEqual(controller.matters.map(\.isPinned), [true, true, false])
+
+        controller.setPinned(matterID: charlie.id, pinned: false)
+        XCTAssertEqual(controller.matters.map(\.id), [bravo.id, charlie.id, alpha.id])
+
+        // Pins survive a "restart", and pinning never touches updated_at
+        // (compare DB-round-tripped values; SQLite stores millisecond precision).
+        let bravoUpdatedAt = controller.matters.first { $0.id == bravo.id }?.updatedAt
+        let revived = MattersController(store: store, runtimeClient: stub, defaults: defaults)
+        revived.loadMatters()
+        XCTAssertEqual(revived.matters.map(\.id), [bravo.id, charlie.id, alpha.id])
+        XCTAssertEqual(revived.matters.first?.updatedAt, bravoUpdatedAt)
+    }
+
+    func testManualMoveRespectsPinnedBoundary() async throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let defaults = try makeScratchDefaults()
+        let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
+
+        let alpha = try controller.createMatter(name: "Alpha")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let bravo = try controller.createMatter(name: "Bravo")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let charlie = try controller.createMatter(name: "Charlie")
+
+        controller.setPinned(matterID: charlie.id, pinned: true)
+        controller.setSortMode(.manual)
+        XCTAssertEqual(controller.matters.map(\.id), [charlie.id, bravo.id, alpha.id])
+
+        // Dragging the pinned row is refused outright.
+        controller.moveMatters(fromOffsets: IndexSet(integer: 0), toOffset: 3)
+        XCTAssertEqual(controller.matters.map(\.id), [charlie.id, bravo.id, alpha.id])
+
+        // Dropping an unpinned row above the pinned block clamps to just below
+        // it — the row lands where the partition allows, never snaps back.
+        controller.moveMatters(fromOffsets: IndexSet(integer: 2), toOffset: 0)
+        XCTAssertEqual(controller.matters.map(\.id), [charlie.id, alpha.id, bravo.id])
+    }
+
     // MARK: - ResearchSessionController
 
     func testResearchPlannerGeneratesParsesAndPersistsApprovedQueries() async throws {
@@ -3328,6 +3570,15 @@ final class SupraSessionsTests: XCTestCase {
             .appendingPathComponent("SupraSessionsTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
+    }
+
+    /// An isolated UserDefaults suite, wiped up front so persisted preferences
+    /// (e.g. the matter sort mode) start clean and stay hermetic per test.
+    private func makeScratchDefaults() throws -> UserDefaults {
+        let suiteName = "SupraSessionsTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        return defaults
     }
 }
 

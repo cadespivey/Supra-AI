@@ -548,9 +548,12 @@ public final class DocumentImportService: @unchecked Sendable {
                 parentID = cached
                 continue
             }
-            let created = try store.documentLibrary.createFolder(matterID: matterID, name: component, parentFolderID: parentID)
-            folderCache[accumulated] = created.id
-            parentID = created.id
+            // Reuse an existing same-named folder (seeded template folders,
+            // prior imports) instead of creating a duplicate sibling.
+            let folder = try store.documentLibrary.findFolder(matterID: matterID, parentFolderID: parentID, name: component)
+                ?? store.documentLibrary.createFolder(matterID: matterID, name: component, parentFolderID: parentID)
+            folderCache[accumulated] = folder.id
+            parentID = folder.id
         }
         return parentID
     }

@@ -133,6 +133,25 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(imported.folderID, folder.id, "a top-level import should land in the target folder, not root")
     }
 
+    func testImportReusesExistingSameNamedFolder() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        // Pre-existing root folder with the same name as an imported directory
+        // (e.g. a seeded template folder) — the import must file into it, not
+        // create a duplicate "Contracts" sibling.
+        let seeded = try store.documentLibrary.createFolder(matterID: matter.id, name: "Contracts")
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot))
+
+        _ = try await service.importSources([sourceRoot.appendingPathComponent("Contracts")], matterID: matter.id)
+
+        let folders = try store.documentLibrary.fetchFolders(matterID: matter.id)
+        XCTAssertEqual(folders.filter { $0.name.caseInsensitiveCompare("Contracts") == .orderedSame }.count, 1)
+        let imported = try XCTUnwrap(
+            store.documentLibrary.fetchDocuments(matterID: matter.id).first { $0.displayName == "agreement.txt" }
+        )
+        XCTAssertEqual(imported.folderID, seeded.id)
+    }
+
     // MARK: - Fixtures
 
     private func buildSourceTree() throws {

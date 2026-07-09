@@ -145,6 +145,12 @@ public final class MatterDocumentsController: ObservableObject {
         trashedDocuments = (try? store.documentLibrary.fetchSoftDeletedDocuments(matterID: matterID)) ?? []
         trashedFolders = ((try? store.documentLibrary.fetchFolders(matterID: matterID, includeDeleted: true)) ?? []).filter { $0.deletedAt != nil }
         tags = (try? store.documentLibrary.fetchTags(matterID: matterID)) ?? []
+        // The selected folder can vanish out from under the selection (deleting
+        // an ancestor cascades to the whole subtree); fall back to All Documents
+        // rather than silently filtering — and scoping Q&A — by an invisible folder.
+        if selectedSidebarID != Self.allDocumentsTag, !folders.contains(where: { $0.id == selectedSidebarID }) {
+            selectedSidebarID = Self.allDocumentsTag
+        }
     }
 
     /// Documents for the current sidebar selection: every document for

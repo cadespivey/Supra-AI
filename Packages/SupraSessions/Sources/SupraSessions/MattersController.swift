@@ -11,6 +11,7 @@ public struct MatterSummary: Identifiable, Sendable, Equatable {
     public var name: String
     public var jurisdiction: String
     public var court: String?
+    public var practiceArea: String?
     public var clientNames: String?
     public var matterDescription: String?
     public var internalMatterID: String?
@@ -19,20 +20,83 @@ public struct MatterSummary: Identifiable, Sendable, Equatable {
     /// LEDES `CLIENT_MATTER_ID` (e-billing).
     public var clientMatterID: String?
     public var partyPerspective: PartyPerspective
+    public var createdAt: Date
     public var updatedAt: Date
+    /// Position under the sidebar's manual sort; nil = never manually placed.
+    public var sortOrder: Int?
+    /// When the matter was pinned to the top of the sidebar; nil = not pinned.
+    public var pinnedAt: Date?
+
+    public var isPinned: Bool { pinnedAt != nil }
 
     init(record: MatterRecord) {
         self.id = record.id
         self.name = record.name
         self.jurisdiction = record.jurisdiction
         self.court = record.court
+        self.practiceArea = record.practiceArea
         self.clientNames = record.clientNames
         self.matterDescription = record.matterDescription
         self.internalMatterID = record.internalMatterID
         self.clientID = record.clientID
         self.clientMatterID = record.clientMatterID
         self.partyPerspective = PartyPerspective(rawValue: record.partyPerspective) ?? .neutral
+        self.createdAt = record.createdAt
         self.updatedAt = record.updatedAt
+        self.sortOrder = record.sortOrder
+        self.pinnedAt = record.pinnedAt
+    }
+
+    /// Canonical client-group identity, set by the controller from the
+    /// ClientDirectory after each load: matters of the same client share this
+    /// key even across name spellings or a missing client number, and the label
+    /// is the canonical spelling. Empty key = no client info.
+    public internal(set) var clientGroupKey: String = ""
+    public internal(set) var clientGroupLabel: String?
+
+    /// Canonical practice-area spelling for the group label (the raw field can
+    /// be a minority spelling variant). Set by the controller after each load.
+    public internal(set) var practiceAreaGroupLabel: String?
+
+    /// What the sidebar shows for the client group: the human name, falling back
+    /// to the client number for matters that only carry an ID.
+    public var clientDisplayName: String? {
+        if let clientNames, !clientNames.isEmpty { return clientNames }
+        if let clientID, !clientID.isEmpty { return "Client \(clientID)" }
+        return nil
+    }
+
+    /// Groups matters of the same practice area across spelling case variants;
+    /// empty for matters without one. Locale nil so the key never shifts with
+    /// the user's locale.
+    public var practiceAreaGroupKey: String {
+        guard let practiceArea, !practiceArea.isEmpty else { return "" }
+        return practiceArea.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+}
+
+/// How the sidebar orders the matter list. Raw values are persisted in
+/// UserDefaults, so they must stay stable.
+public enum MatterSortMode: String, CaseIterable, Sendable {
+    /// Grouped by client, groups ordered by client number (LEDES `CLIENT_ID`),
+    /// shown under the client's name.
+    case client
+    /// Grouped by practice area, groups ordered alphabetically.
+    case practiceArea
+    case name
+    case dateCreated
+    case dateModified
+    case manual
+
+    public var title: String {
+        switch self {
+        case .client: return "Client"
+        case .practiceArea: return "Practice Area"
+        case .name: return "Name"
+        case .dateCreated: return "Date Created"
+        case .dateModified: return "Date Modified"
+        case .manual: return "Manual"
+        }
     }
 }
 
@@ -125,6 +189,7 @@ public struct MatterAuditEntry: Identifiable, Sendable, Equatable {
 @MainActor
 public final class MattersController: ObservableObject {
     @Published public private(set) var matters: [MatterSummary] = []
+    @Published public private(set) var sortMode: MatterSortMode
     @Published public private(set) var selectedMatterID: String?
     @Published public private(set) var chatController: GlobalChatController?
     @Published public private(set) var researchController: ResearchSessionController?
@@ -141,19 +206,26 @@ public final class MattersController: ObservableObject {
     private let defaultSystemPrompt: String?
     private let documentQueue: DocumentProcessingQueue?
     private let isImportReady: (@MainActor () -> Bool)?
+    private let defaults: UserDefaults
+
+    private static let sortModeKey = "supra.matterSortMode"
 
     public init(
         store: SupraStore,
         runtimeClient: any RuntimeClientProtocol,
         defaultSystemPrompt: String? = nil,
         documentQueue: DocumentProcessingQueue? = nil,
-        isImportReady: (@MainActor () -> Bool)? = nil
+        isImportReady: (@MainActor () -> Bool)? = nil,
+        defaults: UserDefaults = .standard
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.defaultSystemPrompt = defaultSystemPrompt
         self.documentQueue = documentQueue
         self.isImportReady = isImportReady
+        self.defaults = defaults
+        self.sortMode = defaults.string(forKey: Self.sortModeKey)
+            .flatMap(MatterSortMode.init(rawValue:)) ?? .dateModified
     }
 
     public var selectedMatter: MatterSummary? {
@@ -207,6 +279,11 @@ public final class MattersController: ObservableObject {
             actor: "user",
             summary: "Created matter “\(record.name)”"
         )
+        // Preload the Documents tab with the practice area's starter folders
+        // (best-effort — a folder hiccup shouldn't fail matter creation).
+        for folderName in PracticeAreaFolderTemplates.folders(forPracticeArea: draft.practiceArea) {
+            _ = try? store.documentLibrary.createFolder(matterID: record.id, name: folderName)
+        }
         reload()
         select(matterID: record.id)
         return MatterSummary(record: record)
@@ -217,6 +294,19 @@ public final class MattersController: ObservableObject {
     @discardableResult
     public func createMatter(name: String = "New Matter") throws -> MatterSummary {
         try createMatter(MatterDraft(name: name, jurisdiction: "Unspecified"))
+    }
+
+    /// The known clients (numbers + canonical names) aggregated from existing
+    /// matters, rebuilt fresh for each matter form so recommendations always
+    /// reflect the current data.
+    public func clientDirectory() -> ClientDirectory {
+        ClientDirectory.build(from: (try? store.matters.fetchClientUsage()) ?? [])
+    }
+
+    /// The known practice areas aggregated from existing matters, for the matter
+    /// form's suggestions.
+    public func practiceAreaDirectory() -> PracticeAreaDirectory {
+        PracticeAreaDirectory.build(from: (try? store.matters.fetchPracticeAreaUsage()) ?? [])
     }
 
     /// The editable draft for an existing matter, or nil if it no longer exists.
@@ -368,7 +458,141 @@ public final class MattersController: ObservableObject {
         draftingController = MatterDraftingController(store: store, runtimeClient: runtimeClient)
     }
 
+    /// Pins or unpins a matter; pinned matters float to the top of the sidebar
+    /// in every sort mode.
+    public func setPinned(matterID: String, pinned: Bool) {
+        try? store.matters.setMatterPinned(id: matterID, pinned: pinned)
+        reload()
+    }
+
+    // MARK: - Sorting
+
+    /// Switches the sidebar sort and persists the choice. Entering manual mode for
+    /// the first time (no matter has ever been placed) bakes in the order the user
+    /// is currently looking at, so the list doesn't jump; afterwards the saved
+    /// manual order is restored whenever they come back to it.
+    public func setSortMode(_ mode: MatterSortMode) {
+        sortMode = mode
+        defaults.set(mode.rawValue, forKey: Self.sortModeKey)
+        if mode == .manual, matters.allSatisfy({ $0.sortOrder == nil }) {
+            try? store.matters.updateMatterSortOrder(orderedIDs: matters.map(\.id))
+        }
+        reload()
+    }
+
+    /// Drag-to-reorder for manual mode: applies the move to the visible list and
+    /// persists the resulting order. Same semantics as SwiftUI's
+    /// `move(fromOffsets:toOffset:)` (destination is an offset into the
+    /// pre-removal list), reimplemented here because that helper lives in SwiftUI
+    /// and this package doesn't link it.
+    public func moveMatters(fromOffsets source: IndexSet, toOffset destination: Int) {
+        guard sortMode == .manual else { return }
+        // Pinned rows always float above the list, so a drag may not cross the
+        // pinned/unpinned boundary — otherwise the drop would silently snap
+        // back on the re-partition. Pinned rows themselves aren't draggable
+        // (`.moveDisabled` in the sidebar); here the drop TARGET is clamped
+        // below the pinned block.
+        let pinnedCount = matters.prefix(while: \.isPinned).count
+        guard source.allSatisfy({ $0 >= pinnedCount }) else { return }
+        let clampedDestination = max(destination, pinnedCount)
+        var reordered = matters
+        let moved = source.sorted(by: >).compactMap { index in
+            reordered.indices.contains(index) ? reordered.remove(at: index) : nil
+        }
+        let insertion = clampedDestination - source.count(where: { $0 < clampedDestination })
+        reordered.insert(contentsOf: moved.reversed(), at: min(insertion, reordered.count))
+        try? store.matters.updateMatterSortOrder(orderedIDs: reordered.map(\.id))
+        reload()
+    }
+
     private func reload() {
-        matters = (try? store.matters.fetchMatters())?.map(MatterSummary.init) ?? matters
+        var loaded = (try? store.matters.fetchMatters())?.map(MatterSummary.init) ?? matters
+        Self.canonicalizeGroupIdentities(&loaded)
+        matters = Self.sorted(loaded, by: sortMode)
+    }
+
+    /// Stamps each summary with its canonical client-group key/label and
+    /// practice-area label, so the sidebar's grouping (and the client-sort
+    /// comparator) agree with the directories about what "the same client" or
+    /// "the same practice area" is — folded spellings collapse, and a name-only
+    /// matter joins the numbered client it unambiguously matches.
+    static func canonicalizeGroupIdentities(_ matters: inout [MatterSummary]) {
+        let clientDirectory = ClientDirectory.build(from: matters.map {
+            MattersRepository.ClientUsageRow(clientID: $0.clientID, clientNames: $0.clientNames, matterCount: 1, lastUsedAt: $0.updatedAt)
+        })
+        let practiceAreas = PracticeAreaDirectory.build(from: matters.compactMap { matter in
+            matter.practiceArea.map { MattersRepository.PracticeAreaUsageRow(name: $0, matterCount: 1) }
+        })
+        for index in matters.indices {
+            let identity = clientDirectory.groupIdentity(
+                clientID: matters[index].clientID,
+                clientNames: matters[index].clientNames
+            )
+            matters[index].clientGroupKey = identity?.key ?? ""
+            matters[index].clientGroupLabel = identity?.label
+            matters[index].practiceAreaGroupLabel = matters[index].practiceArea
+                .flatMap(practiceAreas.canonicalName(for:))
+        }
+    }
+
+    /// Applies the sort mode, then floats pinned matters to the top. Pinning
+    /// only partitions the list — within each half the mode's order holds, so
+    /// pinned matters stay predictable across every sort.
+    static func sorted(_ matters: [MatterSummary], by mode: MatterSortMode) -> [MatterSummary] {
+        let ordered = orderedByMode(matters, mode)
+        return ordered.filter(\.isPinned) + ordered.filter { !$0.isPinned }
+    }
+
+    private static func orderedByMode(_ matters: [MatterSummary], _ mode: MatterSortMode) -> [MatterSummary] {
+        switch mode {
+        case .client:
+            // Groups ordered by client number (numeric-aware, so client 9 precedes
+            // client 10); matters without any client info trail. Within a client,
+            // matters read alphabetically. Clients known only by name sort after
+            // all numbered clients — the "id:"/"name:" key prefixes encode that
+            // deliberately (number-identified clients are the organized ones).
+            return matters.sorted { lhs, rhs in
+                switch (lhs.clientGroupKey.isEmpty, rhs.clientGroupKey.isEmpty) {
+                case (true, false): return false
+                case (false, true): return true
+                default: break
+                }
+                if lhs.clientGroupKey != rhs.clientGroupKey {
+                    return lhs.clientGroupKey.localizedStandardCompare(rhs.clientGroupKey) == .orderedAscending
+                }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+        case .practiceArea:
+            // Groups alphabetical by practice area (case-insensitive), matters
+            // without one trailing; alphabetical within a group.
+            return matters.sorted { lhs, rhs in
+                switch (lhs.practiceAreaGroupKey.isEmpty, rhs.practiceAreaGroupKey.isEmpty) {
+                case (true, false): return false
+                case (false, true): return true
+                default: break
+                }
+                if lhs.practiceAreaGroupKey != rhs.practiceAreaGroupKey {
+                    return lhs.practiceAreaGroupKey.localizedStandardCompare(rhs.practiceAreaGroupKey) == .orderedAscending
+                }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+        case .name:
+            return matters.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        case .dateCreated:
+            return matters.sorted { $0.createdAt > $1.createdAt }
+        case .dateModified:
+            return matters.sorted { $0.updatedAt > $1.updatedAt }
+        case .manual:
+            // Never-placed matters (created after the order was set) trail the
+            // placed ones, newest first among themselves.
+            return matters.sorted { lhs, rhs in
+                switch (lhs.sortOrder, rhs.sortOrder) {
+                case let (l?, r?): return l < r
+                case (_?, nil): return true
+                case (nil, _?): return false
+                case (nil, nil): return lhs.updatedAt > rhs.updatedAt
+                }
+            }
+        }
     }
 }
