@@ -167,22 +167,24 @@ struct ScratchPadView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 16) {
-            // The screen title, sized like every other module header.
-            Text("ScratchPad")
-                .font(.supraTitle)
-            Spacer(minLength: 12)
-            weekStrip
-            Spacer(minLength: 12)
-            VStack(alignment: .trailing, spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
+                // The screen title, sized like every other module header.
+                Text("ScratchPad")
+                    .font(.supraTitle)
                 GhostSegmentedControl(
                     selection: $tab,
                     segments: [(.note, "Note", ""), (.draft, "Billing draft", "")]
                 )
+            }
+            Spacer(minLength: 12)
+            weekStrip
+            Spacer(minLength: 12)
+            VStack(alignment: .trailing, spacing: 6) {
+                scratchSearchField
+                    .frame(width: 200)
                 HStack(spacing: 8) {
                     historyButton
                     lockButton
-                    scratchSearchField
-                        .frame(width: 180)
                 }
             }
         }
@@ -238,7 +240,6 @@ struct ScratchPadView: View {
     private var historyButton: some View {
         Button { showHistory.toggle() } label: {
             Label("History", systemImage: "calendar")
-                .labelStyle(.iconOnly)
         }
         .buttonStyle(.ghost)
         .help("Jump to another day")
@@ -275,7 +276,6 @@ struct ScratchPadView: View {
                 controller.reopenCurrentDay()
             } label: {
                 Label("Locked", systemImage: "lock.fill")
-                    .labelStyle(.iconOnly)
             }
             .buttonStyle(.ghost)
             .help("This day is locked. Reopen to edit.")
@@ -284,7 +284,6 @@ struct ScratchPadView: View {
                 controller.lockCurrentDay()
             } label: {
                 Label("Lock day", systemImage: "lock.open")
-                    .labelStyle(.iconOnly)
             }
             .buttonStyle(.ghost)
             .help("Finalize and lock this day (reversible).")
