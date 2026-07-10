@@ -174,9 +174,16 @@ public final class MatterDocumentsController: ObservableObject {
     /// The auto-created destination folder for research imported from Authorities.
     public static let researchFolderName = "Research"
 
-    /// Imports dropped/picked files and folders, if setup is complete. Pass a
-    /// `targetFolderID` to file the imports into a specific folder (nil = root).
-    public func importItems(_ urls: [URL], targetFolderID: String? = nil) {
+    /// Imports dropped/picked files and folders into the folder currently
+    /// selected in the sidebar ("All Documents" = the root) — an import lands
+    /// where the user is looking instead of always in All Documents.
+    public func importItems(_ urls: [URL]) {
+        importItems(urls, targetFolderID: selectedFolderID)
+    }
+
+    /// Imports into a specific folder (nil = root) regardless of the sidebar
+    /// selection, if setup is complete.
+    public func importItems(_ urls: [URL], targetFolderID: String?) {
         guard isImportReady() else {
             message = "Finish Document Intelligence setup in Settings before importing."
             return

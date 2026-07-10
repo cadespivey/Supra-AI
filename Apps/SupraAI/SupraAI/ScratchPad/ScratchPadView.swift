@@ -1,4 +1,5 @@
 import SupraCore
+import SupraDesignSystem
 import SupraSessions
 import SupraStore
 import SwiftUI
@@ -29,6 +30,8 @@ struct ScratchPadView: View {
     @State private var dismissedToken: String?
     /// Cross-day note search term, shown below the day controls in the header.
     @State private var searchTerm = ""
+    /// True while a drag hovers the note surface (drives the drop hint).
+    @State private var fileDropTargeted = false
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -69,18 +72,39 @@ struct ScratchPadView: View {
         if isSearching {
             searchResultsList
         } else {
-            entryList
-                .dropDestination(for: URL.self) { urls, _ in
-                    // A file dropped on the timeline (not on a specific note) creates a
-                    // minimal note carrying it, so it's never orphaned in a day-level tray.
-                    guard !controller.isCurrentDayLocked, !urls.isEmpty else { return false }
-                    Task { await controller.addEntry("", attachmentURLs: urls) }
-                    return true
+            VStack(spacing: 0) {
+                entryList
+                attachmentBar
+                errorBanner
+                Divider()
+                composer
+            }
+            // The whole Note tab takes file drops (not just the entry list), so an
+            // empty day accepts a drop anywhere. A file dropped on the day (not on
+            // a specific note) creates a minimal note carrying it, so it's never
+            // orphaned in a day-level tray; dropping on a note still attaches to
+            // that note (the row's own target wins).
+            .dropDestination(for: URL.self) { urls, _ in
+                guard !controller.isCurrentDayLocked, !urls.isEmpty else { return false }
+                Task { await controller.addEntry("", attachmentURLs: urls) }
+                return true
+            }
+            // Emails and other promised-file drags (Mail/Outlook messages, browser
+            // images) never reach SwiftUI's URL target — the promise layer receives
+            // them into the same evidence path. Plain file drags stay with the
+            // .dropDestination targets above.
+            .supraFileDrop(
+                isEnabled: !controller.isCurrentDayLocked,
+                acceptsFileURLs: false,
+                isTargeted: $fileDropTargeted
+            ) { urls in
+                Task { await controller.addEntry("", attachmentURLs: urls) }
+            }
+            .overlay(alignment: .top) {
+                if fileDropTargeted {
+                    SupraDropHint("Drop to add as evidence for this day")
                 }
-            attachmentBar
-            errorBanner
-            Divider()
-            composer
+            }
         }
     }
 

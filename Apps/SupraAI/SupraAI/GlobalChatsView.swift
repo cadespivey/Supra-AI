@@ -1,5 +1,6 @@
 import AppKit
 import SupraCore
+import SupraDesignSystem
 import SupraDocuments
 import SupraResearch
 import SupraSessions
@@ -30,6 +31,8 @@ struct GlobalChatsView: View {
     @State private var attachments: [ChatAttachmentContext] = []
     @State private var attachmentError: String?
     @State private var isLoadingAttachment = false
+    /// True while a drag hovers the conversation column (drives the drop hint).
+    @State private var fileDropTargeted = false
     @FocusState private var inputFocused: Bool
 
     // Chat-history sidebar state (global chat only).
@@ -128,6 +131,20 @@ struct GlobalChatsView: View {
             }
             composer
             chatStatusBar
+        }
+        // Files dragged anywhere over the conversation (Finder files, or emails
+        // and other promised-file drags straight from Mail/Outlook) become chat
+        // attachments — the same session-only path as the paperclip.
+        .supraFileDrop(
+            isEnabled: !controller.isGenerating && !isLoadingAttachment,
+            isTargeted: $fileDropTargeted
+        ) { urls in
+            addAttachments(urls)
+        }
+        .overlay(alignment: .top) {
+            if fileDropTargeted {
+                SupraDropHint("Drop files to attach to this chat")
+            }
         }
     }
 

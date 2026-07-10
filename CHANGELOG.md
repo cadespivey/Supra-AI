@@ -11,8 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Drag and drop everywhere** — drag files onto a ScratchPad day to add them
+  as billing evidence, or onto a global or matter chat to attach them to the
+  conversation. This includes emails dragged straight from Mail or Outlook
+  (and other drags that deliver a promised file rather than a real one), which
+  previously did nothing.
+
 ### Changed
 
+- **Documents drop follows your folder** — dropping or importing files in a
+  matter's Documents tab now files them into the folder selected in the
+  sidebar (All Documents still imports to the top level, as before).
 - **ScratchPad week strip** — the ScratchPad header now shows the week at a
   glance: step between weeks and pick a day directly, with each date carrying
   the billable-hour total from its latest billing draft (the grey number
