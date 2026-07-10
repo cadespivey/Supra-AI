@@ -9,7 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
-## [Unreleased]
+## [2.1.2] - 2026-07-10
+
+Drag and drop everywhere, and a week-at-a-glance ScratchPad with billable-hour
+indicators.
 
 ### Added
 
@@ -29,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the billable-hour total from its latest billing draft (the grey number
   appears once a draft has been run for that day and updates as you edit or
   regenerate). The screen title now matches the other module headers.
+
+### Fixed
+
+- **Research planner crash** — saving a session while a proposed query was
+  still being edited could crash the app; edits are now routed safely.
+- **Drop hardening (review fixes)** — dropped batches are capped in count and
+  size with clear messages when a promised file can't be read or exceeds the
+  limits; temporary files from message drags are cleaned up after use; and a
+  drop surface toggled between configurations no longer holds on to stale
+  drag registrations. Imports dropped on a folder keep that folder even if
+  you navigate away before the files finish arriving.
 
 ## [2.1.1] - 2026-07-09
 
