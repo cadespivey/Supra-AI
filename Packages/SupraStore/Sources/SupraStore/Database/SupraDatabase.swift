@@ -10,6 +10,17 @@ public final class SupraDatabase: @unchecked Sendable {
     }
 
     public convenience init(url: URL) throws {
+        // Safety net: before a genuine schema upgrade mutates an existing on-disk
+        // database, capture a consistent rollback snapshot. Best-effort — a snapshot
+        // failure (e.g. no disk space) must never stop the app from launching, and a
+        // fresh/first-create or up-to-date database is a no-op. In-memory stores never
+        // reach this path.
+        try? PreMigrationSnapshot.captureIfUpgrading(
+            databaseURL: url,
+            migrator: SupraMigrator.makeMigrator(),
+            snapshotDirectory: url.deletingLastPathComponent()
+                .appendingPathComponent("PreMigrationSnapshots", isDirectory: true)
+        )
         var configuration = Configuration()
         configuration.prepareDatabase { db in
             try db.execute(sql: "PRAGMA foreign_keys = ON")
