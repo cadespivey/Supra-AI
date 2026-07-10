@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "SupraDesignSystem", targets: ["SupraDesignSystem"])
     ],
     targets: [
-        .target(name: "SupraDesignSystem")
+        .target(name: "SupraDesignSystem"),
+        .testTarget(name: "SupraDesignSystemTests", dependencies: ["SupraDesignSystem"])
     ]
 )
