@@ -146,13 +146,28 @@ struct ResearchPlannerView: View {
 
                 if showsQuerySection {
                     Section("Queries") {
-                        ForEach($controller.plannedQueries) { $query in
+                        // Iterate by element identity and drive edits through the
+                        // controller's id-keyed mutators. The binding-collection form
+                        // (`ForEach($controller.plannedQueries)`) vends *index-based*
+                        // element bindings whose getter does `array[index]`; when Save
+                        // clears `plannedQueries` while a query field is still focused,
+                        // that stale getter indexes an empty array and traps
+                        // (Array._checkSubscript / EXC_BREAKPOINT). These id-keyed
+                        // closures read a captured value and look edits up by id, so a
+                        // concurrent clear is a safe no-op.
+                        ForEach(controller.plannedQueries) { query in
                             HStack(spacing: 8) {
-                                Toggle("Approved", isOn: $query.approved).labelsHidden()
+                                Toggle("Approved", isOn: Binding(
+                                    get: { query.approved },
+                                    set: { controller.setApproved($0, for: query.id) }
+                                )).labelsHidden()
                                     .accessibilityIdentifier("planner.approved")
                                 BoxedLeadingTextField(
                                     placeholder: "Query",
-                                    text: $query.text,
+                                    text: Binding(
+                                        get: { query.text },
+                                        set: { controller.updateText($0, for: query.id) }
+                                    ),
                                     accessibilityID: "planner.query"
                                 )
                                     .accessibilityIdentifier("planner.query")
