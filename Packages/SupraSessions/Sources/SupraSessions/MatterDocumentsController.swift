@@ -214,19 +214,23 @@ public final class MatterDocumentsController: ObservableObject {
     /// The id of the matter's top-level "Research" folder, creating it if absent.
     @discardableResult
     public func ensureResearchFolderID() -> String? {
-        if let existing = folders.first(where: { $0.parentFolderID == nil && $0.name == Self.researchFolderName }) {
-            return existing.id
-        }
-        let created = try? store.documentLibrary.createFolder(matterID: matterID, name: Self.researchFolderName)
+        let folder = try? store.documentLibrary.ensureFolder(
+            matterID: matterID,
+            name: Self.researchFolderName
+        )
         reload()
-        return created?.id
+        return folder?.id
     }
 
     // MARK: - Folders
 
     public func createFolder(name: String, parentFolderID: String?) {
         do {
-            _ = try store.documentLibrary.createFolder(matterID: matterID, name: name, parentFolderID: parentFolderID)
+            _ = try store.documentLibrary.ensureFolder(
+                matterID: matterID,
+                name: name,
+                parentFolderID: parentFolderID
+            )
             reload()
         } catch { message = error.localizedDescription }
     }

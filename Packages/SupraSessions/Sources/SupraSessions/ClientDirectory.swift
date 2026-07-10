@@ -6,7 +6,7 @@ public struct ClientDirectoryEntry: Identifiable, Sendable, Equatable {
     /// LEDES `CLIENT_ID` (the client number); nil for clients recorded by name only.
     public let clientID: String?
     /// Canonical display name: the spelling used by the most matters (ties break
-    /// to the most recently touched), so accepting a recommendation converges
+    /// by recency, then alphabetically), so accepting a recommendation converges
     /// every matter on one spelling.
     public let name: String?
     public let matterCount: Int
@@ -20,11 +20,28 @@ public struct ClientDirectoryEntry: Identifiable, Sendable, Equatable {
 public struct ClientDirectory: Sendable, Equatable {
     /// Most-used clients first, so the likeliest picks lead the suggestions.
     public let entries: [ClientDirectoryEntry]
+    /// Every folded spelling ever associated with each numbered client. Entries
+    /// retain one canonical display name, while aliases keep matching/grouping
+    /// faithful to the underlying matters.
+    private let aliasesByClientKey: [String: Set<String>]
+    /// Numbered clients associated with each folded alias. A singleton is safe
+    /// to infer; two or more is deliberately ambiguous.
+    private let numberedClientKeysByAlias: [String: Set<String>]
 
-    public static let empty = ClientDirectory(entries: [])
+    public static let empty = ClientDirectory(
+        entries: [],
+        aliasesByClientKey: [:],
+        numberedClientKeysByAlias: [:]
+    )
 
-    init(entries: [ClientDirectoryEntry]) {
+    init(
+        entries: [ClientDirectoryEntry],
+        aliasesByClientKey: [String: Set<String>],
+        numberedClientKeysByAlias: [String: Set<String>]
+    ) {
         self.entries = entries
+        self.aliasesByClientKey = aliasesByClientKey
+        self.numberedClientKeysByAlias = numberedClientKeysByAlias
     }
 
     public static func build(from rows: [MattersRepository.ClientUsageRow]) -> ClientDirectory {
@@ -45,23 +62,50 @@ public struct ClientDirectory: Sendable, Equatable {
 
             var dominantName: String? {
                 spellings.max { lhs, rhs in
-                    (lhs.value.count, lhs.value.lastUsed) < (rhs.value.count, rhs.value.lastUsed)
+                    ClientDirectory.canonicalSpellingRanksHigher(
+                        name: rhs.key,
+                        count: rhs.value.count,
+                        lastUsedAt: rhs.value.lastUsed,
+                        than: lhs.key,
+                        otherCount: lhs.value.count,
+                        otherLastUsedAt: lhs.value.lastUsed
+                    )
                 }?.key
             }
         }
 
         var numbered: [String: Tally] = [:]
+        var displayClientIDs: [String: String] = [:]
         var nameOnly: [String: Tally] = [:]
         for row in rows {
-            if let clientID = row.clientID {
-                numbered[clientID, default: Tally()].add(row)
+            let trimmedID = row.clientID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmedID.isEmpty {
+                let key = trimmedID.lowercased()
+                numbered[key, default: Tally()].add(row)
+                if displayClientIDs[key].map({ trimmedID < $0 }) ?? true {
+                    displayClientIDs[key] = trimmedID
+                }
             } else if let name = row.clientNames {
                 nameOnly[Self.fold(name), default: Tally()].add(row)
             }
         }
 
-        var entries = numbered.map { clientID, tally in
-            ClientDirectoryEntry(clientID: clientID, name: tally.dominantName, matterCount: tally.total)
+        let aliasesByClientKey = numbered.mapValues { tally in
+            Set(tally.spellings.keys.map(Self.fold))
+        }
+        var numberedClientKeysByAlias: [String: Set<String>] = [:]
+        for (clientKey, aliases) in aliasesByClientKey {
+            for alias in aliases {
+                numberedClientKeysByAlias[alias, default: []].insert(clientKey)
+            }
+        }
+
+        var entries = numbered.map { clientKey, tally in
+            ClientDirectoryEntry(
+                clientID: displayClientIDs[clientKey] ?? clientKey,
+                name: tally.dominantName,
+                matterCount: tally.total
+            )
         }
 
         // A name-only client whose name matches exactly one numbered client is
@@ -69,12 +113,12 @@ public struct ClientDirectory: Sendable, Equatable {
         // recommends the number. Ambiguous names (two client numbers sharing a
         // name) stay separate rather than guessing.
         for (foldedName, tally) in nameOnly {
-            let matches = entries.indices.filter { index in
-                entries[index].name.map { Self.fold($0) == foldedName } ?? false
-            }
-            if matches.count == 1 {
-                let match = entries[matches[0]]
-                entries[matches[0]] = ClientDirectoryEntry(
+            let matchingClientKeys = numberedClientKeysByAlias[foldedName] ?? []
+            if matchingClientKeys.count == 1,
+               let clientKey = matchingClientKeys.first,
+               let matchIndex = entries.firstIndex(where: { Self.clientKey($0.clientID) == clientKey }) {
+                let match = entries[matchIndex]
+                entries[matchIndex] = ClientDirectoryEntry(
                     clientID: match.clientID,
                     name: match.name,
                     matterCount: match.matterCount + tally.total
@@ -88,9 +132,16 @@ public struct ClientDirectory: Sendable, Equatable {
 
         entries.sort { lhs, rhs in
             if lhs.matterCount != rhs.matterCount { return lhs.matterCount > rhs.matterCount }
-            return (lhs.name ?? lhs.clientID ?? "") < (rhs.name ?? rhs.clientID ?? "")
+            let lhsLabel = lhs.name ?? lhs.clientID ?? ""
+            let rhsLabel = rhs.name ?? rhs.clientID ?? ""
+            if lhsLabel != rhsLabel { return lhsLabel < rhsLabel }
+            return (lhs.clientID ?? "") < (rhs.clientID ?? "")
         }
-        return ClientDirectory(entries: entries)
+        return ClientDirectory(
+            entries: entries,
+            aliasesByClientKey: aliasesByClientKey,
+            numberedClientKeysByAlias: numberedClientKeysByAlias
+        )
     }
 
     /// Clients whose number starts with the typed digits, exact match first.
@@ -106,8 +157,14 @@ public struct ClientDirectory: Sendable, Equatable {
     public func suggestions(forName query: String, limit: Int = 6) -> [ClientDirectoryEntry] {
         let folded = Self.fold(query)
         guard !folded.isEmpty else { return [] }
-        let matches = entries.filter { $0.name.map { Self.fold($0).contains(folded) } ?? false }
-        return Array(rankedFirst(matches) { $0.name.map { Self.fold($0).hasPrefix(folded) } ?? false }.prefix(limit))
+        let matches = entries.filter { entry in
+            searchableNames(for: entry).contains { $0.contains(folded) }
+        }
+        return Array(
+            rankedFirst(matches) { entry in
+                searchableNames(for: entry).contains { $0.hasPrefix(folded) }
+            }.prefix(limit)
+        )
     }
 
     /// The client with exactly this number, if known.
@@ -133,11 +190,17 @@ public struct ClientDirectory: Sendable, Equatable {
         }
         guard !trimmedName.isEmpty else { return nil }
         let folded = Self.fold(trimmedName)
-        let matches = entries.filter { $0.name.map { Self.fold($0) == folded } ?? false }
-        if matches.count == 1, let match = matches.first, let number = match.clientID {
+        let matchingClientKeys = numberedClientKeysByAlias[folded] ?? []
+        if matchingClientKeys.count == 1,
+           let clientKey = matchingClientKeys.first,
+           let match = entries.first(where: { Self.clientKey($0.clientID) == clientKey }),
+           let number = match.clientID {
             return ("id:\(number.lowercased())", match.name ?? trimmedName)
         }
-        return ("name:\(folded)", matches.first?.name ?? trimmedName)
+        let standalone = entries.first {
+            $0.clientID == nil && $0.name.map { Self.fold($0) == folded } == true
+        }
+        return ("name:\(folded)", standalone?.name ?? trimmedName)
     }
 
     /// True when the form's fields already carry this entry — both the number
@@ -157,6 +220,36 @@ public struct ClientDirectory: Sendable, Equatable {
         leads: (ClientDirectoryEntry) -> Bool
     ) -> [ClientDirectoryEntry] {
         matches.filter(leads) + matches.filter { !leads($0) }
+    }
+
+    private func searchableNames(for entry: ClientDirectoryEntry) -> Set<String> {
+        var names = Set(entry.name.map { [Self.fold($0)] } ?? [])
+        if let key = Self.clientKey(entry.clientID), let aliases = aliasesByClientKey[key] {
+            names.formUnion(aliases)
+        }
+        return names
+    }
+
+    /// Deterministic canonical-spelling ranking: usage count, recency, then
+    /// lexical spelling. Internal so the final tie-break has a direct wire-proof.
+    static func canonicalSpellingRanksHigher(
+        name: String,
+        count: Int,
+        lastUsedAt: Date,
+        than otherName: String,
+        otherCount: Int,
+        otherLastUsedAt: Date
+    ) -> Bool {
+        if count != otherCount { return count > otherCount }
+        if lastUsedAt != otherLastUsedAt { return lastUsedAt > otherLastUsedAt }
+        return name < otherName
+    }
+
+    private static func clientKey(_ clientID: String?) -> String? {
+        guard let trimmed = clientID?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed.lowercased()
     }
 
     private static func fold(_ value: String) -> String {

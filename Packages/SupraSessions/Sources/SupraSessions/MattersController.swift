@@ -281,9 +281,7 @@ public final class MattersController: ObservableObject {
         )
         // Preload the Documents tab with the practice area's starter folders
         // (best-effort — a folder hiccup shouldn't fail matter creation).
-        for folderName in PracticeAreaFolderTemplates.folders(forPracticeArea: draft.practiceArea) {
-            _ = try? store.documentLibrary.createFolder(matterID: record.id, name: folderName)
-        }
+        seedStarterFolders(matterID: record.id, practiceArea: draft.practiceArea)
         reload()
         select(matterID: record.id)
         return MatterSummary(record: record)
@@ -307,6 +305,15 @@ public final class MattersController: ObservableObject {
     /// form's suggestions.
     public func practiceAreaDirectory() -> PracticeAreaDirectory {
         PracticeAreaDirectory.build(from: (try? store.matters.fetchPracticeAreaUsage()) ?? [])
+    }
+
+    /// Seeds a matter's practice-area starter set through the same idempotent
+    /// folder identity used by imports and manual creation. Public for the
+    /// direct-store demo fixture path, which intentionally bypasses createMatter.
+    public func seedStarterFolders(matterID: String, practiceArea: String) {
+        for folderName in PracticeAreaFolderTemplates.folders(forPracticeArea: practiceArea) {
+            _ = try? store.documentLibrary.ensureFolder(matterID: matterID, name: folderName)
+        }
     }
 
     /// The editable draft for an existing matter, or nil if it no longer exists.
@@ -494,14 +501,32 @@ public final class MattersController: ObservableObject {
         // below the pinned block.
         let pinnedCount = matters.prefix(while: \.isPinned).count
         guard source.allSatisfy({ $0 >= pinnedCount }) else { return }
-        let clampedDestination = max(destination, pinnedCount)
-        var reordered = matters
-        let moved = source.sorted(by: >).compactMap { index in
-            reordered.indices.contains(index) ? reordered.remove(at: index) : nil
+        let clampedDestination = max(destination, pinnedCount) - pinnedCount
+
+        // Reorder only the visible unpinned suffix. Pinned rows occupy fixed
+        // slots in the latent manual order so unpinning returns them to the
+        // position they held before they floated above the list.
+        var reorderedUnpinned = matters.filter { !$0.isPinned }
+        let unpinnedSource = IndexSet(source.compactMap { visibleIndex in
+            let index = visibleIndex - pinnedCount
+            return reorderedUnpinned.indices.contains(index) ? index : nil
+        })
+        guard !unpinnedSource.isEmpty else { return }
+        let moved = unpinnedSource.sorted(by: >).map { index in
+            reorderedUnpinned.remove(at: index)
         }
-        let insertion = clampedDestination - source.count(where: { $0 < clampedDestination })
-        reordered.insert(contentsOf: moved.reversed(), at: min(insertion, reordered.count))
-        try? store.matters.updateMatterSortOrder(orderedIDs: reordered.map(\.id))
+        let insertion = clampedDestination
+            - unpinnedSource.count(where: { $0 < clampedDestination })
+        reorderedUnpinned.insert(
+            contentsOf: moved.reversed(),
+            at: min(insertion, reorderedUnpinned.count)
+        )
+
+        var unpinnedIterator = reorderedUnpinned.makeIterator()
+        let latentOrder = Self.orderedByMode(matters, .manual).compactMap { matter in
+            matter.isPinned ? matter : unpinnedIterator.next()
+        }
+        try? store.matters.updateMatterSortOrder(orderedIDs: latentOrder.map(\.id))
         reload()
     }
 

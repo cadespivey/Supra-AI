@@ -31,6 +31,9 @@ struct GlobalChatsView: View {
     @State private var attachments: [ChatAttachmentContext] = []
     @State private var attachmentError: String?
     @State private var isLoadingAttachment = false
+    @State private var isReceivingFileDrop = false
+    @State private var attachmentLoadTask: Task<Void, Never>?
+    @State private var attachmentLoadID: UUID?
     /// True while a drag hovers the conversation column (drives the drop hint).
     @State private var fileDropTargeted = false
     @FocusState private var inputFocused: Bool
@@ -84,11 +87,15 @@ struct GlobalChatsView: View {
         // Rotate the example prompts every time the chat window goes blank/empty
         // (new chat, deleted chat, or a moved chat) so they don't get stale.
         .onChange(of: controller.selectedChatID) { _, _ in
+            cancelAttachmentLoading(clearAttachments: true)
             suggestions = ChatSuggestions.sample()
         }
         .onChange(of: chatSearch) { _, newValue in
             let query = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             tagHits = query.count > 1 ? controller.tagSearch(term: query) : []
+        }
+        .onDisappear {
+            cancelAttachmentLoading(clearAttachments: false)
         }
     }
 
@@ -136,10 +143,17 @@ struct GlobalChatsView: View {
         // and other promised-file drags straight from Mail/Outlook) become chat
         // attachments — the same session-only path as the paperclip.
         .supraFileDrop(
-            isEnabled: !controller.isGenerating && !isLoadingAttachment,
-            isTargeted: $fileDropTargeted
-        ) { urls in
-            addAttachments(urls)
+            isEnabled: !controller.isGenerating && !attachmentBusy,
+            limits: .chatAttachments,
+            isTargeted: $fileDropTargeted,
+            isProcessing: $isReceivingFileDrop
+        ) { [targetChatID = controller.selectedChatID] delivery in
+            let task = replaceAttachmentLoad(
+                delivery.urls,
+                targetChatID: targetChatID,
+                initialErrors: delivery.issues.map(\.message)
+            )
+            await task.value
         }
         .overlay(alignment: .top) {
             if fileDropTargeted {
@@ -729,7 +743,7 @@ struct GlobalChatsView: View {
             attachmentError = nil
             presentAttachmentPicker()
         } label: {
-            if isLoadingAttachment {
+            if attachmentBusy {
                 ProgressView().controlSize(.small)
             } else {
                 Image(systemName: "paperclip").font(.body)
@@ -738,7 +752,7 @@ struct GlobalChatsView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .help("Attach files or images for this chat only (up to \(Self.maxAttachments)). They're read into the conversation, not saved to the matter.")
-        .disabled(controller.isGenerating || isLoadingAttachment || attachments.count >= Self.maxAttachments)
+        .disabled(controller.isGenerating || attachmentBusy || attachments.count >= Self.maxAttachments)
     }
 
     @ViewBuilder
@@ -789,37 +803,87 @@ struct GlobalChatsView: View {
         panel.prompt = "Attach"
         panel.message = "Choose files or images to attach to this chat"
         guard panel.runModal() == .OK else { return }
-        addAttachments(panel.urls)
+        _ = replaceAttachmentLoad(panel.urls, targetChatID: controller.selectedChatID)
     }
 
-    private func addAttachments(_ urls: [URL]) {
-        attachmentError = nil
-        let remaining = Self.maxAttachments - attachments.count
-        guard remaining > 0 else {
-            attachmentError = "You can attach up to \(Self.maxAttachments) items."
-            return
+    private var attachmentBusy: Bool {
+        isReceivingFileDrop || isLoadingAttachment
+    }
+
+    /// Cancels the prior batch and waits for it to unwind before starting the next
+    /// one. Every append revalidates the chat captured when the files were chosen.
+    @discardableResult
+    private func replaceAttachmentLoad(
+        _ urls: [URL],
+        targetChatID: String?,
+        initialErrors: [String] = []
+    ) -> Task<Void, Never> {
+        let previous = attachmentLoadTask
+        previous?.cancel()
+
+        guard controller.selectedChatID == targetChatID else {
+            return Task { @MainActor in }
         }
-        let toLoad = Array(urls.prefix(remaining))
-        if urls.count > remaining {
-            attachmentError = "You can attach up to \(Self.maxAttachments) items; some were skipped."
-        }
-        Task { @MainActor in
-            isLoadingAttachment = true
-            defer { isLoadingAttachment = false }
-            for url in toLoad {
-                do {
-                    let context = try await attachmentLoader.load(url: url)
-                    attachments.append(context)
-                } catch {
-                    attachmentError = (error as? ChatAttachmentLoader.LoadFailure)?.errorDescription
-                        ?? error.localizedDescription
+
+        let loadID = UUID()
+        attachmentLoadID = loadID
+        isLoadingAttachment = true
+        let task = Task { @MainActor in
+            await previous?.value
+            var errors = initialErrors
+            defer {
+                if attachmentLoadID == loadID {
+                    attachmentLoadTask = nil
+                    attachmentLoadID = nil
+                    isLoadingAttachment = false
+                    attachmentError = errors.isEmpty ? nil : errors.joined(separator: "\n")
                 }
             }
+
+            guard !Task.isCancelled, controller.selectedChatID == targetChatID else { return }
+            let remaining = Self.maxAttachments - attachments.count
+            guard remaining > 0 else {
+                errors.append("You can attach up to \(Self.maxAttachments) items.")
+                return
+            }
+            let toLoad = Array(urls.prefix(remaining))
+            if urls.count > remaining {
+                errors.append("You can attach up to \(Self.maxAttachments) items; some were skipped.")
+            }
+
+            for url in toLoad {
+                guard !Task.isCancelled, controller.selectedChatID == targetChatID else { return }
+                do {
+                    let context = try await attachmentLoader.load(url: url)
+                    guard !Task.isCancelled, controller.selectedChatID == targetChatID else { return }
+                    attachments.append(context)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    errors.append(
+                        (error as? ChatAttachmentLoader.LoadFailure)?.errorDescription
+                            ?? error.localizedDescription
+                    )
+                }
+            }
+        }
+        attachmentLoadTask = task
+        return task
+    }
+
+    private func cancelAttachmentLoading(clearAttachments: Bool) {
+        attachmentLoadTask?.cancel()
+        attachmentLoadTask = nil
+        attachmentLoadID = nil
+        isLoadingAttachment = false
+        if clearAttachments {
+            attachments = []
+            attachmentError = nil
         }
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !attachmentBusy && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func send() {
@@ -831,7 +895,7 @@ struct GlobalChatsView: View {
     /// Routes the prompt, loads the role model if needed, then streams the answer.
     private func submit(_ rawPrompt: String) {
         guard !rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,
-              !controller.isGenerating else { return }
+              !controller.isGenerating, !attachmentBusy else { return }
         let rawAttachments = attachments
         let router = ModelRouter(configuration: .fromEnvironment())
         let routed = router.routePrompt(rawPrompt)

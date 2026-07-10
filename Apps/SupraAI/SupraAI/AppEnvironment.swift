@@ -482,12 +482,12 @@ final class AppEnvironment: ObservableObject {
                 practiceArea: "Commercial Litigation",
                 clientNames: "Meridian Fabrication, Inc."
             )
-            // Same practice-area starter folders a user-created matter gets from
-            // MattersController.createMatter — this path writes through the
-            // store directly, so it seeds them itself.
-            for folderName in PracticeAreaFolderTemplates.folders(forPracticeArea: "Commercial Litigation") {
-                _ = try? store.documentLibrary.createFolder(matterID: matter.id, name: folderName)
-            }
+            // This fixture creates the matter directly, then delegates the same
+            // practice-area starter-folder setup used by MattersController.createMatter.
+            mattersController.seedStarterFolders(
+                matterID: matter.id,
+                practiceArea: "Commercial Litigation"
+            )
 
             // Fictitious documents with real (fictional) contract text so previews work.
             let msaText = """

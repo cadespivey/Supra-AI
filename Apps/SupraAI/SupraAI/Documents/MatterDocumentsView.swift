@@ -82,8 +82,7 @@ struct MatterDocumentsView: View {
         }
         .overlay(alignment: .top) {
             if dropTargeted {
-                Text("Drop files to import")
-                    .padding(8).background(.thinMaterial, in: Capsule()).padding(.top, 8)
+                SupraDropHint("Drop files to import")
             }
         }
         .sheet(isPresented: $showTrash) { trashSheet }
@@ -634,6 +633,9 @@ struct MatterDocumentsView: View {
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         guard controller.setupReady else { return false }
+        // The sidebar can change while item providers resolve. A drop belongs to
+        // the folder selected when the user released it, not a later selection.
+        let targetFolderID = controller.selectedFolderID
         let group = DispatchGroup()
         // NSItemProvider completion handlers run concurrently, so collect through a
         // lock instead of mutating a captured array (a data race — and a Swift 6
@@ -648,7 +650,7 @@ struct MatterDocumentsView: View {
         }
         group.notify(queue: .main) {
             let urls = collector.drain()
-            if !urls.isEmpty { controller.importItems(urls) }
+            if !urls.isEmpty { controller.importItems(urls, targetFolderID: targetFolderID) }
         }
         return true
     }

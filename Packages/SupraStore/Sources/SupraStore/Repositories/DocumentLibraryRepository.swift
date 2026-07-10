@@ -84,24 +84,48 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
         }
     }
 
-    /// The live folder with this exact parent and (case-insensitive) name, if
-    /// one exists — used by imports to reuse seeded/existing folders instead of
-    /// creating same-named duplicates.
+    /// The live folder with this exact parent and Unicode case-insensitive name,
+    /// if one exists. When legacy data contains duplicate siblings, the oldest
+    /// folder (then lexical id) wins deterministically.
     public func findFolder(matterID: String, parentFolderID: String?, name: String) throws -> DocumentFolderRecord? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         return try writer.read { db in
-            try DocumentFolderRecord.fetchOne(
+            try Self.findFolder(
                 db,
-                sql: """
-                SELECT * FROM document_folders
-                WHERE matter_id = ?
-                  AND deleted_at IS NULL
-                  AND name = ? COLLATE NOCASE
-                  AND parent_folder_id \(parentFolderID == nil ? "IS NULL" : "= ?")
-                """,
-                arguments: parentFolderID == nil ? [matterID, trimmed] : [matterID, trimmed, parentFolderID]
+                matterID: matterID,
+                parentFolderID: parentFolderID,
+                normalizedName: Self.folderIdentity(trimmed)
             )
+        }
+    }
+
+    /// Returns the matching live sibling or creates it atomically. Import,
+    /// research, templates, and manual folder creation all use this path so
+    /// their definition of "the same folder" cannot drift.
+    @discardableResult
+    public func ensureFolder(
+        matterID: String,
+        name: String,
+        parentFolderID: String? = nil
+    ) throws -> DocumentFolderRecord {
+        let trimmed = try Self.requireNonEmpty(name, fieldName: "name")
+        return try writer.write { db in
+            if let existing = try Self.findFolder(
+                db,
+                matterID: matterID,
+                parentFolderID: parentFolderID,
+                normalizedName: Self.folderIdentity(trimmed)
+            ) {
+                return existing
+            }
+            let record = DocumentFolderRecord(
+                matterID: matterID,
+                parentFolderID: parentFolderID,
+                name: trimmed
+            )
+            try record.insert(db)
+            return record
         }
     }
 
@@ -147,10 +171,10 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
     public func softDeleteFolder(id: String) throws {
         try writer.write { db in
             let now = Date()
-            let folderIDs = try Self.folderSubtreeIDs(db, rootID: id)
+            let folderIDs = try Self.folderSubtreeIDs(db, rootID: id, includingDeleted: true)
             for folderID in folderIDs {
                 try db.execute(
-                    sql: "UPDATE document_folders SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                    sql: "UPDATE document_folders SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
                     arguments: [now, now, folderID]
                 )
             }
@@ -176,14 +200,14 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                 sql: "SELECT deleted_at FROM document_folders WHERE id = ?",
                 arguments: [id]
             )
-            let folderIDs = try Self.folderSubtreeIDs(db, rootID: id)
+            guard let folderDeletedAt else { return }
+            let folderIDs = try Self.folderSubtreeIDs(db, rootID: id, includingDeleted: true)
             for folderID in folderIDs {
                 try db.execute(
-                    sql: "UPDATE document_folders SET deleted_at = NULL, updated_at = ? WHERE id = ?",
-                    arguments: [now, folderID]
+                    sql: "UPDATE document_folders SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at = ?",
+                    arguments: [now, folderID, folderDeletedAt]
                 )
             }
-            guard let folderDeletedAt else { return }
             for folderID in folderIDs {
                 try db.execute(
                     sql: """
@@ -566,8 +590,11 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                 // the dangerous failure for a legal research scope.
                 var expanded: Set<String> = []
                 for folderID in folderIDs {
-                    expanded.formUnion(try Self.folderSubtreeIDs(db, rootID: folderID))
+                    expanded.formUnion(
+                        try Self.folderSubtreeIDs(db, rootID: folderID, includingDeleted: false)
+                    )
                 }
+                guard !expanded.isEmpty else { return [] }
                 clauses.append("d.folder_id IN (\(databaseQuestionMarks(count: expanded.count)))")
                 arguments.append(contentsOf: Array(expanded))
             }
@@ -637,8 +664,18 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
         )
     }
 
-    /// Returns a folder id plus all descendant folder ids (depth-first).
-    private static func folderSubtreeIDs(_ db: Database, rootID: String) throws -> [String] {
+    /// Returns a folder id plus its descendants. Delete/restore traversal includes
+    /// trashed rows so it can preserve cascade ownership; retrieval traversal is
+    /// live-only and stops before a trashed branch.
+    private static func folderSubtreeIDs(
+        _ db: Database,
+        rootID: String,
+        includingDeleted: Bool
+    ) throws -> [String] {
+        let rootSQL = "SELECT id FROM document_folders WHERE id = ?"
+            + (includingDeleted ? "" : " AND deleted_at IS NULL")
+        guard try String.fetchOne(db, sql: rootSQL, arguments: [rootID]) != nil else { return [] }
+
         var result: [String] = []
         var seen = Set<String>()
         var queue: [String] = [rootID]
@@ -650,12 +687,40 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
             result.append(current)
             let children = try String.fetchAll(
                 db,
-                sql: "SELECT id FROM document_folders WHERE parent_folder_id = ?",
+                sql: "SELECT id FROM document_folders WHERE parent_folder_id = ?"
+                    + (includingDeleted ? "" : " AND deleted_at IS NULL")
+                    + " ORDER BY id ASC",
                 arguments: [current]
             )
             queue.append(contentsOf: children)
         }
         return result
+    }
+
+    private static func findFolder(
+        _ db: Database,
+        matterID: String,
+        parentFolderID: String?,
+        normalizedName: String
+    ) throws -> DocumentFolderRecord? {
+        let candidates = try DocumentFolderRecord.fetchAll(
+            db,
+            sql: """
+            SELECT * FROM document_folders
+            WHERE matter_id = ?
+              AND deleted_at IS NULL
+              AND parent_folder_id \(parentFolderID == nil ? "IS NULL" : "= ?")
+            ORDER BY created_at ASC, id ASC
+            """,
+            arguments: parentFolderID == nil ? [matterID] : [matterID, parentFolderID]
+        )
+        return candidates.first { folderIdentity($0.name) == normalizedName }
+    }
+
+    private static func folderIdentity(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .precomposedStringWithCanonicalMapping
+            .folding(options: [.caseInsensitive], locale: nil)
     }
 
     /// Breadth-first list of a document id followed by all of its attachment

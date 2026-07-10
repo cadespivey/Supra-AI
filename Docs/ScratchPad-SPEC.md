@@ -403,6 +403,26 @@ App-wide **adoption** of these across Authorities / Outputs / Matters / Research
 ScratchPad: ScratchPad is additive (new section, new tables), whereas a UI rollout modifies every
 existing screen — a different risk profile that must not enlarge this feature's blast radius.
 
+### 10.1 Week navigation and day context
+
+```text
+- The header shows the selected day inside a seven-day strip. Week arrows also select the
+  corresponding weekday in the destination week; the visible week and the day receiving edits
+  never diverge. A target after today clamps to today, and wholly future weeks stay inaccessible.
+- ScratchPad day keys and date arithmetic are Gregorian `YYYY-MM-DD`. Calendar presentation keeps
+  the user's locale, time zone, first weekday, and minimum-days-in-first-week preferences; choosing
+  a non-Gregorian system calendar must not reinterpret persisted keys.
+- A week crossing a month boundary names both months and includes the year. A year boundary names
+  both month/year pairs, so edge dates cannot appear under the wrong month or year.
+- Today/future flags and week totals refresh when ScratchPad appears, the app becomes active, and
+  the system calendar day changes. Refreshing never changes the open date, preserving unsent text
+  and in-progress edits.
+- Each day shows the total from that day's latest billing-draft version. Draftless days omit the
+  indicator; an existing draft with no remaining lines shows `0.0`.
+- The header reflows the week strip onto its own row when the detail area cannot fit the wide
+  arrangement, including the supported 640-point detail width.
+```
+
 ---
 
 ## 11. Security / privacy / auditability

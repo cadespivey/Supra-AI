@@ -84,7 +84,7 @@ public final class ScratchPadController: ObservableObject {
     /// Day-level attachments (evidence) for the current day.
     @Published public private(set) var attachments: [ScratchPadAttachmentView] = []
     /// Set when an attachment can't be ingested (e.g. `.msg`); the view surfaces it.
-    @Published public var lastAttachmentError: String?
+    @Published public private(set) var lastAttachmentError: String?
     /// The header strip's week (always contains `displayedDate` until the user
     /// browses with the chevrons). Nil until the first day loads.
     @Published public private(set) var visibleWeek: ScratchPadWeek?
@@ -97,6 +97,7 @@ public final class ScratchPadController: ObservableObject {
     private let calendar: Calendar
     private let attachmentService: ScratchPadAttachmentService
     private var matterObserver: AnyCancellable?
+    private var attachmentErrorsByDay: [String: String] = [:]
 
     public init(
         store: SupraStore,
@@ -106,7 +107,7 @@ public final class ScratchPadController: ObservableObject {
     ) {
         self.store = store
         self.now = now
-        self.calendar = calendar
+        self.calendar = ScratchPadWeek.canonicalCalendar(from: calendar)
         self.attachmentService = attachmentService
     }
 
@@ -129,7 +130,7 @@ public final class ScratchPadController: ObservableObject {
     /// Loads (or creates) today's pad and the recent-day list.
     public func load() {
         loadMatterChips()
-        guard let day = try? store.scratchPad.fetchOrCreateDay(Self.dayString(now())) else { return }
+        guard let day = try? store.scratchPad.fetchOrCreateDay(dayString(now())) else { return }
         setCurrentDay(day)
         reloadRecentDays()
     }
@@ -137,7 +138,6 @@ public final class ScratchPadController: ObservableObject {
     /// Switches to a previously-recorded day (read or continue editing).
     public func selectDay(id: String) {
         loadMatterChips()
-        lastAttachmentError = nil
         guard let day = try? store.scratchPad.fetchDay(id: id) else { return }
         setCurrentDay(day)
     }
@@ -148,15 +148,13 @@ public final class ScratchPadController: ObservableObject {
     /// calendar never leaves a trail of empty days.
     public func selectDate(_ date: Date) {
         loadMatterChips()
-        // The attachment error belongs to the day that produced it — clear it so the
-        // banner doesn't linger after navigating to a different day.
-        lastAttachmentError = nil
-        let dayString = Self.dayString(date)
+        let dayString = dayString(date)
         if let record = try? store.scratchPad.fetchDay(day: dayString) {
             setCurrentDay(record)
         } else {
             displayedDate = dayString
             currentDay = nil
+            lastAttachmentError = attachmentErrorsByDay[dayString]
             reloadEntries()       // entries empty, but #tag suggestions stay all-time
             reloadAttachments()
             updateVisibleWeek()
@@ -165,21 +163,27 @@ public final class ScratchPadController: ObservableObject {
 
     // MARK: - Week strip
 
-    /// Moves the visible week by whole weeks (the chevrons pass ±1). Forward
-    /// motion stops at the week containing today — later weeks are entirely
-    /// unbillable. Browsing alone never changes the open day; that takes a
-    /// day click (`selectDate`).
+    /// Moves by whole weeks and opens the corresponding weekday. Keeping selection
+    /// and navigation together prevents the header from showing a different week
+    /// than the day receiving edits. A future target clamps to today.
     public func stepWeek(_ deltaWeeks: Int) {
-        guard let week = visibleWeek else { return }
-        if deltaWeeks > 0, week.containsToday { return }
+        guard deltaWeeks != 0,
+              let selectedDate = ScratchPadWeek.date(dayString: displayedDate, calendar: calendar),
+              let targetDate = calendar.date(byAdding: .day, value: deltaWeeks * 7, to: selectedDate) else { return }
         let today = now()
-        var advanced = week.advanced(by: deltaWeeks, today: today, calendar: calendar)
-        // Defensive clamp for multi-week deltas: never land in an all-future week.
-        if let start = advanced.days.first?.date, start > today, !advanced.containsToday {
-            advanced = ScratchPadWeek.containing(today, today: today, calendar: calendar)
+        let destination = calendar.startOfDay(for: targetDate) > calendar.startOfDay(for: today) ? today : targetDate
+        selectDate(destination)
+    }
+
+    /// Refreshes today/future flags when the app appears, becomes active, or crosses
+    /// midnight. The open day remains stable so unsent composer text and in-progress
+    /// edits cannot silently move to a different date.
+    public func refreshCalendarState() {
+        guard !displayedDate.isEmpty else {
+            load()
+            return
         }
-        visibleWeek = advanced
-        refreshWeekBilledHours()
+        updateVisibleWeek(today: now())
     }
 
     /// Re-reads each visible day's billable-hour total from its latest billing
@@ -194,8 +198,12 @@ public final class ScratchPadController: ObservableObject {
     }
 
     /// Snaps the strip to the week containing the displayed date.
-    private func updateVisibleWeek() {
-        guard let week = ScratchPadWeek.containing(dayString: displayedDate, today: now(), calendar: calendar) else {
+    private func updateVisibleWeek(today: Date? = nil) {
+        guard let week = ScratchPadWeek.containing(
+            dayString: displayedDate,
+            today: today ?? now(),
+            calendar: calendar
+        ) else {
             return
         }
         visibleWeek = week
@@ -249,22 +257,65 @@ public final class ScratchPadController: ObservableObject {
     public func addEntry(
         _ text: String,
         explicitMentions: [String: String] = [:],
-        attachmentURLs: [URL]
+        attachmentURLs: [URL],
+        targetDay: String? = nil
     ) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachmentURLs.isEmpty else { return false }
-        guard let day = ensurePersistedDay(), !day.isLocked else { return false }
-        let entryText = trimmed.isEmpty ? Self.defaultText(forAttachments: attachmentURLs) : trimmed
+        guard let day = resolvedDay(targetDay: targetDay), day.lockedAt == nil else { return false }
+        let prepared = await prepareAttachments(attachmentURLs)
+        guard let refreshedDay = try? store.scratchPad.fetchDay(id: day.id),
+              refreshedDay.lockedAt == nil else {
+            replaceAttachmentErrors(["This ScratchPad day was locked before the files finished loading."], targetDay: day.day)
+            return false
+        }
+        guard !trimmed.isEmpty || !prepared.attachments.isEmpty else {
+            replaceAttachmentErrors(prepared.errors, targetDay: day.day)
+            return false
+        }
+
+        let successfulURLs = prepared.attachments.map(\.sourceURL)
+        let entryText = trimmed.isEmpty ? Self.defaultText(forAttachments: successfulURLs) : trimmed
         let parsed = ScratchPadTokenParser.parse(entryText)
         let mentions = ScratchPadTagResolver.resolveMentions(parsed.mentions, chips: matterChips, explicit: explicitMentions)
         guard let entry = try? store.scratchPad.addEntry(
             dayID: day.id, text: entryText, mentions: mentions, tags: parsed.tags, createdAt: now()
         ) else { return false }
-        let entryMatter = mentions.first ?? suggestedMatterID
-        for url in attachmentURLs {
-            await addAttachment(fileURL: url, matterID: entryMatter, entryID: entry.id)
+
+        let entryMatter = mentions.first ?? suggestedMatterID(dayID: day.id)
+        var errors = prepared.errors
+        var insertedURLs: [URL] = []
+        for attachment in prepared.attachments {
+            do {
+                try store.scratchPad.addAttachment(
+                    dayID: day.id,
+                    entryID: entry.id,
+                    matterID: entryMatter,
+                    evidenceKind: attachment.evidence.billingKind,
+                    evidenceSignalsJSON: AttachmentEvidence.encode(attachment.evidence)
+                )
+                insertedURLs.append(attachment.sourceURL)
+            } catch {
+                errors.append("Couldn't attach \(attachment.sourceURL.lastPathComponent): \(error.localizedDescription)")
+            }
         }
-        reloadEntries()
+
+        if trimmed.isEmpty, insertedURLs.isEmpty {
+            try? store.scratchPad.deleteEntry(id: entry.id)
+            replaceAttachmentErrors(
+                errors.isEmpty ? ["Couldn't attach the dropped files."] : errors,
+                targetDay: day.day
+            )
+            refreshAfterAttachmentMutation(dayID: day.id)
+            return false
+        }
+
+        if trimmed.isEmpty, insertedURLs.count != successfulURLs.count {
+            let correctedText = Self.defaultText(forAttachments: insertedURLs)
+            try? store.scratchPad.updateEntry(id: entry.id, text: correctedText, mentions: mentions, tags: [])
+        }
+        replaceAttachmentErrors(errors, targetDay: day.day)
+        refreshAfterAttachmentMutation(dayID: day.id)
         return true
     }
 
@@ -289,11 +340,7 @@ public final class ScratchPadController: ObservableObject {
     /// The matter most-mentioned in today's entries — the default association for a
     /// dropped file when the caller doesn't specify one.
     public var suggestedMatterID: String? {
-        var counts: [String: Int] = [:]
-        for entry in entries {
-            for matterID in entry.mentionMatterIDs { counts[matterID, default: 0] += 1 }
-        }
-        return counts.max { $0.value < $1.value }?.key
+        currentDay.flatMap { suggestedMatterID(dayID: $0.id) }
     }
 
     /// Attachments tied to a specific note entry (rendered inline under that note).
@@ -310,32 +357,86 @@ public final class ScratchPadController: ObservableObject {
     /// When `entryID` is given the file is recorded inline with that note (and inherits
     /// the note's matter when one isn't passed). Sets `lastAttachmentError` on failure
     /// (e.g. an unsupported `.msg`).
+    @discardableResult
     public func addAttachment(
         fileURL: URL,
         matterID: String? = nil,
         explicitKind: BillingEvidenceKind? = nil,
-        entryID: String? = nil
-    ) async {
-        guard let day = ensurePersistedDay(), !day.isLocked else { return }
-        let resolvedMatter = matterID ?? entryMatterID(entryID) ?? suggestedMatterID
-        let scoped = fileURL.startAccessingSecurityScopedResource()
-        defer { if scoped { fileURL.stopAccessingSecurityScopedResource() } }
-        do {
-            let evidence = try await attachmentService.makeEvidence(fileURL: fileURL, explicitKind: explicitKind)
-            try store.scratchPad.addAttachment(
-                dayID: day.id,
-                entryID: entryID,
-                matterID: resolvedMatter,
-                evidenceKind: evidence.billingKind,
-                evidenceSignalsJSON: AttachmentEvidence.encode(evidence)
-            )
-            lastAttachmentError = nil
-            reloadAttachments()
-        } catch let error as ScratchPadAttachmentError {
-            lastAttachmentError = error.message
-        } catch {
-            lastAttachmentError = "Couldn't read that file: \(error.localizedDescription)"
+        entryID: String? = nil,
+        targetDayID: String? = nil
+    ) async -> Bool {
+        await addAttachments(
+            fileURLs: [fileURL],
+            matterID: matterID,
+            explicitKind: explicitKind,
+            entryID: entryID,
+            targetDayID: targetDayID
+        ) == 1
+    }
+
+    /// Batch form used by multi-file drops. It resolves the target day once and
+    /// publishes one aggregate error after every file has been attempted.
+    @discardableResult
+    public func addAttachments(
+        fileURLs: [URL],
+        matterID: String? = nil,
+        explicitKind: BillingEvidenceKind? = nil,
+        entryID: String? = nil,
+        targetDayID: String? = nil
+    ) async -> Int {
+        guard !fileURLs.isEmpty,
+              let day = resolvedDay(targetDayID: targetDayID),
+              day.lockedAt == nil else { return 0 }
+        let resolvedMatter = matterID
+            ?? entryMatterID(entryID, dayID: day.id)
+            ?? suggestedMatterID(dayID: day.id)
+        let prepared = await prepareAttachments(fileURLs, explicitKind: explicitKind)
+        guard let refreshedDay = try? store.scratchPad.fetchDay(id: day.id),
+              refreshedDay.lockedAt == nil else {
+            replaceAttachmentErrors(["This ScratchPad day was locked before the files finished loading."], targetDay: day.day)
+            return 0
         }
+        var errors = prepared.errors
+        var insertedCount = 0
+        for attachment in prepared.attachments {
+            do {
+                try store.scratchPad.addAttachment(
+                    dayID: day.id,
+                    entryID: entryID,
+                    matterID: resolvedMatter,
+                    evidenceKind: attachment.evidence.billingKind,
+                    evidenceSignalsJSON: AttachmentEvidence.encode(attachment.evidence)
+                )
+                insertedCount += 1
+            } catch {
+                errors.append("Couldn't attach \(attachment.sourceURL.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        replaceAttachmentErrors(errors, targetDay: day.day)
+        refreshAfterAttachmentMutation(dayID: day.id)
+        return insertedCount
+    }
+
+    /// Adds receiver-level failures (size limits, promise materialization errors)
+    /// to the same day-scoped banner used by extraction failures.
+    public func appendAttachmentErrors(_ messages: [String], targetDay: String) {
+        let messages = messages.filter { !$0.isEmpty }
+        guard !messages.isEmpty else { return }
+        var combinedMessages: [String] = []
+        if let existing = attachmentErrorsByDay[targetDay] { combinedMessages.append(existing) }
+        combinedMessages.append(contentsOf: messages)
+        let combined = combinedMessages.joined(separator: "\n")
+        attachmentErrorsByDay[targetDay] = combined
+        if displayedDate == targetDay { lastAttachmentError = combined }
+    }
+
+    public func clearAttachmentError() {
+        guard !displayedDate.isEmpty else {
+            lastAttachmentError = nil
+            return
+        }
+        attachmentErrorsByDay.removeValue(forKey: displayedDate)
+        lastAttachmentError = nil
     }
 
     public func removeAttachment(id: String) {
@@ -345,9 +446,81 @@ public final class ScratchPadController: ObservableObject {
     }
 
     /// The matter mentioned by a given entry (for attributing a file dropped onto it).
-    private func entryMatterID(_ entryID: String?) -> String? {
+    private func entryMatterID(_ entryID: String?, dayID: String) -> String? {
         guard let entryID else { return nil }
-        return entries.first { $0.id == entryID }?.mentionMatterIDs.first
+        return try? store.scratchPad.entries(dayID: dayID)
+            .first { $0.id == entryID }?.mentions.first
+    }
+
+    private struct PreparedAttachment {
+        let sourceURL: URL
+        let evidence: AttachmentEvidence
+    }
+
+    private func prepareAttachments(
+        _ urls: [URL],
+        explicitKind: BillingEvidenceKind? = nil
+    ) async -> (attachments: [PreparedAttachment], errors: [String]) {
+        var attachments: [PreparedAttachment] = []
+        var errors: [String] = []
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            do {
+                let evidence = try await attachmentService.makeEvidence(fileURL: url, explicitKind: explicitKind)
+                attachments.append(PreparedAttachment(sourceURL: url, evidence: evidence))
+            } catch let error as ScratchPadAttachmentError {
+                errors.append(error.message)
+            } catch {
+                errors.append("Couldn't read \(url.lastPathComponent): \(error.localizedDescription)")
+            }
+            if scoped { url.stopAccessingSecurityScopedResource() }
+        }
+        return (attachments, errors)
+    }
+
+    private func resolvedDay(targetDay: String?) -> ScratchPadDayRecord? {
+        if let targetDay {
+            return try? store.scratchPad.fetchOrCreateDay(targetDay)
+        }
+        guard let current = ensurePersistedDay() else { return nil }
+        return try? store.scratchPad.fetchDay(id: current.id)
+    }
+
+    private func resolvedDay(targetDayID: String?) -> ScratchPadDayRecord? {
+        if let targetDayID {
+            return try? store.scratchPad.fetchDay(id: targetDayID)
+        }
+        guard let current = ensurePersistedDay() else { return nil }
+        return try? store.scratchPad.fetchDay(id: current.id)
+    }
+
+    private func suggestedMatterID(dayID: String) -> String? {
+        let records = (try? store.scratchPad.entries(dayID: dayID)) ?? []
+        var counts: [String: Int] = [:]
+        for record in records {
+            for matterID in record.mentions { counts[matterID, default: 0] += 1 }
+        }
+        return counts.max { $0.value < $1.value }?.key
+    }
+
+    private func refreshAfterAttachmentMutation(dayID: String) {
+        if currentDay?.id == dayID {
+            reloadEntries()
+            reloadAttachments()
+        }
+        reloadRecentDays()
+    }
+
+    private func replaceAttachmentErrors(_ messages: [String], targetDay: String) {
+        let message = messages.filter { !$0.isEmpty }.joined(separator: "\n")
+        if message.isEmpty {
+            attachmentErrorsByDay.removeValue(forKey: targetDay)
+        } else {
+            attachmentErrorsByDay[targetDay] = message
+        }
+        if displayedDate == targetDay {
+            lastAttachmentError = message.isEmpty ? nil : message
+        }
     }
 
     /// A minimal note for a bare file drop (no typed text), so the file is still tied
@@ -376,6 +549,7 @@ public final class ScratchPadController: ObservableObject {
     private func setCurrentDay(_ record: ScratchPadDayRecord) {
         currentDay = ScratchPadDaySummary(record: record)
         displayedDate = record.day
+        lastAttachmentError = attachmentErrorsByDay[record.day]
         reloadEntries()
         reloadAttachments()
         updateVisibleWeek()
@@ -421,14 +595,7 @@ public final class ScratchPadController: ObservableObject {
         matterChips = ((try? store.matters.fetchMatters()) ?? []).map { MatterChip(id: $0.id, name: $0.name) }
     }
 
-    static func dayString(_ date: Date) -> String { dayFormatter.string(from: date) }
-
-    private static let dayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
+    private func dayString(_ date: Date) -> String {
+        ScratchPadWeek.dayString(date, calendar: calendar)
+    }
 }

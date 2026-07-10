@@ -140,6 +140,10 @@ struct SidebarView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(matter.name)
+        .accessibilityValue(matter.isPinned ? "Pinned" : "Not pinned")
+        .accessibilityAction(named: matter.isPinned ? "Unpin" : "Pin") {
+            matters.setPinned(matterID: matter.id, pinned: !matter.isPinned)
+        }
         .accessibilityIdentifier("matter.row.\(matter.name)")
     }
 

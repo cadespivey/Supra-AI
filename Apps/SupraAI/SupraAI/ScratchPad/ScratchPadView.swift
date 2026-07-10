@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 /// The ScratchPad daily note (Milestone 4, Phase 2): a running list of
 /// timestamped entries plus a composer with inline `@matter` / `#tag` autocomplete.
 struct ScratchPadView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var controller: ScratchPadController
     @ObservedObject var billing: BillingDraftController
     @ObservedObject var billingSettings: BillingSettingsController
@@ -32,6 +33,7 @@ struct ScratchPadView: View {
     @State private var searchTerm = ""
     /// True while a drag hovers the note surface (drives the drop hint).
     @State private var fileDropTargeted = false
+    @State private var isSubmitting = false
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -51,8 +53,14 @@ struct ScratchPadView: View {
             }
         }
         .onAppear {
-            if controller.currentDay == nil { controller.load() }
+            controller.refreshCalendarState()
             billing.applySettings(billingSettings.settings)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { controller.refreshCalendarState() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            controller.refreshCalendarState()
         }
         .onChange(of: billingSettings.settings) { _, settings in
             billing.applySettings(settings)
@@ -86,7 +94,8 @@ struct ScratchPadView: View {
             // that note (the row's own target wins).
             .dropDestination(for: URL.self) { urls, _ in
                 guard !controller.isCurrentDayLocked, !urls.isEmpty else { return false }
-                Task { await controller.addEntry("", attachmentURLs: urls) }
+                let targetDay = controller.displayedDate
+                Task { await controller.addEntry("", attachmentURLs: urls, targetDay: targetDay) }
                 return true
             }
             // Emails and other promised-file drags (Mail/Outlook messages, browser
@@ -97,8 +106,9 @@ struct ScratchPadView: View {
                 isEnabled: !controller.isCurrentDayLocked,
                 acceptsFileURLs: false,
                 isTargeted: $fileDropTargeted
-            ) { urls in
-                Task { await controller.addEntry("", attachmentURLs: urls) }
+            ) { [targetDay = controller.displayedDate] delivery in
+                await controller.addEntry("", attachmentURLs: delivery.urls, targetDay: targetDay)
+                controller.appendAttachmentErrors(delivery.issues.map(\.message), targetDay: targetDay)
             }
             .overlay(alignment: .top) {
                 if fileDropTargeted {
@@ -166,30 +176,62 @@ struct ScratchPadView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                // The screen title, sized like every other module header.
-                Text("ScratchPad")
-                    .font(.supraTitle)
-                GhostSegmentedControl(
-                    selection: $tab,
-                    segments: [(.note, "Note", ""), (.draft, "Billing draft", "")]
-                )
-            }
-            Spacer(minLength: 12)
-            weekStrip
-            Spacer(minLength: 12)
-            VStack(alignment: .trailing, spacing: 6) {
-                scratchSearchField
-                    .frame(width: 200)
-                HStack(spacing: 8) {
-                    historyButton
-                    lockButton
-                }
-            }
+        ViewThatFits(in: .horizontal) {
+            wideHeader
+            compactHeader
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    private var wideHeader: some View {
+        HStack(alignment: .top, spacing: 16) {
+            moduleIdentity
+                .fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 12)
+            weekStrip
+                .fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 12)
+            headerTools
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    /// The supported 640-point detail width cannot hold every header control in one
+    /// row. Keep tools beside the title and give the date strip its own centered row.
+    private var compactHeader: some View {
+        VStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 16) {
+                moduleIdentity
+                Spacer(minLength: 8)
+                headerTools
+            }
+            weekStrip
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+
+    private var moduleIdentity: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("ScratchPad")
+                .font(.supraTitle)
+            GhostSegmentedControl(
+                selection: $tab,
+                segments: [(.note, "Note", ""), (.draft, "Billing draft", "")]
+            )
+        }
+    }
+
+    private var headerTools: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            scratchSearchField
+                .frame(width: 200)
+            HStack(spacing: 8) {
+                historyButton
+                lockButton
+            }
+        }
     }
 
     /// The week-strip date navigation: the month heading over seven ghost day
@@ -316,10 +358,33 @@ struct ScratchPadView: View {
                             .dropDestination(for: URL.self) { urls, _ in
                                 // Dropping on a note attaches the file to that note.
                                 guard !controller.isCurrentDayLocked, !urls.isEmpty else { return false }
-                                for url in urls {
-                                    Task { await controller.addAttachment(fileURL: url, entryID: entry.id) }
+                                let targetDayID = controller.currentDay?.id
+                                Task {
+                                    await controller.addAttachments(
+                                        fileURLs: urls,
+                                        entryID: entry.id,
+                                        targetDayID: targetDayID
+                                    )
                                 }
                                 return true
+                            }
+                            // Promised files need their own row-level AppKit target;
+                            // otherwise the day catcher would create a new note.
+                            .supraFileDrop(
+                                isEnabled: !controller.isCurrentDayLocked,
+                                acceptsFileURLs: false
+                            ) { [
+                                entryID = entry.id,
+                                targetDayID = controller.currentDay?.id,
+                                targetDay = controller.displayedDate
+                            ] delivery in
+                                guard let targetDayID else { return }
+                                await controller.addAttachments(
+                                    fileURLs: delivery.urls,
+                                    entryID: entryID,
+                                    targetDayID: targetDayID
+                                )
+                                controller.appendAttachmentErrors(delivery.issues.map(\.message), targetDay: targetDay)
                             }
                             .id(entry.id)
                             Divider()
@@ -389,7 +454,7 @@ struct ScratchPadView: View {
                 Text(error)
                     .font(.supraCaption)
                 Spacer(minLength: 8)
-                Button { controller.lastAttachmentError = nil } label: {
+                Button { controller.clearAttachmentError() } label: {
                     Image(systemName: "xmark")
                 }
                 .buttonStyle(.plain)
@@ -490,12 +555,22 @@ struct ScratchPadView: View {
                                     return .handled
                                 }
                             Button(action: submit) {
-                                Image(systemName: "arrow.up.circle.fill")
-                                    .font(.title2)
+                                if isSubmitting {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .frame(width: 24, height: 24)
+                                } else {
+                                    Image(systemName: "arrow.up.circle.fill")
+                                        .font(.title2)
+                                        .frame(width: 24, height: 24)
+                                }
                             }
                             .buttonStyle(.plain)
                             .keyboardShortcut(.return, modifiers: .command)
-                            .disabled(composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stagedFiles.isEmpty)
+                            .disabled(
+                                isSubmitting
+                                    || (composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stagedFiles.isEmpty)
+                            )
                         }
                     }
                     .padding(12)
@@ -505,6 +580,7 @@ struct ScratchPadView: View {
                     )
                 }
                 .padding(16)
+                .disabled(isSubmitting)
             }
         }
     }
@@ -709,9 +785,18 @@ struct ScratchPadView: View {
         let text = composerText
         let files = stagedFiles
         let mentions = pendingMentions
-        guard !files.isEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let targetDay = controller.displayedDate
+        guard !isSubmitting,
+              !files.isEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        isSubmitting = true
         Task {
-            if await controller.addEntry(text, explicitMentions: mentions, attachmentURLs: files) {
+            defer { isSubmitting = false }
+            if await controller.addEntry(
+                text,
+                explicitMentions: mentions,
+                attachmentURLs: files,
+                targetDay: targetDay
+            ) {
                 composerText = ""
                 pendingMentions = [:]
                 stagedFiles = []

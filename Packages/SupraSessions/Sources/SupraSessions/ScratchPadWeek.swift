@@ -19,15 +19,15 @@ public struct ScratchPadWeek: Equatable, Sendable {
     }
 
     public let days: [Day]
-    /// The strip heading: the week's majority month — its middle day always holds
-    /// at least four of the seven days — plus the year when the week lies outside
-    /// today's year ("December 2025").
+    /// The strip heading. Weeks spanning a month boundary name both months so a
+    /// selected edge day can never appear to belong to the wrong month.
     public let monthLabel: String
 
     public var containsToday: Bool { days.contains(where: \.isToday) }
 
     /// The week containing `date`.
     public static func containing(_ date: Date, today: Date, calendar: Calendar) -> ScratchPadWeek {
+        let calendar = canonicalCalendar(from: calendar)
         let start = calendar.dateInterval(of: .weekOfYear, for: date)?.start
             ?? calendar.startOfDay(for: date)
         let dayFormatter = formatter("yyyy-MM-dd", calendar: calendar, posix: true)
@@ -45,15 +45,12 @@ public struct ScratchPadWeek: Equatable, Sendable {
                 isFuture: calendar.startOfDay(for: dayDate) > todayStart
             )
         }
-        let middle = (days.count > 3 ? days[3] : days.last)?.date ?? date
-        let sameYear = calendar.component(.year, from: middle) == calendar.component(.year, from: today)
-        let monthFormatter = formatter(sameYear ? "MMMM" : "MMMM yyyy", calendar: calendar)
-        return ScratchPadWeek(days: days, monthLabel: monthFormatter.string(from: middle))
+        return ScratchPadWeek(days: days, monthLabel: monthLabel(for: days, today: today, calendar: calendar))
     }
 
     /// The week containing a canonical "yyyy-MM-dd" day, or nil if unparseable.
     public static func containing(dayString: String, today: Date, calendar: Calendar) -> ScratchPadWeek? {
-        guard let date = formatter("yyyy-MM-dd", calendar: calendar, posix: true).date(from: dayString) else {
+        guard let date = date(dayString: dayString, calendar: calendar) else {
             return nil
         }
         return containing(date, today: today, calendar: calendar)
@@ -61,9 +58,29 @@ public struct ScratchPadWeek: Equatable, Sendable {
 
     /// The week `weeks` away from this one (the chevrons pass ±1).
     public func advanced(by weeks: Int, today: Date, calendar: Calendar) -> ScratchPadWeek {
+        let calendar = Self.canonicalCalendar(from: calendar)
         guard let anchor = days.first?.date,
               let shifted = calendar.date(byAdding: .day, value: weeks * 7, to: anchor) else { return self }
         return Self.containing(shifted, today: today, calendar: calendar)
+    }
+
+    /// Converts user calendar preferences into the Gregorian calendar required by
+    /// persisted ScratchPad day keys while retaining display and week conventions.
+    static func canonicalCalendar(from preferences: Calendar) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = preferences.locale
+        calendar.timeZone = preferences.timeZone
+        calendar.firstWeekday = preferences.firstWeekday
+        calendar.minimumDaysInFirstWeek = preferences.minimumDaysInFirstWeek
+        return calendar
+    }
+
+    static func dayString(_ date: Date, calendar: Calendar) -> String {
+        formatter("yyyy-MM-dd", calendar: canonicalCalendar(from: calendar), posix: true).string(from: date)
+    }
+
+    static func date(dayString: String, calendar: Calendar) -> Date? {
+        formatter("yyyy-MM-dd", calendar: canonicalCalendar(from: calendar), posix: true).date(from: dayString)
     }
 
     /// Formats a day total for the indicator row: whole tenths read as billing
@@ -83,6 +100,29 @@ public struct ScratchPadWeek: Equatable, Sendable {
     private static func abbreviated(_ symbol: String) -> String {
         guard let last = symbol.last, last.isLetter || last.isNumber else { return symbol }
         return symbol + "."
+    }
+
+    private static func monthLabel(for days: [Day], today: Date, calendar: Calendar) -> String {
+        guard let first = days.first?.date, let last = days.last?.date else { return "" }
+        let firstMonth = calendar.component(.month, from: first)
+        let lastMonth = calendar.component(.month, from: last)
+        let firstYear = calendar.component(.year, from: first)
+        let lastYear = calendar.component(.year, from: last)
+        let todayYear = calendar.component(.year, from: today)
+
+        if firstMonth == lastMonth, firstYear == lastYear {
+            let format = firstYear == todayYear ? "MMMM" : "MMMM yyyy"
+            return formatter(format, calendar: calendar).string(from: first)
+        }
+        if firstYear == lastYear {
+            let firstName = formatter("MMMM", calendar: calendar).string(from: first)
+            let lastName = formatter("MMMM", calendar: calendar).string(from: last)
+            let year = formatter("yyyy", calendar: calendar).string(from: last)
+            return "\(firstName) - \(lastName) \(year)"
+        }
+        let firstName = formatter("MMMM yyyy", calendar: calendar).string(from: first)
+        let lastName = formatter("MMMM yyyy", calendar: calendar).string(from: last)
+        return "\(firstName) - \(lastName)"
     }
 
     /// Machine formats (`posix: true`) pin en_US_POSIX so day keys/numbers are
