@@ -5,9 +5,11 @@ public enum SupraMigrator {
     public static func makeMigrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
 
-        #if DEBUG
-        migrator.eraseDatabaseOnSchemaChange = true
-        #endif
+        // NOTE: `eraseDatabaseOnSchemaChange` is deliberately NEVER enabled. It once
+        // ran under `#if DEBUG`, but a Debug build opening the real store with a
+        // mismatched migration registry silently wiped the user's database
+        // (2026-07-10). The store must never destroy real data on a schema mismatch.
+        // For a deliberate dev reset use `SupraDatabase.resetForDebug()`.
 
         migrator.registerMigration("v001_create_app_settings") { db in
             try db.create(table: "app_settings", ifNotExists: true) { table in
