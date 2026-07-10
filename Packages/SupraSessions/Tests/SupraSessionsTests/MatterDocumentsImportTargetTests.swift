@@ -24,6 +24,8 @@ final class MatterDocumentsImportTargetTests: XCTestCase {
         try Data("Deposition summary for the folder drop.".utf8).write(to: intoFolder)
         let atRoot = sourceDir.appendingPathComponent("dropped-at-root.txt")
         try Data("Root-level import with All Documents selected.".utf8).write(to: atRoot)
+        let delayedProvider = sourceDir.appendingPathComponent("delayed-provider.txt")
+        try Data("Import target captured before provider resolution.".utf8).write(to: delayedProvider)
 
         let store = try SupraStore.inMemory()
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
@@ -54,8 +56,20 @@ final class MatterDocumentsImportTargetTests: XCTestCase {
             "an import made while a folder is selected must file into that folder"
         )
 
-        // With All Documents selected, imports keep landing at the root.
+        // Standing guard (already GREEN): the controller already supports an
+        // explicit target. This pins the contract the view must use when a drop
+        // provider resolves after the sidebar selection changes.
+        let acceptedDropTarget = controller.selectedFolderID
         controller.selectedSidebarID = MatterDocumentsController.allDocumentsTag
+        controller.importItems([delayedProvider], targetFolderID: acceptedDropTarget)
+        await queue.waitUntilIdle()
+        let delayed = try XCTUnwrap(
+            store.documentLibrary.fetchDocuments(matterID: matter.id)
+                .first { $0.displayName == "delayed-provider.txt" }
+        )
+        XCTAssertEqual(delayed.folderID, folder.id)
+
+        // With All Documents selected, imports keep landing at the root.
         controller.importItems([atRoot])
         await queue.waitUntilIdle()
         let rooted = try XCTUnwrap(

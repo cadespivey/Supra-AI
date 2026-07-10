@@ -42,6 +42,29 @@ final class ClientDirectoryTests: XCTestCase {
         XCTAssertEqual(directory.entries.first?.name, "Vistage Florida")
     }
 
+    func testCompleteSpellingTieBreaksAlphabetically() {
+        // Expected RED: the deterministic ranking helper does not exist yet;
+        // the existing Dictionary.max has no final tie-break when count/date tie.
+        let tiedAt = Date(timeIntervalSince1970: 0)
+        XCTAssertTrue(
+            ClientDirectory.canonicalSpellingRanksHigher(
+                name: "Alpha Holdings",
+                count: 1,
+                lastUsedAt: tiedAt,
+                than: "Zulu Holdings",
+                otherCount: 1,
+                otherLastUsedAt: tiedAt
+            )
+        )
+        let spellings = [
+            "Zulu Holdings", "Yankee Holdings", "Xray Holdings", "Whiskey Holdings",
+            "Victor Holdings", "Uniform Holdings", "Tango Holdings", "Alpha Holdings"
+        ]
+        let directory = ClientDirectory.build(from: spellings.map { row("201", $0, count: 1) })
+
+        XCTAssertEqual(directory.entries.first?.name, "Alpha Holdings")
+    }
+
     func testNameOnlyRowsMergeIntoUniqueNumberedClient() {
         let directory = ClientDirectory.build(from: [
             row("300", "SmartSky Networks LLC", count: 2),
@@ -53,6 +76,64 @@ final class ClientDirectoryTests: XCTestCase {
         XCTAssertEqual(directory.entries.count, 1)
         XCTAssertEqual(directory.entries.first?.clientID, "300")
         XCTAssertEqual(directory.entries.first?.matterCount, 3)
+    }
+
+    func testWhitespaceOnlyClientIDRowIsTreatedAsNameOnly() throws {
+        // Expected RED: build treats every non-nil client ID as numbered, so a
+        // whitespace-only value survives as an unusable client number.
+        let directory = ClientDirectory.build(from: [
+            row("  \t ", "Northstar Analytics", count: 2)
+        ])
+
+        let entry = try XCTUnwrap(directory.entries.first)
+        XCTAssertEqual(directory.entries.count, 1)
+        XCTAssertNil(entry.clientID)
+        XCTAssertEqual(entry.name, "Northstar Analytics")
+        XCTAssertEqual(entry.matterCount, 2)
+    }
+
+    func testNameOnlyMinorityAliasMergesIntoUniqueNumberedClient() {
+        // Expected RED: numbered clients currently retain only their dominant
+        // display spelling, so a known minority alias becomes a separate client.
+        let directory = ClientDirectory.build(from: [
+            row("301", "SmartSky Networks LLC", count: 3),
+            row("301", "SmartSky Networks", count: 1),
+            row(nil, "smartsky networks", count: 1)
+        ])
+
+        XCTAssertEqual(directory.entries.count, 1)
+        XCTAssertEqual(directory.entries.first?.clientID, "301")
+        XCTAssertEqual(directory.entries.first?.name, "SmartSky Networks LLC")
+        XCTAssertEqual(directory.entries.first?.matterCount, 5)
+        XCTAssertEqual(directory.suggestions(forName: "smartsky networks").first?.clientID, "301")
+        XCTAssertEqual(
+            directory.groupIdentity(clientID: nil, clientNames: "SMARTSKY NETWORKS")?.key,
+            "id:301"
+        )
+    }
+
+    func testSharedMinorityAliasRemainsAmbiguous() {
+        // Expected RED: the old directory discarded minority aliases entirely;
+        // retaining them must not introduce an arbitrary merge when two numbered
+        // clients have both used the same alias.
+        let directory = ClientDirectory.build(from: [
+            row("410", "Pinecrest Holdings", count: 3),
+            row("410", "Legacy Client", count: 1),
+            row("411", "Harbor Services", count: 3),
+            row("411", "Legacy Client", count: 1),
+            row(nil, "LEGACY CLIENT", count: 1)
+        ])
+
+        XCTAssertEqual(directory.entries.count, 3)
+        XCTAssertTrue(directory.entries.contains { $0.clientID == nil && $0.name == "LEGACY CLIENT" })
+        XCTAssertEqual(
+            Set(directory.suggestions(forName: "legacy client").compactMap(\.clientID)),
+            ["410", "411"]
+        )
+        XCTAssertEqual(
+            directory.groupIdentity(clientID: nil, clientNames: "legacy client")?.key,
+            "name:legacy client"
+        )
     }
 
     func testAmbiguousNameOnlyRowStaysStandalone() {

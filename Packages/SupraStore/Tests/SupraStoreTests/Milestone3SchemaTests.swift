@@ -100,6 +100,68 @@ final class Milestone3SchemaTests: XCTestCase {
         XCTAssertEqual(try store.documentLibrary.fetchDocuments(matterID: matter.id).count, 1)
     }
 
+    func testParentRestorePreservesIndependentlyDeletedChildFolder() throws {
+        // Expected RED: deleting the parent overwrites the child's earlier
+        // deletion timestamp, so restoring the parent also restores the child.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let parent = try store.documentLibrary.createFolder(matterID: matter.id, name: "Discovery")
+        let child = try store.documentLibrary.createFolder(
+            matterID: matter.id,
+            name: "Depositions",
+            parentFolderID: parent.id
+        )
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(
+                sha256: "independent-child-delete",
+                byteSize: 1,
+                originalExtension: "txt",
+                managedRelativePath: "blobs/independent-child-delete.txt"
+            )
+        ).blob
+        let document = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(
+                matterID: matter.id,
+                blobID: blob.id,
+                folderID: child.id,
+                displayName: "deposition.txt"
+            )
+        )
+
+        try store.documentLibrary.softDeleteFolder(id: child.id)
+        // Pin a clearly distinct timestamp into the fixture so this test proves
+        // delete-batch ownership rather than depending on wall-clock precision.
+        let childDeletion = Date(timeIntervalSince1970: 1_700_000_000)
+        try store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE document_folders SET deleted_at = ? WHERE id = ?",
+                arguments: [childDeletion, child.id]
+            )
+            try db.execute(
+                sql: "UPDATE matter_documents SET deleted_at = ? WHERE id = ?",
+                arguments: [childDeletion, document.id]
+            )
+        }
+
+        try store.documentLibrary.softDeleteFolder(id: parent.id)
+        try store.documentLibrary.restoreFolder(id: parent.id)
+
+        let allFolders = try store.documentLibrary.fetchFolders(matterID: matter.id, includeDeleted: true)
+        let restoredParent = try XCTUnwrap(allFolders.first { $0.id == parent.id })
+        let independentlyDeletedChild = try XCTUnwrap(allFolders.first { $0.id == child.id })
+        XCTAssertNil(restoredParent.deletedAt)
+        XCTAssertEqual(
+            independentlyDeletedChild.deletedAt,
+            childDeletion,
+            "restoring a parent must not revive a child folder deleted in an earlier operation"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(store.documentLibrary.fetchDocument(id: document.id)).deletedAt,
+            childDeletion,
+            "documents owned by the independently deleted child must remain in trash"
+        )
+    }
+
     func testDocumentMoveCopyAndPermanentDelete() throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
@@ -297,6 +359,54 @@ final class Milestone3SchemaTests: XCTestCase {
         XCTAssertTrue(resolved.contains(inParent.id))
         XCTAssertTrue(resolved.contains(inChild.id), "subfolder documents must be inside the parent folder's scope")
         XCTAssertFalse(resolved.contains(elsewhere.id))
+    }
+
+    func testFolderScopeExcludesRestoredDocumentUnderTrashedDescendant() throws {
+        // Expected RED: scope expansion currently traverses deleted folders, so
+        // a separately restored document under a trashed child leaks into the
+        // live parent's legal-retrieval scope.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let discovery = try store.documentLibrary.createFolder(matterID: matter.id, name: "Discovery")
+        let depositions = try store.documentLibrary.createFolder(
+            matterID: matter.id,
+            name: "Depositions",
+            parentFolderID: discovery.id
+        )
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(
+                sha256: "restored-hidden-document",
+                byteSize: 1,
+                originalExtension: "txt",
+                managedRelativePath: "blobs/restored-hidden-document.txt"
+            )
+        ).blob
+        let restoredDocument = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(
+                matterID: matter.id,
+                blobID: blob.id,
+                folderID: depositions.id,
+                displayName: "restored-deposition.txt"
+            )
+        )
+
+        try store.documentLibrary.softDeleteFolder(id: depositions.id)
+        try store.documentLibrary.restoreDocument(id: restoredDocument.id)
+
+        let liveDocument = try XCTUnwrap(store.documentLibrary.fetchDocument(id: restoredDocument.id))
+        XCTAssertNil(liveDocument.deletedAt, "the scoped document must be live for this fixture")
+        XCTAssertFalse(
+            try store.documentLibrary.fetchFolders(matterID: matter.id).contains { $0.id == depositions.id },
+            "the descendant folder must still be in trash for this fixture"
+        )
+        let resolved = try store.documentLibrary.resolveScopeDocumentIDs(
+            matterID: matter.id,
+            folderIDs: [discovery.id]
+        )
+        XCTAssertFalse(
+            resolved.contains(restoredDocument.id),
+            "a live parent scope must not traverse a descendant folder that remains in trash"
+        )
     }
 
     func testSearchExcludesSoftDeletedDocuments() throws {

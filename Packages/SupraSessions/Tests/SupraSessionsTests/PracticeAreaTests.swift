@@ -69,10 +69,10 @@ final class PracticeAreaTests: XCTestCase {
     }
 
     func testTemplateMatchingIsWholeWordNotSubstring() {
-        // "Intellectual Property" must not match real estate's old "property"
-        // substring — no IP template exists, so it gets the general set.
+        // Standing guard (already GREEN): "laboratory" contains the live keyword
+        // "labor", so this catches a future regression from whole-word to substring matching.
         XCTAssertEqual(
-            PracticeAreaFolderTemplates.folders(forPracticeArea: "Intellectual Property"),
+            PracticeAreaFolderTemplates.folders(forPracticeArea: "Laboratory Compliance"),
             PracticeAreaFolderTemplates.generalFolders
         )
         // "Property Insurance Litigation" is litigation, not real estate.

@@ -2,13 +2,9 @@ import AppKit
 @testable import SupraDesignSystem
 import XCTest
 
-/// Gating tests for the shared drop layer (T-DD-02…04): the AppKit-backed
-/// catcher must deliver dropped file URLs to its handler, refuse drags while
-/// disabled, and only accept plain file URLs when configured to (so it never
-/// steals drags from SwiftUI `.dropDestination` targets layered beneath it).
-///
-/// File-promise receiving needs a live drag source writing the promise, so it
-/// can't run hermetically — the URL path proves the view/delivery wiring.
+/// Gating tests for the shared AppKit drop layer. Actual `NSFilePromiseReceiver`
+/// fulfillment requires a live drag session, so synthetic receivers exercise the
+/// same asynchronous coordinator without depending on Finder or Mail.
 @MainActor
 final class SupraFileDropTests: XCTestCase {
 
@@ -19,8 +15,6 @@ final class SupraFileDropTests: XCTestCase {
         return url
     }
 
-    /// A private, uniquely-named pasteboard carrying one real file URL — the
-    /// same shape a Finder drag delivers.
     private func pasteboard(withFileURL url: URL) -> NSPasteboard {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("supra-drop-test-\(UUID().uuidString)"))
         pasteboard.clearContents()
@@ -32,54 +26,61 @@ final class SupraFileDropTests: XCTestCase {
         url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
-    // Expected RED: compile error — cannot find 'FileDropCatcherView' in scope
-    // (the shared drop layer does not exist yet).
-    func testPerformDragOperationDeliversDroppedFileURLs() throws {
+    // Expected RED before the delivery-lifetime fix: the callback accepted only
+    // `[URL]`, so it could not hold and deterministically release promised files.
+    func testPerformDragOperationDeliversDroppedFileURLs() async throws {
         let file = try temporaryFile("Coverage letter for the drop test.")
         defer { try? FileManager.default.removeItem(at: file) }
 
         var delivered: [[URL]] = []
+        let callback = expectation(description: "drop callback")
         let view = FileDropCatcherView()
         view.acceptsFileURLs = true
-        view.onFiles = { delivered.append($0) }
+        view.onDrop = { delivery in
+            delivered.append(delivery.urls)
+            callback.fulfill()
+        }
         view.refreshRegisteredTypes()
 
         let info = DragInfoStub(pasteboard: pasteboard(withFileURL: file))
         XCTAssertEqual(view.draggingEntered(info), .copy)
         XCTAssertTrue(view.performDragOperation(info))
+        await fulfillment(of: [callback], timeout: 2)
         XCTAssertEqual(delivered.count, 1, "one drop must produce exactly one delivery")
         XCTAssertEqual(delivered.first?.map(canonical), [canonical(file)])
     }
 
-    // Expected RED: same missing 'FileDropCatcherView' type.
+    // Expected RED: compile error because the old catcher exposes only `onFiles`,
+    // not the new async `onDrop` contract. This also preserves the existing
+    // disabled-state guard through the callback migration.
     func testDraggingIsRejectedWhenDisabled() throws {
         let file = try temporaryFile("Ignored while disabled.")
         defer { try? FileManager.default.removeItem(at: file) }
 
-        var delivered: [[URL]] = []
+        var delivered = false
         let view = FileDropCatcherView()
         view.acceptsFileURLs = true
         view.isEnabled = false
-        view.onFiles = { delivered.append($0) }
+        view.onDrop = { _ in delivered = true }
         view.refreshRegisteredTypes()
 
         let info = DragInfoStub(pasteboard: pasteboard(withFileURL: file))
         XCTAssertEqual(view.draggingEntered(info), [], "a disabled layer must refuse the drag")
         XCTAssertFalse(view.performDragOperation(info))
-        XCTAssertTrue(delivered.isEmpty, "nothing may be delivered while disabled")
+        XCTAssertFalse(delivered, "nothing may be delivered while disabled")
     }
 
-    // Expected RED: same missing 'FileDropCatcherView' type. Wire-proof shape:
-    // the non-default configuration (acceptsFileURLs: false) must make the
-    // default outcome (URL delivery) absent, asserted on the exact callback.
+    // Expected RED: compile error because the old catcher exposes only `onFiles`,
+    // not the new async `onDrop` contract. This also preserves configurable URL
+    // acceptance through the callback migration.
     func testFileURLAcceptanceIsConfigurable() throws {
         let file = try temporaryFile("Should pass through to SwiftUI targets.")
         defer { try? FileManager.default.removeItem(at: file) }
 
-        var delivered: [[URL]] = []
+        var delivered = false
         let view = FileDropCatcherView()
         view.acceptsFileURLs = false
-        view.onFiles = { delivered.append($0) }
+        view.onDrop = { _ in delivered = true }
         view.refreshRegisteredTypes()
 
         let info = DragInfoStub(pasteboard: pasteboard(withFileURL: file))
@@ -88,11 +89,245 @@ final class SupraFileDropTests: XCTestCase {
             "a promises-only layer must refuse a plain file-URL drag so SwiftUI targets beneath receive it"
         )
         XCTAssertFalse(view.performDragOperation(info))
-        XCTAssertTrue(delivered.isEmpty, "a URL-only drag must not be delivered when acceptsFileURLs is off")
+        XCTAssertFalse(delivered)
+    }
+
+    // Expected RED: `registerForDraggedTypes` unions registrations, so changing
+    // true -> false left `.fileURL` registered and could still steal Finder drops.
+    func testRefreshingRegistrationRemovesPreviouslyAcceptedFileURLs() {
+        let view = FileDropCatcherView()
+        view.acceptsFileURLs = true
+        view.refreshRegisteredTypes()
+        XCTAssertTrue(view.registeredDraggedTypes.contains(.fileURL))
+
+        view.acceptsFileURLs = false
+        view.refreshRegisteredTypes()
+
+        XCTAssertFalse(view.registeredDraggedTypes.contains(.fileURL))
+    }
+
+    // Expected RED: the DispatchGroup left after the first callback from each
+    // receiver, so a legacy receiver promising multiple files delivered only a
+    // timing-dependent subset and had no cleanup contract.
+    func testSyntheticPromiseDeliversEveryCallbackThenCleansTemporaryDirectory() async throws {
+        let receiver = SyntheticPromiseReceiver(events: [
+            .file(name: "first.txt", contents: "first"),
+            .file(name: "second.txt", contents: "second")
+        ])
+        let callback = expectation(description: "promise callback")
+        let cleanup = expectation(description: "temporary directory cleanup")
+        var names: [String] = []
+        var ownedDirectory: URL?
+        let view = FileDropCatcherView()
+
+        view.receivePromisedFiles(
+            [receiver],
+            alongside: [],
+            limits: .standard,
+            completion: { cleanup.fulfill() }
+        ) { delivery in
+            names = delivery.urls.map(\.lastPathComponent).sorted()
+            ownedDirectory = delivery.urls.first?.deletingLastPathComponent()
+            XCTAssertTrue(ownedDirectory.map { FileManager.default.fileExists(atPath: $0.path) } ?? false)
+            try? await Task.sleep(for: .milliseconds(25))
+            XCTAssertTrue(
+                ownedDirectory.map { FileManager.default.fileExists(atPath: $0.path) } ?? false,
+                "promised files must remain available while the async handler is suspended"
+            )
+            callback.fulfill()
+        }
+
+        await fulfillment(of: [callback], timeout: 2)
+        XCTAssertEqual(names, ["first.txt", "second.txt"])
+        let directory = try XCTUnwrap(ownedDirectory)
+        await fulfillment(of: [cleanup], timeout: 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
+    // Expected RED: every receiver was materialized before the feature-level cap,
+    // and promise errors disappeared without reaching the UI.
+    func testSyntheticPromiseEnforcesLimitsAndReportsFailures() async {
+        let receiver = SyntheticPromiseReceiver(events: [
+            .file(name: "one.txt", contents: "1"),
+            .file(name: "two.txt", contents: "22"),
+            .failure(name: "broken.eml")
+        ])
+        let callback = expectation(description: "limited callback")
+        var deliveredCount = -1
+        var issueKinds: Set<SupraFileDropIssue.Kind> = []
+        let view = FileDropCatcherView()
+
+        view.receivePromisedFiles(
+            [receiver],
+            alongside: [],
+            limits: SupraFileDropLimits(maxFiles: 1, maxFileBytes: 10, maxTotalBytes: 10)
+        ) { delivery in
+            deliveredCount = delivery.urls.count
+            issueKinds = Set(delivery.issues.map(\.kind))
+            callback.fulfill()
+        }
+
+        await fulfillment(of: [callback], timeout: 2)
+        XCTAssertEqual(deliveredCount, 1)
+        XCTAssertTrue(issueKinds.contains(.tooManyFiles))
+        XCTAssertTrue(issueKinds.contains(.receiveFailed))
+    }
+
+    // Expected RED: promise callbacks ran on a concurrent queue and were appended
+    // in completion order, so a fast later receiver could reorder attachments.
+    func testSyntheticPromisePreservesReceiverOrder() async {
+        let first = DeferredSchedulingPromiseReceiver(fileName: "first.txt")
+        let second = SyntheticPromiseReceiver(events: [.file(name: "second.txt", contents: "second")])
+        let callback = expectation(description: "ordered callback")
+        var names: [String] = []
+        let view = FileDropCatcherView()
+
+        view.receivePromisedFiles([first, second], alongside: [], limits: .standard) { delivery in
+            names = delivery.urls.map(\.lastPathComponent)
+            callback.fulfill()
+        }
+
+        await fulfillment(of: [callback], timeout: 2)
+        XCTAssertEqual(names, ["first.txt", "second.txt"])
+    }
+
+    // Expected RED: an OperationQueue barrier can run before AppKit schedules a
+    // reader operation for a promise that is not ready yet, delivering an empty
+    // batch and deleting the destination before the callback arrives.
+    func testPromiseWaitsForReaderScheduledAfterReceiveReturns() async {
+        let receiver = DeferredSchedulingPromiseReceiver()
+        let callback = expectation(description: "deferred promise callback")
+        var names: [String] = []
+        let view = FileDropCatcherView()
+
+        view.receivePromisedFiles([receiver], alongside: [], limits: .standard) { delivery in
+            names = delivery.urls.map(\.lastPathComponent)
+            callback.fulfill()
+        }
+
+        await fulfillment(of: [callback], timeout: 2)
+        XCTAssertEqual(names, ["deferred.txt"])
+    }
+
+    // Expected RED: the catcher accepted another operation while the first async
+    // handler was suspended, so one completion could clear the shared busy state
+    // while the other drop still owned temporary files.
+    func testCatcherRejectsOverlappingDropsUntilHandlerCompletes() async throws {
+        let file = try temporaryFile("Serialized drop delivery.")
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let firstStarted = expectation(description: "first handler started")
+        let firstFinished = expectation(description: "first drop finished")
+        let secondFinished = expectation(description: "second drop finished")
+        var releaseFirst: CheckedContinuation<Void, Never>?
+        var deliveryCount = 0
+        var idleCount = 0
+        let view = FileDropCatcherView()
+        view.onProcessingChange = { processing in
+            if !processing {
+                idleCount += 1
+                if idleCount == 1 { firstFinished.fulfill() }
+                if idleCount == 2 { secondFinished.fulfill() }
+            }
+        }
+        view.onDrop = { _ in
+            deliveryCount += 1
+            if deliveryCount == 1 {
+                firstStarted.fulfill()
+                await withCheckedContinuation { releaseFirst = $0 }
+            }
+        }
+        view.refreshRegisteredTypes()
+
+        let info = DragInfoStub(pasteboard: pasteboard(withFileURL: file))
+        XCTAssertTrue(view.performDragOperation(info))
+        await fulfillment(of: [firstStarted], timeout: 2)
+
+        XCTAssertEqual(view.draggingEntered(info), [])
+        XCTAssertFalse(view.performDragOperation(info), "an in-flight catcher must reject a second drop")
+        XCTAssertEqual(deliveryCount, 1)
+
+        try XCTUnwrap(releaseFirst).resume()
+        await fulfillment(of: [firstFinished], timeout: 2)
+
+        XCTAssertEqual(view.draggingEntered(info), .copy)
+        XCTAssertTrue(view.performDragOperation(info))
+        await fulfillment(of: [secondFinished], timeout: 2)
+        XCTAssertEqual(deliveryCount, 2)
     }
 }
 
-/// Minimal NSDraggingInfo for driving NSDraggingDestination methods directly.
+private final class SyntheticPromiseReceiver: FilePromiseReceiving, @unchecked Sendable {
+    enum Event: Sendable {
+        case file(name: String, contents: String)
+        case failure(name: String)
+    }
+
+    let events: [Event]
+    let delay: TimeInterval
+
+    init(events: [Event], delay: TimeInterval = 0) {
+        self.events = events
+        self.delay = delay
+    }
+
+    func receive(
+        at destination: URL,
+        operationQueue: OperationQueue,
+        reader: @escaping @Sendable (URL, (any Error)?) -> Void
+    ) -> Int {
+        operationQueue.addOperation { [events, delay] in
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+            for event in events {
+                switch event {
+                case let .file(name, contents):
+                    let url = destination.appendingPathComponent(name)
+                    do {
+                        try Data(contents.utf8).write(to: url)
+                        reader(url, nil)
+                    } catch {
+                        reader(url, error)
+                    }
+                case let .failure(name):
+                    reader(
+                        destination.appendingPathComponent(name),
+                        NSError(domain: "SyntheticPromiseReceiver", code: 1)
+                    )
+                }
+            }
+        }
+        return events.count
+    }
+}
+
+private final class DeferredSchedulingPromiseReceiver: FilePromiseReceiving, @unchecked Sendable {
+    let fileName: String
+
+    init(fileName: String = "deferred.txt") {
+        self.fileName = fileName
+    }
+
+    func receive(
+        at destination: URL,
+        operationQueue: OperationQueue,
+        reader: @escaping @Sendable (URL, (any Error)?) -> Void
+    ) -> Int {
+        Task.detached { [fileName] in
+            try? await Task.sleep(for: .milliseconds(50))
+            operationQueue.addOperation {
+                let url = destination.appendingPathComponent(fileName)
+                do {
+                    try Data("deferred".utf8).write(to: url)
+                    reader(url, nil)
+                } catch {
+                    reader(url, error)
+                }
+            }
+        }
+        return 1
+    }
+}
+
 private final class DragInfoStub: NSObject, NSDraggingInfo {
     private let pasteboard: NSPasteboard
     init(pasteboard: NSPasteboard) { self.pasteboard = pasteboard }
@@ -107,8 +342,8 @@ private final class DragInfoStub: NSObject, NSDraggingInfo {
     var draggingSequenceNumber: Int { 0 }
     func slideDraggedImage(to screenPoint: NSPoint) {}
     var draggingFormation: NSDraggingFormation = .default
-    var animatesToDestination: Bool = false
-    var numberOfValidItemsForDrop: Int = 0
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 0
     func enumerateDraggingItems(
         options enumOpts: NSDraggingItemEnumerationOptions,
         for view: NSView?,

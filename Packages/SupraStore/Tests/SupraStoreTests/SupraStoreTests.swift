@@ -111,6 +111,60 @@ final class SupraStoreTests: XCTestCase {
         XCTAssertNil(try store.documentLibrary.findFolder(matterID: matter.id, parentFolderID: nil, name: "Research"))
     }
 
+    func testEnsureFolderReusesUnicodeCaseVariantsAndLegacyDuplicatesDeterministically() throws {
+        // Expected RED: `ensureFolder` does not exist yet; the old SQL `NOCASE`
+        // lookup also treats accented case variants as different folders.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "M")
+        let resume = try store.documentLibrary.createFolder(matterID: matter.id, name: "RÉSUMÉ")
+
+        let unicodeReuse = try store.documentLibrary.ensureFolder(
+            matterID: matter.id,
+            name: "résumé"
+        )
+        XCTAssertEqual(unicodeReuse.id, resume.id)
+
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try store.database.writer.write { db in
+            try DocumentFolderRecord(
+                id: "legacy-folder-a",
+                matterID: matter.id,
+                name: "Research",
+                createdAt: createdAt,
+                updatedAt: createdAt
+            ).insert(db)
+            try DocumentFolderRecord(
+                id: "legacy-folder-b",
+                matterID: matter.id,
+                name: "RESEARCH",
+                createdAt: createdAt,
+                updatedAt: createdAt
+            ).insert(db)
+        }
+
+        let first = try store.documentLibrary.ensureFolder(matterID: matter.id, name: "research")
+        let second = try store.documentLibrary.ensureFolder(matterID: matter.id, name: "Research")
+        XCTAssertEqual(first.id, "legacy-folder-a")
+        XCTAssertEqual(second.id, first.id)
+    }
+
+    func testEnsureFolderDoesNotReviveOrReuseTrashedFolder() throws {
+        // Expected RED: `ensureFolder` does not exist yet. Its identity contract
+        // must be scoped to live siblings so creating after deletion stays visible.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "M")
+        let trashed = try store.documentLibrary.createFolder(matterID: matter.id, name: "Pleadings")
+        try store.documentLibrary.softDeleteFolder(id: trashed.id)
+
+        let replacement = try store.documentLibrary.ensureFolder(matterID: matter.id, name: "PLEADINGS")
+
+        XCTAssertNotEqual(replacement.id, trashed.id)
+        XCTAssertEqual(
+            try store.documentLibrary.fetchFolders(matterID: matter.id).map(\.id),
+            [replacement.id]
+        )
+    }
+
     func testMatterChatsAreScopedSeparatelyFromGlobalChats() throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")

@@ -10,18 +10,24 @@ import XCTest
 @MainActor
 final class ScratchPadWeekTests: XCTestCase {
 
-    /// Deterministic US-style calendar (Sunday-first) with a pinned en_US locale so
-    /// weekday/month labels don't drift with the machine's locale. The time zone
-    /// stays `.current` on purpose — it must agree with the controller's
-    /// `dayString` formatter, which also uses the current zone.
+    /// Deterministic US-style calendar (Sunday-first) with pinned locale and time
+    /// zone so weekday/month labels and day keys don't drift with the machine.
     private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.locale = Locale(identifier: "en_US")
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         calendar.firstWeekday = 1
         return calendar
     }
 
-    private func date(_ year: Int, _ month: Int, _ day: Int, hour: Int = 12) -> Date {
+    private func date(
+        _ year: Int,
+        _ month: Int,
+        _ day: Int,
+        hour: Int = 12,
+        using calendar: Calendar? = nil
+    ) -> Date {
+        let calendar = calendar ?? self.calendar
         var components = DateComponents()
         components.year = year
         components.month = month
@@ -44,6 +50,53 @@ final class ScratchPadWeekTests: XCTestCase {
         XCTAssertTrue(week.containsToday)
     }
 
+    // Standing guard (already GREEN): the original gate covered only Sunday-first
+    // calendars, so this prevents a future regression that ignores `firstWeekday`.
+    func testWeekContainingDateHonorsMondayFirstCalendar() {
+        var mondayFirst = calendar
+        mondayFirst.firstWeekday = 2
+        let today = date(2026, 7, 9, using: mondayFirst)
+        let week = ScratchPadWeek.containing(today, today: today, calendar: mondayFirst)
+
+        XCTAssertEqual(
+            week.days.map(\.id),
+            ["2026-07-06", "2026-07-07", "2026-07-08", "2026-07-09", "2026-07-10", "2026-07-11", "2026-07-12"]
+        )
+        XCTAssertEqual(week.days.first?.weekdayLabel, "Mon.")
+    }
+
+    // Expected RED: parsing canonical Gregorian keys with a Buddhist system
+    // calendar produced a date in Gregorian year 1483 and could persist that key
+    // when the apparent 2026 day was clicked.
+    func testNonGregorianPreferencesStillUseGregorianKeysAndDateMath() throws {
+        let losAngeles = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.locale = Locale(identifier: "fr_FR")
+        gregorian.timeZone = losAngeles
+        gregorian.firstWeekday = 2
+        let today = date(2026, 7, 9, hour: 23, using: gregorian)
+
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.locale = Locale(identifier: "fr_FR")
+        buddhist.timeZone = losAngeles
+        buddhist.firstWeekday = 2
+        let week = try XCTUnwrap(
+            ScratchPadWeek.containing(dayString: "2026-07-09", today: today, calendar: buddhist)
+        )
+
+        XCTAssertEqual(week.days.first?.id, "2026-07-06")
+        XCTAssertEqual(week.days.last?.id, "2026-07-12")
+        XCTAssertEqual(week.days.first(where: \.isToday)?.id, "2026-07-09")
+        XCTAssertEqual(week.monthLabel, "juillet", "display labels must retain the requested locale")
+
+        let store = try SupraStore.inMemory()
+        let controller = ScratchPadController(store: store, now: { today }, calendar: buddhist)
+        controller.load()
+        XCTAssertEqual(controller.displayedDate, "2026-07-09")
+        controller.selectDate(try XCTUnwrap(week.days.first?.date))
+        XCTAssertEqual(controller.displayedDate, "2026-07-06")
+    }
+
     // Expected RED: compile error — same missing `ScratchPadWeek` type.
     func testWeekDayLabelsNumbersAndFlags() {
         let today = date(2026, 7, 9)
@@ -57,18 +110,17 @@ final class ScratchPadWeekTests: XCTestCase {
         )
     }
 
-    // Expected RED: compile error — same missing `ScratchPadWeek` type.
-    func testMonthLabelUsesMajorityMonthAndAppendsYearOutsideTheCurrentYear() {
+    // Expected RED: a spanning week reports only its majority month (`July`),
+    // hiding June and making edge dates appear to belong to the wrong month.
+    func testMonthLabelNamesEveryMonthAndDisambiguatesYears() {
         let today = date(2026, 7, 9)
         XCTAssertEqual(ScratchPadWeek.containing(today, today: today, calendar: calendar).monthLabel, "July")
-        // Jun 28 – Jul 4, 2026: four of the seven days (middle day Wed Jul 1 onward)
-        // are July, so July is the majority month.
         let spanning = ScratchPadWeek.containing(date(2026, 6, 29), today: today, calendar: calendar)
-        XCTAssertEqual(spanning.monthLabel, "July")
-        XCTAssertFalse(spanning.monthLabel.contains("June"), "the minority month must not be shown")
-        // A week outside today's year carries the year for orientation.
+        XCTAssertEqual(spanning.monthLabel, "June - July 2026")
         let lastYear = ScratchPadWeek.containing(date(2025, 12, 24), today: today, calendar: calendar)
         XCTAssertEqual(lastYear.monthLabel, "December 2025")
+        let yearBoundary = ScratchPadWeek.containing(date(2025, 12, 29), today: today, calendar: calendar)
+        XCTAssertEqual(yearBoundary.monthLabel, "December 2025 - January 2026")
     }
 
     // Expected RED: compile error — same missing `ScratchPadWeek` type.
@@ -113,8 +165,9 @@ final class ScratchPadWeekTests: XCTestCase {
         XCTAssertTrue(snapped.days.contains { $0.id == "2026-06-15" })
     }
 
-    // Expected RED: compile error — `ScratchPadController.stepWeek` does not exist yet.
-    func testStepWeekNavigatesBackAndGatesAtTheCurrentWeek() throws {
+    // Expected RED: stepping a week changes only `visibleWeek`; `displayedDate`
+    // remains July 9 while the strip shows June 28 - July 4.
+    func testStepWeekSelectsTheCorrespondingDayAndGatesAtTheCurrentWeek() throws {
         let store = try SupraStore.inMemory()
         let controller = ScratchPadController(store: store, now: { self.date(2026, 7, 9) }, calendar: calendar)
         controller.load()
@@ -128,12 +181,33 @@ final class ScratchPadWeekTests: XCTestCase {
         controller.stepWeek(-1)
         XCTAssertEqual(controller.visibleWeek?.days.first?.id, "2026-06-28")
         XCTAssertEqual(
-            controller.displayedDate, "2026-07-09",
-            "browsing weeks alone must not change the open day"
+            controller.displayedDate, "2026-07-02",
+            "the editable day must follow the strip to the corresponding weekday"
         )
 
         controller.stepWeek(1)
         XCTAssertEqual(controller.visibleWeek?.days.first?.id, "2026-07-05")
+        XCTAssertEqual(controller.displayedDate, "2026-07-09")
+    }
+
+    // Expected RED: week flags were snapshots with no lifecycle refresh; after a
+    // Saturday-to-Sunday rollover the old week still disabled forward navigation.
+    func testRefreshCalendarStatePreservesOpenDayAndEnablesNewCurrentWeek() throws {
+        let store = try SupraStore.inMemory()
+        var current = date(2026, 7, 11)
+        let controller = ScratchPadController(store: store, now: { current }, calendar: calendar)
+        controller.load()
+        XCTAssertTrue(try XCTUnwrap(controller.visibleWeek).containsToday)
+
+        current = date(2026, 7, 12)
+        controller.refreshCalendarState()
+
+        XCTAssertEqual(controller.displayedDate, "2026-07-11", "refresh must not move an in-progress note")
+        XCTAssertFalse(try XCTUnwrap(controller.visibleWeek).containsToday)
+        controller.stepWeek(1)
+        XCTAssertEqual(controller.displayedDate, "2026-07-12")
+        XCTAssertEqual(controller.visibleWeek?.days.first?.id, "2026-07-12")
+        XCTAssertTrue(try XCTUnwrap(controller.visibleWeek).containsToday)
     }
 
     // Expected RED: compile error — `ScratchPadController.weekBilledHours` does not

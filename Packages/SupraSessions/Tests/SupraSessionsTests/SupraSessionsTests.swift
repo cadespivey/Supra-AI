@@ -1841,7 +1841,7 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(revived.matters.map(\.id), [second.id, first.id, third.id, fourth.id])
     }
 
-    func testCreateMatterPreloadsPracticeAreaFolders() async throws {
+    func testCreateMatterPreloadsPracticeAreaFolders() throws {
         let store = try makeStore()
         let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
         let controller = MattersController(store: store, runtimeClient: stub)
@@ -1855,6 +1855,16 @@ final class SupraSessionsTests: XCTestCase {
             ["Correspondence", "Discovery", "Drafts", "Exhibits", "Motions", "Pleadings", "Research"]
         )
         XCTAssertTrue(folders.allSatisfy { $0.parentFolderID == nil })
+
+        // Expected RED for the shared identity fix: `seedStarterFolders` does not
+        // exist yet. Re-entering a seed path must reuse the original live folders.
+        let originalFolderIDs = Set(folders.map(\.id))
+        controller.seedStarterFolders(matterID: litigation.id, practiceArea: "commercial litigation")
+        controller.seedStarterFolders(matterID: litigation.id, practiceArea: "Commercial Litigation")
+        XCTAssertEqual(
+            Set(try store.documentLibrary.fetchFolders(matterID: litigation.id).map(\.id)),
+            originalFolderIDs
+        )
 
         // No practice area still seeds the general starter set.
         let generic = try controller.createMatter(name: "Middleton Estate")
@@ -1948,8 +1958,14 @@ final class SupraSessionsTests: XCTestCase {
         // sort still applies.
         controller.setPinned(matterID: charlie.id, pinned: true)
         XCTAssertEqual(controller.matters.map(\.id), [charlie.id, alpha.id, bravo.id])
+        // Standing guard (already GREEN): this repairs the prior post-pin baseline,
+        // which could not detect a future pin operation mutating updated_at.
+        let bravoUpdatedAt = try XCTUnwrap(
+            controller.matters.first { $0.id == bravo.id }?.updatedAt
+        )
         controller.setPinned(matterID: bravo.id, pinned: true)
         XCTAssertEqual(controller.matters.map(\.id), [bravo.id, charlie.id, alpha.id])
+        XCTAssertEqual(controller.matters.first { $0.id == bravo.id }?.updatedAt, bravoUpdatedAt)
 
         // Switching modes reorders both halves but keeps pinned on top
         // (date-created is newest first).
@@ -1962,7 +1978,6 @@ final class SupraSessionsTests: XCTestCase {
 
         // Pins survive a "restart", and pinning never touches updated_at
         // (compare DB-round-tripped values; SQLite stores millisecond precision).
-        let bravoUpdatedAt = controller.matters.first { $0.id == bravo.id }?.updatedAt
         let revived = MattersController(store: store, runtimeClient: stub, defaults: defaults)
         revived.loadMatters()
         XCTAssertEqual(revived.matters.map(\.id), [bravo.id, charlie.id, alpha.id])
@@ -1993,6 +2008,38 @@ final class SupraSessionsTests: XCTestCase {
         // it — the row lands where the partition allows, never snaps back.
         controller.moveMatters(fromOffsets: IndexSet(integer: 2), toOffset: 0)
         XCTAssertEqual(controller.matters.map(\.id), [charlie.id, alpha.id, bravo.id])
+    }
+
+    func testManualMovePreservesPinnedMattersLatentOrder() throws {
+        // Expected RED: moving the unpinned suffix currently persists the visible
+        // pinned-first array, overwriting the pinned row's latent manual position.
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
+        let defaults = try makeScratchDefaults()
+        let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
+
+        let alpha = try controller.createMatter(name: "Alpha")
+        let bravo = try controller.createMatter(name: "Bravo")
+        let charlie = try controller.createMatter(name: "Charlie")
+
+        // Establish the initial manual order from a deterministic comparator;
+        // creation timestamps are intentionally irrelevant to this fixture.
+        controller.setSortMode(.name)
+        controller.setSortMode(.manual)
+        controller.moveMatters(fromOffsets: IndexSet(integer: 0), toOffset: 2)
+        XCTAssertEqual(controller.matters.map(\.id), [bravo.id, alpha.id, charlie.id])
+
+        controller.setPinned(matterID: alpha.id, pinned: true)
+        XCTAssertEqual(controller.matters.map(\.id), [alpha.id, bravo.id, charlie.id])
+        controller.moveMatters(fromOffsets: IndexSet(integer: 2), toOffset: 1)
+        XCTAssertEqual(controller.matters.map(\.id), [alpha.id, charlie.id, bravo.id])
+
+        controller.setPinned(matterID: alpha.id, pinned: false)
+        XCTAssertEqual(
+            controller.matters.map(\.id),
+            [charlie.id, alpha.id, bravo.id],
+            "unpinning must restore the pinned row to its untouched latent manual slot"
+        )
     }
 
     // MARK: - ResearchSessionController
