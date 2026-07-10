@@ -68,6 +68,10 @@ public final class BillingDraftController: ObservableObject {
     public var autoTimestamp: Bool = true
     /// Firm-wide narrative terminal-punctuation style; a matter may override it.
     public var narrativeTerminal: BillingNarrativeTerminal = .asWritten
+    /// Fires after the loaded draft state changes — generation, edit, delete,
+    /// reassign, or rebinding to a day — so companion surfaces (the ScratchPad
+    /// week strip's billable-hour indicators) can re-read the store.
+    public var onDraftMutated: (() -> Void)?
 
     private let store: SupraStore
     private let service: BillingDraftService
@@ -101,6 +105,7 @@ public final class BillingDraftController: ObservableObject {
     }
 
     public func loadLatest() {
+        defer { onDraftMutated?() }
         guard let dayID, let draft = try? store.billing.latestDraft(dayID: dayID) else {
             draftID = nil; draftVersion = nil; lines = []; reconciliation = nil
             return

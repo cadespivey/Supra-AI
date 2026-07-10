@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [Unreleased]
+
+### Changed
+
+- **ScratchPad week strip** — the ScratchPad header now shows the week at a
+  glance: step between weeks and pick a day directly, with each date carrying
+  the billable-hour total from its latest billing draft (the grey number
+  appears once a draft has been run for that day and updates as you edit or
+  regenerate). The screen title now matches the other module headers.
+
 ## [2.1.1] - 2026-07-09
 
 Matter organization: sort and pin the sidebar, consistent client and

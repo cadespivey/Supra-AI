@@ -169,8 +169,9 @@ final class ScratchPadWeekTests: XCTestCase {
     // Expected RED: compile error — `BillingDraftController.onDraftMutated` does not
     // exist yet. The counter assertions are outer-level (not inside the closure), so
     // a callback that never fires fails loudly rather than passing vacuously.
-    func testDraftMutationsNotifyOnDraftMutated() async throws {
-        let store = try SupraStore.inMemory()
+    /// Synchronous on purpose: in an async test body, `writer.write` resolves to
+    /// the async GRDB overload and fails to compile without `await`.
+    private func seedDraftableDay(_ store: SupraStore) throws -> String {
         try store.database.writer.write { db in
             try MatterRecord(
                 id: "m-mckernon", name: "McKernon Motors v. Liberty Rail", clientNames: "McKernon",
@@ -179,6 +180,12 @@ final class ScratchPadWeekTests: XCTestCase {
         }
         let day = try store.scratchPad.fetchOrCreateDay("2026-07-09")
         try store.scratchPad.addEntry(dayID: day.id, text: "Working on @McKernon", mentions: ["m-mckernon"])
+        return day.id
+    }
+
+    func testDraftMutationsNotifyOnDraftMutated() async throws {
+        let store = try SupraStore.inMemory()
+        let dayID = try seedDraftableDay(store)
 
         let json = """
         {"lineItems":[
@@ -195,7 +202,7 @@ final class ScratchPadWeekTests: XCTestCase {
         var notified = 0
         controller.onDraftMutated = { notified += 1 }
 
-        controller.bind(dayID: day.id)
+        controller.bind(dayID: dayID)
         XCTAssertEqual(notified, 1, "binding to a day reloads the draft and must notify")
 
         await controller.generate(sensitivity: 0.6)

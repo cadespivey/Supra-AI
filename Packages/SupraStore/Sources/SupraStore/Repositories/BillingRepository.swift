@@ -130,6 +130,37 @@ public final class BillingRepository: @unchecked Sendable {
         }
     }
 
+    /// Total line-item hours of the LATEST draft version for each given calendar
+    /// day (`yyyy-MM-dd`) — the ScratchPad week strip's billable-hour indicators.
+    /// A day appears only when a draft has been run for it; a latest draft whose
+    /// lines were all deleted reports 0. Superseded versions never count.
+    public func latestDraftHours(days: [String]) throws -> [String: Double] {
+        guard !days.isEmpty else { return [:] }
+        let placeholders = Array(repeating: "?", count: days.count).joined(separator: ",")
+        return try writer.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT d.day AS day, COALESCE(SUM(li.hours), 0) AS hours
+                FROM scratch_pad_days d
+                JOIN billing_drafts bd
+                  ON bd.day_id = d.id
+                 AND bd.version = (SELECT MAX(version) FROM billing_drafts WHERE day_id = d.id)
+                LEFT JOIN billing_line_items li ON li.draft_id = bd.id
+                WHERE d.day IN (\(placeholders))
+                GROUP BY d.day
+                """,
+                arguments: StatementArguments(days)
+            )
+            var totals: [String: Double] = [:]
+            for row in rows {
+                let day: String = row["day"]
+                totals[day] = row["hours"]
+            }
+            return totals
+        }
+    }
+
     public func setDraftStatus(id: String, status: BillingDraftStatus) throws {
         try writer.write { db in
             try db.execute(

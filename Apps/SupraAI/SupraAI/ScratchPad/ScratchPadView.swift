@@ -142,34 +142,70 @@ struct ScratchPadView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("ScratchPad")
-                    .font(.supraCaption)
-                    .foregroundStyle(.tertiary)
-                Text(Self.displayDate(controller.displayedDate))
-                    .font(.supraTitle)
-            }
-            Spacer()
-            // Note / Billing tabs live in the header now (freeing the row they used to
-            // occupy).
-            GhostSegmentedControl(
-                selection: $tab,
-                segments: [(.note, "Note", ""), (.draft, "Billing draft", "")]
-            )
-            Spacer()
-            // The search box sits directly below the day controls and spans their width.
+        HStack(alignment: .top, spacing: 16) {
+            // The screen title, sized like every other module header.
+            Text("ScratchPad")
+                .font(.supraTitle)
+            Spacer(minLength: 12)
+            weekStrip
+            Spacer(minLength: 12)
             VStack(alignment: .trailing, spacing: 6) {
+                GhostSegmentedControl(
+                    selection: $tab,
+                    segments: [(.note, "Note", ""), (.draft, "Billing draft", "")]
+                )
                 HStack(spacing: 8) {
                     historyButton
                     lockButton
+                    scratchSearchField
+                        .frame(width: 180)
                 }
-                scratchSearchField
-                    .frame(width: 200)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    /// The week-strip date navigation: the month heading over seven ghost day
+    /// buttons flanked by week chevrons. The grey number under a date is that
+    /// day's billable-hour total from its LATEST billing draft; it appears only
+    /// once a draft has been run for the day.
+    @ViewBuilder
+    private var weekStrip: some View {
+        if let week = controller.visibleWeek {
+            VStack(spacing: 2) {
+                Text(week.monthLabel)
+                    .font(.supraTitle)
+                    .accessibilityIdentifier("scratchpad.week.month")
+                HStack(spacing: 2) {
+                    Button { controller.stepWeek(-1) } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .buttonStyle(.ghost)
+                    .help("Previous week")
+                    .accessibilityLabel("Previous week")
+                    .accessibilityIdentifier("scratchpad.week.back")
+                    ForEach(week.days) { day in
+                        WeekDayButton(
+                            day: day,
+                            isSelected: day.id == controller.displayedDate,
+                            hoursLabel: controller.weekBilledHours[day.id].map(ScratchPadWeek.hoursLabel),
+                            fullDate: Self.displayDate(day.id)
+                        ) {
+                            controller.selectDate(day.date)
+                        }
+                    }
+                    Button { controller.stepWeek(1) } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                    .buttonStyle(.ghost)
+                    .disabled(week.containsToday)
+                    .help("Next week")
+                    .accessibilityLabel("Next week")
+                    .accessibilityIdentifier("scratchpad.week.forward")
+                }
+            }
+        }
     }
 
     /// History navigation: a calendar to jump to any day, defaulting to the day on
@@ -178,6 +214,7 @@ struct ScratchPadView: View {
     private var historyButton: some View {
         Button { showHistory.toggle() } label: {
             Label("History", systemImage: "calendar")
+                .labelStyle(.iconOnly)
         }
         .buttonStyle(.ghost)
         .help("Jump to another day")
@@ -214,6 +251,7 @@ struct ScratchPadView: View {
                 controller.reopenCurrentDay()
             } label: {
                 Label("Locked", systemImage: "lock.fill")
+                    .labelStyle(.iconOnly)
             }
             .buttonStyle(.ghost)
             .help("This day is locked. Reopen to edit.")
@@ -222,6 +260,7 @@ struct ScratchPadView: View {
                 controller.lockCurrentDay()
             } label: {
                 Label("Lock day", systemImage: "lock.open")
+                    .labelStyle(.iconOnly)
             }
             .buttonStyle(.ghost)
             .help("Finalize and lock this day (reversible).")
@@ -685,6 +724,54 @@ struct ScratchPadView: View {
         return formatter
     }()
 
+}
+
+/// One selectable day in the header's week strip — the ghost-button visual family
+/// (hover wash; the soft fill of `GhostSegmentedControl`'s selected segment) with
+/// the day's billable hours in grey beneath the date once a billing draft has been
+/// run for it. Future days can't be billed and render disabled.
+private struct WeekDayButton: View {
+    let day: ScratchPadWeek.Day
+    let isSelected: Bool
+    let hoursLabel: String?
+    let fullDate: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 1) {
+                Text(day.weekdayLabel)
+                    .font(.supraCaption.weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                Text(day.dayNumber)
+                    .font(.supraBody.weight(day.isToday ? .semibold : .regular).monospacedDigit())
+                    .foregroundStyle(day.isToday ? Color.accentColor : Color.primary)
+                // The indicator row is always laid out (invisible when no draft has
+                // been run) so day numbers align across the strip.
+                Text(hoursLabel ?? "0.0")
+                    .font(.supraCaption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .opacity(hoursLabel == nil ? 0 : 1)
+            }
+            .frame(width: 42)
+            .padding(.vertical, 4)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(day.isFuture)
+        .opacity(day.isFuture ? 0.35 : 1)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(isSelected ? Color.primary.opacity(0.08) : (hovering ? Color.primary.opacity(0.10) : .clear))
+        )
+        .onHover { hovering = !day.isFuture && $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .help(day.isFuture ? "Future day — notes can't be billed ahead" : fullDate)
+        .accessibilityLabel(hoursLabel.map { "\(fullDate), \($0) hours drafted" } ?? fullDate)
+        .accessibilityIdentifier("scratchpad.week.day.\(day.id)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
 }
 
 /// One entry row with a hover-revealed delete button. The delete affordance lives

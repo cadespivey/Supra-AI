@@ -85,19 +85,28 @@ public final class ScratchPadController: ObservableObject {
     @Published public private(set) var attachments: [ScratchPadAttachmentView] = []
     /// Set when an attachment can't be ingested (e.g. `.msg`); the view surfaces it.
     @Published public var lastAttachmentError: String?
+    /// The header strip's week (always contains `displayedDate` until the user
+    /// browses with the chevrons). Nil until the first day loads.
+    @Published public private(set) var visibleWeek: ScratchPadWeek?
+    /// Billable-hour totals for the visible week's days, keyed "yyyy-MM-dd" —
+    /// each day's LATEST billing draft. A day absent here has had no draft run.
+    @Published public private(set) var weekBilledHours: [String: Double] = [:]
 
     private let store: SupraStore
     private let now: () -> Date
+    private let calendar: Calendar
     private let attachmentService: ScratchPadAttachmentService
     private var matterObserver: AnyCancellable?
 
     public init(
         store: SupraStore,
         now: @escaping () -> Date = { Date() },
+        calendar: Calendar = .current,
         attachmentService: ScratchPadAttachmentService = ScratchPadAttachmentService()
     ) {
         self.store = store
         self.now = now
+        self.calendar = calendar
         self.attachmentService = attachmentService
     }
 
@@ -150,7 +159,47 @@ public final class ScratchPadController: ObservableObject {
             currentDay = nil
             reloadEntries()       // entries empty, but #tag suggestions stay all-time
             reloadAttachments()
+            updateVisibleWeek()
         }
+    }
+
+    // MARK: - Week strip
+
+    /// Moves the visible week by whole weeks (the chevrons pass ±1). Forward
+    /// motion stops at the week containing today — later weeks are entirely
+    /// unbillable. Browsing alone never changes the open day; that takes a
+    /// day click (`selectDate`).
+    public func stepWeek(_ deltaWeeks: Int) {
+        guard let week = visibleWeek else { return }
+        if deltaWeeks > 0, week.containsToday { return }
+        let today = now()
+        var advanced = week.advanced(by: deltaWeeks, today: today, calendar: calendar)
+        // Defensive clamp for multi-week deltas: never land in an all-future week.
+        if let start = advanced.days.first?.date, start > today, !advanced.containsToday {
+            advanced = ScratchPadWeek.containing(today, today: today, calendar: calendar)
+        }
+        visibleWeek = advanced
+        refreshWeekBilledHours()
+    }
+
+    /// Re-reads each visible day's billable-hour total from its latest billing
+    /// draft (a day with no draft run stays absent, so no indicator shows).
+    /// Called on week changes and by the billing controller's mutation callback.
+    public func refreshWeekBilledHours() {
+        guard let week = visibleWeek else {
+            weekBilledHours = [:]
+            return
+        }
+        weekBilledHours = (try? store.billing.latestDraftHours(days: week.days.map(\.id))) ?? [:]
+    }
+
+    /// Snaps the strip to the week containing the displayed date.
+    private func updateVisibleWeek() {
+        guard let week = ScratchPadWeek.containing(dayString: displayedDate, today: now(), calendar: calendar) else {
+            return
+        }
+        visibleWeek = week
+        refreshWeekBilledHours()
     }
 
     /// Runs a cross-day note search. Matches entry text (which includes inline `#tags`
@@ -329,6 +378,7 @@ public final class ScratchPadController: ObservableObject {
         displayedDate = record.day
         reloadEntries()
         reloadAttachments()
+        updateVisibleWeek()
     }
 
     /// Returns the current day's record, persisting it from the displayed date if

@@ -119,6 +119,13 @@ final class AppEnvironment: ObservableObject {
         )
         billingDraft.applySettings(billingSettings.settings)
         self.billingDraftController = billingDraft
+        // A generated/edited/deleted draft changes the day's billable-hour total
+        // shown in the ScratchPad week strip — refresh those indicators whenever
+        // the draft reloads.
+        let scratchPad = self.scratchPadController
+        billingDraft.onDraftMutated = { [weak scratchPad] in
+            scratchPad?.refreshWeekBilledHours()
+        }
 
         // Document intelligence controllers must exist before MattersController so
         // it can vend a per-matter Documents controller wired to the queue + gate.
@@ -658,6 +665,53 @@ final class AppEnvironment: ObservableObject {
                     displayName: "Winter v. Natural Resources Defense Council, Inc.",
                     matchText: "A plaintiff seeking a preliminary injunction must establish that he is likely to succeed on the merits, that he is likely to suffer irreparable harm",
                     rank: 0
+                )
+            ])
+
+            // ScratchPad: two days of fictitious notes with generated billing
+            // drafts, so the week strip's billable-hour indicators and the
+            // review table render with content in screenshots.
+            let dayFormatter = DateFormatter()
+            dayFormatter.calendar = Calendar(identifier: .gregorian)
+            dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+            dayFormatter.timeZone = .current
+            dayFormatter.dateFormat = "yyyy-MM-dd"
+            let todayString = dayFormatter.string(from: Date())
+            let yesterdayString = dayFormatter.string(from: Date().addingTimeInterval(-86_400))
+            let pad = try store.scratchPad.fetchOrCreateDay(todayString)
+            try store.scratchPad.addEntry(
+                dayID: pad.id,
+                text: "Drafted opposition to motion to compel @MeridianFabrication #drafting",
+                mentions: [matter.id], tags: ["drafting"]
+            )
+            try store.scratchPad.addEntry(
+                dayID: pad.id,
+                text: "TC w/ adjuster re coverage position #call",
+                tags: ["call"]
+            )
+            try store.billing.createDraft(dayID: pad.id, lineItems: [
+                BillingLineItemInput(
+                    matterID: matter.id,
+                    narrative: "Drafted opposition to motion to compel and supporting exhibits.",
+                    hours: 2.4, workDate: todayString, utbmsTaskCode: "L350", utbmsActivityCode: "A103"
+                ),
+                BillingLineItemInput(
+                    matterID: matter.id,
+                    narrative: "Telephone conference with insurance adjuster regarding coverage position.",
+                    hours: 0.4, workDate: todayString, utbmsTaskCode: "L120", utbmsActivityCode: "A106"
+                ),
+            ])
+            let priorPad = try store.scratchPad.fetchOrCreateDay(yesterdayString)
+            try store.scratchPad.addEntry(
+                dayID: priorPad.id,
+                text: "Reviewed Calloway deposition transcript @MeridianFabrication #review",
+                mentions: [matter.id], tags: ["review"]
+            )
+            try store.billing.createDraft(dayID: priorPad.id, lineItems: [
+                BillingLineItemInput(
+                    matterID: matter.id,
+                    narrative: "Reviewed Calloway deposition transcript for tie-down testimony.",
+                    hours: 1.2, workDate: yesterdayString, utbmsTaskCode: "L330", utbmsActivityCode: "A104"
                 )
             ])
 
