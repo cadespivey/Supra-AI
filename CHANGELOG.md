@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.1.3] - 2026-07-10
+
+Database safety hardening.
+
+### Fixed
+
+- **Your data is protected across app updates** — the app will no longer rebuild
+  its database from scratch if it is ever opened by a version whose internal
+  schema doesn't match, and it now writes an automatic local snapshot of the
+  database immediately before applying any schema upgrade. Together these ensure
+  an update or a mismatched build can't discard your matters, notes, or
+  documents.
+
 ## [2.1.2] - 2026-07-10
 
 Drag and drop everywhere, and a week-at-a-glance ScratchPad with billable-hour
