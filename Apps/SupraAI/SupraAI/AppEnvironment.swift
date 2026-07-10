@@ -39,6 +39,7 @@ final class AppEnvironment: ObservableObject {
     let chatController: GlobalChatController
     let modelDownloadController: ModelDownloadController
     let settingsController: SettingsController
+    let backupController: BackupController
     let assistantProfileController: AssistantProfileController
     /// Firm structural style (Track A): letterhead/caption/signature wording + geometry.
     let firmStyleProfileController: FirmStyleProfileController
@@ -84,6 +85,12 @@ final class AppEnvironment: ObservableObject {
             fetcher: HuggingFaceClient()
         )
         self.settingsController = SettingsController(store: store, appVersion: appVersion)
+        self.backupController = BackupController(
+            store: store,
+            blobsDirectory: DocumentStorage.makeDefault().blobsDirectory,
+            appVersion: appVersion.marketingVersion,
+            appBuild: appVersion.buildNumber
+        )
         self.assistantProfileController = AssistantProfileController(store: store, basePrompt: systemPrompt)
         // Firm structural style: autosaves to the store; MatterDraftingController reads the
         // persisted profile fresh at draft time via effectiveStyle(), so no threading is needed.
@@ -223,6 +230,11 @@ final class AppEnvironment: ObservableObject {
         let maintenance = DocumentMaintenance(store: store)
         maintenance.purgeExpired()
         maintenance.purgeExpiredChats()
+        // P2 backup schedule: one launch check, never on quit. The controller
+        // skips fresh/unconfigured destinations and performs file work off-main.
+        if !Self.isUITestMode, !Self.isDemoMode, !usingFallbackStore {
+            Task { await backupController.backUpOnLaunchIfStale() }
+        }
         // Start Sparkle: scheduled background checks + silent download, surfacing a
         // single "Install and Relaunch" prompt. Skipped in UI tests.
         if !Self.isUITestMode, !Self.isDemoMode { sparkleUpdater.start() }

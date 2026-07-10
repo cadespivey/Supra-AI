@@ -12,6 +12,7 @@ struct SettingsView: View {
     @ObservedObject var profile: AssistantProfileController
     @ObservedObject var update: SparkleUpdaterController
     @ObservedObject var billing: BillingSettingsController
+    @ObservedObject var backup: BackupController
     @ObservedObject var firmStyle: FirmStyleProfileController
     let parseExemplar: @MainActor (ExemplarKind, URL) async -> ExemplarParseOutcome
 
@@ -22,6 +23,8 @@ struct SettingsView: View {
             FirmStyleSection(firmStyle: firmStyle, parseExemplar: parseExemplar)
 
             ScratchPadBillingSection(billing: billing)
+
+            BackupSection(backup: backup)
 
             Section("Generation Defaults") {
                 Picker("Preset", selection: $settings.preset) {
@@ -170,6 +173,224 @@ struct SettingsView: View {
     private func revealInFinder(_ path: String) {
         try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+}
+
+/// P2's deliberately compact backup surface. The card reads like a continuity
+/// ledger — destination, last protected state, snapshot size, document count —
+/// while folder choice and execution remain ordinary macOS controls.
+private struct BackupSection: View {
+    @ObservedObject var backup: BackupController
+
+    var body: some View {
+        Section {
+            Text("Keep a restorable copy of your database and managed documents in a folder you control. Supra AI backs up when you ask and once on launch when the last successful copy is at least 24 hours old.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: statusSymbol)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(statusColor)
+                        .frame(width: 34, height: 34)
+                        .background(statusColor.opacity(0.12), in: Circle())
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 7) {
+                            Text(statusTitle)
+                                .font(.supraHeadline)
+                            if backup.isBackingUp {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
+                        Text(statusDetail)
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 12)
+                    if backup.destinationIsICloudDrive {
+                        Label("iCloud Drive", systemImage: "icloud.fill")
+                            .font(.supraCaption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Divider()
+
+                ledgerRow(label: "Destination", systemImage: "folder") {
+                    Text(backup.destinationPath ?? "No folder chosen")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                ledgerRow(label: "Last backup", systemImage: "clock") {
+                    Text(lastBackupText)
+                        .monospacedDigit()
+                }
+                ledgerRow(label: "Snapshot", systemImage: "externaldrive") {
+                    Text(snapshotText)
+                        .monospacedDigit()
+                }
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(nsColor: .textBackgroundColor).opacity(0.72))
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(statusColor.opacity(0.25), lineWidth: 1)
+            }
+
+            if backup.shouldWarnAboutLargeFirstBackup {
+                Label {
+                    Text("Your managed documents use about \(formattedBytes(backup.estimatedSourceBytes)). The first backup may take a while; later runs copy only new documents.")
+                } icon: {
+                    Image(systemName: "externaldrive.badge.timemachine")
+                }
+                .font(.callout)
+                .foregroundStyle(.orange)
+            }
+
+            if backup.hasDestination, !backup.destinationIsICloudDrive {
+                Label {
+                    Text("This folder may exist only on this Mac. For off-site protection, choose iCloud Drive. If you use an external disk, keep it encrypted.")
+                } icon: {
+                    Image(systemName: "lock.trianglebadge.exclamationmark")
+                }
+                .font(.callout)
+                .foregroundStyle(.orange)
+            }
+
+            HStack(spacing: 10) {
+                Button(folderButtonTitle) { chooseFolder() }
+                Button("Back Up Now") {
+                    Task { await backup.backUpNow() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!backup.hasDestination || backup.isBackingUp)
+                Spacer()
+                Text("Keeps the newest 10 database snapshots; document blobs are incremental.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Backup")
+        }
+        .task { await backup.refreshEstimatedSourceSize() }
+    }
+
+    @ViewBuilder
+    private func ledgerRow<Content: View>(
+        label: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Label(label, systemImage: systemImage)
+                .font(.supraCaption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 104, alignment: .leading)
+            content()
+                .font(.supraCaption)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var statusTitle: String {
+        switch backup.state {
+        case .unconfigured: "Backup not configured"
+        case .ready: backup.lastSuccessAt == nil ? "Ready for first backup" : "Backup ready"
+        case .backingUp: "Backing up"
+        case .succeeded: "Backup complete"
+        case .failed: "Backup needs attention"
+        case .needsDestinationRepick: "Choose the folder again"
+        }
+    }
+
+    private var statusDetail: String {
+        if let message = backup.statusMessage { return message }
+        if backup.lastSuccessAt != nil {
+            return backup.isLastBackupStale
+                ? "The last copy is more than 24 hours old."
+                : "Database and managed documents have a current copy."
+        }
+        return "Choose a folder, then make the first copy."
+    }
+
+    private var statusSymbol: String {
+        switch backup.state {
+        case .unconfigured: "archivebox"
+        case .ready: backup.lastSuccessAt == nil ? "archivebox" : "checkmark.shield.fill"
+        case .backingUp: "arrow.triangle.2.circlepath"
+        case .succeeded: "checkmark.shield.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        case .needsDestinationRepick: "folder.badge.questionmark"
+        }
+    }
+
+    private var statusColor: Color {
+        switch backup.state {
+        case .succeeded: .green
+        case .failed: .red
+        case .needsDestinationRepick: .orange
+        case .backingUp: .accentColor
+        case .ready where backup.lastSuccessAt != nil && !backup.isLastBackupStale: .green
+        case .ready where backup.isLastBackupStale: .orange
+        default: .secondary
+        }
+    }
+
+    private var lastBackupText: String {
+        guard let date = backup.lastSuccessAt else { return "Not yet backed up" }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private var snapshotText: String {
+        guard let bytes = backup.lastSnapshotBytes else { return "—" }
+        let size = formattedBytes(Int64(bytes))
+        if let documents = backup.lastReferencedBlobCount {
+            return "\(size) · \(documents) document\(documents == 1 ? "" : "s")"
+        }
+        return size
+    }
+
+    private var folderButtonTitle: String {
+        switch backup.state {
+        case .needsDestinationRepick: "Choose Folder Again…"
+        default: backup.hasDestination ? "Change Folder…" : "Choose Backup Folder…"
+        }
+    }
+
+    private func formattedBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+        panel.prompt = "Use for Backups"
+        panel.message = "Choose a folder for Supra AI backups. iCloud Drive is recommended for an off-site copy."
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let bookmark = try url.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+            _ = backup.configureDestination(bookmarkData: bookmark, url: url)
+        } catch {
+            backup.reportDestinationSelectionFailure(
+                "The folder permission could not be saved. Choose a different folder."
+            )
+        }
     }
 }
 
