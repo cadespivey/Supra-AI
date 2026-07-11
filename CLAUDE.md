@@ -28,3 +28,23 @@ adds or modifies behavior:
   compiles Swift — the package suites are the merge gate and must pass with zero failures.
 - Fixtures are synthetic (`TestData/`); never introduce real client data. Secrets live in
   `.env` / Keychain, never in source.
+
+## Public website font license invariant (non-negotiable)
+
+- **Never add, commit, push, package, upload, deploy, or otherwise expose any Equity font
+  file publicly.** This applies even if a file is renamed, converted, subsetted, embedded,
+  base64-encoded, placed in a release/build artifact, or kept only in Git history.
+- The public repository and every artifact produced from it must remain free of Equity font
+  binaries. Do not put them under `website/`, Git LFS, Actions artifacts, GitHub Pages,
+  releases, fixtures, screenshots with embedded font data, or any other tracked/public path.
+- Website work must use system fonts or fonts whose license expressly permits the intended
+  public redistribution. A local/private font workflow may be designed separately, but it
+  must default to absence, stay outside this repository, and never feed public builds.
+- Several stale LOCAL branches (e.g. `feat/website`) still carry the font binaries in their
+  history — never push them. A local pre-push hook (`.git/hooks/pre-push`) blocks any ref
+  whose history contains the prohibited paths or blob hashes; keep it installed.
+- Every website SPEC / PLAN / TESTPLAN must repeat this invariant and include the repository
+  asset-license check as an acceptance gate. Run `bash Scripts/verify-public-font-license.sh`
+  before committing or deploying website changes. Never bypass or weaken that check.
+- See [`Docs/Website-Asset-Licensing.md`](Docs/Website-Asset-Licensing.md) for the durable
+  policy and incident procedure.
