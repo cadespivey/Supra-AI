@@ -7,6 +7,15 @@ build/
 website/.next/
 website/node_modules/
 
+# Commercial Equity fonts are not redistributable in this public repository. These entries
+# reduce accidental staging; Scripts/verify-public-font-license.sh is the non-bypassable CI
+# backstop and also detects the known binaries when renamed.
+website/public/fonts/
+**/[Ee]quity[_ -][Aa]*.woff
+**/[Ee]quity[_ -][Aa]*.woff2
+**/[Ee]quity[_ -][Aa]*.ttf
+**/[Ee]quity[_ -][Aa]*.otf
+
 # Local environment config — may hold API keys/tokens (SUPRA_*_API_KEY). Never commit.
 # Keep the empty template (.env.example) tracked; exclude every real dotenv variant.
 .env

@@ -118,6 +118,11 @@ The git history is a good reference for scope and message style.
   exports.
 - **No new remote dependencies** without pinning the exact version and documenting it in
   [`Docs/Architecture/Dependencies.md`](Docs/Architecture/Dependencies.md), including license.
+- **Never publish Equity font files.** They are commercially licensed and must not appear in
+  this repository, its Git history, Git LFS, website assets, Actions/Pages artifacts, or
+  releases—even renamed, converted, subsetted, or embedded. All website plans and changes
+  must follow [`Docs/Website-Asset-Licensing.md`](Docs/Website-Asset-Licensing.md) and pass
+  `bash Scripts/verify-public-font-license.sh`.
 - **Match the surrounding code.** Comment density, naming, and idiom should look like the file
   you're editing.
 

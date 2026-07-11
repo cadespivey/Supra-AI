@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - "website/**"
+      - "Scripts/verify-public-font-license.sh"
+      - "Docs/Website-Asset-Licensing.md"
       - ".github/workflows/deploy-website.yml"
   workflow_dispatch:
 
@@ -30,6 +32,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Reject prohibited font assets
+        run: bash ../Scripts/verify-public-font-license.sh
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -48,6 +53,9 @@ jobs:
 
       - name: Build static export
         run: npm run build:pages
+
+      - name: Verify exported assets
+        run: bash ../Scripts/verify-public-font-license.sh
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

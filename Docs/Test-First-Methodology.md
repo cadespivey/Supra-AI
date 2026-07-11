@@ -26,6 +26,11 @@ Cross-reference by ID in both directions (Task `M1-T5` ⇄ Test `T-CAP-03`) so n
 a test that doesn't exist and no test is orphaned. A coverage matrix row with only a parity
 test and no wire-proof (see §3.1) is a **gap** and blocks the task's definition of done.
 
+For any website work, all three planning documents must explicitly carry the public asset
+license invariant from [`Website-Asset-Licensing.md`](Website-Asset-Licensing.md): Equity font
+files must never enter the repository, history, build output, or deployment. The TESTPLAN
+must include `bash Scripts/verify-public-font-license.sh` as a release gate.
+
 **The documents are scaffolding, not deliverables.** They stay out of the repo (keep them
 locally or in a private space); what lands here is the code, the tests, and this method. The
 tests themselves are the durable form of the TESTPLAN's catalog.
