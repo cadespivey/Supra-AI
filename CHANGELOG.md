@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.2.0] - 2026-07-10
+
+Off-site backup: protect your matters, notes, and documents by backing up to a
+folder you choose — put it in iCloud Drive and the backup leaves the building.
+
+### Added
+
+- **Backup to a folder you pick** — a new Backup section in Settings: choose a
+  destination folder (iCloud Drive recommended for off-site protection), back
+  up on demand, and the app also backs itself up on launch when the last
+  backup is more than a day old. Each backup is a consistent, verified copy of
+  the database plus your imported documents; documents are copied
+  incrementally, so after the first run only new files transfer. The panel
+  shows the last successful backup, its size, and clear warnings when the
+  folder needs re-selecting — and a heads-up before a large first backup.
+  Backups never include your API keys (those stay in the Keychain). Restore
+  ships in an upcoming release; until then, a backup can be restored with
+  assistance.
+
 ## [2.1.3] - 2026-07-10
 
 Database safety hardening.
