@@ -10,8 +10,8 @@
   --color-supra-white: #f4f6f8;
   --color-supra-muted: #a8b0bd;
   --color-supra-border: #3a465a;
-  --font-serif: var(--font-equity), Georgia, "Times New Roman", serif;
-  --font-caps: var(--font-equity-caps), Georgia, "Times New Roman", serif;
+  --font-serif: Georgia, "Times New Roman", serif;
+  --font-caps: Georgia, "Times New Roman", serif;
 }
 
 * {
@@ -30,7 +30,7 @@ body {
   background: #10223d;
   color: #f4f6f8;
   /* Body text first: a comfortable reading size and leading (Butterick). */
-  font-family: var(--font-equity), Georgia, "Times New Roman", serif;
+  font-family: Georgia, "Times New Roman", serif;
   font-size: 1.0625rem;
   line-height: 1.5;
   font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
@@ -115,7 +115,7 @@ button:focus-visible {
 
 /* Small caps / caps labels always carry letterspacing (Butterick: 5-12%). */
 .font-caps {
-  font-family: var(--font-equity-caps), Georgia, "Times New Roman", serif;
+  font-family: Georgia, "Times New Roman", serif;
   letter-spacing: 0.09em;
 }
 
