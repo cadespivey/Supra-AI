@@ -242,6 +242,11 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
                 guard allowedFiles.contains(relativePath) else {
                     throw SignedReleaseModelAuthorizationError.undeclaredEntry(relativePath)
                 }
+                let attributes = try FileManager.default.attributesOfItem(atPath: entry.path)
+                guard let referenceCount = attributes[.referenceCount] as? NSNumber,
+                      referenceCount.intValue == 1 else {
+                    throw SignedReleaseModelAuthorizationError.hardLinkedEntry(relativePath)
+                }
             } else {
                 throw SignedReleaseModelAuthorizationError.unsupportedEntry(relativePath)
             }
@@ -347,6 +352,7 @@ public enum SignedReleaseModelAuthorizationError: Error, LocalizedError, Equatab
     case modelDirectoryUnavailable
     case modelDirectoryOutsideManagedRoot
     case symbolicLink(String)
+    case hardLinkedEntry(String)
     case undeclaredEntry(String)
     case unsupportedEntry(String)
     case fingerprintMismatch
@@ -364,6 +370,8 @@ public enum SignedReleaseModelAuthorizationError: Error, LocalizedError, Equatab
             "The protected release model is outside the app-managed model root."
         case let .symbolicLink(relativePath):
             "The protected release model contains a symbolic link at \(relativePath)."
+        case let .hardLinkedEntry(relativePath):
+            "The protected release model contains a hard-linked entry at \(relativePath)."
         case let .undeclaredEntry(relativePath):
             "The protected release model contains an undeclared entry at \(relativePath)."
         case let .unsupportedEntry(relativePath):
