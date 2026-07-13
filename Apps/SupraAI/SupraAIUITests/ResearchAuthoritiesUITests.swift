@@ -15,12 +15,12 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    private func launchApp() -> XCUIApplication {
+    private func launchApp(extraArguments: [String] = []) throws -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-uiTestMode"]
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-uiTestMode"] + extraArguments
         let tabCommandURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SupraAI-UITest-\(UUID().uuidString)-matter-tab.txt")
-        try? "".write(to: tabCommandURL, atomically: true, encoding: .utf8)
+        try "".write(to: tabCommandURL, atomically: true, encoding: .utf8)
         self.tabCommandURL = tabCommandURL
         addTeardownBlock {
             try? FileManager.default.removeItem(at: tabCommandURL)
@@ -35,8 +35,8 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         return app
     }
 
-    func testResearchPlannerAndAuthoritiesFlow() {
-        let app = launchApp()
+    func testResearchPlannerAndAuthoritiesFlow() throws {
+        let app = try launchApp()
 
         // Open the seeded matter from the far-left sidebar.
         let matter = seededMatterRow(in: app)
@@ -46,7 +46,7 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         // --- Research tab --- (ghost segments surface as buttons, not radioButtons)
         let researchTab = app.buttons["matterTab.Research"]
         XCTAssertTrue(researchTab.waitForExistence(timeout: 10), "Research tab not found")
-        selectMatterTab("Research")
+        try selectMatterTab("Research")
 
         // Open the planner sheet.
         let newSession = app.buttons["research.newSession"]
@@ -93,7 +93,7 @@ final class ResearchAuthoritiesUITests: XCTestCase {
 
         // --- Authorities tab ---
         XCTAssertTrue(app.buttons["matterTab.Authorities"].waitForExistence(timeout: 10))
-        selectMatterTab("Authorities")
+        try selectMatterTab("Authorities")
         XCTAssertTrue(
             app.staticTexts["No Authorities Saved"].waitForExistence(timeout: 10),
             "Authorities empty state not shown"
@@ -110,14 +110,14 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         )
     }
 
-    func testResearchPlannerTabOrderIsTopToBottom() {
-        let app = launchApp()
+    func testResearchPlannerTabOrderIsTopToBottom() throws {
+        let app = try launchApp()
 
         let matter = seededMatterRow(in: app)
         XCTAssertTrue(matter.waitForExistence(timeout: 20), "Seeded matter did not appear in the sidebar")
         matter.click()
 
-        selectMatterTab("Research+planner")
+        try selectMatterTab("Research+planner")
         let title = app.textFields["planner.title"]
         XCTAssertTrue(
             title.waitForExistence(timeout: 10),
@@ -146,9 +146,42 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         return app.descendants(matching: .any)[identifier]
     }
 
-    private func selectMatterTab(_ rawValue: String) {
-        guard let tabCommandURL else { return }
-        try? rawValue.write(to: tabCommandURL, atomically: true, encoding: .utf8)
+    func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() throws {
+        let app = try launchApp(extraArguments: ["-uiTestRemediationWarnings"])
+
+        let matter = seededMatterRow(in: app)
+        XCTAssertTrue(matter.waitForExistence(timeout: 20), "Seeded matter did not appear in the sidebar")
+        matter.click()
+
+        try selectMatterTab("Outputs")
+        let output = app.descendants(matching: .any)["output.row.Legacy Verification Fixture"]
+        XCTAssertTrue(output.waitForExistence(timeout: 10), "Legacy output fixture did not appear")
+        output.click()
+
+        let warning = app.descendants(matching: .any)["output.verificationWarning"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 10), "Legacy verification warning was not shown")
+        XCTAssertEqual(warning.label, "Output verification status")
+        XCTAssertTrue(
+            warning.value as? String == "Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it.",
+            "VoiceOver value did not describe the verification state and required action: \(warning.value ?? "nil")"
+        )
+
+        let export = app.descendants(matching: .any)["output.export"]
+        XCTAssertTrue(export.exists, "Unavailable export action should remain discoverable")
+        XCTAssertFalse(export.isEnabled, "Legacy output must not be exportable")
+        XCTAssertEqual(export.value as? String, "Unavailable until the output is reverified or regenerated")
+
+        let reverify = app.buttons["Reverify Sources"]
+        XCTAssertTrue(reverify.exists)
+        XCTAssertTrue(reverify.isHittable, "Warning repair action must be keyboard and pointer reachable")
+    }
+
+    private func selectMatterTab(_ rawValue: String) throws {
+        let tabCommandURL = try XCTUnwrap(
+            tabCommandURL,
+            "Matter-tab command file was not initialized; the intended navigation action cannot run"
+        )
+        try rawValue.write(to: tabCommandURL, atomically: true, encoding: .utf8)
     }
 
     private func pasteText(
