@@ -128,4 +128,68 @@ final class DraftPipelineTests: XCTestCase {
                        "pre-suit correspondence must never get a 2.516 certificate requirement")
         XCTAssertFalse(result.followUps.contains { $0.severity == .blocking })
     }
+
+    // ACR-DRAFT-01 — verification is a pre-render boundary, not a review note.
+    func testVerifierFailureBlocksEveryRenderPathBeforeRenderer() async {
+        for operation in ["notice", "motion"] {
+            let renderer = CountingRenderer()
+            let pipeline = DraftPipeline(verifier: AlwaysBlockingVerifier(), renderer: renderer)
+
+            do {
+                if operation == "notice" {
+                    _ = try await pipeline.runNotice(noticeInputs, profile: profile, style: .defaultFL)
+                } else {
+                    let model = NoticeAppearance.assemble(noticeInputs, profile: profile)
+                    _ = try await pipeline.runMotion(model: model, style: .defaultFL)
+                }
+                XCTFail("a verifier failure must throw before rendering \(operation)")
+            } catch {
+                // The exact typed error is asserted after DraftError grows the blocked case.
+            }
+            XCTAssertEqual(renderer.renderCount, 0, "blocked \(operation) reached the renderer")
+        }
+    }
+
+    // ACR-DRAFT-02 — pre-file failures are blocking even when the verifier is clean.
+    func testPreFileFailureBlocksLetterBeforeRenderer() async {
+        let renderer = CountingRenderer()
+        let pipeline = DraftPipeline(verifier: DraftVerifier(), renderer: renderer)
+        let generated = GeneratedLetter(
+            paragraphs: ["The invoice remains unpaid."],
+            assertedFacts: [FactRef(label: "claim")],
+            citesUsed: []
+        )
+        let inputs = LetterDemand.Inputs(
+            recipient: AddressBlock(name: "", title: nil, firm: nil, street: "", city: "", state: "", zip: ""),
+            reSubject: "Demand",
+            salutation: "Dear Sir or Madam:",
+            date: DateOnly(year: 2026, month: 7, day: 13)
+        )
+
+        do {
+            _ = try await pipeline.runLetter(inputs, generated: generated, profile: profile, style: .defaultFL)
+            XCTFail("an incomplete recipient must block before render")
+        } catch {
+            // Expected: the gate is fail-closed.
+        }
+        XCTAssertEqual(renderer.renderCount, 0)
+    }
+}
+
+private struct AlwaysBlockingVerifier: Verifier {
+    func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
+        VerificationResult(
+            failures: [GateFailure(gate: .factProvenance, detail: "unsupported proposition", repair: .stripToPlaceholderAndFlag)],
+            followUps: [FollowUp(severity: .blocking, kind: .verify, message: "Unsupported proposition.")]
+        )
+    }
+}
+
+private final class CountingRenderer: Renderer, @unchecked Sendable {
+    private(set) var renderCount = 0
+
+    func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {
+        renderCount += 1
+        return Data("rendered".utf8)
+    }
 }

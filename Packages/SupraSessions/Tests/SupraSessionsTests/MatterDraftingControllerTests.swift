@@ -269,7 +269,7 @@ final class MatterDraftingControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testLetterBodyScanFlagsCitationsAndPlaceholders() async throws {
+    func testLetterBodyScanBlocksCitationsAndPlaceholdersWithoutSideEffects() async throws {
         let store = try makeStore()
         try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
         let matter = try store.matters.createMatter(name: "McKernon Motors")
@@ -278,7 +278,14 @@ final class MatterDraftingControllerTests: XCTestCase {
         let runtime = StubRuntimeClient(outcome: { request in
             .events([.event(request, 0, .token, token: body), .event(request, 1, .generationCompleted)])
         })
-        let controller = MatterDraftingController(store: store, runtimeClient: runtime, storage: makeStorage())
+        let storage = makeStorage()
+        let renderer = StyleSpyRenderer()
+        let controller = MatterDraftingController(
+            store: store,
+            runtimeClient: runtime,
+            storage: storage,
+            pipelineFactory: { DraftPipeline(verifier: DraftVerifier(), renderer: renderer) }
+        )
 
         let result = await controller.draftLetterDemand(
             matterID: matter.id,
@@ -288,11 +295,10 @@ final class MatterDraftingControllerTests: XCTestCase {
             route: ModelRouter().route(for: .drafting)
         )
 
-        guard case let .success(artifact) = result else { return XCTFail("expected success") }
-        // The firewall scan surfaces both the citation and the placeholder as review notes.
-        XCTAssertTrue(artifact.reviewNotes.contains { $0.contains("legal authority") }, "citation should be flagged")
-        XCTAssertTrue(artifact.reviewNotes.contains { $0.contains("[fact?]") }, "placeholder should be flagged")
-        XCTAssertTrue(artifact.hasBlocking, "unverified law or missing facts in generated prose must block review")
+        guard case .failure = result else { return XCTFail("unsafe prose must be blocked, not written with review notes") }
+        XCTAssertEqual(renderer.renderCount, 0, "unsafe prose reached the renderer")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: storage.exportsDirectory(forMatterID: matter.id).path))
+        XCTAssertFalse(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "draft_generated" })
     }
 
     @MainActor
@@ -661,7 +667,9 @@ final class MatterDraftingControllerTests: XCTestCase {
 /// is safe here: the render happens on the controller's @MainActor and the test awaits it.
 final class StyleSpyRenderer: Renderer, @unchecked Sendable {
     private(set) var captured: HouseStyleSheet?
+    private(set) var renderCount = 0
     func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {
+        renderCount += 1
         captured = style
         return Data()
     }
