@@ -5,15 +5,17 @@ import SupraCore
 /// text part, plus attachments as child documents (plan §3.2). Legacy Outlook
 /// `.msg` is reported as unsupported rather than silently skipped.
 public struct EmailExtractor: DocumentExtractor {
-    public init() {}
+    private let policy: ImportPolicy
+
+    public init(policy: ImportPolicy = .default) { self.policy = policy }
 
     public func extract(fileURL: URL) async throws -> ExtractionResult {
         let ext = fileURL.pathExtension.lowercased()
         guard ext == "eml" else {
             throw ExtractionError.unsupportedFormat("Outlook .\(ext) is not supported; export the email as .eml.")
         }
-        let raw = try DocumentTextLoader.readString(at: fileURL)
-        let message = MIMEMessage.parse(raw)
+        let raw = try DocumentTextLoader.readString(at: fileURL, maxBytes: policy.maxInputBytes)
+        let message = try MIMEMessage.parse(raw, policy: policy)
 
         var parts: [ExtractedPart] = []
         var attachments: [ExtractedAttachment] = []
@@ -21,9 +23,19 @@ public struct EmailExtractor: DocumentExtractor {
         let headerSummary = Self.headerSummary(message.headers)
         let body = message.bodyText()
         let bodyText = TextNormalization.normalize([headerSummary, body].filter { !$0.isEmpty }.joined(separator: "\n\n"))
+        try policy.validateDecodedText(bodyText)
         parts.append(ExtractedPart(sourceKind: .emailBody, text: bodyText, emailPartPath: "body"))
 
+        var expandedBytes = bodyText.utf8.count
         for (index, attachment) in message.attachments().enumerated() {
+            let (next, overflow) = expandedBytes.addingReportingOverflow(attachment.data.count)
+            if overflow || next > policy.maxArchiveExpandedBytes {
+                throw ImportPolicyViolation(
+                    .expandedBytesLimit,
+                    "Email content exceeds the \(policy.maxArchiveExpandedBytes)-byte decoded limit."
+                )
+            }
+            expandedBytes = next
             attachments.append(ExtractedAttachment(
                 // The MIME filename is attacker-controlled; reduce it to a bare
                 // last-path-component so it can never carry path separators or
@@ -89,23 +101,52 @@ struct MIMEMessage {
         var data: Data
     }
 
-    static func parse(_ raw: String) -> MIMEMessage {
+    static func parse(_ raw: String, policy: ImportPolicy = .default) throws -> MIMEMessage {
         let unified = raw.replacingOccurrences(of: "\r\n", with: "\n")
         let (headerBlock, body) = splitHeaders(unified)
         let headers = parseHeaders(headerBlock)
-        return parse(headers: headers, body: body)
+        let budget = MIMEParseBudget(policy: policy)
+        return try parse(headers: headers, body: body, depth: 0, budget: budget)
     }
 
-    private static func parse(headers: [String: String], body: String) -> MIMEMessage {
+    private static func parse(
+        headers: [String: String],
+        body: String,
+        depth: Int,
+        budget: MIMEParseBudget
+    ) throws -> MIMEMessage {
+        try Task.checkCancellation()
+        guard depth <= budget.policy.maxMIMEDepth else {
+            throw ImportPolicyViolation(
+                .mimeDepthLimit,
+                "MIME nesting exceeds the \(budget.policy.maxMIMEDepth)-level limit."
+            )
+        }
         let contentType = headers["content-type"] ?? "text/plain"
         if contentType.lowercased().contains("multipart"), let boundary = boundary(from: contentType) {
-            let parts = splitParts(body: body, boundary: boundary).map { segment -> MIMEMessage in
+            var parts: [MIMEMessage] = []
+            for segment in splitParts(body: body, boundary: boundary) {
                 let (hb, b) = splitHeaders(segment)
-                return parse(headers: parseHeaders(hb), body: b)
+                parts.append(try parse(
+                    headers: parseHeaders(hb),
+                    body: b,
+                    depth: depth + 1,
+                    budget: budget
+                ))
             }
             return MIMEMessage(headers: headers, body: "", parts: parts)
         }
-        return MIMEMessage(headers: headers, body: body, parts: [])
+        let message = MIMEMessage(headers: headers, body: body, parts: [])
+        if message.isAttachmentLeaf {
+            budget.attachmentCount += 1
+            if budget.attachmentCount > budget.policy.maxAttachments {
+                throw ImportPolicyViolation(
+                    .attachmentCountLimit,
+                    "Message exceeds the \(budget.policy.maxAttachments)-attachment limit."
+                )
+            }
+        }
+        return message
     }
 
     /// Best body text: first text/plain in the tree, else stripped first text/html.
@@ -144,6 +185,15 @@ struct MIMEMessage {
                 part.collectAttachments(into: &result)
             }
         }
+    }
+
+    private var isAttachmentLeaf: Bool {
+        guard parts.isEmpty else { return false }
+        let disposition = (headers["content-disposition"] ?? "").lowercased()
+        let contentType = (headers["content-type"] ?? "").lowercased()
+        return disposition.contains("attachment")
+            || disposition.contains("filename")
+            || (!contentType.contains("text/plain") && !contentType.contains("text/html") && fileName() != nil)
     }
 
     private func firstPart(matching type: String) -> MIMEMessage? {
@@ -264,6 +314,15 @@ struct MIMEMessage {
             }
         }
         return segments
+    }
+}
+
+private final class MIMEParseBudget {
+    let policy: ImportPolicy
+    var attachmentCount = 0
+
+    init(policy: ImportPolicy) {
+        self.policy = policy
     }
 }
 

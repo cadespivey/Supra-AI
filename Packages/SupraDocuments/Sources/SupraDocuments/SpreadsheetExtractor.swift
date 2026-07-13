@@ -1,12 +1,15 @@
 import Foundation
 import SupraCore
+import ZIPFoundation
 
 /// Extracts visible cell values from `.xlsx` workbooks (plan §3.3): workbook /
 /// sheet names, visible cell values, and row/column coordinates. Formulas,
 /// hidden sheets/rows, comments, and macros are out of scope. Legacy `.xls` is
 /// reported as unsupported rather than silently skipped.
 public struct SpreadsheetExtractor: DocumentExtractor {
-    public init() {}
+    private let policy: ImportPolicy
+
+    public init(policy: ImportPolicy = .default) { self.policy = policy }
 
     public func extract(fileURL: URL) async throws -> ExtractionResult {
         let ext = fileURL.pathExtension.lowercased()
@@ -14,8 +17,9 @@ public struct SpreadsheetExtractor: DocumentExtractor {
             throw ExtractionError.unsupportedFormat("Legacy .\(ext) spreadsheets are not supported; convert to .xlsx.")
         }
 
-        let sharedStrings = try Self.loadSharedStrings(fileURL: fileURL)
-        let sheets = try Self.loadSheets(fileURL: fileURL)
+        let archive = try ZipArchiveReader.validatedArchive(at: fileURL, policy: policy)
+        let sharedStrings = try Self.loadSharedStrings(archive: archive, policy: policy)
+        let sheets = try Self.loadSheets(archive: archive, policy: policy)
         let workbookName = fileURL.lastPathComponent
 
         var parts: [ExtractedPart] = []
@@ -23,7 +27,8 @@ public struct SpreadsheetExtractor: DocumentExtractor {
             // Resolve each tab to its actual worksheet part via the r:id relationship;
             // fall back to positional sheet{N}.xml only when relationships are absent.
             let sheetPath = sheet.path ?? "xl/worksheets/sheet\(index + 1).xml"
-            guard let data = try ZipArchiveReader.entryData(in: fileURL, path: sheetPath) else { continue }
+            guard let data = try ZipArchiveReader.entryData(in: archive, path: sheetPath, policy: policy) else { continue }
+            try policy.validateXMLData(data)
             let cells = Self.parseCells(data: data, sharedStrings: sharedStrings)
             guard !cells.isEmpty else { continue }
             let grid = Self.renderGrid(cells)
@@ -40,15 +45,18 @@ public struct SpreadsheetExtractor: DocumentExtractor {
         if parts.isEmpty {
             parts.append(ExtractedPart(sourceKind: .spreadsheetCellRange, text: workbookName, sheetName: sheets.first?.name))
         }
-        return ExtractionResult(parts: parts, method: "xlsx")
+        let result = ExtractionResult(parts: parts, method: "xlsx")
+        try policy.validateDecodedText(result.combinedText)
+        return result
     }
 
     // MARK: - Shared strings
 
-    private static func loadSharedStrings(fileURL: URL) throws -> [String] {
-        guard let data = try ZipArchiveReader.entryData(in: fileURL, path: "xl/sharedStrings.xml") else {
+    private static func loadSharedStrings(archive: Archive, policy: ImportPolicy) throws -> [String] {
+        guard let data = try ZipArchiveReader.entryData(in: archive, path: "xl/sharedStrings.xml", policy: policy) else {
             return []
         }
+        try policy.validateXMLData(data)
         let collector = SharedStringsCollector()
         let parser = XMLParser(data: data)
         parser.delegate = collector
@@ -68,10 +76,11 @@ public struct SpreadsheetExtractor: DocumentExtractor {
         let path: String?
     }
 
-    private static func loadSheets(fileURL: URL) throws -> [SheetRef] {
-        guard let data = try ZipArchiveReader.entryData(in: fileURL, path: "xl/workbook.xml") else {
+    private static func loadSheets(archive: Archive, policy: ImportPolicy) throws -> [SheetRef] {
+        guard let data = try ZipArchiveReader.entryData(in: archive, path: "xl/workbook.xml", policy: policy) else {
             return [SheetRef(name: "Sheet1", path: nil)]
         }
+        try policy.validateXMLData(data)
         let collector = WorkbookSheetsCollector()
         let parser = XMLParser(data: data)
         parser.delegate = collector
@@ -79,7 +88,7 @@ public struct SpreadsheetExtractor: DocumentExtractor {
         guard !collector.sheets.isEmpty else {
             return [SheetRef(name: "Sheet1", path: nil)]
         }
-        let relationships = try Self.loadWorkbookRelationships(fileURL: fileURL)
+        let relationships = try Self.loadWorkbookRelationships(archive: archive, policy: policy)
         return collector.sheets.map { sheet in
             let path = sheet.relationshipId
                 .flatMap { relationships[$0] }
@@ -91,10 +100,11 @@ public struct SpreadsheetExtractor: DocumentExtractor {
     /// Parses xl/_rels/workbook.xml.rels into a `[Relationship Id: Target]` map.
     /// Returns an empty map when the rels part is absent (minimal writers),
     /// which makes `loadSheets` fall back to positional worksheet mapping.
-    private static func loadWorkbookRelationships(fileURL: URL) throws -> [String: String] {
-        guard let data = try ZipArchiveReader.entryData(in: fileURL, path: "xl/_rels/workbook.xml.rels") else {
+    private static func loadWorkbookRelationships(archive: Archive, policy: ImportPolicy) throws -> [String: String] {
+        guard let data = try ZipArchiveReader.entryData(in: archive, path: "xl/_rels/workbook.xml.rels", policy: policy) else {
             return [:]
         }
+        try policy.validateXMLData(data)
         let collector = RelationshipsCollector()
         let parser = XMLParser(data: data)
         parser.delegate = collector

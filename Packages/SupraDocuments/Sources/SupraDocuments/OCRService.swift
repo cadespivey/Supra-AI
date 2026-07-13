@@ -36,15 +36,23 @@ public enum OCRPolicy {
 /// Vision-backed on-device OCR.
 public struct VisionOCRService: DocumentOCRService {
     private let renderScale: CGFloat
+    private let policy: ImportPolicy
 
-    public init(renderScale: CGFloat = 2.0) {
+    public init(renderScale: CGFloat = 2.0, policy: ImportPolicy = .default) {
         self.renderScale = renderScale
+        self.policy = policy
     }
 
     public func recognizeImage(at url: URL) async throws -> OCRTextResult {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             throw ExtractionError.fileUnreadable("Could not decode image for OCR.")
+        }
+        let pixels = Int64(cgImage.width).multipliedReportingOverflow(by: Int64(cgImage.height))
+        if pixels.overflow || pixels.partialValue > Int64(policy.maxPixels) {
+            throw ExtractionError.policyViolation(
+                ImportPolicyViolation(.pixelLimit, "Image exceeds the \(policy.maxPixels)-pixel OCR limit.")
+            )
         }
         return try Self.recognize(cgImage: cgImage)
     }
@@ -54,9 +62,24 @@ public struct VisionOCRService: DocumentOCRService {
             throw ExtractionError.malformed("Could not open PDF for OCR.")
         }
         let indices = pageIndices ?? Array(0..<document.pageCount)
+        if indices.count > policy.maxPages {
+            throw ExtractionError.policyViolation(
+                ImportPolicyViolation(.pageLimit, "PDF exceeds the \(policy.maxPages)-page OCR limit.")
+            )
+        }
         var results: [Int: OCRTextResult] = [:]
+        var renderedPixels: Double = 0
         for index in indices {
-            guard let page = document.page(at: index), let cgImage = render(page: page) else { continue }
+            try Task.checkCancellation()
+            guard let page = document.page(at: index) else { continue }
+            let bounds = page.bounds(for: .mediaBox)
+            renderedPixels += max(1, bounds.width * renderScale) * max(1, bounds.height * renderScale)
+            if renderedPixels > Double(policy.maxPixels) {
+                throw ExtractionError.policyViolation(
+                    ImportPolicyViolation(.pixelLimit, "PDF OCR exceeds the \(policy.maxPixels)-pixel limit.")
+                )
+            }
+            guard let cgImage = render(page: page) else { continue }
             results[index] = try Self.recognize(cgImage: cgImage)
         }
         return results

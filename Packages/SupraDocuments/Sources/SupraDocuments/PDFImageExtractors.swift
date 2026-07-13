@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import PDFKit
 import SupraCore
 
@@ -8,9 +9,11 @@ public struct PDFExtractor: DocumentExtractor {
     /// Below this many non-whitespace characters per page on average, the PDF is
     /// treated as scanned and routed to OCR.
     private let lowTextPerPageThreshold: Int
+    private let policy: ImportPolicy
 
-    public init(lowTextPerPageThreshold: Int = 16) {
+    public init(lowTextPerPageThreshold: Int = 16, policy: ImportPolicy = .default) {
         self.lowTextPerPageThreshold = lowTextPerPageThreshold
+        self.policy = policy
     }
 
     public func extract(fileURL: URL) async throws -> ExtractionResult {
@@ -21,11 +24,21 @@ public struct PDFExtractor: DocumentExtractor {
         guard pageCount > 0 else {
             throw ExtractionError.malformed("PDF has no pages.")
         }
+        guard pageCount <= policy.maxPages else {
+            throw ImportPolicyViolation(.pageLimit, "PDF exceeds the \(policy.maxPages)-page limit.")
+        }
 
         var parts: [ExtractedPart] = []
         var totalChars = 0
+        var totalPixels = 0.0
         for index in 0..<pageCount {
+            try Task.checkCancellation()
             guard let page = document.page(at: index) else { continue }
+            let bounds = page.bounds(for: .mediaBox)
+            totalPixels += max(1, bounds.width * 2) * max(1, bounds.height * 2)
+            guard totalPixels <= Double(policy.maxPixels) else {
+                throw ImportPolicyViolation(.pixelLimit, "PDF rendering exceeds the \(policy.maxPixels)-pixel limit.")
+            }
             let text = TextNormalization.normalize(page.string ?? "")
             totalChars += text.filter { !$0.isWhitespace }.count
             parts.append(ExtractedPart(
@@ -35,6 +48,7 @@ public struct PDFExtractor: DocumentExtractor {
                 pageLabel: page.label ?? "\(index + 1)"
             ))
         }
+        try policy.validateDecodedText(parts.map(\.text).joined(separator: "\n\n"))
 
         let needsOCR = totalChars < lowTextPerPageThreshold * pageCount
         var warnings: [String] = []
@@ -57,9 +71,20 @@ public struct PDFExtractor: DocumentExtractor {
 /// Images carry no embedded text; they are always routed to OCR (WO 36). The
 /// extractor emits a single image part as a placeholder locator.
 public struct ImageExtractor: DocumentExtractor {
-    public init() {}
+    private let policy: ImportPolicy
+
+    public init(policy: ImportPolicy = .default) { self.policy = policy }
 
     public func extract(fileURL: URL) async throws -> ExtractionResult {
+        if let source = CGImageSourceCreateWithURL(fileURL as CFURL, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+           let height = properties[kCGImagePropertyPixelHeight] as? NSNumber {
+            let pixels = width.int64Value.multipliedReportingOverflow(by: height.int64Value)
+            if pixels.overflow || pixels.partialValue > Int64(policy.maxPixels) {
+                throw ImportPolicyViolation(.pixelLimit, "Image exceeds the \(policy.maxPixels)-pixel limit.")
+            }
+        }
         let part = ExtractedPart(sourceKind: .image, text: "", pageIndex: 0, pageLabel: "1")
         return ExtractionResult(
             parts: [part],

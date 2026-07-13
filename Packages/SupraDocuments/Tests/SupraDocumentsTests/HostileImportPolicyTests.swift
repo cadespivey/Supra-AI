@@ -1,5 +1,9 @@
+import CoreGraphics
 import Foundation
+import ImageIO
 @testable import SupraDocuments
+import SupraCore
+import UniformTypeIdentifiers
 import XCTest
 import ZIPFoundation
 
@@ -20,7 +24,16 @@ final class HostileImportPolicyTests: XCTestCase {
         let disguised = directory.appendingPathComponent("pleading.txt")
         try Data("%PDF-1.7\nsynthetic".utf8).write(to: disguised)
 
-        await assertViolation(.typeMismatch, from: ExtractionService().extract(fileURL: disguised))
+        await assertViolation(.typeMismatch, from: try await ExtractionService().extract(fileURL: disguised))
+
+        let conflictingOOXML = try makeArchive(name: "conflicting.docx", entries: [
+            ("word/document.xml", "<w:document/>"),
+            ("[Content_Types].xml", "<Types><Override ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/></Types>")
+        ])
+        await assertViolation(
+            .typeMismatch,
+            from: try await ExtractionService().extract(fileURL: conflictingOOXML)
+        )
     }
 
     func testACRIMPORT002RejectsOversizedSourceBeforeDecode() async throws {
@@ -28,7 +41,7 @@ final class HostileImportPolicyTests: XCTestCase {
         try Data(repeating: 0x41, count: 17).write(to: oversized)
         let service = ExtractionService(policy: ImportPolicy(maxInputBytes: 16))
 
-        await assertViolation(.sourceTooLarge, from: service.extract(fileURL: oversized))
+        await assertViolation(.sourceTooLarge, from: try await service.extract(fileURL: oversized))
     }
 
     func testACRIMPORT003RejectsTraversalAndBackslashZIPEntries() async throws {
@@ -41,7 +54,7 @@ final class HostileImportPolicyTests: XCTestCase {
                 ("word/document.xml", "<w:document/>"),
                 (hostilePath, "synthetic")
             ])
-            await assertViolation(.unsafeArchivePath, from: ExtractionService().extract(fileURL: url))
+            await assertViolation(.unsafeArchivePath, from: try await ExtractionService().extract(fileURL: url))
         }
     }
 
@@ -52,7 +65,7 @@ final class HostileImportPolicyTests: XCTestCase {
             ("word/café.xml", "two")
         ])
 
-        await assertViolation(.duplicateArchiveEntry, from: ExtractionService().extract(fileURL: url))
+        await assertViolation(.duplicateArchiveEntry, from: try await ExtractionService().extract(fileURL: url))
     }
 
     func testACRIMPORT005RejectsZIPEntryCountAndCompressionRatio() async throws {
@@ -63,7 +76,7 @@ final class HostileImportPolicyTests: XCTestCase {
         ])
         await assertViolation(
             .archiveEntryLimit,
-            from: ExtractionService(policy: ImportPolicy(maxArchiveEntries: 2)).extract(fileURL: many)
+            from: try await ExtractionService(policy: ImportPolicy(maxArchiveEntries: 2)).extract(fileURL: many)
         )
 
         let compressed = directory.appendingPathComponent("ratio.docx")
@@ -72,7 +85,7 @@ final class HostileImportPolicyTests: XCTestCase {
         try add(Data(repeating: 0x41, count: 8_192), path: "word/repeated.bin", to: archive, compression: .deflate)
         await assertViolation(
             .archiveCompressionRatio,
-            from: ExtractionService(policy: ImportPolicy(maxArchiveCompressionRatio: 2)).extract(fileURL: compressed)
+            from: try await ExtractionService(policy: ImportPolicy(maxArchiveCompressionRatio: 2)).extract(fileURL: compressed)
         )
     }
 
@@ -82,7 +95,7 @@ final class HostileImportPolicyTests: XCTestCase {
         try add(Data("<w:document/>".utf8), path: "word/document.xml", to: archive)
         try add(Data("../../outside".utf8), path: "word/link", to: archive, type: .symlink)
 
-        await assertViolation(.archiveSpecialEntry, from: ExtractionService().extract(fileURL: url))
+        await assertViolation(.archiveSpecialEntry, from: try await ExtractionService().extract(fileURL: url))
     }
 
     func testACRIMPORT007RejectsMIMEDepthAndAttachmentStorm() async throws {
@@ -108,7 +121,7 @@ final class HostileImportPolicyTests: XCTestCase {
         try nestedBody.write(to: nested, atomically: true, encoding: .utf8)
         await assertViolation(
             .mimeDepthLimit,
-            from: ExtractionService(policy: ImportPolicy(maxMIMEDepth: 2)).extract(fileURL: nested)
+            from: try await ExtractionService(policy: ImportPolicy(maxMIMEDepth: 2)).extract(fileURL: nested)
         )
 
         let storm = directory.appendingPathComponent("storm.eml")
@@ -131,7 +144,7 @@ final class HostileImportPolicyTests: XCTestCase {
         try stormBody.write(to: storm, atomically: true, encoding: .utf8)
         await assertViolation(
             .attachmentCountLimit,
-            from: ExtractionService(policy: ImportPolicy(maxAttachments: 1)).extract(fileURL: storm)
+            from: try await ExtractionService(policy: ImportPolicy(maxAttachments: 1)).extract(fileURL: storm)
         )
     }
 
@@ -140,15 +153,79 @@ final class HostileImportPolicyTests: XCTestCase {
         try "<r><a>1</a><b>2</b><c>3</c></r>".write(to: xml, atomically: true, encoding: .utf8)
         await assertViolation(
             .xmlNodeLimit,
-            from: ExtractionService(policy: ImportPolicy(maxXMLNodes: 3)).extract(fileURL: xml)
+            from: try await ExtractionService(policy: ImportPolicy(maxXMLNodes: 3)).extract(fileURL: xml)
         )
 
         let text = directory.appendingPathComponent("decoded.txt")
         try "123456789".write(to: text, atomically: true, encoding: .utf8)
         await assertViolation(
             .decodedTextLimit,
-            from: ExtractionService(policy: ImportPolicy(maxDecodedTextBytes: 8)).extract(fileURL: text)
+            from: try await ExtractionService(policy: ImportPolicy(maxDecodedTextBytes: 8)).extract(fileURL: text)
         )
+    }
+
+    func testACRIMPORT017RejectsAggregateArchiveExpansion() async throws {
+        let archive = try makeArchive(name: "expanded.docx", entries: [
+            ("word/document.xml", "<w:document/>"),
+            ("word/extra.bin", "0123456789")
+        ])
+
+        await assertViolation(
+            .expandedBytesLimit,
+            from: try await ExtractionService(
+                policy: ImportPolicy(maxArchiveExpandedBytes: 16)
+            ).extract(fileURL: archive)
+        )
+    }
+
+    func testACRIMPORT018RejectsPDFPageAndImagePixelLimits() async throws {
+        let pdf = directory.appendingPathComponent("pages.pdf")
+        try makePDF(at: pdf, pageCount: 2)
+        await assertViolation(
+            .pageLimit,
+            from: try await ExtractionService(policy: ImportPolicy(maxPages: 1)).extract(fileURL: pdf)
+        )
+
+        let image = directory.appendingPathComponent("pixels.png")
+        try makePNG(at: image, width: 2, height: 2)
+        await assertViolation(
+            .pixelLimit,
+            from: try await ExtractionService(policy: ImportPolicy(maxPixels: 3)).extract(fileURL: image)
+        )
+    }
+
+    func testACRIMPORT019RejectsParserThatExceedsDeadline() async throws {
+        let source = directory.appendingPathComponent("slow.txt")
+        try "bounded".write(to: source, atomically: true, encoding: .utf8)
+        let service = ExtractionService(
+            policy: ImportPolicy(maxParserDurationSeconds: 0.001),
+            extractors: [.plainText: SlowExtractor()]
+        )
+
+        await assertViolation(
+            .parserTimeLimit,
+            from: try await service.extract(fileURL: source)
+        )
+    }
+
+    func testACRIMPORT021PreCancelledExtractionReturnsWithoutStartingParser() async throws {
+        let source = directory.appendingPathComponent("cancelled.txt")
+        try "bounded".write(to: source, atomically: true, encoding: .utf8)
+        let service = ExtractionService(
+            extractors: [.plainText: SlowExtractor()]
+        )
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await service.extract(fileURL: source)
+        }
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            // The deadline continuation must resolve even when cancellation wins
+            // before its work and timer tasks have been installed.
+        }
     }
 
     private func assertViolation<T>(
@@ -195,5 +272,49 @@ final class HostileImportPolicyTests: XCTestCase {
             let start = Int(position)
             return data.subdata(in: start..<(start + size))
         }
+    }
+
+    private func makePDF(at url: URL, pageCount: Int) throws {
+        let consumer = try XCTUnwrap(CGDataConsumer(url: url as CFURL))
+        var mediaBox = CGRect(x: 0, y: 0, width: 72, height: 72)
+        let context = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &mediaBox, nil))
+        for _ in 0..<pageCount {
+            context.beginPDFPage(nil)
+            context.endPDFPage()
+        }
+        context.closePDF()
+    }
+
+    private func makePNG(at url: URL, width: Int, height: Int) throws {
+        let context = try XCTUnwrap(CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let image = try XCTUnwrap(context.makeImage())
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(
+            url as CFURL,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+    }
+}
+
+private struct SlowExtractor: DocumentExtractor {
+    func extract(fileURL: URL) async throws -> ExtractionResult {
+        try await Task.sleep(for: .milliseconds(20))
+        return ExtractionResult(
+            parts: [ExtractedPart(sourceKind: .text, text: "bounded")],
+            method: "synthetic-slow"
+        )
     }
 }

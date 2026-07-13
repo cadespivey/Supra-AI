@@ -40,10 +40,13 @@ private extension String {
 
 /// Reads .txt / .md as UTF-8 (falling back to common encodings).
 public struct PlainTextExtractor: DocumentExtractor {
-    public init() {}
+    private let policy: ImportPolicy
+
+    public init(policy: ImportPolicy = .default) { self.policy = policy }
 
     public func extract(fileURL: URL) async throws -> ExtractionResult {
-        let text = try DocumentTextLoader.readString(at: fileURL)
+        let text = try DocumentTextLoader.readString(at: fileURL, maxBytes: policy.maxInputBytes)
+        try policy.validateDecodedText(text)
         let kind = SupportedDocumentTypes.format(for: fileURL)?.sourceKind ?? .text
         let normalized = TextNormalization.normalize(text)
         let part = ExtractedPart(sourceKind: kind, text: normalized)
@@ -53,10 +56,13 @@ public struct PlainTextExtractor: DocumentExtractor {
 
 /// Extracts text content + attribute values from an XML document.
 public struct XMLTextExtractor: DocumentExtractor {
-    public init() {}
+    private let policy: ImportPolicy
+
+    public init(policy: ImportPolicy = .default) { self.policy = policy }
 
     public func extract(fileURL: URL) async throws -> ExtractionResult {
-        let data = try DocumentTextLoader.readData(at: fileURL)
+        let data = try DocumentTextLoader.readData(at: fileURL, maxBytes: policy.maxInputBytes)
+        try policy.validateXMLData(data)
         let collector = XMLTextCollector()
         let parser = XMLParser(data: data)
         parser.delegate = collector
@@ -68,8 +74,9 @@ public struct XMLTextExtractor: DocumentExtractor {
         } else {
             // Fall back to raw text if the document is not well-formed XML.
             warnings.append("XML not well-formed; extracted raw text.")
-            text = (try? DocumentTextLoader.readString(at: fileURL)) ?? ""
+            text = (try? DocumentTextLoader.readString(at: fileURL, maxBytes: policy.maxInputBytes)) ?? ""
         }
+        try policy.validateDecodedText(text)
         let part = ExtractedPart(sourceKind: .xml, text: TextNormalization.normalize(text))
         return ExtractionResult(parts: [part], method: "xml", warnings: warnings)
     }
@@ -95,11 +102,14 @@ private final class XMLTextCollector: NSObject, XMLParserDelegate {
 /// Strips HTML to readable text without WebKit (so it is safe to run off the main
 /// thread in the import pipeline).
 public struct HTMLTextExtractor: DocumentExtractor {
-    public init() {}
+    private let policy: ImportPolicy
+
+    public init(policy: ImportPolicy = .default) { self.policy = policy }
 
     public func extract(fileURL: URL) async throws -> ExtractionResult {
-        let html = try DocumentTextLoader.readString(at: fileURL)
+        let html = try DocumentTextLoader.readString(at: fileURL, maxBytes: policy.maxInputBytes)
         let text = HTMLToText.convert(html)
+        try policy.validateDecodedText(text)
         let part = ExtractedPart(sourceKind: .html, text: TextNormalization.normalize(text))
         return ExtractionResult(parts: [part], method: "html-strip")
     }
@@ -163,16 +173,25 @@ public enum HTMLToText {
 
 /// Shared file readers with encoding fallbacks.
 public enum DocumentTextLoader {
-    public static func readData(at url: URL) throws -> Data {
+    public static func readData(at url: URL, maxBytes: Int = ImportPolicy.default.maxInputBytes) throws -> Data {
         do {
-            return try Data(contentsOf: url)
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            let sentinelCount = maxBytes == Int.max ? maxBytes : maxBytes + 1
+            let bounded = try handle.read(upToCount: sentinelCount) ?? Data()
+            guard bounded.count <= maxBytes else {
+                throw ImportPolicyViolation(.sourceTooLarge, "Source exceeds the \(maxBytes)-byte limit.")
+            }
+            return bounded
+        } catch let violation as ImportPolicyViolation {
+            throw violation
         } catch {
             throw ExtractionError.fileUnreadable(error.localizedDescription)
         }
     }
 
-    public static func readString(at url: URL) throws -> String {
-        let data = try readData(at: url)
+    public static func readString(at url: URL, maxBytes: Int = ImportPolicy.default.maxInputBytes) throws -> String {
+        let data = try readData(at: url, maxBytes: maxBytes)
         for encoding: String.Encoding in [.utf8, .utf16, .isoLatin1, .windowsCP1252] {
             if let string = String(data: data, encoding: encoding) {
                 return string

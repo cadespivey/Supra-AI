@@ -88,7 +88,7 @@ final class HostileDocumentImportTests: XCTestCase {
         try "deep".write(to: deep.appendingPathComponent("deep.txt"), atomically: true, encoding: .utf8)
         try "123456".write(to: sources.appendingPathComponent("first.txt"), atomically: true, encoding: .utf8)
         try "abcdef".write(to: sources.appendingPathComponent("second.txt"), atomically: true, encoding: .utf8)
-        let policy = ImportPolicy(maxAggregateSourceBytes: 10, maxTreeDepth: 2)
+        let policy = ImportPolicy(maxTreeDepth: 2, maxAggregateSourceBytes: 10)
         let (store, matterID) = try makeStoreAndMatter()
 
         let outcome = try await DocumentImportService(
@@ -121,6 +121,93 @@ final class HostileDocumentImportTests: XCTestCase {
         let outcome = try await service.importSources([sources], matterID: matterID)
 
         XCTAssertTrue(outcome.report.items.contains { $0.rejectionCode == ImportPolicyViolation.Code.rootChanged.rawValue })
+        XCTAssertEqual(try store.documentLibrary.fetchDocuments(matterID: matterID).count, 0)
+        XCTAssertFalse(containsRegularFile(under: managed.appendingPathComponent("blobs")))
+    }
+
+    func testACRIMPORT014RejectsFinderAliasWithoutFollowingIt() async throws {
+        let outside = base.appendingPathComponent("alias-target.txt")
+        try "ALIAS-OUTSIDE-CANARY".write(to: outside, atomically: true, encoding: .utf8)
+        let alias = sources.appendingPathComponent("target-alias.txt")
+        let bookmark = try outside.bookmarkData(
+            options: .suitableForBookmarkFile,
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+        try URL.writeBookmarkData(bookmark, to: alias)
+        XCTAssertEqual(try alias.resourceValues(forKeys: [.isAliasFileKey]).isAliasFile, true)
+
+        let (store, matterID) = try makeStoreAndMatter()
+        let outcome = try await DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: managed),
+            ocr: nil
+        ).importSources([sources], matterID: matterID)
+
+        XCTAssertEqual(outcome.report.items.first?.rejectionCode, ImportPolicyViolation.Code.alias.rawValue)
+        XCTAssertEqual(try store.documentLibrary.fetchDocuments(matterID: matterID).count, 0)
+        XCTAssertFalse(containsRegularFile(under: managed.appendingPathComponent("blobs")))
+    }
+
+    func testACRIMPORT015CancellationCleansStagingAndCreatesNoRows() async throws {
+        let source = sources.appendingPathComponent("cancelled.txt")
+        try Data(repeating: 0x43, count: 4_096).write(to: source)
+        let (store, matterID) = try makeStoreAndMatter()
+        let storage = DocumentStorage(root: managed) { stage in
+            if stage == .beforeInstall { throw CancellationError() }
+        }
+
+        do {
+            _ = try await DocumentImportService(store: store, storage: storage, ocr: nil)
+                .importSources([source], matterID: matterID)
+            XCTFail("Expected cancellation to propagate")
+        } catch is CancellationError {
+            // Expected: cancellation is not converted to a normal failed import.
+        }
+
+        XCTAssertEqual(try store.documentLibrary.fetchDocuments(matterID: matterID).count, 0)
+        XCTAssertEqual(try store.documentLibrary.fetchBlobs(limit: 10).count, 0)
+        XCTAssertFalse(containsRegularFile(under: managed.appendingPathComponent("temp")))
+        XCTAssertFalse(containsRegularFile(under: managed.appendingPathComponent("blobs")))
+    }
+
+    func testACRIMPORT016FileCountBudgetRejectsOnlyItemsBeyondLimit() async throws {
+        try "one".write(to: sources.appendingPathComponent("one.txt"), atomically: true, encoding: .utf8)
+        try "two".write(to: sources.appendingPathComponent("two.txt"), atomically: true, encoding: .utf8)
+        let policy = ImportPolicy(maxFileCount: 1)
+        let (store, matterID) = try makeStoreAndMatter()
+
+        let outcome = try await DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: managed),
+            importPolicy: policy,
+            ocr: nil
+        ).importSources([sources], matterID: matterID)
+
+        XCTAssertEqual(outcome.report.importedCount, 1)
+        XCTAssertEqual(outcome.report.failedCount, 1)
+        XCTAssertTrue(outcome.report.items.contains {
+            $0.rejectionCode == ImportPolicyViolation.Code.fileCount.rawValue
+        })
+    }
+
+    func testACRIMPORT020RejectsCandidateReplacementAfterValidation() async throws {
+        let victim = sources.appendingPathComponent("victim.txt")
+        try "SAFE-CANDIDATE".write(to: victim, atomically: true, encoding: .utf8)
+        let fault = CandidateReplacementFault(victim: victim)
+        let (store, matterID) = try makeStoreAndMatter()
+
+        let outcome = try await DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: managed),
+            ocr: nil,
+            traversalFaultInjector: fault.inject
+        ).importSources([sources], matterID: matterID)
+
+        XCTAssertEqual(
+            outcome.report.items.first?.rejectionCode,
+            ImportPolicyViolation.Code.candidateChanged.rawValue
+        )
         XCTAssertEqual(try store.documentLibrary.fetchDocuments(matterID: matterID).count, 0)
         XCTAssertFalse(containsRegularFile(under: managed.appendingPathComponent("blobs")))
     }
@@ -164,5 +251,25 @@ private final class RootReplacementFault: @unchecked Sendable {
         let moved = root.deletingLastPathComponent().appendingPathComponent("original-sources")
         try FileManager.default.moveItem(at: root, to: moved)
         try FileManager.default.createSymbolicLink(at: root, withDestinationURL: replacement)
+    }
+}
+
+private final class CandidateReplacementFault: @unchecked Sendable {
+    private let victim: URL
+    private var fired = false
+    private let lock = NSLock()
+
+    init(victim: URL) {
+        self.victim = victim
+    }
+
+    func inject(stage: ImportTraversalStage, url: URL) throws {
+        guard stage == .afterCandidateValidated, url.standardizedFileURL == victim.standardizedFileURL else { return }
+        try lock.withLock {
+            guard !fired else { return }
+            fired = true
+            try FileManager.default.removeItem(at: victim)
+            try "REPLACED-CANDIDATE".write(to: victim, atomically: true, encoding: .utf8)
+        }
     }
 }

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import SupraCore
 import SupraDocuments
@@ -12,7 +13,18 @@ public struct DocumentImportReportItem: Codable, Sendable {
     public var reason: String?
     public var documentID: String?
     public var parentDocumentID: String?
+    /// Stable machine-readable reason when policy rejected this item.
+    public var rejectionCode: String? = nil
 }
+
+/// Deterministic fault-injection and audit boundaries for pinned-root traversal.
+public enum ImportTraversalStage: String, Sendable {
+    case afterRootPinned = "after_root_pinned"
+    case beforeCandidateRead = "before_candidate_read"
+    case afterCandidateValidated = "after_candidate_validated"
+}
+
+public typealias ImportTraversalFaultInjector = @Sendable (ImportTraversalStage, URL) throws -> Void
 
 /// The final import report stored on the batch (plan §5.1).
 public struct DocumentImportReport: Codable, Sendable {
@@ -51,18 +63,24 @@ public final class DocumentImportService: @unchecked Sendable {
     private let store: SupraStore
     private let storage: DocumentStorage
     private let extraction: ExtractionService
+    private let importPolicy: ImportPolicy
     private let ocr: (any DocumentOCRService)?
+    private let traversalFaultInjector: ImportTraversalFaultInjector
 
     public init(
         store: SupraStore,
         storage: DocumentStorage = .makeDefault(),
-        extraction: ExtractionService = ExtractionService(),
-        ocr: (any DocumentOCRService)? = VisionOCRService()
+        extraction: ExtractionService? = nil,
+        importPolicy: ImportPolicy = .default,
+        ocr: (any DocumentOCRService)? = VisionOCRService(),
+        traversalFaultInjector: @escaping ImportTraversalFaultInjector = { _, _ in }
     ) {
         self.store = store
         self.storage = storage
-        self.extraction = extraction
+        self.extraction = extraction ?? ExtractionService(policy: importPolicy)
+        self.importPolicy = importPolicy
         self.ocr = ocr
+        self.traversalFaultInjector = traversalFaultInjector
     }
 
     public struct ImportOutcome: Sendable {
@@ -85,6 +103,7 @@ public final class DocumentImportService: @unchecked Sendable {
 
         var report = DocumentImportReport()
         var folderCache: [String: String?] = [:]  // managed relative dir path -> folder id
+        let ledger = ImportBudgetLedger(policy: importPolicy)
 
         for source in sources {
             // User-picked / dropped files are security-scoped under the App
@@ -93,16 +112,42 @@ public final class DocumentImportService: @unchecked Sendable {
             // read fails. App-owned/temp URLs return false and need no scope.
             let scoped = source.startAccessingSecurityScopedResource()
             defer { if scoped { source.stopAccessingSecurityScopedResource() } }
-            try await importEntry(
-                at: source,
-                relativeDir: "",
-                rootName: source.lastPathComponent,
-                matterID: matterID,
-                batchID: batch.id,
-                rootFolderID: targetFolderID,
-                folderCache: &folderCache,
-                report: &report
-            )
+            do {
+                let root = try PinnedImportRoot(url: source)
+                try traversalFaultInjector(.afterRootPinned, source)
+                try root.verifyUnchanged()
+                var visited = Set<FileIdentity>()
+                try await importEntry(
+                    at: source,
+                    relativePath: source.lastPathComponent,
+                    depth: 0,
+                    root: root,
+                    ledger: ledger,
+                    visited: &visited,
+                    matterID: matterID,
+                    batchID: batch.id,
+                    currentFolderID: targetFolderID,
+                    rootFolderID: targetFolderID,
+                    folderCache: &folderCache,
+                    report: &report
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let violation as ImportPolicyViolation {
+                Self.appendPolicyRejection(
+                    violation,
+                    url: source,
+                    sourceDisplayPath: source.lastPathComponent,
+                    report: &report
+                )
+            } catch {
+                report.items.append(DocumentImportReportItem(
+                    displayName: source.lastPathComponent,
+                    sourceDisplayPath: source.lastPathComponent,
+                    disposition: DocumentImportDisposition.extractionFailed.rawValue,
+                    reason: "Unreadable: \(error.localizedDescription)"
+                ))
+            }
         }
 
         report.counts = Self.tallyCounts(report.items)
@@ -130,85 +175,110 @@ public final class DocumentImportService: @unchecked Sendable {
 
     private func importEntry(
         at url: URL,
-        relativeDir: String,
-        rootName: String,
+        relativePath: String,
+        depth: Int,
+        root: PinnedImportRoot,
+        ledger: ImportBudgetLedger,
+        visited: inout Set<FileIdentity>,
         matterID: String,
         batchID: String,
+        currentFolderID: String?,
         rootFolderID: String?,
         folderCache: inout [String: String?],
         report: inout DocumentImportReport
     ) async throws {
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return }
+        try Task.checkCancellation()
+        guard depth <= importPolicy.maxTreeDepth else {
+            throw ImportPolicyViolation(
+                .treeDepth,
+                "Path exceeds the \(importPolicy.maxTreeDepth)-level tree-depth limit."
+            )
+        }
+        try traversalFaultInjector(.beforeCandidateRead, url)
+        let metadata = try root.validateCandidate(url)
+        if metadata.isRegularFile, metadata.linkCount > 1 {
+            throw ImportPolicyViolation(.hardLink, "Hard-linked files have ambiguous identity and are not imported.")
+        }
+        guard visited.insert(metadata.identity).inserted else {
+            throw ImportPolicyViolation(.duplicateFileIdentity, "A filesystem object was encountered more than once.")
+        }
 
-        if isDirectory.boolValue {
-            let childDir = relativeDir.isEmpty ? url.lastPathComponent : "\(relativeDir)/\(url.lastPathComponent)"
+        if metadata.isDirectory {
             let folderID = try folder(
-                forRelativeDir: childDir,
+                forRelativeDir: relativePath,
                 matterID: matterID,
                 rootFolderID: rootFolderID,
                 folderCache: &folderCache
             )
-            let contents = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: url,
+                includingPropertiesForKeys: [.isAliasFileKey, .isSymbolicLinkKey, .fileResourceIdentifierKey],
+                options: [.skipsHiddenFiles]
+            )
             for child in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                try await importEntryWithFolder(
-                    at: child,
-                    parentRelativeDir: childDir,
-                    parentFolderID: folderID,
-                    rootName: rootName,
-                    matterID: matterID,
-                    batchID: batchID,
-                    rootFolderID: rootFolderID,
-                    folderCache: &folderCache,
-                    report: &report
-                )
+                let childPath = "\(relativePath)/\(child.lastPathComponent)"
+                do {
+                    try await importEntry(
+                        at: child,
+                        relativePath: childPath,
+                        depth: depth + 1,
+                        root: root,
+                        ledger: ledger,
+                        visited: &visited,
+                        matterID: matterID,
+                        batchID: batchID,
+                        currentFolderID: folderID,
+                        rootFolderID: rootFolderID,
+                        folderCache: &folderCache,
+                        report: &report
+                    )
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch let violation as ImportPolicyViolation {
+                    Self.appendPolicyRejection(
+                        violation,
+                        url: child,
+                        sourceDisplayPath: childPath,
+                        report: &report
+                    )
+                } catch {
+                    report.items.append(DocumentImportReportItem(
+                        displayName: child.lastPathComponent,
+                        sourceDisplayPath: childPath,
+                        disposition: DocumentImportDisposition.extractionFailed.rawValue,
+                        reason: "Unreadable: \(error.localizedDescription)"
+                    ))
+                }
             }
-        } else {
-            try await importFile(
-                at: url,
-                folderID: rootFolderID,
-                sourceDisplayPath: relativeDir.isEmpty ? url.lastPathComponent : "\(relativeDir)/\(url.lastPathComponent)",
-                matterID: matterID,
-                batchID: batchID,
-                report: &report
-            )
+            return
         }
-    }
 
-    private func importEntryWithFolder(
-        at url: URL,
-        parentRelativeDir: String,
-        parentFolderID: String?,
-        rootName: String,
-        matterID: String,
-        batchID: String,
-        rootFolderID: String?,
-        folderCache: inout [String: String?],
-        report: inout DocumentImportReport
-    ) async throws {
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return }
-        if isDirectory.boolValue {
-            try await importEntry(
-                at: url,
-                relativeDir: parentRelativeDir,
-                rootName: rootName,
-                matterID: matterID,
-                batchID: batchID,
-                rootFolderID: rootFolderID,
-                folderCache: &folderCache,
-                report: &report
-            )
-        } else {
-            try await importFile(
-                at: url,
-                folderID: parentFolderID,
-                sourceDisplayPath: "\(parentRelativeDir)/\(url.lastPathComponent)",
-                matterID: matterID,
-                batchID: batchID,
-                report: &report
-            )
+        guard metadata.isRegularFile else {
+            throw ImportPolicyViolation(.duplicateFileIdentity, "Only regular files and directories may be imported.")
         }
+        try importPolicy.validateSource(at: url)
+        try ledger.consumeSource(byteSize: metadata.byteSize)
+        try traversalFaultInjector(.afterCandidateValidated, url)
+        _ = try await importFile(
+            at: url,
+            folderID: currentFolderID,
+            sourceDisplayPath: relativePath,
+            matterID: matterID,
+            batchID: batchID,
+            pinnedSourceValidator: {
+                let current = try root.validateCandidate(url)
+                guard current.identity == metadata.identity,
+                      current.isRegularFile,
+                      current.linkCount == metadata.linkCount else {
+                    throw ImportPolicyViolation(
+                        .candidateChanged,
+                        "The import item changed after it was discovered."
+                    )
+                }
+            },
+            ledger: ledger,
+            report: &report
+        )
     }
 
     // MARK: - Single file import
@@ -221,16 +291,47 @@ public final class DocumentImportService: @unchecked Sendable {
         matterID: String,
         batchID: String,
         parentDocumentID: String? = nil,
+        attachmentDepth: Int = 0,
+        pinnedSourceValidator: (@Sendable () throws -> Void)? = nil,
+        ledger: ImportBudgetLedger,
         report: inout DocumentImportReport
     ) async throws -> String? {
         let displayName = url.lastPathComponent
         let format = SupportedDocumentTypes.format(for: url)
+
+        do {
+            try pinnedSourceValidator?()
+            if let format {
+                _ = try DocumentTypeDetector.validate(fileURL: url, expected: format, policy: importPolicy)
+            }
+            try pinnedSourceValidator?()
+        } catch let violation as ImportPolicyViolation {
+            Self.appendPolicyRejection(
+                violation,
+                url: url,
+                sourceDisplayPath: sourceDisplayPath,
+                parentDocumentID: parentDocumentID,
+                report: &report
+            )
+            return nil
+        } catch {
+            report.items.append(DocumentImportReportItem(
+                displayName: displayName,
+                sourceDisplayPath: sourceDisplayPath,
+                disposition: DocumentImportDisposition.extractionFailed.rawValue,
+                reason: "Unreadable: \(error.localizedDescription)",
+                parentDocumentID: parentDocumentID
+            ))
+            return nil
+        }
 
         // Copy + dedup the blob even for unsupported files so the instance can be
         // shown and managed; mark unsupported in the report.
         let managedBlob: ManagedImportedBlob
         do {
             managedBlob = try ingestBlob(at: url)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             report.items.append(DocumentImportReportItem(
                 displayName: displayName, sourceDisplayPath: sourceDisplayPath,
@@ -286,6 +387,7 @@ public final class DocumentImportService: @unchecked Sendable {
                     throw error
                 }
             }
+            try ledger.consumeDecoded(result)
             try persistExtraction(result, documentID: document.id)
             let disposition: DocumentImportDisposition
             if result.needsOCR {
@@ -308,19 +410,53 @@ public final class DocumentImportService: @unchecked Sendable {
                     folderID: folderID,
                     matterID: matterID,
                     batchID: batchID,
+                    attachmentDepth: attachmentDepth + 1,
+                    ledger: ledger,
                     report: &report
                 )
             }
-        } catch {
+        } catch is CancellationError {
+            rollbackRejectedDocument(document.id)
+            throw CancellationError()
+        } catch let violation as ImportPolicyViolation {
+            rollbackRejectedDocument(document.id)
+            Self.appendPolicyRejection(
+                violation,
+                url: url,
+                sourceDisplayPath: sourceDisplayPath,
+                parentDocumentID: parentDocumentID,
+                report: &report
+            )
+            return nil
+        } catch let error as ExtractionError {
+            if case .policyViolation(let violation) = error {
+                rollbackRejectedDocument(document.id)
+                Self.appendPolicyRejection(
+                    violation,
+                    url: url,
+                    sourceDisplayPath: sourceDisplayPath,
+                    parentDocumentID: parentDocumentID,
+                    report: &report
+                )
+                return nil
+            }
             try store.documentLibrary.updateStatus(documentID: document.id, status: .failed)
             try? markExtractionFailed(documentID: document.id, error: error)
-            // A type we recognize but cannot extract locally (e.g. legacy .xls,
-            // Outlook .msg) is "unsupported"; anything else is an extraction error.
-            let disposition: DocumentImportDisposition
-            if case ExtractionError.unsupportedFormat = error { disposition = .unsupported } else { disposition = .extractionFailed }
+            let disposition: DocumentImportDisposition = {
+                if case .unsupportedFormat = error { return .unsupported }
+                return .extractionFailed
+            }()
             report.items.append(DocumentImportReportItem(
                 displayName: displayName, sourceDisplayPath: sourceDisplayPath,
                 disposition: disposition.rawValue,
+                reason: error.localizedDescription, documentID: document.id, parentDocumentID: parentDocumentID
+            ))
+        } catch {
+            try store.documentLibrary.updateStatus(documentID: document.id, status: .failed)
+            try? markExtractionFailed(documentID: document.id, error: error)
+            report.items.append(DocumentImportReportItem(
+                displayName: displayName, sourceDisplayPath: sourceDisplayPath,
+                disposition: DocumentImportDisposition.extractionFailed.rawValue,
                 reason: error.localizedDescription, documentID: document.id, parentDocumentID: parentDocumentID
             ))
         }
@@ -344,8 +480,23 @@ public final class DocumentImportService: @unchecked Sendable {
         folderID: String?,
         matterID: String,
         batchID: String,
+        attachmentDepth: Int,
+        ledger: ImportBudgetLedger,
         report: inout DocumentImportReport
     ) async throws {
+        let sourceDisplayPath = "\(parentDocument.sourceDisplayPath ?? parentDocument.displayName) ▸ \(attachment.fileName)"
+        do {
+            try ledger.consumeAttachment(byteSize: attachment.data.count, depth: attachmentDepth)
+        } catch let violation as ImportPolicyViolation {
+            Self.appendPolicyRejection(
+                violation,
+                displayName: attachment.fileName,
+                sourceDisplayPath: sourceDisplayPath,
+                parentDocumentID: parentDocument.id,
+                report: &report
+            )
+            return
+        }
         // Write the attachment bytes to a unique temp directory keeping the
         // original filename, so the path-based import pipeline (copy/dedup/extract)
         // handles it and the child document keeps the attachment's display name.
@@ -358,9 +509,10 @@ public final class DocumentImportService: @unchecked Sendable {
         let containedDir = tempDir.resolvingSymlinksInPath().path
         guard tempURL.resolvingSymlinksInPath().path.hasPrefix(containedDir + "/") else {
             report.items.append(DocumentImportReportItem(
-                displayName: attachment.fileName, sourceDisplayPath: "\(parentDocument.sourceDisplayPath ?? parentDocument.displayName) ▸ \(attachment.fileName)",
+                displayName: attachment.fileName, sourceDisplayPath: sourceDisplayPath,
                 disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                reason: "Rejected an attachment with an unsafe filename.", parentDocumentID: parentDocument.id
+                reason: "Rejected an attachment with an unsafe filename.", parentDocumentID: parentDocument.id,
+                rejectionCode: ImportPolicyViolation.Code.unsafeArchivePath.rawValue
             ))
             return
         }
@@ -369,7 +521,7 @@ public final class DocumentImportService: @unchecked Sendable {
             try attachment.data.write(to: tempURL)
         } catch {
             report.items.append(DocumentImportReportItem(
-                displayName: attachment.fileName, sourceDisplayPath: "\(parentDocument.sourceDisplayPath ?? parentDocument.displayName) ▸ \(attachment.fileName)",
+                displayName: attachment.fileName, sourceDisplayPath: sourceDisplayPath,
                 disposition: DocumentImportDisposition.extractionFailed.rawValue,
                 reason: "Could not write attachment.", parentDocumentID: parentDocument.id
             ))
@@ -378,15 +530,24 @@ public final class DocumentImportService: @unchecked Sendable {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         // A failed attachment must not fail the parent email (plan §3.2).
-        _ = try? await importFile(
+        _ = try await importFile(
             at: tempURL,
             folderID: folderID,
-            sourceDisplayPath: "\(parentDocument.sourceDisplayPath ?? parentDocument.displayName) ▸ \(attachment.fileName)",
+            sourceDisplayPath: sourceDisplayPath,
             matterID: matterID,
             batchID: batchID,
             parentDocumentID: parentDocument.id,
+            attachmentDepth: attachmentDepth,
+            ledger: ledger,
             report: &report
         )
+    }
+
+    private func rollbackRejectedDocument(_ documentID: String) {
+        guard let result = try? store.documentLibrary.permanentlyDeleteDocument(id: documentID) else { return }
+        for relativePath in result.removedBlobPaths {
+            try? FileManager.default.removeItem(at: storage.url(forManagedRelativePath: relativePath))
+        }
     }
 
     // MARK: - Editable extracted text
@@ -680,12 +841,206 @@ public final class DocumentImportService: @unchecked Sendable {
         return try store.documentJobs.createBatch(matterID: matterID, sourceRootDisplay: rootName)
     }
 
+    private static func appendPolicyRejection(
+        _ violation: ImportPolicyViolation,
+        url: URL,
+        sourceDisplayPath: String,
+        parentDocumentID: String? = nil,
+        report: inout DocumentImportReport
+    ) {
+        appendPolicyRejection(
+            violation,
+            displayName: url.lastPathComponent,
+            sourceDisplayPath: sourceDisplayPath,
+            parentDocumentID: parentDocumentID,
+            report: &report
+        )
+    }
+
+    private static func appendPolicyRejection(
+        _ violation: ImportPolicyViolation,
+        displayName: String,
+        sourceDisplayPath: String,
+        parentDocumentID: String? = nil,
+        report: inout DocumentImportReport
+    ) {
+        report.items.append(DocumentImportReportItem(
+            displayName: displayName,
+            sourceDisplayPath: sourceDisplayPath,
+            disposition: DocumentImportDisposition.extractionFailed.rawValue,
+            reason: violation.localizedDescription,
+            parentDocumentID: parentDocumentID,
+            rejectionCode: violation.code.rawValue
+        ))
+    }
+
     private static func tallyCounts(_ items: [DocumentImportReportItem]) -> [String: Int] {
         var counts: [String: Int] = [:]
         for item in items {
             counts[item.disposition, default: 0] += 1
         }
         return counts
+    }
+}
+
+private struct FileIdentity: Hashable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+}
+
+private struct ImportFileMetadata: Sendable {
+    let identity: FileIdentity
+    let isDirectory: Bool
+    let isRegularFile: Bool
+    let isSymbolicLink: Bool
+    let linkCount: UInt64
+    let byteSize: Int
+}
+
+/// Pins the selected root's identity before enumeration and rechecks it before
+/// every candidate access, closing root-replacement and link-following races.
+private struct PinnedImportRoot: Sendable {
+    private let selectedURL: URL
+    private let canonicalPath: String
+    private let identity: FileIdentity
+    private let isDirectory: Bool
+
+    init(url: URL) throws {
+        let metadata = try Self.metadata(at: url)
+        if metadata.isSymbolicLink {
+            throw ImportPolicyViolation(.symbolicLink, "Symbolic-link roots are not imported.")
+        }
+        if Self.isAlias(url) {
+            throw ImportPolicyViolation(.alias, "Finder-alias roots are not imported.")
+        }
+        self.selectedURL = url.standardizedFileURL
+        self.canonicalPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        self.identity = metadata.identity
+        self.isDirectory = metadata.isDirectory
+    }
+
+    func verifyUnchanged() throws {
+        let current: ImportFileMetadata
+        do {
+            current = try Self.metadata(at: selectedURL)
+        } catch {
+            throw ImportPolicyViolation(.rootChanged, "The selected import root changed during traversal.")
+        }
+        guard !current.isSymbolicLink,
+              current.identity == identity,
+              current.isDirectory == isDirectory,
+              !Self.isAlias(selectedURL) else {
+            throw ImportPolicyViolation(.rootChanged, "The selected import root changed during traversal.")
+        }
+    }
+
+    func validateCandidate(_ url: URL) throws -> ImportFileMetadata {
+        try Task.checkCancellation()
+        try verifyUnchanged()
+        let metadata = try Self.metadata(at: url)
+        if metadata.isSymbolicLink {
+            throw ImportPolicyViolation(.symbolicLink, "Symbolic links are not imported.")
+        }
+        if Self.isAlias(url) {
+            throw ImportPolicyViolation(.alias, "Finder aliases are not imported.")
+        }
+        let candidatePath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let contained = isDirectory
+            ? candidatePath == canonicalPath || candidatePath.hasPrefix(canonicalPath + "/")
+            : candidatePath == canonicalPath
+        guard contained else {
+            throw ImportPolicyViolation(.outsideRoot, "Import traversal attempted to leave the selected root.")
+        }
+        return metadata
+    }
+
+    private static func isAlias(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isAliasFileKey]).isAliasFile) == true
+    }
+
+    private static func metadata(at url: URL) throws -> ImportFileMetadata {
+        var value = stat()
+        guard lstat(url.path, &value) == 0 else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        let fileType = value.st_mode & mode_t(S_IFMT)
+        let size = value.st_size > 0 ? Int(value.st_size) : 0
+        return ImportFileMetadata(
+            identity: FileIdentity(
+                device: UInt64(bitPattern: Int64(value.st_dev)),
+                inode: UInt64(value.st_ino)
+            ),
+            isDirectory: fileType == mode_t(S_IFDIR),
+            isRegularFile: fileType == mode_t(S_IFREG),
+            isSymbolicLink: fileType == mode_t(S_IFLNK),
+            linkCount: UInt64(value.st_nlink),
+            byteSize: size
+        )
+    }
+}
+
+/// One ledger is shared by top-level files and recursively extracted
+/// attachments so nesting cannot reset aggregate limits.
+private final class ImportBudgetLedger: @unchecked Sendable {
+    private let policy: ImportPolicy
+    private var fileCount = 0
+    private var attachmentCount = 0
+    private var aggregateSourceBytes = 0
+    private var aggregateDecodedBytes = 0
+
+    init(policy: ImportPolicy) {
+        self.policy = policy
+    }
+
+    func consumeSource(byteSize: Int) throws {
+        fileCount += 1
+        guard fileCount <= policy.maxFileCount else {
+            throw ImportPolicyViolation(.fileCount, "Import exceeds the \(policy.maxFileCount)-file limit.")
+        }
+        let (next, overflow) = aggregateSourceBytes.addingReportingOverflow(byteSize)
+        guard !overflow, next <= policy.maxAggregateSourceBytes else {
+            throw ImportPolicyViolation(
+                .aggregateSourceBytes,
+                "Import exceeds the \(policy.maxAggregateSourceBytes)-byte aggregate source limit."
+            )
+        }
+        aggregateSourceBytes = next
+    }
+
+    func consumeAttachment(byteSize: Int, depth: Int) throws {
+        guard depth <= policy.maxMIMEDepth else {
+            throw ImportPolicyViolation(
+                .mimeDepthLimit,
+                "Nested attachments exceed the \(policy.maxMIMEDepth)-level limit."
+            )
+        }
+        attachmentCount += 1
+        guard attachmentCount <= policy.maxAttachments else {
+            throw ImportPolicyViolation(
+                .attachmentCountLimit,
+                "Import exceeds the \(policy.maxAttachments)-attachment limit."
+            )
+        }
+        try consumeSource(byteSize: byteSize)
+    }
+
+    func consumeDecoded(_ result: ExtractionResult) throws {
+        var bytes = result.combinedText.utf8.count
+        for attachment in result.attachments {
+            let (next, overflow) = bytes.addingReportingOverflow(attachment.data.count)
+            guard !overflow else {
+                throw ImportPolicyViolation(.expandedBytesLimit, "Decoded content size overflowed the aggregate counter.")
+            }
+            bytes = next
+        }
+        let (next, overflow) = aggregateDecodedBytes.addingReportingOverflow(bytes)
+        guard !overflow, next <= policy.maxArchiveExpandedBytes else {
+            throw ImportPolicyViolation(
+                .expandedBytesLimit,
+                "Import exceeds the \(policy.maxArchiveExpandedBytes)-byte aggregate decoded limit."
+            )
+        }
+        aggregateDecodedBytes = next
     }
 }
 

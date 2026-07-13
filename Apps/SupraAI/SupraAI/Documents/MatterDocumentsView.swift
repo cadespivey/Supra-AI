@@ -34,6 +34,7 @@ struct MatterDocumentsView: View {
         Binding(get: { CGFloat(previewWidthRaw) }, set: { previewWidthRaw = Double($0) })
     }
     @State private var dismissedImportFailureID: String?
+    @AccessibilityFocusState private var importFailureFocused: Bool
     /// The single row whose action buttons (move/preview/open/delete) are revealed.
     @State private var selectedDocID: String?
     /// Documents ticked for multi-select sharing.
@@ -128,6 +129,8 @@ struct MatterDocumentsView: View {
                 showImporter = true
             }
             .disabled(!controller.setupReady)
+            .accessibilityValue(controller.setupReady ? "Available" : "Unavailable until Document Intelligence setup is complete")
+            .accessibilityHint(controller.setupReady ? "Opens the document picker" : "Complete setup in Settings before importing documents")
 
             Divider().frame(height: 20)
 
@@ -501,10 +504,15 @@ struct MatterDocumentsView: View {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             Text("Document import is disabled until Document Intelligence setup is complete in Settings.")
                 .font(.supraCaption)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer()
         }
         .padding(8)
         .background(Color.orange.opacity(0.12))
+        .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier("documents.importUnavailableWarning")
+        .accessibilityLabel("Document import unavailable")
+        .accessibilityValue("Complete Document Intelligence setup in Settings before importing files")
     }
 
     /// In-app banner for the most recent import that completed with failures
@@ -514,25 +522,38 @@ struct MatterDocumentsView: View {
         if let failure = queue.lastImportFailure,
            failure.matterID == controller.matterID,
            dismissedImportFailureID != failure.id {
-            SupraWarningBanner(
-                .warning,
-                title: "Some files couldn’t be imported",
-                message: "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see the Audit tab for details."
-            )
-            .overlay(alignment: .topTrailing) {
+            let message = "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see the Audit tab for details."
+            VStack(alignment: .trailing, spacing: 4) {
+                SupraWarningBanner(
+                    .warning,
+                    title: "Some files couldn’t be imported",
+                    message: message
+                )
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .ignore)
+                .accessibilityIdentifier("documents.importFailureWarning")
+                .accessibilityLabel("Document import warning")
+                .accessibilityValue("Some files could not be imported. \(message)")
+                .accessibilityFocused($importFailureFocused)
+
                 Button {
+                    importFailureFocused = false
                     dismissedImportFailureID = failure.id
                     queue.clearImportFailure()
                 } label: {
-                    Image(systemName: "xmark")
+                    Label("Dismiss import warning", systemImage: "xmark")
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .padding(8)
-                .help("Dismiss")
+                .buttonStyle(.ghost)
+                .accessibilityIdentifier("documents.dismissImportFailureWarning")
+                .accessibilityHint("Removes this warning; rejection details remain in the Audit tab")
             }
             .padding(.horizontal, 8)
             .padding(.top, 8)
+            .task(id: failure.id) {
+                importFailureFocused = false
+                await Task.yield()
+                importFailureFocused = true
+            }
         }
     }
 
