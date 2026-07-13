@@ -31,6 +31,7 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
     private let policyTransport: PolicyEnforcingURLSessionTransport
     private let injectedTestTransport: HTTPTransport?
     private let redactsQueryValues: Bool
+    private let queryFingerprinter: any QueryFingerprinting
 
     public init(
         keyStore: any APIKeyStoreProtocol,
@@ -38,6 +39,7 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         logger: NetworkRequestLogger,
         rateLimitTracker: RateLimitTracker = RateLimitTracker(),
         redactsQueryValues: Bool = true,
+        queryFingerprinter: any QueryFingerprinting = KeychainBackedQueryFingerprinter(),
         policyTransport: PolicyEnforcingURLSessionTransport = PolicyEnforcingURLSessionTransport()
     ) {
         self.keyStore = keyStore
@@ -45,6 +47,7 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         self.logger = logger
         self.rateLimitTracker = rateLimitTracker
         self.redactsQueryValues = redactsQueryValues
+        self.queryFingerprinter = queryFingerprinter
         self.policyTransport = policyTransport
         self.injectedTestTransport = nil
     }
@@ -57,6 +60,7 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         logger: NetworkRequestLogger,
         rateLimitTracker: RateLimitTracker = RateLimitTracker(),
         redactsQueryValues: Bool = true,
+        queryFingerprinter: any QueryFingerprinting = KeychainBackedQueryFingerprinter(),
         transport: @escaping HTTPTransport
     ) {
         self.keyStore = keyStore
@@ -64,6 +68,7 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         self.logger = logger
         self.rateLimitTracker = rateLimitTracker
         self.redactsQueryValues = redactsQueryValues
+        self.queryFingerprinter = queryFingerprinter
         self.policyTransport = PolicyEnforcingURLSessionTransport()
         self.injectedTestTransport = transport
     }
@@ -257,7 +262,13 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         // The query string can carry privileged search terms and, for some APIs,
         // credentials. Sensitive parameter names are always masked; other values
         // are fingerprinted unless query-term logging is explicitly enabled.
-        let query = url.query.map { Self.sanitizedQuery($0, redactsValues: redactsQueryValues) }
+        let query = url.query.map {
+            Self.sanitizedQuery(
+                $0,
+                redactsValues: redactsQueryValues,
+                fingerprinter: queryFingerprinter
+            )
+        }
         let metadata = NetworkRequestAuditMetadata(
             query: query,
             headers: sanitizedHeaders.isEmpty ? nil : sanitizedHeaders
@@ -312,6 +323,18 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
     }
 
     static func sanitizedQuery(_ query: String, redactsValues: Bool) -> String {
+        sanitizedQuery(
+            query,
+            redactsValues: redactsValues,
+            fingerprinter: KeychainBackedQueryFingerprinter()
+        )
+    }
+
+    static func sanitizedQuery(
+        _ query: String,
+        redactsValues: Bool,
+        fingerprinter: any QueryFingerprinting
+    ) -> String {
         query.split(separator: "&", omittingEmptySubsequences: false).map { pair -> String in
             let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
             guard parts.count == 2 else { return String(pair) }
@@ -326,20 +349,12 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
             } else if sensitiveQueryParameterNames.contains(normalizedName) {
                 marker = "#redacted"
             } else if redactsValues {
-                marker = "#\(fingerprint(value))"
+                marker = fingerprinter.marker(for: value) ?? "#redacted"
             } else {
                 marker = value
             }
             return "\(name)=\(marker)"
         }.joined(separator: "&")
-    }
-
-    private static func fingerprint(_ value: String) -> String {
-        var hash: UInt64 = 1469598103934665603
-        for byte in value.utf8 {
-            hash = (hash ^ UInt64(byte)) &* 1099511628211
-        }
-        return String(hash, radix: 16)
     }
 }
 

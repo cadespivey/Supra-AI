@@ -53,8 +53,8 @@ See `.env.example` for the full list. The most important values are:
 
 CourtListener tokens can still be saved in Settings. If
 `SUPRA_COURTLISTENER_API_KEY` is set, it is used ahead of the Keychain token.
-Legal-route audit events redact raw query terms by default and store stable
-fingerprints instead; set `SUPRA_LEGAL_LOG_QUERY_TERMS=true` only when the audit
+Legal-route audit events redact raw query terms by default and store per-install
+HMAC pseudonyms instead; set `SUPRA_LEGAL_LOG_QUERY_TERMS=true` only when the audit
 store is approved for privileged query content.
 
 ## Modes

@@ -11,6 +11,7 @@ struct DiagnosticsView: View {
     /// wins are visible: a warmed model shows its load time up front, and the first
     /// message's first-token latency no longer includes a multi-second load.
     @State private var timings: [DiagnosticEventRecord] = []
+    @State private var networkCleanupMessage: String?
 
     var body: some View {
         List {
@@ -48,6 +49,29 @@ struct DiagnosticsView: View {
                 } footer: {
                     Text("Model loads and generation latency. Pre-warming moves the load out of your first request.")
                 }
+            }
+
+            Section {
+                Button("Remove Stored Query Fingerprints") {
+                    do {
+                        let count = try environment.store.networkRequests.removeStoredQueryMetadata()
+                        networkCleanupMessage = count == 1
+                            ? "Removed query metadata from 1 network audit record."
+                            : "Removed query metadata from \(count) network audit records."
+                    } catch {
+                        networkCleanupMessage = "Query metadata could not be removed."
+                    }
+                }
+                if let networkCleanupMessage {
+                    Text(networkCleanupMessage)
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(networkCleanupMessage)
+                }
+            } header: {
+                Text("Network Privacy").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
+            } footer: {
+                Text("New query values use installation-scoped pseudonyms. This removes all stored query markers, including legacy fingerprints, while retaining other audit metadata where possible.")
             }
 
             Section {

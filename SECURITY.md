@@ -85,9 +85,10 @@ need an explicit, documented justification.
 
 ### Privilege-aware logging
 
-- Privileged query terms are redacted to **stable fingerprints** in request logs and
-  diagnostics by default. Storing raw query terms is strictly opt-in
-  (`SUPRA_LEGAL_LOG_QUERY_TERMS`, off by default).
+- Privileged query terms are redacted to **per-install keyed pseudonyms** in request logs and
+  diagnostics by default. These markers support local grouping but are not anonymous or
+  portable across installations; Diagnostics can remove stored query markers. Storing raw
+  query terms is strictly opt-in (`SUPRA_LEGAL_LOG_QUERY_TERMS`, off by default).
 - Exports, audit summaries, and diagnostics avoid raw absolute source paths; documents are
   referenced by safe display names / managed relative paths.
 

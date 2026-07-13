@@ -54,7 +54,7 @@ unverified authority as settled law.
   chat history in an interior sidebar, searchable by title and message content — a leading `#`
   matches a tag exactly and surfaces a cross-matter "Tag matches" section spanning chats and
   ScratchPad notes. Rename, delete, or move a chat into a matter when it turns out to be case-specific.
-- **Privacy by default.** Privileged query terms are redacted (stored as stable fingerprints) in
+- **Privacy by default.** Privileged query terms are redacted (stored as per-install keyed pseudonyms) in
   logs and diagnostics unless explicitly enabled; the CourtListener token lives in the Keychain,
   bound to the device.
 
@@ -136,7 +136,7 @@ Configuration is read from `.env` / the process environment (defaults shown in
 | `SUPRA_DEFAULT_CONTEXT_TOKENS`, `SUPRA_MAX_CONTEXT_TOKENS` | Context-window budget |
 | `SUPRA_ENABLE_COURTLISTENER`, `SUPRA_COURTLISTENER_*` | CourtListener integration & token |
 | `SUPRA_LEGAL_REQUIRE_CITATIONS`, `…_ALLOW_UNGROUNDED_LAW`, `…_VERIFY_CITATIONS`, `…_JURISDICTION_REQUIRED` | Legal-safety gates |
-| `SUPRA_LEGAL_LOG_QUERY_TERMS` | Opt-in to store raw query terms (off by default; fingerprints otherwise) |
+| `SUPRA_LEGAL_LOG_QUERY_TERMS` | Opt-in to store raw query terms (off by default; per-install keyed pseudonyms otherwise) |
 
 ## Development
 
@@ -158,7 +158,7 @@ cd Packages/SupraSessions && swift test
 - Legal answers are constrained to retrieved authority; the citation verifier flags unsupported
   citations/quotes and jurisdiction mismatches, and structured outputs that assert authority always
   carry a verification banner.
-- Privileged query terms are redacted to fingerprints in request logs and diagnostics by default.
+- Privileged query terms are represented by per-install HMAC pseudonyms in request logs and diagnostics by default. They are not anonymous; Diagnostics can remove all stored query markers.
 
 ## License
 
