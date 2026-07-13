@@ -41,11 +41,6 @@ jobs:
       - name: Test public repository metadata guard
         run: bash ../Tests/Scripts/test-verify-public-repository-assets.sh
 
-      - name: Audit advertised public refs and release metadata
-        env:
-          PUBLIC_ASSET_GITHUB_TOKEN: ${{ github.token }}
-        run: bash ../Scripts/verify-public-repository-assets.sh "${GITHUB_REPOSITORY}"
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:

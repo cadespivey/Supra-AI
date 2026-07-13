@@ -44,9 +44,11 @@ public-view verification, or set `PUBLIC_ASSET_GITHUB_TOKEN` when rate-limited a
 appropriate. An incomplete or truncated metadata response fails closed.
 
 The metadata audit runs on a schedule and on manual dispatch through
-`.github/workflows/verify-public-repository-assets.yml`. Website deployments and desktop
-releases run it as a blocking preflight. Its synthetic regression fixtures contain only ref,
-tree, and release metadata—never font bytes.
+`.github/workflows/verify-public-repository-assets.yml`, and desktop releases run it as a
+blocking preflight. Website deployments run its synthetic regression suite plus the existing
+local guard before and after export; they do not depend on the Support-managed state of old
+public refs. The synthetic fixtures contain only ref, tree, and release metadata—never font
+bytes.
 
 ## If an exposure is suspected
 
