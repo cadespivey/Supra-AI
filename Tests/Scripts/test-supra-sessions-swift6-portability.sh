@@ -15,12 +15,12 @@ record_failure() {
 # Expected RED before the portability fix: the macOS 15 Swift 6 compiler rejects
 # an actor-isolated async operation whose unconstrained generic result can cross
 # an isolation boundary. Pin every protocol/conformance declaration to Sendable.
-if rg -n -F 'func withAccess<T>' "$backup_source" "$backup_tests" >&2; then
+if grep -nF -- 'func withAccess<T>' "$backup_source" "$backup_tests" >&2; then
   record_failure 'BackupDestination withAccess generic result is not constrained to Sendable'
 fi
 
 with_access_declarations="$(
-  { rg -n -F 'func withAccess<T: Sendable>' "$backup_source" "$backup_tests" || true; } |
+  { grep -hF -- 'func withAccess<T: Sendable>' "$backup_source" "$backup_tests" || true; } |
     wc -l | tr -d ' '
 )"
 if [[ "$with_access_declarations" != '3' ]]; then
@@ -30,10 +30,10 @@ fi
 # Expected RED before the portability fix: the macOS 15 Swift 6 compiler cannot
 # infer the nested optional produced by Optional.map around this inout helper.
 # Require a typed local and explicit optional branching so inference is stable.
-if ! rg -Fq 'let profile: MatterBillingProfileRecord?' "$billing_source"; then
+if ! grep -Fq -- 'let profile: MatterBillingProfileRecord?' "$billing_source"; then
   record_failure 'billing profile lookup does not declare its optional result type'
 fi
-if rg -n -F 'record.matterID.map { profile(for:' "$billing_source" >&2; then
+if grep -nF -- 'record.matterID.map { profile(for:' "$billing_source" >&2; then
   record_failure 'billing profile lookup still uses the ambiguous Optional.map expression'
 fi
 
