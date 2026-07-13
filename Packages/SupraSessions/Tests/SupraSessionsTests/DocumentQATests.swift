@@ -5,6 +5,20 @@ import SupraDocuments
 import SupraStore
 import XCTest
 
+private final class SequencedDocumentAnswers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var answers: [String]
+
+    init(_ answers: [String]) { self.answers = answers }
+
+    func next() -> String {
+        lock.withLock {
+            if answers.count > 1 { return answers.removeFirst() }
+            return answers.first ?? ""
+        }
+    }
+}
+
 @MainActor
 final class DocumentQATests: XCTestCase {
 
@@ -191,6 +205,124 @@ final class DocumentQATests: XCTestCase {
         )
         XCTAssertNil(controller.deeperSearchOffer)
         XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
+    func testUnrelatedResolvedCitationPersistsNeedsReviewProvenance() async throws {
+        // ACR-DOCSUP-INT-01 expected RED: the label-only path persists this as complete
+        // and leaves the v055 verification columns in legacy_unverified state.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Matter A")
+        try await indexDoc(
+            store,
+            matter.id,
+            "payment-correspondence.txt",
+            "Payment correspondence concerned account setup. The deposition occurred July 12, 2025."
+        )
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "Payment was due March 3, 2025 [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: nil)
+
+        let generated = await qa.generate(question: "When was payment due?", modelID: ModelID())
+        let result = try XCTUnwrap(generated)
+        XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue)
+
+        let output = try XCTUnwrap(try store.structuredOutputs.fetchOutputs(matterID: matter.id).first { $0.id == result.outputID })
+        XCTAssertEqual(output.status, StructuredOutputStatus.needsReview.rawValue)
+        let version = try XCTUnwrap(try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).first)
+        XCTAssertEqual(version.verificationStatus, OutputVerificationStatus.needsReview.rawValue)
+        XCTAssertEqual(version.verificationVersion, DocumentSupportVerifier.version)
+        let json = try XCTUnwrap(version.verificationJSON)
+        let support = try DateCoding.decoder.decode([PropositionSupportResult].self, from: Data(json.utf8))
+        XCTAssertEqual(support.map(\.status), [.unsupported])
+        XCTAssertNotNil(try store.documentSources.fetchSourceSet(structuredOutputVersionID: version.id))
+    }
+
+    func testRegenerationReverifiesAndPersistsEachVersionsOwnSourceSet() async throws {
+        // ACR-DOCSUP-INT-02 expected RED: regeneration updates status separately and
+        // stores neither verifier provenance nor transactional source attachment.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Matter A")
+        try await indexDoc(store, matter.id, "agreement.txt", "The agreement was executed March 3, 2025.")
+        let answers = SequencedDocumentAnswers([
+            "The agreement was executed March 3, 2025 [S1].",
+            "The agreement was executed March 9, 2025 [S1].",
+        ])
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: answers.next()),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: nil)
+
+        let generated = await qa.generate(question: "When was the agreement executed?", modelID: ModelID())
+        let first = try XCTUnwrap(generated)
+        let regenerated = await qa.regenerate(outputID: first.outputID, modelID: ModelID())
+        let second = try XCTUnwrap(regenerated)
+        XCTAssertEqual(first.status, StructuredOutputStatus.complete.rawValue)
+        XCTAssertEqual(second.status, StructuredOutputStatus.needsReview.rawValue)
+
+        let versions = try store.structuredOutputs.fetchVersions(structuredOutputID: first.outputID)
+        XCTAssertEqual(versions.count, 2)
+        XCTAssertEqual(Set(versions.map(\.verificationStatus)), Set([
+            OutputVerificationStatus.allSupported.rawValue,
+            OutputVerificationStatus.needsReview.rawValue,
+        ]))
+        for version in versions {
+            XCTAssertNotNil(version.verificationJSON)
+            XCTAssertNotNil(try store.documentSources.fetchSourceSet(structuredOutputVersionID: version.id))
+        }
+    }
+
+    func testTwoMatterCanariesStayOutOfPromptVerificationAndPersistedSources() async throws {
+        // ACR-DOCSUP-INT-03 expected RED: no persisted verifier input/provenance exists
+        // to prove that the selected matter alone supported the clean decision.
+        let store = try makeStore()
+        let selectedMatter = try store.matters.createMatter(name: "Synthetic Matter Alpha")
+        let otherMatter = try store.matters.createMatter(name: "Synthetic Matter Omega")
+        try await indexDoc(
+            store,
+            selectedMatter.id,
+            "alpha.txt",
+            "ALPHA_CANARY. Payment was due March 3, 2025."
+        )
+        try await indexDoc(
+            store,
+            otherMatter.id,
+            "omega.txt",
+            "OMEGA_CANARY. Payment was due December 31, 2099."
+        )
+        let runtime = StubRuntimeClient(outcome: { request in
+            XCTAssertTrue(request.prompt.contains("ALPHA_CANARY"))
+            XCTAssertFalse(request.prompt.contains("OMEGA_CANARY"))
+            return .events([
+                .event(request, 0, .token, token: "Payment was due March 3, 2025 [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let qa = DocumentQAController(matterID: selectedMatter.id, store: store, runtimeClient: runtime, embedder: nil)
+
+        let generated = await qa.generate(question: "When was payment due?", modelID: ModelID())
+        let result = try XCTUnwrap(generated)
+        XCTAssertEqual(result.status, StructuredOutputStatus.complete.rawValue)
+        let version = try XCTUnwrap(try store.structuredOutputs.fetchVersions(structuredOutputID: result.outputID).first)
+        let verificationJSON = try XCTUnwrap(version.verificationJSON)
+        XCTAssertFalse(verificationJSON.contains("OMEGA_CANARY"))
+        let evidence = try DateCoding.decoder.decode([PropositionSupportResult].self, from: Data(verificationJSON.utf8))
+            .flatMap(\.evidence)
+        XCTAssertTrue(evidence.allSatisfy { $0.sourceID.contains(selectedMatter.id) })
+        XCTAssertFalse(evidence.contains { $0.sourceID.contains(otherMatter.id) })
+
+        let selectedDocumentIDs = Set(try store.documentLibrary.fetchDocuments(matterID: selectedMatter.id).map(\.id))
+        let persistedSources = try store.documentSources.fetchSources(structuredOutputVersionID: version.id)
+        XCTAssertFalse(persistedSources.isEmpty)
+        XCTAssertTrue(persistedSources.allSatisfy { row in
+            row.documentID.map(selectedDocumentIDs.contains) ?? false
+        })
     }
 
     // MARK: - Helpers

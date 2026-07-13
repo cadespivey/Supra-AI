@@ -84,6 +84,28 @@ final class DocumentChronologyTests: XCTestCase {
         XCTAssertNotNil(generated)
     }
 
+    func testUnsupportedChronologyCannotBecomeComplete() async throws {
+        // ACR-DOCSUP-INT-04 expected RED: a resolved S1 currently marks the chronology
+        // complete even when its proposition is absent from the cited source.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Matter A")
+        try await indexDoc(store, matter.id, nil, "timeline.txt", "A status conference occurred January 5, 2025.")
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "| Date | Event | Source |\n| 2025-09-09 | Judgment entered [S1] | [S1] |"),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let generated = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+        let result = try XCTUnwrap(generated)
+        XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue)
+        let version = try XCTUnwrap(try store.structuredOutputs.fetchVersions(structuredOutputID: result.outputID).first)
+        XCTAssertEqual(version.verificationStatus, OutputVerificationStatus.needsReview.rawValue)
+        XCTAssertNotNil(version.verificationJSON)
+    }
+
     func testDateExtractionDetectsCommonForms() {
         XCTAssertTrue(DateExtraction.containsDate("Signed on March 3, 2024."))
         XCTAssertTrue(DateExtraction.containsDate("2024-03-03 filing"))

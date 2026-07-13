@@ -9,11 +9,26 @@ final class CitationCoverageTests: XCTestCase {
         XCTAssertEqual(labels, ["S1", "S12"])
     }
 
-    func testCitedAnswerPasses() {
-        let check = CitationCoverage.check(answer: "Payment was due March 3 [S1].", availableLabels: ["S1", "S2"])
-        XCTAssertTrue(check.hasInlineCitations)
-        XCTAssertTrue(check.unresolvedLabels.isEmpty)
-        XCTAssertFalse(check.requiresReview)
+    func testResolvedLabelIsStructuralOnlyAndUnrelatedSourceRequiresReview() throws {
+        // ACR-DOCSUP-01 expected RED: CitationCoverage currently treats any resolved
+        // label as clean without testing whether the cited text supports the claim.
+        let report = try DocumentSupportVerifier.verify(
+            answer: "Payment was due March 3 [S1].",
+            sources: [
+                DocumentSupportSource(
+                    sourceID: "chunk-unrelated",
+                    label: "S1",
+                    locator: "p. 8",
+                    text: "The deposition was noticed for July 12."
+                )
+            ],
+            scopeFullyIndexed: true,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        XCTAssertEqual(report.results.map(\.status), [.unsupported])
+        XCTAssertTrue(report.requiresReview)
+        XCTAssertEqual(report.verificationStatus, .needsReview)
     }
 
     func testMissingCitationsRequiresReview() {
