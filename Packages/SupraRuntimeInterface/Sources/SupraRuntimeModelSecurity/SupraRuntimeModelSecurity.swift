@@ -12,6 +12,7 @@ public final class RuntimeModelSnapshot: @unchecked Sendable {
 
     private let contentBinding: RuntimeModelContentBinding
     private let expectedNodeIdentities: [String: NodeIdentity]
+    private let privateRoot: PrivateRoot
     private let stateLock = NSLock()
     private var isRemoved = false
 
@@ -29,7 +30,7 @@ public final class RuntimeModelSnapshot: @unchecked Sendable {
         var keepPrivateRoot = false
         defer {
             if !keepPrivateRoot {
-                try? FileManager.default.removeItem(at: privateRoot.url)
+                try? Self.removeOwnedRoot(privateRoot)
             }
         }
 
@@ -47,6 +48,7 @@ public final class RuntimeModelSnapshot: @unchecked Sendable {
         self.verifiedModelSHA256 = contentBinding.fingerprintSHA256
         self.contentBinding = contentBinding
         self.expectedNodeIdentities = identities
+        self.privateRoot = privateRoot
         keepPrivateRoot = true
     }
 
@@ -81,18 +83,7 @@ public final class RuntimeModelSnapshot: @unchecked Sendable {
         defer { stateLock.unlock() }
         guard !isRemoved else { return }
 
-        guard FileManager.default.fileExists(atPath: snapshotURL.path) else {
-            isRemoved = true
-            return
-        }
-
-        let root = try Self.openRootDirectory(at: snapshotURL, purpose: .snapshot)
-        let currentIdentity = try Self.identity(of: root.rawValue, path: "")
-        guard currentIdentity == expectedNodeIdentities[""] else {
-            throw RuntimeModelSnapshotError.snapshotIdentityChanged
-        }
-
-        try FileManager.default.removeItem(at: snapshotURL)
+        try Self.removeOwnedRoot(privateRoot)
         isRemoved = true
     }
 }
@@ -169,6 +160,8 @@ private extension RuntimeModelSnapshot {
 
     struct PrivateRoot {
         let url: URL
+        let name: String
+        let parentDescriptor: OwnedFileDescriptor
         let descriptor: OwnedFileDescriptor
     }
 
@@ -235,36 +228,75 @@ private extension RuntimeModelSnapshot {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .resolvingSymlinksInPath()
             .standardizedFileURL
-        let templateURL = temporaryDirectory.appendingPathComponent(
-            "SupraRuntimeModelSnapshot.XXXXXXXX",
-            isDirectory: true
+        let parentDescriptor = try openRootDirectory(
+            at: temporaryDirectory,
+            purpose: .source
         )
-        var template = Array(templateURL.path.utf8CString)
-        let createdPath: String? = template.withUnsafeMutableBufferPointer { buffer in
-            guard let baseAddress = buffer.baseAddress,
-                  let result = Darwin.mkdtemp(baseAddress) else {
-                return nil
+
+        var createdName: String?
+        var lastCreationError = EEXIST
+        for _ in 0..<64 {
+            let candidate = "SupraRuntimeModelSnapshot." + UUID().uuidString
+            let result = candidate.withCString { name in
+                Darwin.mkdirat(parentDescriptor.rawValue, name, mode_t(0o700))
             }
-            return String(cString: result)
+            if result == 0 {
+                createdName = candidate
+                break
+            }
+            lastCreationError = errno
+            guard lastCreationError == EEXIST else { break }
         }
-        guard let createdPath else {
-            throw RuntimeModelSnapshotError.temporaryRootCreationFailed(errno)
+        guard let createdName else {
+            throw RuntimeModelSnapshotError.temporaryRootCreationFailed(lastCreationError)
         }
 
-        let url = URL(fileURLWithPath: createdPath, isDirectory: true)
+        let url = temporaryDirectory.appendingPathComponent(
+            createdName,
+            isDirectory: true
+        )
         do {
-            let descriptor = try openRootDirectory(at: url, purpose: .snapshot)
+            let descriptor = try openDirectory(
+                at: parentDescriptor.rawValue,
+                name: createdName,
+                path: createdName
+            )
             guard Darwin.fchmod(descriptor.rawValue, mode_t(0o700)) == 0 else {
                 throw systemError("fchmod", path: url.path)
             }
             let value = try status(of: descriptor.rawValue, path: "")
             try requireDirectory(value, path: "")
             try requirePermissions(value, expected: mode_t(0o700), path: "")
-            return PrivateRoot(url: url, descriptor: descriptor)
+            return PrivateRoot(
+                url: url,
+                name: createdName,
+                parentDescriptor: parentDescriptor,
+                descriptor: descriptor
+            )
         } catch {
-            try? FileManager.default.removeItem(at: url)
+            _ = createdName.withCString { name in
+                Darwin.unlinkat(parentDescriptor.rawValue, name, AT_REMOVEDIR)
+            }
             throw error
         }
+    }
+
+    static func openDirectory(
+        at parent: Int32,
+        name: String,
+        path: String
+    ) throws -> OwnedFileDescriptor {
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        let descriptor = name.withCString { component in
+            Darwin.openat(parent, component, flags)
+        }
+        guard descriptor >= 0 else {
+            throw systemError("openat", path: path)
+        }
+        let owned = OwnedFileDescriptor(descriptor)
+        let value = try status(of: descriptor, path: path)
+        try requireDirectory(value, path: path)
+        return owned
     }
 
     static func openRootDirectory(
@@ -296,6 +328,226 @@ private extension RuntimeModelSnapshot {
             try requirePermissions(value, expected: mode_t(0o700), path: ".")
         }
         return owned
+    }
+
+    static func removeOwnedRoot(_ privateRoot: PrivateRoot) throws {
+        let rootStatus = try status(
+            of: privateRoot.descriptor.rawValue,
+            path: privateRoot.name
+        )
+        try requireDirectory(rootStatus, path: privateRoot.name)
+        let rootIdentity = NodeIdentity(rootStatus)
+
+        try removeDirectoryContents(
+            descriptor: privateRoot.descriptor.rawValue,
+            relativePath: ""
+        )
+
+        for _ in 0..<3 {
+            let names = try directoryEntryNames(
+                descriptor: privateRoot.parentDescriptor.rawValue,
+                path: privateRoot.url.deletingLastPathComponent().path
+            )
+            for name in names {
+                guard let entryStatus = try status(
+                    at: privateRoot.parentDescriptor.rawValue,
+                    name: name,
+                    path: name
+                ), NodeIdentity(entryStatus) == rootIdentity else {
+                    continue
+                }
+                try requireDirectory(entryStatus, path: name)
+
+                let candidate = try openDirectory(
+                    at: privateRoot.parentDescriptor.rawValue,
+                    name: name,
+                    path: name
+                )
+                let openedStatus = try status(of: candidate.rawValue, path: name)
+                guard NodeIdentity(openedStatus) == rootIdentity else {
+                    throw RuntimeModelSnapshotError.snapshotIdentityChanged
+                }
+
+                let result = name.withCString { component in
+                    Darwin.unlinkat(
+                        privateRoot.parentDescriptor.rawValue,
+                        component,
+                        AT_REMOVEDIR
+                    )
+                }
+                if result == 0 {
+                    return
+                }
+                let code = errno
+                if code == ENOENT {
+                    continue
+                }
+                throw RuntimeModelSnapshotError.systemCallFailed(
+                    operation: "unlinkat",
+                    path: name,
+                    code: code
+                )
+            }
+
+            let retainedStatus = try status(
+                of: privateRoot.descriptor.rawValue,
+                path: privateRoot.name
+            )
+            if retainedStatus.st_nlink == 0 {
+                return
+            }
+        }
+
+        throw RuntimeModelSnapshotError.snapshotIdentityChanged
+    }
+
+    static func removeDirectoryContents(
+        descriptor: Int32,
+        relativePath: String
+    ) throws {
+        let names = try directoryEntryNames(
+            descriptor: descriptor,
+            path: relativePath
+        )
+        for name in names {
+            let path = relativePath.isEmpty ? name : relativePath + "/" + name
+            guard let entryStatus = try status(
+                at: descriptor,
+                name: name,
+                path: path
+            ) else {
+                continue
+            }
+
+            if entryStatus.st_mode & S_IFMT == S_IFDIR {
+                let child = try openDirectory(
+                    at: descriptor,
+                    name: name,
+                    path: path
+                )
+                let openedStatus = try status(of: child.rawValue, path: path)
+                let childIdentity = NodeIdentity(openedStatus)
+                guard childIdentity == NodeIdentity(entryStatus) else {
+                    throw RuntimeModelSnapshotError.snapshotIdentityChanged
+                }
+
+                try removeDirectoryContents(
+                    descriptor: child.rawValue,
+                    relativePath: path
+                )
+                guard let beforeUnlink = try status(
+                    at: descriptor,
+                    name: name,
+                    path: path
+                ) else {
+                    continue
+                }
+                guard beforeUnlink.st_mode & S_IFMT == S_IFDIR,
+                      NodeIdentity(beforeUnlink) == childIdentity else {
+                    throw RuntimeModelSnapshotError.snapshotIdentityChanged
+                }
+
+                let result = name.withCString { component in
+                    Darwin.unlinkat(descriptor, component, AT_REMOVEDIR)
+                }
+                if result != 0 {
+                    let code = errno
+                    if code == ENOENT { continue }
+                    throw RuntimeModelSnapshotError.systemCallFailed(
+                        operation: "unlinkat",
+                        path: path,
+                        code: code
+                    )
+                }
+            } else {
+                let result = name.withCString { component in
+                    Darwin.unlinkat(descriptor, component, 0)
+                }
+                if result != 0 {
+                    let code = errno
+                    if code == ENOENT { continue }
+                    throw RuntimeModelSnapshotError.systemCallFailed(
+                        operation: "unlinkat",
+                        path: path,
+                        code: code
+                    )
+                }
+            }
+        }
+    }
+
+    static func directoryEntryNames(
+        descriptor: Int32,
+        path: String
+    ) throws -> [String] {
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        let duplicate = ".".withCString { component in
+            Darwin.openat(descriptor, component, flags)
+        }
+        guard duplicate >= 0 else {
+            throw systemError("openat", path: path)
+        }
+        guard let stream = Darwin.fdopendir(duplicate) else {
+            let code = errno
+            _ = Darwin.close(duplicate)
+            throw RuntimeModelSnapshotError.systemCallFailed(
+                operation: "fdopendir",
+                path: path,
+                code: code
+            )
+        }
+        defer { Darwin.closedir(stream) }
+
+        var names: [String] = []
+        while true {
+            errno = 0
+            guard let entry = Darwin.readdir(stream) else {
+                if errno != 0 {
+                    throw systemError("readdir", path: path)
+                }
+                break
+            }
+            let name = withUnsafePointer(to: &entry.pointee.d_name) { pointer in
+                pointer.withMemoryRebound(
+                    to: CChar.self,
+                    capacity: Int(MAXNAMLEN) + 1
+                ) {
+                    String(cString: $0)
+                }
+            }
+            if name != ".", name != ".." {
+                names.append(name)
+            }
+        }
+        return names
+    }
+
+    static func status(
+        at parent: Int32,
+        name: String,
+        path: String
+    ) throws -> stat? {
+        var value = stat()
+        let result = name.withCString { component in
+            Darwin.fstatat(
+                parent,
+                component,
+                &value,
+                AT_SYMLINK_NOFOLLOW
+            )
+        }
+        if result == 0 {
+            return value
+        }
+        let code = errno
+        if code == ENOENT {
+            return nil
+        }
+        throw RuntimeModelSnapshotError.systemCallFailed(
+            operation: "fstatat",
+            path: path,
+            code: code
+        )
     }
 
     static func copyDeclaredFiles(
