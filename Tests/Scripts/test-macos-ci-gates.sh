@@ -117,7 +117,7 @@ run_case \
     --project "$release_project" --appcast "$release_appcast" --constants "$release_constants"
 
 mixed_release_project="${temporary_dir}/mixed-release-project.pbxproj"
-sed '0,/CURRENT_PROJECT_VERSION = 387;/s//CURRENT_PROJECT_VERSION = 18;/' \
+awk '!changed && sub(/CURRENT_PROJECT_VERSION = 387;/, "CURRENT_PROJECT_VERSION = 18;") { changed = 1 } { print }' \
   "$release_project" >"$mixed_release_project"
 run_case \
   "mixed app and XPC candidate builds fail closed" \
@@ -145,6 +145,63 @@ run_case \
   "candidate marketing version requires a build newer than the published appcast" \
   bash "${scripts}/verify-release-version-state.sh" \
     --project "$nonmonotonic_release_project" --appcast "$release_appcast" --constants "$release_constants"
+
+published_release_project="${temporary_dir}/published-release-project.pbxproj"
+sed -e 's/MARKETING_VERSION = 2.2.1;/MARKETING_VERSION = 2.2.0;/g' \
+  -e 's/CURRENT_PROJECT_VERSION = 387;/CURRENT_PROJECT_VERSION = 386;/g' \
+  "$release_project" >"$published_release_project"
+run_case \
+  "candidate metadata may equal the published release after publication" \
+  0 \
+  "Release version state passed: candidate 2.2.0 (386), published 2.2.0 (386)." \
+  bash "${scripts}/verify-release-version-state.sh" \
+    --project "$published_release_project" --appcast "$release_appcast" --constants "$release_constants"
+
+older_release_project="${temporary_dir}/older-release-project.pbxproj"
+sed 's/MARKETING_VERSION = 2.2.1;/MARKETING_VERSION = 2.1.9;/g' \
+  "$release_project" >"$older_release_project"
+run_case \
+  "an older marketing version fails even with a newer build" \
+  1 \
+  "candidate marketing version must be newer than the published appcast" \
+  bash "${scripts}/verify-release-version-state.sh" \
+    --project "$older_release_project" --appcast "$release_appcast" --constants "$release_constants"
+
+same_version_new_build_project="${temporary_dir}/same-version-new-build-project.pbxproj"
+sed 's/MARKETING_VERSION = 2.2.1;/MARKETING_VERSION = 2.2.0;/g' \
+  "$release_project" >"$same_version_new_build_project"
+run_case \
+  "an unchanged marketing version cannot carry a different build" \
+  1 \
+  "candidate build must match the published appcast when the marketing version is unchanged" \
+  bash "${scripts}/verify-release-version-state.sh" \
+    --project "$same_version_new_build_project" --appcast "$release_appcast" --constants "$release_constants"
+
+split_release_appcast="${temporary_dir}/split-release-appcast.xml"
+printf '%s\n' \
+  '<rss><channel><item>' \
+  '<sparkle:shortVersionString>2.2.0</sparkle:shortVersionString>' \
+  '</item><item>' \
+  '<sparkle:version>386</sparkle:version>' \
+  '</item></channel></rss>' >"$split_release_appcast"
+run_case \
+  "appcast fields from different items cannot be combined" \
+  1 \
+  "newest appcast item must contain exactly one marketing version and build" \
+  bash "${scripts}/verify-release-version-state.sh" \
+    --project "$release_project" --appcast "$split_release_appcast" --constants "$release_constants"
+
+duplicate_release_constants="${temporary_dir}/duplicate-release-constants.ts"
+cp "$release_constants" "$duplicate_release_constants"
+printf '%s\n' \
+  'export const FALLBACK_RELEASE_TAG = "v9.9.9";' \
+  'export const FALLBACK_RELEASE_VERSION = "9.9.9";' >>"$duplicate_release_constants"
+run_case \
+  "duplicate website fallback declarations fail closed" \
+  1 \
+  "website fallback release metadata must contain one tag and version" \
+  bash "${scripts}/verify-release-version-state.sh" \
+    --project "$release_project" --appcast "$release_appcast" --constants "$duplicate_release_constants"
 
 artifact_fixture="${temporary_dir}/artifacts"
 mkdir -p "${artifact_fixture}/Sources"
