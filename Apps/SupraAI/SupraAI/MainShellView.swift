@@ -7,7 +7,10 @@ struct MainShellView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @State private var selection: SidebarSelection? = .route(.globalChats)
     @State private var showNewMatter = false
-    @State private var windowContentHeight: CGFloat?
+    // Give WindowGroup a finite first-pass proposal before AppKit attaches the
+    // content view. Without this bootstrap value, older SwiftUI releases can size
+    // the window from a long descendant before the live window height is readable.
+    @State private var windowContentHeight: CGFloat? = 640
 
     var body: some View {
         NavigationSplitView {
@@ -260,7 +263,6 @@ private final class WindowContentHeightView: NSView {
         }
         resizeObserver = nil
     }
-
 }
 
 /// Hosts a matter's workspace, resolving the matter from the (observed) controller

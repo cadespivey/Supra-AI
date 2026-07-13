@@ -153,14 +153,15 @@ final class ResearchAuthoritiesUITests: XCTestCase {
     func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() throws {
         let app = try launchApp(extraArguments: [
             "-uiTestRemediationWarnings",
-            "-uiTestSelectFirstMatter",
             "-uiTestInitialMatterTab", "Outputs",
         ])
 
+        let matter = seededMatterRow(in: app)
         XCTAssertTrue(
-            seededMatterRow(in: app).waitForExistence(timeout: 20),
+            matter.waitForExistence(timeout: 20),
             "Seeded matter did not appear in the sidebar"
         )
+        matter.click()
 
         XCTAssertTrue(
             app.buttons["matterTab.Outputs"].waitForExistence(timeout: 10),
@@ -171,9 +172,9 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         XCTAssertTrue(output.isHittable, "Legacy output row must be pointer-reachable before navigation")
         output.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
-        // Expected RED before the navigation synchronization fix: the detail
-        // destination has no readiness identifier, so a missed/stalled push is
-        // misreported as a missing verification warning on stable Xcode.
+        // The destination marker separates a completed navigation push from the
+        // warning assertions below. Launch through the real matter-selection path
+        // so its first-responder cleanup makes this first row click deterministic.
         let detail = app.descendants(matching: .any)["output.detail.Legacy Verification Fixture"]
         XCTAssertTrue(detail.waitForExistence(timeout: 10), "Legacy output detail did not finish navigating")
 
@@ -307,9 +308,9 @@ final class DraftingBlockedStateUITests: XCTestCase {
         let generate = app.buttons["drafting.generate"]
         XCTAssertTrue(generate.waitForExistence(timeout: 10))
         XCTAssertTrue(generate.isEnabled)
-        // Expected RED before the stable-Xcode layout fix: the sheet expands to
-        // its full Form height and places this pinned footer thousands of points
-        // below the visible window, so an enabled action cannot be reached.
+        // Expected RED before the stable-Xcode layout fix: the finite sheet is
+        // centered in a repeatedly expanding parent window, placing this pinned
+        // footer thousands of points below the visible screen.
         XCTAssertTrue(
             generate.isHittable,
             "Generate must remain pointer-reachable in the visible sheet footer: \(generate.debugDescription)"
