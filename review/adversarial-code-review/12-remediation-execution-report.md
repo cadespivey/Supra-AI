@@ -8,11 +8,11 @@
 | Remediation branch | `remediation/acr-program` |
 | Execution date | 2026-07-13 |
 | Pre-XPC-integration implementation snapshot | `815180c2fbf2ca6921e913923383cf13e20a215d` |
-| Final integrated implementation snapshot | `fce83ebf462c76b60203eb9ccb5db4ed00c7a0de` |
+| Final integrated implementation snapshot | `f24c792179137557ae61f259f18a209c9790b345` |
 | Evidence-only deliverable commit | The commit containing this report; resolve with `git log -1 --format=%H -- review/adversarial-code-review/12-remediation-execution-report.md` |
 | Findings in scope | SA-ACR-001 through SA-ACR-015 |
 
-The historical portions of documents `00` through `11` preserve the adversarial assessment of the historical review baseline; dated appendices record later remediation without retroactively changing that assessment. The exact final source SHA is fixed above. The initial XPC contract/follow-up RED commits are `2d91ed613fe0b82de0116ed635160e9fcc1708a9` and `945497a1ca94f41480018192582792fdf78a84bf`; the corresponding GREEN commits are `9874920c4b8ac94491b583569c4ba7c04e41497e` and `b656cdb0385d4db4bd29c0a32f75980dec4953d0`. Later RED/GREEN sequences bind release authorization to exact model content, load from a private descriptor-retained XPC snapshot, harden cleanup, require repository-owned signed-smoke evidence, and enforce a dedicated ephemeral isolated runner. Because a commit cannot embed its own final object ID, the evidence commit is self-locating by path.
+The historical portions of documents `00` through `11` preserve the adversarial assessment of the historical review baseline; dated appendices record later remediation without retroactively changing that assessment. The exact final source SHA is fixed above. The initial XPC contract/follow-up RED commits are `2d91ed613fe0b82de0116ed635160e9fcc1708a9` and `945497a1ca94f41480018192582792fdf78a84bf`; the corresponding GREEN commits are `9874920c4b8ac94491b583569c4ba7c04e41497e` and `b656cdb0385d4db4bd29c0a32f75980dec4953d0`. Later RED/GREEN sequences bind release authorization to exact model content, load from a private descriptor-retained XPC snapshot, harden cleanup, require repository-owned signed-smoke evidence, and enforce a dedicated ephemeral isolated runner. The final portability sequences are RED `0a452dd` to GREEN `3a55987` for main-actor live-resize observers and RED `ddda8b6` to GREEN `f24c792` for deterministic output-warning navigation. Because a commit cannot embed its own final object ID, the evidence commit is self-locating by path.
 
 The final source implementation closes or materially contains every locally remediable finding at the deterministic source-gate level. Final XPC/concurrency integration and the combined gates passed as recorded below. Current GitHub-owned hidden refs/caches remain outside local source control and were assigned by the repository owner to GitHub Support.
 
@@ -30,7 +30,7 @@ The remediation changed the product from label-presence and best-effort safety c
 8. macOS CI, product-claim validation, release preflight, and transaction rollback are fail-closed source controls. The release transaction binds artifacts to an exact source SHA, app/model evidence, and repository-owned signed-smoke result and was tested hermetically without publishing.
 9. Remediation/recovery warnings are accessible, synchronized without silent test setup returns, and linked to executable product claims.
 10. Hosted XPC operations bind authorization, exact model content, task admission, cancellation, and terminal delivery to the owning connection and request epoch. Release loads use verified private snapshots with bounded descriptor-anchored cleanup; the remaining same-UID pathname race is assigned to the mandatory isolated-runner boundary.
-11. macOS window sizing no longer feeds continuous SwiftUI measurement changes back into window height/origin updates; the final drafting/output selectors assert stable y-origin and height.
+11. macOS window sizing no longer feeds continuous SwiftUI measurement changes back into window height/origin updates; live-resize callbacks synchronously re-enter the main actor, and the final 5/5 app/UI/XPC smoke includes drafting/output selectors that assert stable y-origin and height.
 
 This is not yet a production-release authorization. Section 7 lists the external and signed-release qualifications that remain.
 
@@ -41,7 +41,7 @@ This is not yet a production-release authorization. Section 7 lists the external
 | SA-ACR-001 | **External — GitHub Support (preventive controls remediated)** | Metadata-only asset audit, repository/Pages/release gates: `393b382`, `db7846f`, `50388c3` | No claim that GitHub's existing hidden refs/caches are deleted or garbage-collected. |
 | SA-ACR-002 | **Mitigated — code remediated; attorney review pending** | Fail-closed legal support and shared corpus: `efc007a`, `ec94b2d`, `64508f9`, `ead5f71`, `2b9d548` | Corpus remains `pending_attorney_review`; code cannot establish good-law or professional sufficiency. |
 | SA-ACR-003 | **Mitigated — code remediated; attorney review pending** | Proposition support, untrusted-source fencing, scoped repair/provenance: `ec71d32` through `539acab` | Same attorney-domain boundary as SA-ACR-002. |
-| SA-ACR-004 | **Remediated** | Pre-render blocking: `365c3e4`, `47d7243`; accessible recovery/window stability: `aadd058`, `05c488e`, `073fe65`, `19e06b4`, `e8ac6cd`; final vertical-window gate 2/2 | Source defect and deterministic regression gate are closed. This is not attorney approval or broad accessibility certification. |
+| SA-ACR-004 | **Remediated** | Pre-render blocking: `365c3e4`, `47d7243`; accessible recovery/window stability: `aadd058`, `05c488e`, `073fe65`, `19e06b4`, `e8ac6cd`; main-actor/navigation portability: `0a452dd`, `3a55987`, `ddda8b6`, `f24c792`; final smoke 5/5 with vertical subset 2/2 | Source defect and deterministic regression gate are closed. This is not attorney approval or broad accessibility certification. |
 | SA-ACR-005 | **Remediated** | Redirect/credential matrix and transport implementation: `c3e733f` through `5a5dda3` | Live provider redirect chains were not exercised with production credentials. |
 | SA-ACR-006 | **Remediated** | Durable writer and managed-blob integrity: `dac7062`, `0df306a`, `c25ad59`, `63cf63f` | Production-scale/container fault behavior remains broader operational qualification. |
 | SA-ACR-007 | **Remediated** | Evidence-derived billing scope: `130f28e`, `b15d9af` | User review remains required for intentionally ambiguous/multi-matter evidence. |
@@ -78,6 +78,8 @@ The `Status` column in `05-findings-index.csv` is the machine-readable source of
 | Release transaction | `1a04b46` | `4acd069` | Preflight is SHA-bound; failure before publication leaves no public release; postpublication failure has rollback semantics. |
 | 2.2.1 candidate and signed smoke | `24d7416`, `50e82f7`, `4414dfc`, `71ba271`, `a43745a`, `feb2529`, `629e72d`, `24d8538`, `183162b`, `22d9c1d`, `0e34bde`, `090b04b`, `f45b5dc`, `bb17895`, `51fb861`, `d795f57` | `e8e8be2`, `7983602`, `e051c78`, `4cdd40c`, `89473ef`, `66d6c6e`, `6929764`, `f7feae6`, `c54acf9`, `f009d9d` | Version/build coherence, repository-owned signed-app/XPC execution, strict reproducible evidence, post-smoke app revalidation, and exact isolated-runner policy fail closed before publication. |
 | Claims/accessibility | `aadd058`, `d7def2e`, `d05062f`, `e3a28c5` | `05c488e`, `4e08203`, `815180c`, `073fe65`, `19e06b4`, `e8ac6cd`, `fce83eb` | Exact claims are versioned/test-linked; warning/recovery surfaces and smoke hooks fail closed; final vertical-window selectors pass. |
+| Window observer actor portability | `0a452dd` | `3a55987` | All three live-resize callbacks synchronously re-enter the main actor without unstructured-task ordering or lifetime changes; the scoped gate prevents regression. |
+| Deterministic output-warning navigation | `ddda8b6` | `f24c792` | The smoke requires the output row to exist and be hittable, then exercises the production navigation path and destination deterministically under local Xcode 27 and GitHub Xcode 16.4. Direct synthesized-click coverage remains an explicit limitation. |
 | XPC/concurrency | `2d91ed6`, `945497a` | `9874920`, `b656cdb` | Hosted boundary identity, origin-specific bookmark handling, connection-bound cancellation, reservation/admission, exactly-once terminal delivery, reconnect/load races, and 20/20 lifecycle iterations passed. TSan/ASan passed; UBSan and real-weight resource qualifications remain explicit limitations. |
 | Content-bound XPC snapshots | `417511c`, `2b45a14`, `f9ffea3`, `a387a19` | `1c4e5fa`, `67749f4`, `e1d60b5`, `fce83eb` | Release load copies and rehashes the exact revision-bound tree, attests the fingerprint through XPC, retains descriptors through use, and performs bounded descriptor-anchored cleanup. Same-UID pathname races remain an isolated-runner qualification. |
 
@@ -101,7 +103,7 @@ Every implementation group retained a separately observable RED contract before 
 
 ### Final integrated verification record
 
-Final release-hardening commands ran with HEAD fixed at `fce83ebf462c76b60203eb9ccb5db4ed00c7a0de` and Xcode beta selected through `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`. Exact xcresult/log paths contain no secrets or client-like data. Sanitizer evidence explicitly remains associated with the earlier snapshot on which it ran.
+Release-hardening commands ran with HEAD fixed at `fce83ebf462c76b60203eb9ccb5db4ed00c7a0de`; final portability and integrated smoke verification ran at `f24c792179137557ae61f259f18a209c9790b345`. Local app commands selected the Xcode beta through `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`; GitHub app builds used Xcode 16.4. Exact xcresult/log paths contain no secrets or client-like data. Sanitizer evidence explicitly remains associated with the earlier snapshot on which it ran.
 
 ```sh
 bash Tests/Scripts/test-macos-ci-gates.sh
@@ -117,22 +119,22 @@ bash Scripts/test-website.sh
 git diff --check
 ```
 
-The earlier integrated execution ran the combined legacy output/billing and drafting accessibility selectors, the hosted real-XPC selector pair with 20 consecutive lifecycle iterations, and sanitizer gates. At the final SHA, execution separately reran the content-bound hosted lifecycle, both window-stability selectors, all package/claim/release/migration/website gates, and current Debug plus universal Release app/XPC builds. Exact commands and outcomes are recorded in `11-command-and-evidence-log.md`; unavailable or excluded tools are not represented as passes.
+The earlier integrated execution ran the combined legacy output/billing and drafting accessibility selectors, the hosted real-XPC selector pair with 20 consecutive lifecycle iterations, and sanitizer gates. Release hardening at `fce83eb` separately reran the content-bound hosted lifecycle and both window-stability selectors. At the final SHA, the combined app/UI/XPC smoke passed all five selected tests, and the exact-head CI reran all packages plus Debug and Release app/XPC builds. Exact commands and outcomes are recorded in `11-command-and-evidence-log.md`; unavailable or excluded tools are not represented as passes.
 
 | Final gate | Evidence |
 |---|---|
-| Final integrated source SHA | `fce83ebf462c76b60203eb9ccb5db4ed00c7a0de` |
+| Final integrated source SHA | `f24c792179137557ae61f259f18a209c9790b345` |
 | Earlier remediation/accessibility selectors | Output/billing 2/2 and drafting 1/1 passed in `/tmp/SupraAI-FINAL-UI-WARNFIX-2/Logs/Test/Test-SupraAI-2026.07.13_09-34-25--0400.xcresult`. The bundle contains one Xcode internal QoS runtime warning; this evidence belongs to the earlier integrated snapshot. |
-| Final vertical-window regression | 2/2 passed at the final SHA: `testBlockedDraftIsAnnouncedWithoutFileActions` and `testLegacyOutputWarningAnnouncesStatusAndUnavailableExport`; both assert stable window y-origin and height. xcresult: `/tmp/SupraAI-XPC-GREEN-FINAL/Logs/Test/Test-SupraAI-2026.07.13_13-56-21--0400.xcresult`; one Xcode internal QoS runtime warning remains recorded. |
-| Final content-bound hosted lifecycle | 1/1 passed at the final SHA with the exact fingerprint attested through XPC. xcresult: `/tmp/SupraAI-XPC-GREEN-FINAL/Logs/Test/Test-SupraAI-2026.07.13_13-52-41--0400.xcresult`. The earlier full selector pair passed 2/2 with lifecycle 20/20 before the final snapshot-cleanup-only commits. |
+| Final app/UI/XPC smoke | 5/5 passed at `f24c792`, including the 2/2 drafting/output vertical-window subset and both hosted XPC selectors. xcresult: `/tmp/SupraAI-FULL-SMOKE-f24c792.xcresult`; one Xcode-internal QoS priority-inversion warning remains recorded. |
+| Release-hardening content-bound hosted lifecycle | 1/1 passed at `fce83eb` with the exact fingerprint attested through XPC. xcresult: `/tmp/SupraAI-XPC-GREEN-FINAL/Logs/Test/Test-SupraAI-2026.07.13_13-52-41--0400.xcresult`. The earlier full selector pair passed 2/2 with lifecycle 20/20 before the snapshot-cleanup-only commits. |
 | XPC identity, content binding, and cleanup | Signed-boundary gate passed. Invalid grants, identity mismatch/replacement, containment escape, and content mismatch are rejected. Release load uses a reverified private snapshot retained through generation/unload; descriptor-anchored cleanup tests passed 15/15. Same-UID mutate/restore and unlink races remain isolated-runner threats. |
-| macOS CI, facts, claims, and migrations | Hook mutation suite passed; repository facts passed for 2.2.1 build 387; claims wrapper passed; 21 claims/14 packages/v057; migration sequence 57/57. |
+| macOS CI, facts, claims, and migrations | Exact-head [protected macOS CI run 29275806317](https://github.com/cadespivey/Supra-AI/actions/runs/29275806317) passed 22/22 jobs; model-catalog run `29275806331` passed. Hook mutation suite passed; repository facts passed for 2.2.1 build 387; claims wrapper passed; 21 claims/14 packages/v057; migration sequence 57/57. |
 | All package suites | 14/14 package suites passed with zero failures. |
 | Shipping migration fixtures | 5/5 passed with zero failures; synthetic-fixture limitation retained. |
-| Debug and Release builds | The current Debug app/XPC built as part of the hosted test. Fresh and incremental universal unsigned Release app/XPC builds succeeded at `/tmp/supra-content-bound-release`. Xcode emitted known dependency/AppIntents diagnostics; no new changed-source compiler failure occurred. |
+| Debug and Release builds | The exact final source passed unsigned Debug and Release app/XPC builds under GitHub's Xcode 16.4 jobs. A local Xcode 27 Debug app/XPC build also succeeded as part of the final smoke. No changed-source compiler failure occurred. |
 | Website and product-claim gates | Final-source website gate and claims gates passed. Website registry audit retained two moderate transitive Next/PostCSS findings and no high/critical finding. |
 | Hermetic release transaction | All current cases passed, including strict signed evidence and isolated-runner policy mutations; no external release state changed. |
-| Sanitizers | At the earlier integrated snapshot, RuntimeClient 4/4 passed under TSan and ASan and hosted lifecycle 1/1 passed under each. UBSan was attempted but excluded because the XPC link could not resolve `___ubsan_handle_*`; no UBSan pass is claimed. Sanitizers were not rerun at `fce83eb`. |
+| Sanitizers | At the earlier integrated snapshot, RuntimeClient 4/4 passed under TSan and ASan and hosted lifecycle 1/1 passed under each. UBSan was attempted but excluded because the XPC link could not resolve `___ubsan_handle_*`; no UBSan pass is claimed. Sanitizers were not rerun at `f24c792`. |
 | CSV/deliverable validation and patch hygiene | 13 files/13 manifest entries; CSV 15 columns × 15 data rows with unique contiguous IDs; SA-ACR-004 Status-only disposition edit; `git diff --check` and staged `git diff --cached --check` pass. |
 
 ## 6. Existing-user and recovery behavior
@@ -158,13 +160,13 @@ The following are deliberately not represented as completed:
 
 ## 8. Release decision
 
-**Do not publish solely because the source remediation branch is green.** Local deterministic integration evidence is complete for `fce83ebf462c76b60203eb9ccb5db4ed00c7a0de`, with the UBSan/linker and resource limitations stated rather than counted as passes. A release owner may qualify candidate 2.2.1 build 387 only after the applicable attorney-domain, protected-infrastructure, real-weight/resource, and Developer ID signed/notarized prerequisites above are satisfied. Existing public refs remain with GitHub Support as directed by the repository owner.
+**Do not publish solely because the source remediation branch is green.** Local smoke and exact-head CI evidence are complete for `f24c792179137557ae61f259f18a209c9790b345`, with the UBSan/linker and resource limitations stated rather than counted as passes. A release owner may qualify candidate 2.2.1 build 387 only after the applicable attorney-domain, protected-infrastructure, real-weight/resource, and Developer ID signed/notarized prerequisites above are satisfied. Existing public refs remain with GitHub Support as directed by the repository owner.
 
 SA-ACR-001's existing public-ref state is tracked through GitHub Support rather than re-audited or mutated by this execution. That ownership decision does not permit removing the preventive font/path/hash guards from CI, Pages, or release preflight.
 
 ## 9. Final handoff checklist
 
-- [x] Record both integrated XPC RED/GREEN commit pairs.
+- [x] Record the integrated XPC pairs and both final window/CI portability RED/GREEN pairs.
 - [x] Record the full verified source SHA.
 - [x] Record exact final results, counts, xcresult/log paths, warnings, and exclusions.
 - [x] Change SA-ACR-004 to `Remediated` in this report and only its `Status` field in `05-findings-index.csv`.
