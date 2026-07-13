@@ -298,7 +298,12 @@ public final class BillingDraftController: ObservableObject {
         var profileCache: [String: MatterBillingProfileRecord?] = [:]
         return lines.map { record in
             let matter = record.matterID.flatMap { byID[$0] }
-            let profile = record.matterID.map { profile(for: $0, cache: &profileCache) } ?? nil
+            let profile: MatterBillingProfileRecord?
+            if let matterID = record.matterID {
+                profile = self.profile(for: matterID, cache: &profileCache)
+            } else {
+                profile = nil
+            }
             return BillingLine(
                 clientID: matter?.clientID,
                 lawFirmMatterID: matter?.internalMatterID,

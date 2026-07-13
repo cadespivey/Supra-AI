@@ -7,7 +7,7 @@ import SupraStore
 /// than a convention that can be accidentally bypassed.
 @MainActor
 public protocol BackupDestination {
-    func withAccess<T>(_ operation: (URL) async throws -> T) async throws -> T
+    func withAccess<T: Sendable>(_ operation: (URL) async throws -> T) async throws -> T
 }
 
 public enum BackupDestinationError: Error, Equatable, LocalizedError {
@@ -38,7 +38,7 @@ public struct SecurityScopedBackupDestination: BackupDestination {
         self.bookmarkData = bookmarkData
     }
 
-    public func withAccess<T>(_ operation: (URL) async throws -> T) async throws -> T {
+    public func withAccess<T: Sendable>(_ operation: (URL) async throws -> T) async throws -> T {
         var isStale = false
         let url: URL
         do {

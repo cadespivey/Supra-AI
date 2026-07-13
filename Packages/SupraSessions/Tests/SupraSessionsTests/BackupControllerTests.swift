@@ -336,7 +336,7 @@ private final class FakeBackupDestination: BackupDestination {
         self.failure = failure
     }
 
-    func withAccess<T>(_ operation: (URL) async throws -> T) async throws -> T {
+    func withAccess<T: Sendable>(_ operation: (URL) async throws -> T) async throws -> T {
         if let failure { throw failure }
         accessCount += 1
         isAccessing = true
