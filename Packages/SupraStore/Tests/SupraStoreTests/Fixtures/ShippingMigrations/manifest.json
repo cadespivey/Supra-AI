@@ -12,5 +12,174 @@
     "v2.2.0",
     "latest-minus-one"
   ],
-  "fixtures": []
+  "migrationCatalogs": {
+    "v040": {
+      "extends": null,
+      "identifiers": [
+        "v001_create_app_settings",
+        "v002_create_models",
+        "v003_create_runtime_profiles",
+        "v004_create_chats",
+        "v005_create_messages",
+        "v006_create_generation_sessions",
+        "v007_create_message_variants",
+        "v008_create_diagnostic_events",
+        "v009_create_model_validation_runs",
+        "v010_create_model_validation_tests",
+        "v011_create_exported_reports",
+        "v012_create_matters",
+        "v013_enrich_matters",
+        "v014_create_research_sessions",
+        "v015_create_network_requests",
+        "v016_create_research_queries",
+        "v017_create_research_results",
+        "v018_create_authorities",
+        "v019_create_structured_outputs",
+        "v020_create_output_versions",
+        "v021_create_audit_events_phase2",
+        "v022_create_document_intelligence_settings",
+        "v023_create_document_blobs",
+        "v024_create_document_folders",
+        "v025_create_matter_documents",
+        "v026_create_document_tags",
+        "v027_create_document_tag_assignments",
+        "v028_create_document_pages_parts",
+        "v029_create_document_chunks",
+        "v030_create_document_chunk_fts",
+        "v031_create_document_embedding_models",
+        "v032_create_document_chunk_embeddings",
+        "v033_create_document_import_batches",
+        "v034_create_document_processing_jobs",
+        "v035_create_document_source_sets",
+        "v036_create_document_output_sources",
+        "v037_create_document_exports",
+        "v038_add_matter_information_fields",
+        "v039_add_document_classification_metadata",
+        "v040_add_authority_soft_delete"
+      ]
+    },
+    "v048": {
+      "extends": "v040",
+      "identifiers": [
+        "v041_create_scratch_pad_days",
+        "v042_create_scratch_pad_entries",
+        "v043_create_scratch_pad_attachments",
+        "v044_create_billing_drafts",
+        "v045_create_billing_line_items",
+        "v046_create_matter_billing_profiles",
+        "v047_add_matter_ledes_fields",
+        "v048_add_billing_narrative_terminal"
+      ]
+    },
+    "v051": {
+      "extends": "v048",
+      "identifiers": [
+        "v049_create_message_citations",
+        "v050_add_source_set_retrieval_depth",
+        "v051_add_authority_opinion_text"
+      ]
+    },
+    "v052": {
+      "extends": "v051",
+      "identifiers": [
+        "v052_add_authority_case_summary"
+      ]
+    },
+    "v054": {
+      "extends": "v052",
+      "identifiers": [
+        "v053_add_matter_sort_order",
+        "v054_add_matter_pinned_at"
+      ]
+    },
+    "v056": {
+      "extends": "v054",
+      "identifiers": [
+        "v055_add_output_verification_provenance",
+        "v056_add_document_blob_integrity"
+      ]
+    }
+  },
+  "fixtures": [
+    {
+      "seedVersion": "v1.4.1",
+      "sourceRef": "v1.4.1",
+      "sourceCommitSHA": "b664db0930e0476f3890aea38de3b2561f5acc2c",
+      "fileName": "v1-4-1.sqlite.gz",
+      "compressedSHA256": "6e92b8d4697c17203c8df868686cbe2d316d49d1ea6864cce95cada70f69e0fd",
+      "databaseSHA256": "2c4791df424a095e12685b761718214ce2c47ded7241991f6c04473ed2bbfe94",
+      "migrationCatalog": "v040",
+      "syntheticData": true
+    },
+    {
+      "seedVersion": "v1.5.2",
+      "sourceRef": "v1.5.2",
+      "sourceCommitSHA": "583d18e5ad8770525c23bea3c39e476f4575fa92",
+      "fileName": "v1-5-2.sqlite.gz",
+      "compressedSHA256": "0bb928fa79f2caa0e890b5496bf4e309d5725a059a5603fd6f6081f09d6626e4",
+      "databaseSHA256": "b9f3f8160d2014d32140ea874764cc608b31a95741edc6222877860b7243da56",
+      "migrationCatalog": "v048",
+      "syntheticData": true
+    },
+    {
+      "seedVersion": "v1.8.0",
+      "sourceRef": "v1.8.0",
+      "sourceCommitSHA": "ecc5c98b2db27959537626e5d197b90b307d23e8",
+      "fileName": "v1-8-0.sqlite.gz",
+      "compressedSHA256": "569c5a7a4a59219168fe3c4fca111ca8c6f3affe2bd85c4bdc1a5f6ab7e006e5",
+      "databaseSHA256": "29033f37360bc0a7aaeb2f74529f6f24782241f52f30cbe44baa6f0b7bf73cb7",
+      "migrationCatalog": "v048",
+      "syntheticData": true
+    },
+    {
+      "seedVersion": "v2.0.0",
+      "sourceRef": "v2.0.0",
+      "sourceCommitSHA": "4951c4253a6de840447aa433a646dbf8bff05980",
+      "fileName": "v2-0-0.sqlite.gz",
+      "compressedSHA256": "dc7c8679f9a09e69d05f32f4aa84270343540a07dea8df9e0a76d6c1c72acdc0",
+      "databaseSHA256": "2e9c7deb99754c3b69e1953bee0f136e23b005374b48b4cf2e9b7fb22659a8f9",
+      "migrationCatalog": "v051",
+      "syntheticData": true
+    },
+    {
+      "seedVersion": "v2.1.0",
+      "sourceRef": "v2.1.0",
+      "sourceCommitSHA": "c21cff69d7268a21724853cad4396bb0d8678a84",
+      "fileName": "v2-1-0.sqlite.gz",
+      "compressedSHA256": "eb0a365c82701f8e61c9acf544871149e417221b6df9f4e3a19b39b56b883695",
+      "databaseSHA256": "a0efd992f4466144ba1e40b3ba3a2dc188f199a98804ccfab97422902ba0c5af",
+      "migrationCatalog": "v052",
+      "syntheticData": true
+    },
+    {
+      "seedVersion": "v2.1.3",
+      "sourceRef": "v2.1.3",
+      "sourceCommitSHA": "67f8707fcd3d2e6c151b244919f2a065ce1ab5ff",
+      "fileName": "v2-1-3.sqlite.gz",
+      "compressedSHA256": "dd036a8ec47e0a57cab18d81ba8634fa8e8d63dcee0672d6d19e0c0c02aad605",
+      "databaseSHA256": "1f8b6151f23fe445ada00391ab404633f9c0ee0694021e675ee44487953afbec",
+      "migrationCatalog": "v054",
+      "syntheticData": true
+    },
+    {
+      "seedVersion": "v2.2.0",
+      "sourceRef": "v2.2.0",
+      "sourceCommitSHA": "4c2a8ff21d5765751651a82129304f1bc6257029",
+      "fileName": "v2-2-0.sqlite.gz",
+      "compressedSHA256": "308b407e4ce0b8f4615a1a34145c5cc972eab4c18ccbb5ef73002cadf529e1ab",
+      "databaseSHA256": "9fbcac8b4bf9e92ea14ebb2dc9a9de11304b80b3be7082874254229575233438",
+      "migrationCatalog": "v054",
+      "syntheticData": true
+    },
+    {
+      "seedVersion": "latest-minus-one",
+      "sourceRef": "63cf63f32a78aa76eb2edd13ab5a53119fcc7616",
+      "sourceCommitSHA": "63cf63f32a78aa76eb2edd13ab5a53119fcc7616",
+      "fileName": "latest-minus-one.sqlite.gz",
+      "compressedSHA256": "02e7ddee3e2e955858ae97bef82bd466cb55a9f7c435f9ac5ccd05891243b103",
+      "databaseSHA256": "e1897158e662d931af849a2dd5884dc4372bdcbd4424082791e19506a11deccf",
+      "migrationCatalog": "v056",
+      "syntheticData": true
+    }
+  ]
 }

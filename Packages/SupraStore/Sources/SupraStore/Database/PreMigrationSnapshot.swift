@@ -48,6 +48,18 @@ public enum PreMigrationSnapshot {
         try? FileManager.default.removeItem(at: destination)
         try queue.vacuum(into: destination.path)
 
+        // Do not allow schema mutation to begin until the rollback point can be
+        // opened and SQLite itself confirms it is internally consistent.
+        let snapshotQueue = try DatabaseQueue(path: destination.path)
+        let isValid = try snapshotQueue.read { db in
+            try String.fetchOne(db, sql: "PRAGMA integrity_check") == "ok"
+                && Int.fetchOne(db, sql: "SELECT COUNT(*) FROM pragma_foreign_key_check") == 0
+        }
+        guard isValid else {
+            try? FileManager.default.removeItem(at: destination)
+            throw PreMigrationSnapshotError.validationFailed
+        }
+
         prune(in: snapshotDirectory, keep: keep)
         return destination
     }
@@ -82,4 +94,8 @@ public enum PreMigrationSnapshot {
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
         return formatter
     }()
+}
+
+public enum PreMigrationSnapshotError: Error {
+    case validationFailed
 }

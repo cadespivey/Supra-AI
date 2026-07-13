@@ -1,3 +1,4 @@
+import AppKit
 import SupraCore
 import SupraSessions
 import SwiftUI
@@ -20,7 +21,10 @@ struct RootView: View {
             // survives a window close/reopen while the process keeps running — the
             // splash then shows only on a true cold launch, not every Dock re-open.
             if !environment.isShowingSplash {
-                if environment.shouldShowOnboarding {
+                if let recoveryState = environment.databaseRecoveryState {
+                    DatabaseRecoveryView(state: recoveryState)
+                        .transition(.opacity)
+                } else if environment.shouldShowOnboarding {
                     FirstRunOnboardingView(
                         library: environment.modelLibrary,
                         downloader: environment.modelDownloadController,
@@ -67,6 +71,44 @@ struct RootView: View {
         let drafts = summary.pendingByKind[.legacyDraftArtifact, default: 0]
         let billing = summary.pendingByKind[.multiMatterBillingDraft, default: 0]
         return "A security update changed how generated work is verified. \(outputs) saved output(s), \(drafts) draft artifact(s), and \(billing) multi-matter billing draft(s) need review. Nothing was deleted. Affected screens identify the item and provide reverify, regenerate, or confirmation actions."
+    }
+}
+
+private struct DatabaseRecoveryView: View {
+    let state: DatabaseRecoveryState
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "externaldrive.badge.exclamationmark")
+                .font(.system(size: 42, weight: .semibold))
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            Text(state.title)
+                .font(.title2.weight(.semibold))
+            Text(state.message)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 620)
+
+            HStack(spacing: 12) {
+                if let snapshotURL = state.snapshotURL {
+                    Button("Show Recovery Snapshot") {
+                        NSWorkspace.shared.activateFileViewerSelecting([snapshotURL])
+                    }
+                    .accessibilityHint("Opens Finder with the verified pre-upgrade snapshot selected.")
+                }
+                Button("Quit Without Changes") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .keyboardShortcut(.cancelAction)
+                .accessibilityHint("Quits without allowing new work to be saved to temporary storage.")
+            }
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Database recovery required")
     }
 }
 

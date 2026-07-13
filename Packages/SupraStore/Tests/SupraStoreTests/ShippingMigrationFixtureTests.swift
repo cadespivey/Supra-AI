@@ -4,6 +4,7 @@ import GRDB
 @testable import SupraStore
 import XCTest
 
+@MainActor
 final class ShippingMigrationFixtureTests: XCTestCase {
     private static let supportedVersions = [
         "v1.4.1", "v1.5.2", "v1.8.0", "v2.0.0",
@@ -19,7 +20,9 @@ final class ShippingMigrationFixtureTests: XCTestCase {
         XCTAssertTrue(manifest.syntheticDataDeclaration.contains("synthetic"))
         XCTAssertTrue(manifest.fixtures.allSatisfy(\.syntheticData))
         XCTAssertTrue(manifest.fixtures.allSatisfy { $0.sourceCommitSHA.count == 40 })
-        XCTAssertTrue(manifest.fixtures.allSatisfy { !$0.schemaMigrationIdentifiers.isEmpty })
+        for fixture in manifest.fixtures {
+            XCTAssertFalse(try manifest.migrationIdentifiers(for: fixture).isEmpty)
+        }
     }
 
     func testACRMIG002EveryAuthenticatedShippingFixtureUpgradesAndRemainsUsable() throws {
@@ -35,7 +38,7 @@ final class ShippingMigrationFixtureTests: XCTestCase {
                 let seedQueue = try DatabaseQueue(path: databaseURL.path)
                 try seedQueue.read { db in
                     XCTAssertEqual(try String.fetchOne(db, sql: "PRAGMA integrity_check"), "ok")
-                    XCTAssertEqual(try appliedMigrations(db), fixture.schemaMigrationIdentifiers)
+                    XCTAssertEqual(try appliedMigrations(db), try manifest.migrationIdentifiers(for: fixture))
                     XCTAssertEqual(try fixtureSeedVersion(db), fixture.seedVersion)
                 }
 
@@ -47,7 +50,11 @@ final class ShippingMigrationFixtureTests: XCTestCase {
                 ).filter { $0.pathExtension == "sqlite" }
                 XCTAssertEqual(snapshots.count, 1, "\(fixture.seedVersion) must capture one pre-upgrade snapshot")
                 try assertHealthyCurrentStore(store, seedVersion: fixture.seedVersion)
-                try assertHealthySnapshot(snapshots[0], fixture: fixture)
+                try assertHealthySnapshot(
+                    snapshots[0],
+                    fixture: fixture,
+                    expectedMigrations: try manifest.migrationIdentifiers(for: fixture)
+                )
 
                 let snapshotsBeforeSecondOpen = snapshots.count
                 let reopened = try SupraStore(url: databaseURL)
@@ -72,30 +79,34 @@ final class ShippingMigrationFixtureTests: XCTestCase {
     }
 
     func testACRMIG004SnapshotFailureBlocksSchemaMutation() throws {
-        let directory = try temporaryDirectory(prefix: "ACR-MIG-snapshot-failure-")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databaseURL = directory.appendingPathComponent("SupraAI.sqlite")
-        let oldMigrator = testMigrator(includeFailingUpgrade: false)
-        let oldQueue = try DatabaseQueue(path: databaseURL.path)
-        try oldMigrator.migrate(oldQueue)
-        try oldQueue.write { db in try db.execute(sql: "INSERT INTO seed (value) VALUES ('canary')") }
-
-        XCTAssertThrowsError(try SupraDatabase(
-            url: databaseURL,
-            migrator: testMigrator(includeFailingUpgrade: true),
-            snapshotDirectory: directory.appendingPathComponent("snapshots"),
-            snapshotCapture: { _, _, _ in throw SyntheticSnapshotFailure.noSpace }
-        )) { error in
-            guard case SupraDatabaseOpenError.snapshotFailed = error else {
-                return XCTFail("Expected typed snapshot failure, got \(error)")
+        for injectedFailure in SyntheticSnapshotFailure.allCases {
+            let directory = try temporaryDirectory(prefix: "ACR-MIG-snapshot-failure-")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let databaseURL = directory.appendingPathComponent("SupraAI.sqlite")
+            let oldMigrator = testMigrator(includeFailingUpgrade: false)
+            let oldQueue = try DatabaseQueue(path: databaseURL.path)
+            try oldMigrator.migrate(oldQueue)
+            try oldQueue.write { db in
+                try db.execute(sql: "INSERT INTO seed (value) VALUES ('canary')")
             }
-        }
 
-        let unchanged = try DatabaseQueue(path: databaseURL.path)
-        try unchanged.read { db in
-            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT value FROM seed"), "canary")
-            XCTAssertFalse(try db.tableExists("upgrade_marker"))
-            XCTAssertEqual(try appliedMigrations(db), ["m001_seed"])
+            XCTAssertThrowsError(try SupraDatabase(
+                url: databaseURL,
+                migrator: testMigrator(includeFailingUpgrade: true),
+                snapshotDirectory: directory.appendingPathComponent("snapshots"),
+                snapshotCapture: { _, _, _ in throw injectedFailure }
+            )) { error in
+                guard case SupraDatabaseOpenError.snapshotFailed = error else {
+                    return XCTFail("Expected typed snapshot failure for \(injectedFailure), got \(error)")
+                }
+            }
+
+            let unchanged = try DatabaseQueue(path: databaseURL.path)
+            try unchanged.read { db in
+                XCTAssertEqual(try String.fetchOne(db, sql: "SELECT value FROM seed"), "canary")
+                XCTAssertFalse(try db.tableExists("upgrade_marker"))
+                XCTAssertEqual(try appliedMigrations(db), ["m001_seed"])
+            }
         }
     }
 
@@ -113,7 +124,13 @@ final class ShippingMigrationFixtureTests: XCTestCase {
             url: databaseURL,
             migrator: testMigrator(includeFailingUpgrade: true),
             snapshotDirectory: directory.appendingPathComponent("snapshots"),
-            snapshotCapture: PreMigrationSnapshot.captureIfUpgrading
+            snapshotCapture: { databaseURL, migrator, snapshotDirectory in
+                try PreMigrationSnapshot.captureIfUpgrading(
+                    databaseURL: databaseURL,
+                    migrator: migrator,
+                    snapshotDirectory: snapshotDirectory
+                )
+            }
         )) { error in
             guard case let SupraDatabaseOpenError.migrationFailed(snapshot, _) = error else {
                 return XCTFail("Expected typed migration failure, got \(error)")
@@ -154,12 +171,16 @@ final class ShippingMigrationFixtureTests: XCTestCase {
         }
     }
 
-    private func assertHealthySnapshot(_ url: URL, fixture: ShippingFixture) throws {
+    private func assertHealthySnapshot(
+        _ url: URL,
+        fixture: ShippingFixture,
+        expectedMigrations: [String]
+    ) throws {
         let queue = try DatabaseQueue(path: url.path)
         try queue.read { db in
             XCTAssertEqual(try String.fetchOne(db, sql: "PRAGMA integrity_check"), "ok")
             XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM pragma_foreign_key_check"), 0)
-            XCTAssertEqual(try appliedMigrations(db), fixture.schemaMigrationIdentifiers)
+            XCTAssertEqual(try appliedMigrations(db), expectedMigrations)
             XCTAssertEqual(try fixtureSeedVersion(db), fixture.seedVersion)
         }
     }
@@ -261,7 +282,29 @@ private struct ShippingFixtureManifest: Decodable {
     let syntheticDataDeclaration: String
     let currentMigration: String
     let supportedVersions: [String]
+    let migrationCatalogs: [String: MigrationCatalog]
     let fixtures: [ShippingFixture]
+
+    func migrationIdentifiers(for fixture: ShippingFixture) throws -> [String] {
+        var result: [String] = []
+        var catalogName: String? = fixture.migrationCatalog
+        var visited = Set<String>()
+        var segments: [[String]] = []
+        while let name = catalogName {
+            guard visited.insert(name).inserted,
+                  let catalog = migrationCatalogs[name]
+            else { throw FixtureAuthenticationError.invalidMigrationCatalog }
+            segments.append(catalog.identifiers)
+            catalogName = catalog.extends
+        }
+        for segment in segments.reversed() { result.append(contentsOf: segment) }
+        return result
+    }
+}
+
+private struct MigrationCatalog: Decodable {
+    let extends: String?
+    let identifiers: [String]
 }
 
 private struct ShippingFixture: Decodable {
@@ -271,7 +314,7 @@ private struct ShippingFixture: Decodable {
     let fileName: String
     let compressedSHA256: String
     let databaseSHA256: String
-    let schemaMigrationIdentifiers: [String]
+    let migrationCatalog: String
     let syntheticData: Bool
 }
 
@@ -283,7 +326,12 @@ private enum FixtureAuthenticationError: Error, Equatable {
     case compressedDigestMismatch
     case databaseDigestMismatch
     case invalidGzip
+    case invalidMigrationCatalog
 }
 
-private enum SyntheticSnapshotFailure: Error { case noSpace }
+private enum SyntheticSnapshotFailure: Error, CaseIterable {
+    case noSpace
+    case permissionDenied
+    case validationFailed
+}
 private enum SyntheticMigrationFailure: Error { case interrupted }

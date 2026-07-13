@@ -1,32 +1,88 @@
 import Foundation
 import GRDB
 
+/// Typed launch failures that require an explicit recovery decision. The public
+/// description intentionally omits database and snapshot paths so it is safe to
+/// display or record without disclosing a user's home-directory layout.
+public enum SupraDatabaseOpenError: Error, LocalizedError {
+    case snapshotFailed(reason: String)
+    case migrationFailed(snapshotURL: URL?, reason: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .snapshotFailed:
+            return "Supra AI could not create a verified pre-upgrade database snapshot. The existing database was not changed."
+        case .migrationFailed:
+            return "Supra AI could not finish upgrading the database. The pre-upgrade snapshot remains available for recovery."
+        }
+    }
+
+    public var recoverySnapshotURL: URL? {
+        guard case let .migrationFailed(snapshotURL, _) = self else { return nil }
+        return snapshotURL
+    }
+}
+
 public final class SupraDatabase: @unchecked Sendable {
     public let writer: any DatabaseWriter
 
-    public init(writer: any DatabaseWriter) throws {
+    private init(writer: any DatabaseWriter, migrator: DatabaseMigrator) throws {
         self.writer = writer
-        try SupraMigrator.makeMigrator().migrate(writer)
+        try migrator.migrate(writer)
+    }
+
+    public convenience init(writer: any DatabaseWriter) throws {
+        try self.init(writer: writer, migrator: SupraMigrator.makeMigrator())
     }
 
     public convenience init(url: URL) throws {
-        // Safety net: before a genuine schema upgrade mutates an existing on-disk
-        // database, capture a consistent rollback snapshot. Best-effort — a snapshot
-        // failure (e.g. no disk space) must never stop the app from launching, and a
-        // fresh/first-create or up-to-date database is a no-op. In-memory stores never
-        // reach this path.
-        try? PreMigrationSnapshot.captureIfUpgrading(
-            databaseURL: url,
+        try self.init(
+            url: url,
             migrator: SupraMigrator.makeMigrator(),
             snapshotDirectory: url.deletingLastPathComponent()
-                .appendingPathComponent("PreMigrationSnapshots", isDirectory: true)
+                .appendingPathComponent("PreMigrationSnapshots", isDirectory: true),
+            snapshotCapture: { databaseURL, migrator, snapshotDirectory in
+                try PreMigrationSnapshot.captureIfUpgrading(
+                    databaseURL: databaseURL,
+                    migrator: migrator,
+                    snapshotDirectory: snapshotDirectory
+                )
+            }
         )
+    }
+
+    /// Internal seam used by migration fault tests. Production callers use
+    /// `init(url:)`, which supplies the shipping migrator and snapshotter.
+    convenience init(
+        url: URL,
+        migrator: DatabaseMigrator,
+        snapshotDirectory: URL,
+        snapshotCapture: (
+            _ databaseURL: URL,
+            _ migrator: DatabaseMigrator,
+            _ snapshotDirectory: URL
+        ) throws -> URL?
+    ) throws {
+        let snapshotURL: URL?
+        do {
+            snapshotURL = try snapshotCapture(url, migrator, snapshotDirectory)
+        } catch {
+            throw SupraDatabaseOpenError.snapshotFailed(reason: Self.safeFailureReason(error))
+        }
+
         var configuration = Configuration()
         configuration.prepareDatabase { db in
             try db.execute(sql: "PRAGMA foreign_keys = ON")
         }
         let queue = try DatabaseQueue(path: url.path, configuration: configuration)
-        try self.init(writer: queue)
+        do {
+            try self.init(writer: queue, migrator: migrator)
+        } catch {
+            throw SupraDatabaseOpenError.migrationFailed(
+                snapshotURL: snapshotURL,
+                reason: Self.safeFailureReason(error)
+            )
+        }
     }
 
     /// An in-memory database (migrations applied). Used as the app's absolute
@@ -59,4 +115,8 @@ public final class SupraDatabase: @unchecked Sendable {
         try SupraMigrator.makeMigrator().migrate(writer)
     }
     #endif
+
+    private static func safeFailureReason(_ error: Error) -> String {
+        String(reflecting: type(of: error))
+    }
 }

@@ -11,6 +11,32 @@ import SupraRuntimeInterface
 import SupraSessions
 import SupraStore
 
+struct DatabaseRecoveryState: Sendable {
+    enum Failure: Sendable {
+        case snapshot
+        case migration
+    }
+
+    let failure: Failure
+    let snapshotURL: URL?
+
+    var title: String {
+        switch failure {
+        case .snapshot: "Database upgrade paused"
+        case .migration: "Database recovery required"
+        }
+    }
+
+    var message: String {
+        switch failure {
+        case .snapshot:
+            "Supra AI could not create and verify the required pre-upgrade snapshot. Your existing database was not changed. Check available disk space and Application Support permissions, then quit and relaunch."
+        case .migration:
+            "Supra AI could not complete the database upgrade. New work is disabled so it cannot be written to temporary storage. Your existing database and the verified pre-upgrade snapshot remain available for recovery."
+        }
+    }
+}
+
 @MainActor
 final class AppEnvironment: ObservableObject {
     @Published var runtimeServiceState: RuntimeServiceState = .disconnected
@@ -19,6 +45,11 @@ final class AppEnvironment: ObservableObject {
     /// throwaway temporary database — surfaced as a warning so the user knows their
     /// data is not being persisted.
     @Published private(set) var usingFallbackStore = false
+    /// A migration-specific open failure is blocking, not a silent temporary-store
+    /// degradation. RootView replaces the entire working shell with recovery choices
+    /// while this value is present, so durable-looking work cannot be created in the
+    /// fallback store.
+    @Published private(set) var databaseRecoveryState: DatabaseRecoveryState?
     /// True on a fresh first launch (no models yet, onboarding never completed) — gates
     /// the first-run model-download flow. Set in `bootstrap()`; cleared once the user
     /// finishes or skips onboarding. Always false under UI tests.
@@ -80,6 +111,7 @@ final class AppEnvironment: ObservableObject {
         let tokenStore = APIKeyStoreComposition.live()
         self.store = store
         self.usingFallbackStore = storeResult.isFallback
+        self.databaseRecoveryState = storeResult.recoveryState
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
         self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
@@ -776,18 +808,42 @@ final class AppEnvironment: ObservableObject {
     /// Opens the on-disk store, falling back to a temporary store so the app still
     /// launches if the Application Support database cannot be created. `isFallback`
     /// is true for that degraded last-resort store (not for the UI-test store).
-    private static func makeStore() -> (store: SupraStore, isFallback: Bool) {
+    private static func makeStore() -> (
+        store: SupraStore,
+        isFallback: Bool,
+        recoveryState: DatabaseRecoveryState?
+    ) {
         if isUITestMode || isDemoMode {
             // Fresh, throwaway store per launch so UI tests / demo screenshots are
             // deterministic and isolated from the user's real Application Support
             // database.
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("SupraAI-UITest-\(UUID().uuidString).sqlite")
-            if let store = try? SupraStore(url: url) { return (store, false) }
+            if let store = try? SupraStore(url: url) { return (store, false, nil) }
         }
-        if let store = try? SupraStore.openAppSupportStore() {
-            return (store, false)
+        do {
+            return (try SupraStore.openAppSupportStore(), false, nil)
+        } catch let error as SupraDatabaseOpenError {
+            let recoveryState: DatabaseRecoveryState
+            switch error {
+            case .snapshotFailed:
+                recoveryState = DatabaseRecoveryState(failure: .snapshot, snapshotURL: nil)
+            case let .migrationFailed(snapshotURL, _):
+                recoveryState = DatabaseRecoveryState(
+                    failure: .migration,
+                    snapshotURL: snapshotURL
+                )
+            }
+            return (makeFallbackStore(), true, recoveryState)
+        } catch {
+            // Non-migration open errors retain the existing visibly degraded mode.
+            // Migration failures never reach this path: they are typed above and
+            // replace the work surface with the blocking recovery UI.
         }
+        return (makeFallbackStore(), true, nil)
+    }
+
+    private static func makeFallbackStore() -> SupraStore {
         // Unique-named on-disk fallback so a corrupt/locked leftover fallback file
         // from a previous crash can't doom every subsequent launch. Prune stale
         // fallback files first since nothing persists across launches in this path.
@@ -795,14 +851,14 @@ final class AppEnvironment: ObservableObject {
         let fallbackURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SupraAI-fallback-\(UUID().uuidString).sqlite")
         if let store = try? SupraStore(url: fallbackURL) {
-            return (store, true)
+            return store
         }
         // Absolute last resort: an in-memory store so the app still launches
         // (degraded — nothing persists) instead of crashing on a broken disk.
         if let store = try? SupraStore.inMemory() {
-            return (store, true)
+            return store
         }
-        return (unavailableStore(), true)
+        return unavailableStore()
     }
 
     /// Removes leftover fallback databases (and their -wal/-shm sidecars) from the
