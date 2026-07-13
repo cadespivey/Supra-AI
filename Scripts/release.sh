@@ -35,6 +35,8 @@ release_validate_sha "$expected_sha"
 [[ "${SUPRA_RELEASE_TESTING:-0}" != '1' ]] \
   || release_die 'the production release entrypoint cannot run in mock-testing mode'
 release_require_protected_environment
+[[ "${SUPRA_RELEASE_ISOLATED_RUNNER:-0}" == '1' ]] \
+  || release_die 'signed release qualification requires the dedicated isolated release runner'
 
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
 team_id="${SUPRA_RELEASE_TEAM_ID:-2DP657YB3K}"

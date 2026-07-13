@@ -47,6 +47,11 @@ rollback_workflow="${repo_root}/.github/workflows/emergency-release-rollback.yml
 if [[ -f "$release_workflow" ]]; then
   grep -Fq 'environment: production-release' "$release_workflow" \
     || fail 'release workflow is not bound to production-release'
+  grep -Fq 'runs-on: [self-hosted, macOS, ARM64, supra-release, supra-release-isolated]' \
+    "$release_workflow" \
+    || fail 'release workflow is not bound to the isolated release runner'
+  grep -Fq 'SUPRA_RELEASE_ISOLATED_RUNNER: "1"' "$release_workflow" \
+    || fail 'release workflow does not attest the isolated release runner'
   grep -Fq 'Scripts/release.sh' "$release_workflow" || fail 'release workflow omits the protected entrypoint'
   grep -Fq -- '--expected-sha' "$release_workflow" || fail 'release workflow is not bound to an expected source SHA'
   grep -Fq -- '--ci-run-id' "$release_workflow" || fail 'release workflow is not bound to protected CI evidence'
@@ -56,6 +61,11 @@ fi
 if [[ -f "$rehearsal_workflow" ]]; then
   grep -Fq 'environment: production-release' "$rehearsal_workflow" \
     || fail 'signed rehearsal is not bound to production-release'
+  grep -Fq 'runs-on: [self-hosted, macOS, ARM64, supra-release, supra-release-isolated]' \
+    "$rehearsal_workflow" \
+    || fail 'signed rehearsal is not bound to the isolated release runner'
+  grep -Fq 'SUPRA_RELEASE_ISOLATED_RUNNER: "1"' "$rehearsal_workflow" \
+    || fail 'signed rehearsal does not attest the isolated release runner'
   grep -Fq -- '--no-publish' "$rehearsal_workflow" \
     || fail 'signed rehearsal does not explicitly disable publication'
 fi
@@ -91,6 +101,8 @@ if [[ -f "$release_script" ]]; then
   for call in release-preflight.sh verify-release-artifacts.sh publish-release-transaction.sh; do
     grep -Fq "$call" "$release_script" || fail "release entrypoint omits required stage: ${call}"
   done
+  grep -Fq 'SUPRA_RELEASE_ISOLATED_RUNNER' "$release_script" \
+    || fail 'release entrypoint does not require the isolated release runner'
   grep -Fq 'no GitHub release, tag, upload, appcast, push, or deployment was attempted' "$release_script" \
     || fail 'signed rehearsal has no explicit non-publication terminal state'
 fi

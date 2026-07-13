@@ -46,12 +46,34 @@ require the resulting Code Owner review.
 
 `production-release` must require a reviewer who did not author the source change. It is the
 only environment with access to the Developer ID identity, notarization Keychain profile,
-Sparkle signing key, manifest-signing identity, signed model/XPC smoke driver, and an identity
-that can create tags/releases and appcast PRs. PR CI and scheduled security jobs receive none
-of those credentials. `SUPRA_RELEASE_GITHUB_TOKEN` belongs to the dedicated release identity,
-is scoped to this repository, and is stored only in this environment. Do not substitute the
-workflow's automatic `GITHUB_TOKEN`: GitHub suppresses recursive workflow runs for changes it
-creates, which would prevent the appcast PR from receiving its required checks.
+Sparkle signing key, manifest-signing identity, protected release-model location, and an
+identity that can create tags/releases and appcast PRs. The signed model/XPC smoke driver is
+repository-owned reviewed code, not a secret or an operator-supplied override. PR CI and
+scheduled security jobs receive none of the release credentials or private model resources.
+`SUPRA_RELEASE_GITHUB_TOKEN` belongs to the dedicated release identity, is scoped to this
+repository, and is stored only in this environment. Do not substitute the workflow's automatic
+`GITHUB_TOKEN`: GitHub suppresses recursive workflow runs for changes it creates, which would
+prevent the appcast PR from receiving its required checks.
+
+## Mandatory isolated release runner
+
+Signed release qualification and signed rehearsal must run only on a dedicated, ephemeral
+Apple Silicon runner carrying both the `supra-release` and `supra-release-isolated` labels.
+The runner must be freshly provisioned, or securely wiped to an equivalent baseline, for one
+approved release job and destroyed or wiped immediately afterward. It must use a unique,
+noninteractive release UID with no interactive login, concurrent job, background service, or
+untrusted same-UID process. Never reuse this runner for pull requests, ordinary CI, developer
+work, or multiple concurrent release jobs. Mount the protected model directory only for the
+approved job and remove access during teardown.
+
+This isolation is part of the signed-smoke security boundary, not merely an operations
+preference. The runtime service copies the authorized model into a private, verified snapshot,
+but MLX still opens model files by pathname. Snapshot verification alone cannot defeat a
+hostile same-UID process that mutates and restores those bytes during the load interval. The
+workflow label selects the controlled runner; `SUPRA_RELEASE_ISOLATED_RUNNER=1` makes the
+release entrypoint fail closed if that boundary is not explicitly attested. The flag is only
+an assertion and does not replace runner provisioning, single-tenancy, teardown, or protected
+environment review.
 
 The environment executes one of three manual workflows:
 

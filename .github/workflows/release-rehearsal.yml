@@ -31,12 +31,13 @@ concurrency:
 jobs:
   rehearse:
     name: Signed and notarized RC without publication
-    runs-on: [self-hosted, macOS, ARM64, supra-release]
+    runs-on: [self-hosted, macOS, ARM64, supra-release, supra-release-isolated]
     environment: production-release
     timeout-minutes: 180
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       SUPRA_PROTECTED_RELEASE_ENVIRONMENT: "1"
+      SUPRA_RELEASE_ISOLATED_RUNNER: "1"
       SUPRA_RELEASE_TEAM_ID: ${{ vars.SUPRA_RELEASE_TEAM_ID }}
       SIGN_IDENTITY: ${{ vars.SIGN_IDENTITY }}
       MANIFEST_SIGNING_IDENTITY: ${{ vars.MANIFEST_SIGNING_IDENTITY }}
