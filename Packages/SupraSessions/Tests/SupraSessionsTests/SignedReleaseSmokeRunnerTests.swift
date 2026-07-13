@@ -208,6 +208,7 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
             XCTAssertEqual(client.connectCallCount, 1, "\(malformed) must connect once")
             XCTAssertEqual(client.loadCallCount, 1, "\(malformed) must load once")
             XCTAssertEqual(client.generateCallCount, 1, "\(malformed) must generate once")
+            XCTAssertEqual(client.cancelCallCount, 1, "\(malformed) must cancel once")
             XCTAssertEqual(client.unloadCallCount, 1, "\(malformed) must unload once")
         }
     }
@@ -240,7 +241,37 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
         let error = await capturedError { try await runner.run() }
 
         XCTAssertNotNil(error)
-        XCTAssertEqual(client.calls, ["connect", "load", "generate", "unload"])
+        XCTAssertEqual(client.calls, ["connect", "load", "generate", "cancel", "unload"])
+        XCTAssertEqual(client.cancelRequests, client.generateRequests.map(\.generationID))
+        XCTAssertEqual(client.unloadCallCount, 1)
+    }
+
+    func testMalformedActiveStreamAwaitsCancellationBeforeUnload() async throws {
+        let fixture = try makeFixture()
+        let authorization = try authorize(fixture)
+        let client = SignedSmokeRuntimeClientFake(
+            stream: { request in
+                Self.stream(
+                    events: [
+                        Self.event(request, sequence: 1, type: .generationStarted),
+                        Self.event(request, sequence: 2, type: .queued),
+                    ]
+                )
+            },
+            unloadRequiresGenerationQuiescence: true
+        )
+        let runner = SignedReleaseSmokeRunner(
+            runtimeClient: client,
+            authorization: authorization,
+            metadata: metadata
+        )
+
+        let error = await capturedError { try await runner.run() }
+
+        XCTAssertNotNil(error)
+        XCTAssertEqual(client.calls, ["connect", "load", "generate", "cancel", "unload"])
+        XCTAssertEqual(client.cancelCallCount, 1)
+        XCTAssertEqual(client.cancelRequests, client.generateRequests.map(\.generationID))
         XCTAssertEqual(client.unloadCallCount, 1)
     }
 
@@ -755,6 +786,8 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
         var calls: [String] = []
         var loadRequests: [LoadModelRequest] = []
         var generateRequests: [GenerateRequest] = []
+        var cancelRequests: [GenerationID] = []
+        var activeGenerationID: GenerationID?
     }
 
     private let lock = NSLock()
@@ -763,6 +796,7 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
     private let load: Load
     private let stream: Stream
     private let unload: Unload
+    private let unloadRequiresGenerationQuiescence: Bool
 
     init(
         connect: @escaping Connect = {},
@@ -774,12 +808,14 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
             )
         },
         stream: @escaping Stream,
-        unload: @escaping Unload = { UnloadModelResponse(status: .unloaded) }
+        unload: @escaping Unload = { UnloadModelResponse(status: .unloaded) },
+        unloadRequiresGenerationQuiescence: Bool = false
     ) {
         self.connectHandler = connect
         self.load = load
         self.stream = stream
         self.unload = unload
+        self.unloadRequiresGenerationQuiescence = unloadRequiresGenerationQuiescence
     }
 
     var calls: [String] {
@@ -810,6 +846,14 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
         lock.withLock { state.calls.filter { $0 == "unload" }.count }
     }
 
+    var cancelCallCount: Int {
+        lock.withLock { state.cancelRequests.count }
+    }
+
+    var cancelRequests: [GenerationID] {
+        lock.withLock { state.cancelRequests }
+    }
+
     func connect() async throws {
         lock.withLock { state.calls.append("connect") }
         try connectHandler()
@@ -829,12 +873,22 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
         lock.withLock {
             state.calls.append("generate")
             state.generateRequests.append(request)
+            state.activeGenerationID = request.generationID
         }
         return try stream(request)
     }
 
     func cancelGeneration(_ generationID: GenerationID) async throws -> CancelGenerationResponse {
-        CancelGenerationResponse(status: .notFound, generationID: generationID)
+        let status: CancelGenerationStatus = lock.withLock {
+            state.calls.append("cancel")
+            state.cancelRequests.append(generationID)
+            guard state.activeGenerationID == generationID else {
+                return .notFound
+            }
+            state.activeGenerationID = nil
+            return .cancelled
+        }
+        return CancelGenerationResponse(status: status, generationID: generationID)
     }
 
     func recentEvents(
@@ -845,7 +899,19 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
     }
 
     func unloadModel() async throws -> UnloadModelResponse {
-        lock.withLock { state.calls.append("unload") }
+        let generationIsActive = lock.withLock {
+            state.calls.append("unload")
+            return state.activeGenerationID != nil
+        }
+        if unloadRequiresGenerationQuiescence, generationIsActive {
+            return UnloadModelResponse(
+                status: .failed,
+                error: RuntimeError(
+                    category: "test",
+                    message: "generation-must-be-quiescent-before-unload"
+                )
+            )
+        }
         return try unload()
     }
 
