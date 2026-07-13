@@ -350,6 +350,49 @@ final class RuntimeModelSnapshotTests: XCTestCase {
         XCTAssertThrowsError(try snapshot.reverify())
     }
 
+    func testSourceRetainsAndRetriesFailedConstructionCleanup() throws {
+        let source = try runtimeModelSnapshotSource()
+
+        XCTAssertFalse(
+            source.contains("try? Self.removeOwnedRoot(privateRoot)"),
+            "failed construction cleanup must not discard its cleanup error and descriptors"
+        )
+        XCTAssertTrue(
+            source.contains("failedConstructionCleanupRegistry.retain(privateRoot)"),
+            "failed cleanup must retain authority to the private root for a later retry"
+        )
+        XCTAssertTrue(
+            source.contains("cleanupLogger.fault("),
+            "failed construction cleanup must emit a fault-level diagnostic"
+        )
+
+        let drain = try XCTUnwrap(
+            source.range(of: "try Self.drainFailedConstructionCleanups()")
+        )
+        let allocation = try XCTUnwrap(
+            source.range(of: "let privateRoot = try Self.makePrivateTemporaryRoot()")
+        )
+        XCTAssertLessThan(
+            drain.lowerBound,
+            allocation.lowerBound,
+            "pending cleanup must drain before another snapshot root is allocated"
+        )
+    }
+
+    func testSourceRejectsRecursiveCleanupAcrossDevices() throws {
+        let source = try runtimeModelSnapshotSource()
+
+        XCTAssertTrue(source.contains("case crossDeviceDirectory(String)"))
+        XCTAssertTrue(source.contains("rootDevice: dev_t"))
+        XCTAssertTrue(source.contains("rootDevice: rootStatus.st_dev"))
+        XCTAssertTrue(
+            source.contains("guard entryStatus.st_dev == rootDevice else")
+        )
+        XCTAssertTrue(
+            source.contains("rootDevice: rootDevice")
+        )
+    }
+
     func testDeinitRemovesOwnedPrivateRoot() throws {
         let declared = FixtureFile(
             path: "model.safetensors",
@@ -396,6 +439,18 @@ final class RuntimeModelSnapshotTests: XCTestCase {
             files: files,
             fingerprintSHA256: fingerprint
         )
+    }
+
+    private func runtimeModelSnapshotSource() throws -> String {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = packageRoot
+            .appendingPathComponent("Sources", isDirectory: true)
+            .appendingPathComponent("SupraRuntimeModelSecurity", isDirectory: true)
+            .appendingPathComponent("SupraRuntimeModelSecurity.swift")
+        return try String(contentsOf: sourceURL, encoding: .utf8)
     }
 
     private func canonicalFingerprint(
