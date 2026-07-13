@@ -102,7 +102,7 @@
       }
     },
     "signedRuntimeSmoke": {
-      "type": ["object", "null"]
+      "$ref": "signed-runtime-smoke-evidence.schema.json"
     }
   },
   "$defs": {

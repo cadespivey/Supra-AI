@@ -131,6 +131,11 @@ manifest_artifact() {
   local kind="$1" key="$2"
   jq -r --arg kind "$kind" --arg key "$key" '.artifacts[] | select(.kind == $kind) | .[$key]' "$manifest"
 }
+manifest_app_sha="$(manifest_artifact app sha256)"
+release_validate_digest "$manifest_app_sha"
+release_verify_embedded_smoke_attestation \
+  "$manifest" "$source_sha" "$manifest_app_sha" "$version" "$build"
+
 for pair in "zip:$zip" "dmg:$dmg"; do
   kind="${pair%%:*}"
   path="${pair#*:}"

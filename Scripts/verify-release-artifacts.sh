@@ -73,6 +73,11 @@ expected_artifact_value() {
   jq -r --arg kind "$kind" --arg key "$key" '.artifacts[] | select(.kind == $kind) | .[$key]' "$manifest"
 }
 
+manifest_app_sha="$(expected_artifact_value app sha256)"
+release_validate_digest "$manifest_app_sha"
+release_verify_embedded_smoke_attestation \
+  "$manifest" "$source_sha" "$manifest_app_sha" "$version" "$build"
+
 verify_file_manifest_entry() {
   local kind="$1" path="$2"
   local expected_name expected_sha expected_size actual_sha actual_size

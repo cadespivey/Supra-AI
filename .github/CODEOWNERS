@@ -8,6 +8,6 @@
 /Scripts/verify-product-claims.sh @cadespivey
 /Docs/Verified-Product-Claims.yml @cadespivey
 /Docs/Release-Protection.md @cadespivey
-/Docs/Schemas/release-preflight-manifest.schema.json @cadespivey
+/Docs/Schemas/ @cadespivey
 /SECURITY.md @cadespivey
 /website/app/privacy/ @cadespivey

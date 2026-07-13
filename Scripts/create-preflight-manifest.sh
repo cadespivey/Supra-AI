@@ -7,7 +7,7 @@ source "${root}/Scripts/lib/release-common.sh"
 
 usage() {
   printf '%s\n' \
-    'Usage: create-preflight-manifest.sh --source-manifest FILE --app APP --zip ZIP --dmg DMG --team-id TEAM --output FILE [--smoke-result FILE]' >&2
+    'Usage: create-preflight-manifest.sh --source-manifest FILE --app APP --zip ZIP --dmg DMG --team-id TEAM --smoke-result FILE --output FILE' >&2
   exit 2
 }
 
@@ -32,6 +32,8 @@ while (( $# > 0 )); do
 done
 
 [[ -f "$source_manifest" && -d "$app" && -f "$zip" && -f "$dmg" && -n "$output" ]] || usage
+[[ -f "$smoke_result" && ! -L "$smoke_result" ]] \
+  || release_die 'signed runtime smoke result is required'
 [[ "$team_id" =~ ^[A-Z0-9]{10}$ ]] || release_die 'invalid release Team ID'
 for command in jq shasum; do release_require_command "$command"; done
 
@@ -71,27 +73,20 @@ dmg_size="$(release_file_size "$dmg")"
 source_manifest_sha="$(release_sha256 "$source_manifest")"
 generated_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
-smoke_json='null'
-if [[ -n "$smoke_result" ]]; then
-  [[ -f "$smoke_result" ]] || release_die 'signed runtime smoke result is missing'
-  smoke_json="$(jq -c \
-    --arg sha256 "$(release_sha256 "$smoke_result")" \
-    '{
-      status: .status,
-      sourceSha: .sourceSha,
-      appTreeSHA256: .appTreeSHA256,
-      modelSHA256: .modelSHA256,
-      xpcBundleIdentifier: .xpcBundleIdentifier,
-      generatedTokens: .generatedTokens,
-      resultSHA256: $sha256
-    }' "$smoke_result")"
-  jq -e --arg source "$source_sha" --arg appSHA "$app_sha" '
-    .status == "passed" and .sourceSha == $source and .appTreeSHA256 == $appSHA and
-    (.modelSHA256 | test("^[0-9a-f]{64}$")) and
-    .xpcBundleIdentifier == "ai.supra.SupraAI.SupraRuntimeService" and
-    (.generatedTokens | type == "number" and . > 0)
-  ' <<<"$smoke_json" >/dev/null || release_die 'signed runtime smoke result does not match release bytes'
-fi
+smoke_model_sha="$(jq -r '.modelSHA256 // empty' "$smoke_result")"
+smoke_nonce="$(jq -r '.nonce // empty' "$smoke_result")"
+release_validate_digest "$smoke_model_sha"
+release_validate_digest "$smoke_nonce"
+bash "${root}/Scripts/verify-signed-runtime-smoke-result.sh" \
+  --result "$smoke_result" --source-sha "$source_sha" \
+  --app-sha "$app_sha" --model-sha "$smoke_model_sha" \
+  --version "$version" --build "$build" --nonce "$smoke_nonce" >/dev/null
+smoke_result_sha="$(jq -S -c . "$smoke_result" | shasum -a 256)"
+smoke_result_sha="${smoke_result_sha%% *}"
+release_validate_digest "$smoke_result_sha"
+smoke_json="$(jq -c \
+  --arg resultSHA256 "$smoke_result_sha" \
+  '. + {resultSHA256: $resultSHA256}' "$smoke_result")"
 
 mkdir -p "$(dirname "$output")"
 temporary_output="$(mktemp "$(dirname "$output")/.preflight-manifest.XXXXXX")"
@@ -139,6 +134,8 @@ jq -e '
   (.artifacts | map(.kind) | sort == ["app", "dmg", "zip"]) and
   (.artifacts | all(.[]; (.sha256 | test("^[0-9a-f]{64}$")) and .sizeBytes >= 0))
 ' "$temporary_output" >/dev/null || release_die 'generated preflight manifest is invalid'
+release_verify_embedded_smoke_attestation \
+  "$temporary_output" "$source_sha" "$app_sha" "$version" "$build"
 
 mv -f "$temporary_output" "$output"
 trap - EXIT

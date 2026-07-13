@@ -44,7 +44,13 @@ manifest_identity="${MANIFEST_SIGNING_IDENTITY:-$sign_identity}"
 sparkle_bin="${SPARKLE_BIN:?SPARKLE_BIN must identify the reviewed Sparkle tools}"
 sign_update="${sparkle_bin}/sign_update"
 smoke_model_sha="${SUPRA_RELEASE_SMOKE_MODEL_SHA256:?SUPRA_RELEASE_SMOKE_MODEL_SHA256 is required}"
+smoke_model_directory="${SUPRA_RELEASE_SMOKE_MODEL_DIRECTORY:?SUPRA_RELEASE_SMOKE_MODEL_DIRECTORY is required}"
 release_validate_digest "$smoke_model_sha"
+[[ "$smoke_model_directory" == /* && -d "$smoke_model_directory" \
+  && ! -L "$smoke_model_directory" ]] \
+  || release_die 'SUPRA_RELEASE_SMOKE_MODEL_DIRECTORY must be an absolute non-symlink directory'
+export SUPRA_RELEASE_SMOKE_MODEL_DIRECTORY="$smoke_model_directory"
+release_require_command openssl
 
 temporary_dir="$(mktemp -d)"
 trap 'rm -rf "$temporary_dir"' EXIT
@@ -113,21 +119,32 @@ xcrun stapler validate "$dmg"
 printf '%s\n' 'Packaging the exact stapled app bytes…'
 ditto -c -k --keepParent "$app" "$zip"
 
-# Create a preliminary manifest only to derive the stable signed-app tree hash
-# used by the real model/XPC smoke attestation. The final manifest is rebuilt
-# with that attestation and signed after the smoke passes.
-preliminary_manifest="${temporary_dir}/preliminary-manifest.json"
-bash "${root}/Scripts/create-preflight-manifest.sh" \
-  --source-manifest "$source_manifest" --app "$app" --zip "$zip" --dmg "$dmg" \
-  --team-id "$team_id" --output "$preliminary_manifest"
-app_sha="$(jq -r '.artifacts[] | select(.kind == "app") | .sha256' "$preliminary_manifest")"
+# Bind the smoke to the exact signed app tree before executing any app code.
+app_sha="$(release_directory_digest "$app")"
+release_validate_digest "$app_sha"
+smoke_nonce="$(openssl rand -hex 32)"
+[[ "$smoke_nonce" =~ ^[0-9a-f]{64}$ ]] \
+  || release_die 'unable to generate a fresh lowercase 64-hex smoke nonce'
 
 bash "${root}/Scripts/run-signed-release-smoke.sh" \
   --app "$app" --source-sha "$expected_sha" --app-sha "$app_sha" \
-  --model-sha "$smoke_model_sha" --output "$smoke_result"
+  --model-sha "$smoke_model_sha" --version "$version" \
+  --build "$build_number" --nonce "$smoke_nonce" --output "$smoke_result"
 bash "${root}/Scripts/verify-signed-runtime-smoke-result.sh" \
   --result "$smoke_result" --source-sha "$expected_sha" \
-  --app-sha "$app_sha" --model-sha "$smoke_model_sha"
+  --app-sha "$app_sha" --model-sha "$smoke_model_sha" \
+  --version "$version" --build "$build_number" --nonce "$smoke_nonce"
+
+# The smoke host must not bless mutations it caused. Recheck the app tree and
+# its nested code signatures before the final manifest is created and signed.
+post_smoke_app_sha="$(release_directory_digest "$app")"
+[[ "$post_smoke_app_sha" == "$app_sha" ]] \
+  || release_die 'signed app tree changed while running the release smoke'
+codesign --verify --deep --strict "$app" >/dev/null 2>&1 \
+  || release_die 'signed app signature changed while running the release smoke'
+post_smoke_xpc="${app}/Contents/XPCServices/SupraRuntimeService.xpc"
+codesign --verify --strict "$post_smoke_xpc" >/dev/null 2>&1 \
+  || release_die 'runtime service signature changed while running the release smoke'
 
 bash "${root}/Scripts/create-preflight-manifest.sh" \
   --source-manifest "$source_manifest" --app "$app" --zip "$zip" --dmg "$dmg" \

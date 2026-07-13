@@ -152,6 +152,112 @@ release_verify_cms_manifest() {
   fi
 }
 
+# Validate the content-free signed runtime smoke evidence embedded in a final
+# preflight manifest. Exact key sets mirror additionalProperties: false in the
+# reviewed schema and prevent generated text, prompts, model paths, or errors
+# from crossing the release-evidence boundary.
+release_verify_embedded_smoke_attestation() {
+  local manifest="$1"
+  local expected_source="$2"
+  local expected_app_sha="$3"
+  local expected_version="$4"
+  local expected_build="$5"
+  local recorded_result_sha
+  local reproduced_result_sha
+
+  jq -e \
+    --arg source "$expected_source" \
+    --arg appSHA "$expected_app_sha" \
+    --arg version "$expected_version" \
+    --arg build "$expected_build" '
+    def exact_keys($expected):
+      type == "object" and ((keys | sort) == ($expected | sort));
+    def git_sha:
+      type == "string" and test("^[0-9a-f]{40}$");
+    def sha256:
+      type == "string" and test("^[0-9a-f]{64}$");
+    def semantic_version:
+      type == "string" and
+      test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)([-+][0-9A-Za-z.-]+)?$");
+    def positive_build:
+      type == "string" and test("^[1-9][0-9]*$");
+    def nonnegative_integer:
+      type == "number" and floor == . and . >= 0;
+    def positive_number:
+      type == "number" and . > 0;
+
+    .signedRuntimeSmoke as $smoke |
+    ($smoke | exact_keys([
+      "schemaVersion", "status", "nonce", "sourceSha", "appTreeSHA256",
+      "modelSHA256", "appBundleIdentifier", "xpcBundleIdentifier",
+      "appVersion", "appBuild", "modelRepositoryID", "modelRevision",
+      "verification", "eventCounts", "generatedTokenCount", "timings",
+      "resultSHA256"
+    ])) and
+    $smoke.schemaVersion == 1 and
+    $smoke.status == "passed" and
+    ($smoke.nonce | sha256) and
+    ($smoke.sourceSha | git_sha) and
+    ($smoke.appTreeSHA256 | sha256) and
+    ($smoke.modelSHA256 | sha256) and
+    ($smoke.resultSHA256 | sha256) and
+    $smoke.appBundleIdentifier == "ai.supra.SupraAI" and
+    $smoke.xpcBundleIdentifier == "ai.supra.SupraAI.SupraRuntimeService" and
+    ($smoke.appVersion | semantic_version) and
+    ($smoke.appBuild | positive_build) and
+    ($smoke.modelRepositoryID | type == "string" and
+      test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+    ($smoke.modelRevision | git_sha) and
+    ($smoke.verification | exact_keys([
+      "xpcConnected", "modelLoaded", "generationStarted",
+      "generationCompleted", "modelUnloaded", "modelReverified"
+    ])) and
+    ($smoke.verification | all(.[]; . == true)) and
+    ($smoke.eventCounts | exact_keys([
+      "total", "generationStarted", "token", "metrics",
+      "generationCompleted", "generationFailed", "generationCancelled",
+      "reserved"
+    ])) and
+    ($smoke.eventCounts | all(.[];
+      type == "number" and floor == . and . >= 0)) and
+    $smoke.eventCounts.generationStarted == 1 and
+    $smoke.eventCounts.token > 0 and
+    $smoke.eventCounts.metrics == 1 and
+    $smoke.eventCounts.generationCompleted == 1 and
+    $smoke.eventCounts.generationFailed == 0 and
+    $smoke.eventCounts.generationCancelled == 0 and
+    $smoke.eventCounts.reserved == 0 and
+    $smoke.eventCounts.total == (
+      $smoke.eventCounts.generationStarted + $smoke.eventCounts.token +
+      $smoke.eventCounts.metrics + $smoke.eventCounts.generationCompleted +
+      $smoke.eventCounts.generationFailed +
+      $smoke.eventCounts.generationCancelled + $smoke.eventCounts.reserved
+    ) and
+    ($smoke.generatedTokenCount |
+      type == "number" and floor == . and . > 0) and
+    ($smoke.timings | exact_keys([
+      "loadTimeMs", "firstTokenLatencyMs", "tokensPerSecond"
+    ])) and
+    ($smoke.timings.loadTimeMs | nonnegative_integer) and
+    ($smoke.timings.firstTokenLatencyMs | nonnegative_integer) and
+    ($smoke.timings.tokensPerSecond | positive_number) and
+    $smoke.sourceSha == $source and
+    $smoke.appTreeSHA256 == $appSHA and
+    $smoke.appVersion == $version and
+    $smoke.appBuild == $build
+  ' "$manifest" >/dev/null \
+    || release_die 'signed runtime smoke evidence is missing, malformed, or does not match the release'
+
+  recorded_result_sha="$(jq -r '.signedRuntimeSmoke.resultSHA256' "$manifest")"
+  reproduced_result_sha="$(
+    jq -S -c '.signedRuntimeSmoke | del(.resultSHA256)' "$manifest" \
+      | shasum -a 256
+  )"
+  reproduced_result_sha="${reproduced_result_sha%% *}"
+  [[ "$reproduced_result_sha" == "$recorded_result_sha" ]] \
+    || release_die 'signed runtime smoke evidence digest is not reproducible'
+}
+
 release_load_git_signing_identity() {
   local repository_root="$1"
   RELEASE_GIT_NAME="${SUPRA_RELEASE_GIT_NAME:-$(git -C "$repository_root" config --get user.name 2>/dev/null || true)}"
