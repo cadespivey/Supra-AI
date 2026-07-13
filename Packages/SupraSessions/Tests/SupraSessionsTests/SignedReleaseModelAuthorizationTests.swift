@@ -101,6 +101,16 @@ final class SignedReleaseModelAuthorizationTests: XCTestCase {
         )
     }
 
+    func testAuthorizeRejectsHardLinkedArtifact() throws {
+        let fixture = try makeFixture()
+        try FileManager.default.linkItem(
+            at: fixture.modelDirectory.appendingPathComponent("model.safetensors"),
+            to: fixture.base.appendingPathComponent("outside-hard-link.safetensors")
+        )
+
+        XCTAssertThrowsError(try authorize(fixture))
+    }
+
     func testAuthorizeRejectsManifestAndArtifactMutation() throws {
         let manifestFixture = try makeFixture()
         try Data("replaced-manifest".utf8).write(to: manifestFixture.manifestURL)
