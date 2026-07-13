@@ -194,6 +194,59 @@ final class DocumentImportTests: XCTestCase {
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
     }
+
+    func testACRBLOB009ExtractionUsesVerifiedManagedBytesAfterSourceMutation() async throws {
+        // Expected RED: extraction currently reads the mutable original URL after hashing/copying it.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Managed Bytes Matter")
+        let source = sourceRoot.appendingPathComponent("mutable-source.txt")
+        let original = Data("ORIGINAL-CANARY-42".utf8)
+        let mutated = Data("MUTATED!-CANARY-42".utf8)
+        try original.write(to: source)
+        let storage = DocumentStorage(root: storageRoot) { stage in
+            if stage == .afterSourceReadChunk { try mutated.write(to: source) }
+        }
+        let service = DocumentImportService(store: store, storage: storage, ocr: nil)
+
+        let outcome = try await service.importSources([source], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let blob = try XCTUnwrap(store.documentLibrary.fetchBlob(id: document.blobID))
+        let managed = storage.url(forManagedRelativePath: blob.managedRelativePath)
+        XCTAssertEqual(try Data(contentsOf: managed), original)
+        XCTAssertEqual(blob.sha256, DocumentStorage.sha256Hex(of: original))
+        XCTAssertEqual(blob.byteSize, original.count)
+        XCTAssertEqual(blob.integrityStatus, DocumentBlobIntegrityStatus.verified.rawValue)
+        XCTAssertEqual(outcome.report.importedCount, 1)
+        XCTAssertEqual(try store.documentIndex.fetchParts(documentID: document.id).first?.normalizedText, "ORIGINAL-CANARY-42")
+        XCTAssertFalse(try store.documentIndex.fetchParts(documentID: document.id).contains { $0.normalizedText.contains("MUTATED!") })
+    }
+
+    func testACRBLOB010DatabaseFailureLeavesValidOrphanAndNoBlobRow() async throws {
+        // Expected RED: hash/copy/upsert ordering is not an explicit durable-orphan policy and is not reconciler-safe.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Database Failure Matter")
+        let source = sourceRoot.appendingPathComponent("database-failure.txt")
+        let bytes = Data("DATABASE-FAILURE-CANARY".utf8)
+        try bytes.write(to: source)
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER acr_blob_insert_failure
+                BEFORE INSERT ON document_blobs
+                BEGIN SELECT RAISE(FAIL, 'ACR-BLOB database canary'); END
+                """)
+        }
+        let storage = DocumentStorage(root: storageRoot)
+        let service = DocumentImportService(store: store, storage: storage, ocr: nil)
+
+        let outcome = try await service.importSources([source], matterID: matter.id)
+
+        let digest = DocumentStorage.sha256Hex(of: bytes)
+        let orphan = storage.blobURL(sha256: digest, fileExtension: "txt")
+        XCTAssertEqual(outcome.report.failedCount, 1)
+        XCTAssertNil(try store.documentLibrary.fetchBlob(sha256: digest))
+        XCTAssertEqual(try Data(contentsOf: orphan), bytes, "valid content-addressed orphan should survive for reconciliation")
+    }
 }
 
 private struct MockOCRService: DocumentOCRService {
