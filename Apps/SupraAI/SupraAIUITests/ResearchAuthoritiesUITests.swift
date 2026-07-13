@@ -176,6 +176,39 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         XCTAssertTrue(reverify.isHittable, "Warning repair action must be keyboard and pointer reachable")
     }
 
+    func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() throws {
+        let app = try launchApp(extraArguments: ["-uiTestRemediationWarnings"])
+        navigate(to: "scratchpad")
+
+        let billingTab = app.buttons["scratchpad.tab.billing"]
+        XCTAssertTrue(billingTab.waitForExistence(timeout: 10), "ScratchPad billing tab did not appear")
+        billingTab.click()
+
+        let warning = app.descendants(matching: .any)["billing.legacyReviewWarning"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 10), "Legacy billing warning was not shown")
+        XCTAssertEqual(warning.label, "Billing draft review required")
+        XCTAssertEqual(
+            warning.value as? String,
+            "Legacy multi-matter draft. Confirm every matter assignment and source entry before export."
+        )
+
+        let export = app.descendants(matching: .any)["billing.export"]
+        XCTAssertTrue(export.exists, "Unavailable billing export should remain discoverable")
+        XCTAssertFalse(export.isEnabled, "Migrated billing draft must not be exportable before review")
+        XCTAssertEqual(export.value as? String, "Unavailable until migrated matter assignments are reviewed")
+
+        let review = app.buttons["I Reviewed Assignments"]
+        XCTAssertTrue(review.exists)
+        XCTAssertTrue(review.isHittable, "Billing review action must be keyboard and pointer reachable")
+    }
+
+    private func navigate(to route: String) {
+        DistributedNotificationCenter.default().post(
+            name: .init("SupraDebugNav"),
+            object: "route \(route)"
+        )
+    }
+
     private func selectMatterTab(_ rawValue: String) throws {
         let tabCommandURL = try XCTUnwrap(
             tabCommandURL,
