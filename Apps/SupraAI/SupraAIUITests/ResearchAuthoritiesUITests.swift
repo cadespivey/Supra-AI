@@ -166,9 +166,16 @@ final class ResearchAuthoritiesUITests: XCTestCase {
             app.buttons["matterTab.Outputs"].waitForExistence(timeout: 10),
             "Outputs tab did not appear before navigation"
         )
-        let output = app.descendants(matching: .any)["output.row.Legacy Verification Fixture"]
+        let output = app.buttons["output.row.Legacy Verification Fixture"]
         XCTAssertTrue(output.waitForExistence(timeout: 10), "Legacy output fixture did not appear")
-        output.click()
+        XCTAssertTrue(output.isHittable, "Legacy output row must be pointer-reachable before navigation")
+        output.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+
+        // Expected RED before the navigation synchronization fix: the detail
+        // destination has no readiness identifier, so a missed/stalled push is
+        // misreported as a missing verification warning on stable Xcode.
+        let detail = app.descendants(matching: .any)["output.detail.Legacy Verification Fixture"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 10), "Legacy output detail did not finish navigating")
 
         let warning = app.descendants(matching: .any)["output.verificationWarning"]
         XCTAssertTrue(warning.waitForExistence(timeout: 10), "Legacy verification warning was not shown")
@@ -277,13 +284,17 @@ final class DraftingBlockedStateUITests: XCTestCase {
 
     func testBlockedDraftIsAnnouncedWithoutFileActions() {
         let app = XCUIApplication()
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-uiTestMode"]
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+        ]
         app.launch()
         app.activate()
-        if !app.windows.firstMatch.waitForExistence(timeout: 5) {
-            app.typeKey("n", modifierFlags: .command)
-            _ = app.windows.firstMatch.waitForExistence(timeout: 10)
-        }
+        XCTAssertTrue(
+            app.windows.firstMatch.waitForExistence(timeout: 10),
+            "UI-test window restoration reset did not publish a fresh WindowGroup"
+        )
 
         let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
         XCTAssertTrue(matter.waitForExistence(timeout: 20))
