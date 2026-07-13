@@ -32,6 +32,7 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
             "staleBookmarkRejected",
             "samePathReplacementRejected",
             "managedRootEscapeRejected",
+            "contentBindingVerified",
             "controlledModelLoaded",
             "streamCompletedOnce",
             "cancelExactlyOnce",

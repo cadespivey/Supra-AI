@@ -1,4 +1,5 @@
 #if DEBUG
+import CryptoKit
 import Foundation
 import SupraCore
 import SupraRuntimeClient
@@ -136,6 +137,7 @@ private struct RuntimeXPCIntegrationRunner {
         "staleBookmarkRejected",
         "samePathReplacementRejected",
         "managedRootEscapeRejected",
+        "contentBindingVerified",
         "controlledModelLoaded",
         "streamCompletedOnce",
         "cancelExactlyOnce",
@@ -293,7 +295,8 @@ private struct RuntimeXPCIntegrationRunner {
                 id: modelID,
                 path: fixture.model.path,
                 bookmark: fixture.modelBookmark,
-                root: fixture.root.path
+                root: fixture.root.path,
+                contentBinding: fixture.contentBinding
             )
         )
         let loadDetail = [load.error?.message, load.error?.technicalDetails]
@@ -302,6 +305,10 @@ private struct RuntimeXPCIntegrationRunner {
         try require(
             load.status == .loaded,
             "controlled lifecycle model did not load\(loadDetail.isEmpty ? "" : ": \(loadDetail)")"
+        )
+        try require(
+            load.verifiedModelSHA256 == fixture.contentBinding.fingerprintSHA256,
+            "hosted XPC did not attest the exact content-bound model snapshot"
         )
 
         let failedReplacement = try await client.loadModel(
@@ -682,6 +689,7 @@ private struct RuntimeXPCIntegrationRunner {
             "staleBookmarkRejected": true,
             "samePathReplacementRejected": true,
             "managedRootEscapeRejected": true,
+            "contentBindingVerified": true,
             "controlledModelLoaded": true,
             "streamCompletedOnce": true,
             "cancelExactlyOnce": true,
@@ -702,7 +710,8 @@ private struct RuntimeXPCIntegrationRunner {
         bookmark: Data?,
         root: String?,
         identity: ModelDirectoryIdentity? = nil,
-        includeCurrentIdentity: Bool = true
+        includeCurrentIdentity: Bool = true,
+        contentBinding: RuntimeModelContentBinding? = nil
     ) -> LoadModelRequest {
         LoadModelRequest(
             modelID: id,
@@ -712,7 +721,8 @@ private struct RuntimeXPCIntegrationRunner {
             managedRootPath: root,
             modelDirectoryIdentity: identity ?? (includeCurrentIdentity
                 ? ModelDirectoryIdentity(url: URL(fileURLWithPath: path, isDirectory: true))
-                : nil)
+                : nil),
+            contentBinding: contentBinding
         )
     }
 
@@ -784,6 +794,34 @@ private struct RuntimeXPCIntegrationRunner {
         try FileManager.default.createDirectory(at: recreatedModel, withIntermediateDirectories: true)
         try Self.markerData.write(to: recreatedModel.appendingPathComponent(Self.markerName), options: .atomic)
 
+        let markerSHA256 = SHA256.hash(data: Self.markerData)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let contentFiles = [
+            RuntimeModelContentBinding.File(
+                path: Self.markerName,
+                size: Int64(Self.markerData.count),
+                declaredDigestAlgorithm: "sha256",
+                declaredDigest: markerSHA256,
+                actualSHA256: markerSHA256
+            ),
+        ]
+        let contentFingerprint = try RuntimeModelContentBinding.canonicalFingerprintSHA256(
+            algorithm: RuntimeModelContentBinding.fingerprintAlgorithm,
+            schemaVersion: RuntimeModelContentBinding.supportedManifestSchemaVersion,
+            repositoryID: "supra-ai/xpc-lifecycle-fixture",
+            revision: String(repeating: "a", count: 40),
+            files: contentFiles
+        )
+        let contentBinding = try RuntimeModelContentBinding(
+            algorithm: RuntimeModelContentBinding.fingerprintAlgorithm,
+            schemaVersion: RuntimeModelContentBinding.supportedManifestSchemaVersion,
+            repositoryID: "supra-ai/xpc-lifecycle-fixture",
+            revision: String(repeating: "a", count: 40),
+            files: contentFiles,
+            fingerprintSHA256: contentFingerprint
+        )
+
         return Fixture(
             base: base,
             root: root,
@@ -796,6 +834,7 @@ private struct RuntimeXPCIntegrationRunner {
             staleBookmark: staleAccess.bookmark,
             recreatedBookmark: recreatedAccess.bookmark,
             recreatedOriginalIdentity: recreatedOriginalIdentity,
+            contentBinding: contentBinding,
             staleOriginalPath: staleOriginal.path,
             scopedURLs: [
                 modelAccess.scopedURL,
@@ -842,6 +881,7 @@ private struct RuntimeXPCIntegrationRunner {
         let staleBookmark: Data
         let recreatedBookmark: Data
         let recreatedOriginalIdentity: ModelDirectoryIdentity
+        let contentBinding: RuntimeModelContentBinding
         let staleOriginalPath: String
         let scopedURLs: [URL]
 
