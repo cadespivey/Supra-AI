@@ -59,6 +59,84 @@ final class RedirectPolicyTests: XCTestCase {
         )
     }
 
+    /// ACR-NET-01 status matrix. Expected RED at the test-only commit: Foundation follows
+    /// each cross-origin redirect and every second server receives a request.
+    func testAllRedirectStatusVariantsRejectBeforeCrossOriginEgress() async throws {
+        let statuses = [
+            (301, "301 Moved Permanently"),
+            (302, "302 Found"),
+            (303, "303 See Other"),
+            (307, "307 Temporary Redirect"),
+            (308, "308 Permanent Redirect")
+        ]
+
+        for (code, status) in statuses {
+            let secondServer = try LoopbackHTTPServer { _ in .ok(body: "must not arrive") }
+            try await secondServer.start()
+            let secondURL = try XCTUnwrap(secondServer.url(path: "/status-\(code)"))
+            let firstServer = try LoopbackHTTPServer { _ in .redirect(to: secondURL, status: status) }
+            try await firstServer.start()
+            let initialURL = try XCTUnwrap(firstServer.url(path: "/start-\(code)"))
+            let store = try makeStore()
+            let client = AuthorizedHTTPClient(
+                keyStore: EmptyKeyStore(),
+                policy: LoopbackInitialPolicy(),
+                logger: NetworkRequestLogger(repository: store.networkRequests)
+            )
+
+            do {
+                _ = try await client.sendUnauthenticated(URLRequest(url: initialURL))
+                XCTFail("ACR-NET-01: HTTP \(code) cross-origin redirect must be rejected")
+            } catch NetworkPolicyError.redirectRejected {
+                // Expected typed rejection.
+            } catch {
+                XCTFail("ACR-NET-01: HTTP \(code) returned wrong error type: \(error)")
+            }
+            XCTAssertEqual(
+                secondServer.requestCount,
+                0,
+                "HTTP \(code) redirect destination must receive zero requests"
+            )
+        }
+    }
+
+    /// ACR-NET-04 real-session hop proof. Expected RED at the test-only commit: the shared
+    /// session continues beyond five hops instead of returning the typed ceiling error.
+    func testSixthSameOriginHopIsRejectedBeforeItsRequest() async throws {
+        let address = LoopbackAddressBox()
+        let server = try LoopbackHTTPServer { request in
+            let requestLine = request.split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? ""
+            let path = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? "/hop/0"
+            let current = Int(path.split(separator: "/").last ?? "0") ?? 0
+            return .redirect(to: address.url(path: "/hop/\(current + 1)"))
+        }
+        try await server.start()
+        address.baseURL = try XCTUnwrap(server.url(path: ""))
+        let initialURL = try XCTUnwrap(server.url(path: "/hop/0"))
+        let store = try makeStore()
+        let client = AuthorizedHTTPClient(
+            keyStore: EmptyKeyStore(),
+            policy: LoopbackInitialPolicy(),
+            logger: NetworkRequestLogger(repository: store.networkRequests)
+        )
+
+        do {
+            _ = try await client.sendUnauthenticated(URLRequest(url: initialURL))
+            XCTFail("ACR-NET-04: sixth redirect must be rejected")
+        } catch NetworkPolicyError.redirectRejected(let rejection) {
+            XCTAssertEqual(rejection.reason, .hopLimitExceeded(maximum: 5))
+            XCTAssertEqual(rejection.hopCount, 6)
+        } catch {
+            XCTFail("ACR-NET-04: wrong error type: \(error)")
+        }
+
+        XCTAssertEqual(server.requestCount, 6, "only the initial request and five allowed hops may arrive")
+        XCTAssertFalse(
+            server.receivedRequestLines.contains { $0.contains(" /hop/6 ") },
+            "the sixth redirect destination must never be requested"
+        )
+    }
+
     /// ACR-NET-02. Expected RED: `RedirectPolicy` does not exist yet.
     func testRedirectPolicyRejectsDowngradeUserinfoAlternatePortAndUnnamedOrigin() throws {
         let initial = try XCTUnwrap(URL(string: "https://api.example.test/start"))
@@ -257,9 +335,14 @@ private final class LoopbackHTTPServer: @unchecked Sendable {
     private let responder: @Sendable (String) -> Response
     private var startContinuation: CheckedContinuation<Void, Error>?
     private var storedRequestCount = 0
+    private var storedRequestLines: [String] = []
 
     var requestCount: Int {
         stateQueue.sync { storedRequestCount }
+    }
+
+    var receivedRequestLines: [String] {
+        stateQueue.sync { storedRequestLines }
     }
 
     init(responder: @escaping @Sendable (String) -> Response) throws {
@@ -317,8 +400,12 @@ private final class LoopbackHTTPServer: @unchecked Sendable {
                 return
             }
 
-            stateQueue.sync { storedRequestCount += 1 }
             let request = String(data: requestData, encoding: .utf8) ?? ""
+            let requestLine = request.split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? ""
+            stateQueue.sync {
+                storedRequestCount += 1
+                storedRequestLines.append(requestLine)
+            }
             let response = responder(request)
             var header = "HTTP/1.1 \(response.status)\r\n"
             for (name, value) in response.headers {
@@ -335,5 +422,29 @@ private final class LoopbackHTTPServer: @unchecked Sendable {
 
     deinit {
         listener.cancel()
+    }
+}
+
+private final class LoopbackAddressBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedBaseURL: URL?
+
+    var baseURL: URL? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedBaseURL
+        }
+        set {
+            lock.lock()
+            storedBaseURL = newValue
+            lock.unlock()
+        }
+    }
+
+    func url(path: String) -> URL {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedBaseURL!.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
     }
 }
