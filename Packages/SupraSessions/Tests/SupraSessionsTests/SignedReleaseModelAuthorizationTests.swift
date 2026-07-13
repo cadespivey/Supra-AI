@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import SupraCore
 import SupraRuntimeInterface
@@ -6,17 +5,18 @@ import SupraRuntimeInterface
 import XCTest
 
 final class SignedReleaseModelAuthorizationTests: XCTestCase {
+    private let expectedFingerprint = "9403244220818d3139ea6d154268eb9395647d8513617be7f403569a90999489"
+
     func testAuthorizeBindsVerifiedExclusiveManifestTree() throws {
         let fixture = try makeFixture()
-        let expectedSHA256 = sha256(try Data(contentsOf: fixture.manifestURL))
 
         let authorization = try SignedReleaseModelAuthorization.authorize(
             modelDirectory: fixture.modelDirectory,
             managedRoot: fixture.managedRoot,
-            expectedSHA256: expectedSHA256
+            expectedSHA256: expectedFingerprint
         )
 
-        XCTAssertEqual(authorization.modelSHA256, expectedSHA256)
+        XCTAssertEqual(authorization.modelSHA256, expectedFingerprint)
         XCTAssertEqual(authorization.manifest.repositoryID, "mlx-community/Release-Smoke-4bit")
         XCTAssertEqual(authorization.manifest.revision, String(repeating: "a", count: 40))
 
@@ -35,13 +35,12 @@ final class SignedReleaseModelAuthorizationTests: XCTestCase {
 
     func testAuthorizeRejectsManagedRootAndOutsideDirectory() throws {
         let fixture = try makeFixture()
-        let expectedSHA256 = sha256(try Data(contentsOf: fixture.manifestURL))
 
         XCTAssertThrowsError(
             try SignedReleaseModelAuthorization.authorize(
                 modelDirectory: fixture.managedRoot,
                 managedRoot: fixture.managedRoot,
-                expectedSHA256: expectedSHA256
+                expectedSHA256: expectedFingerprint
             )
         )
 
@@ -51,7 +50,7 @@ final class SignedReleaseModelAuthorizationTests: XCTestCase {
             try SignedReleaseModelAuthorization.authorize(
                 modelDirectory: outside,
                 managedRoot: fixture.managedRoot,
-                expectedSHA256: expectedSHA256
+                expectedSHA256: expectedFingerprint
             )
         )
     }
@@ -86,7 +85,7 @@ final class SignedReleaseModelAuthorizationTests: XCTestCase {
             try SignedReleaseModelAuthorization.authorize(
                 modelDirectory: modelLink,
                 managedRoot: modelRootFixture.managedRoot,
-                expectedSHA256: sha256(try Data(contentsOf: modelRootFixture.manifestURL))
+                expectedSHA256: expectedFingerprint
             )
         )
 
@@ -132,7 +131,7 @@ final class SignedReleaseModelAuthorizationTests: XCTestCase {
         try SignedReleaseModelAuthorization.authorize(
             modelDirectory: fixture.modelDirectory,
             managedRoot: fixture.managedRoot,
-            expectedSHA256: sha256(try Data(contentsOf: fixture.manifestURL))
+            expectedSHA256: expectedFingerprint
         )
     }
 
@@ -172,10 +171,6 @@ final class SignedReleaseModelAuthorizationTests: XCTestCase {
             modelDirectory: modelDirectory,
             manifestURL: manifestURL
         )
-    }
-
-    private func sha256(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private struct Fixture {
