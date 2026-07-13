@@ -1,0 +1,7 @@
+{
+  "sha": "4444444444444444444444444444444444444444",
+  "truncated": false,
+  "tree": [
+    {"path": "website/public/fonts/synthetic-guard.woff2", "mode": "100644", "type": "blob", "sha": "dddddddddddddddddddddddddddddddddddddddd", "size": 17}
+  ]
+}

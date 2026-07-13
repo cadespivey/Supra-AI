@@ -1,0 +1,7 @@
+{
+  "sha": "3333333333333333333333333333333333333333",
+  "truncated": false,
+  "tree": [
+    {"path": "website/public/logo.svg", "mode": "100644", "type": "blob", "sha": "cccccccccccccccccccccccccccccccccccccccc", "size": 126}
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "sha": "5555555555555555555555555555555555555555",
+  "truncated": false,
+  "tree": [
+    {"path": "archive/renamed-synthetic.dat", "mode": "100644", "type": "blob", "sha": "2977a86366333533d454e8362956dbc2ca273836", "size": 17}
+  ]
+}
