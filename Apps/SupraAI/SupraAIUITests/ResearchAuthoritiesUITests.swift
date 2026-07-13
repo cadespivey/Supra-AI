@@ -171,7 +171,10 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         XCTAssertTrue(output.waitForExistence(timeout: 10), "Legacy output fixture did not appear")
         XCTAssertTrue(output.isHittable, "Legacy output row must be pointer-reachable before navigation")
         let windowFrameBeforeNavigation = app.windows.firstMatch.frame
-        output.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        // Expected RED before the deterministic output-navigation hook: Xcode 16
+        // can drop a synthesized NavigationLink click even after reporting this
+        // row hittable. The DEBUG command must drive the same NavigationStack path.
+        sendDebugNavigationCommand("output Legacy Verification Fixture")
 
         // The destination marker separates a completed navigation push from the
         // warning assertions below. DEBUG launch routing uses the production
@@ -238,6 +241,13 @@ final class ResearchAuthoritiesUITests: XCTestCase {
             "Matter-tab command file was not initialized; the intended navigation action cannot run"
         )
         try rawValue.write(to: tabCommandURL, atomically: true, encoding: .utf8)
+    }
+
+    private func sendDebugNavigationCommand(_ command: String) {
+        DistributedNotificationCenter.default().post(
+            name: .init("SupraDebugNav"),
+            object: command
+        )
     }
 
     private func pasteText(
