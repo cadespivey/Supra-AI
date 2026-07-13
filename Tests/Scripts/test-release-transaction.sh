@@ -269,7 +269,9 @@ jq -n \
       tokensPerSecond: 12.5
     }
   }' >"$smoke_result"
-smoke_result_sha="$(shasum -a 256 "$smoke_result" | awk '{print $1}')"
+# The embedded digest covers canonical sorted JSON so independent verifiers can
+# reproduce it after extracting the attestation from the signed manifest.
+smoke_result_sha="$(jq -S -c . "$smoke_result" | shasum -a 256 | awk '{print $1}')"
 
 manifest_output="${temporary_dir}/strict-manifest.log"
 manifest_status=0
