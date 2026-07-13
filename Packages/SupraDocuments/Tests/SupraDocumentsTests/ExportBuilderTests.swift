@@ -46,6 +46,38 @@ final class ExportBuilderTests: XCTestCase {
         XCTAssertTrue(text.contains("agreement.pdf"))
     }
 
+    func testACRCSV005DocumentCSVAndXLSXNeutralizeFormulaCells() throws {
+        let hostile = DocumentExportPayload(
+            title: "Export",
+            contentMarkdown: "content",
+            reviewWarning: "review",
+            sources: [
+                .init(
+                    label: "=1+1",
+                    documentName: "\u{FEFF}@document",
+                    locator: "  -2",
+                    excerpt: "+HYPERLINK(\"https://evil.invalid\")",
+                    warnings: "\t=cmd"
+                )
+            ]
+        )
+        let csvURL = dir.appendingPathComponent("hostile.csv")
+        let xlsxURL = dir.appendingPathComponent("hostile.xlsx")
+
+        try DocumentExportBuilder.write(hostile, format: .csv, to: csvURL)
+        try DocumentExportBuilder.write(hostile, format: .xlsx, to: xlsxURL)
+
+        let csv = try String(contentsOf: csvURL, encoding: .utf8)
+        XCTAssertTrue(csv.contains("'=1+1"))
+        XCTAssertTrue(csv.contains("'\u{FEFF}@document"))
+        XCTAssertTrue(csv.contains("'  -2"))
+        XCTAssertTrue(csv.contains("'\t=cmd"))
+        let sheetData = try XCTUnwrap(ZipArchiveReader.entryData(in: xlsxURL, path: "xl/worksheets/sheet1.xml"))
+        let sheet = String(decoding: sheetData, as: UTF8.self)
+        XCTAssertTrue(sheet.contains("'=1+1"))
+        XCTAssertTrue(sheet.contains("'\u{FEFF}@document"))
+    }
+
     func testPDFIsReadableWithText() throws {
         let url = dir.appendingPathComponent("o.pdf")
         try DocumentExportBuilder.write(payload, format: .pdf, to: url)
