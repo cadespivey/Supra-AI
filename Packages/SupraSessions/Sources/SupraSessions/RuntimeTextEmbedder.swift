@@ -35,6 +35,15 @@ public actor RuntimeTextEmbedder: TextEmbedder {
 
     public init?(model: DocumentEmbeddingModelRecord, runtimeClient: any RuntimeClientProtocol, batchSize: Int = 32) {
         guard let path = model.localPath, !path.isEmpty else { return nil }
+        if ManagedModelStorage.isManagedEmbedding(path: path) {
+            guard
+                let manifest = try? ManagedModelStorage.loadVerifiedManifest(
+                    at: URL(fileURLWithPath: path, isDirectory: true)
+                ),
+                manifest.repositoryID == model.repoID,
+                manifest.revision == model.revision
+            else { return nil }
+        }
         self.modelID = model.id
         self.modelRepoID = model.repoID
         self.modelDisplayName = model.displayName

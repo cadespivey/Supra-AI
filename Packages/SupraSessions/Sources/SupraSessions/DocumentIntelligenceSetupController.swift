@@ -228,6 +228,14 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             message = "The selected embedding model is not downloaded."
             return
         }
+        do {
+            try Self.verifyManagedEmbeddingModel(model)
+        } catch {
+            embeddingTestPassed = false
+            message = error.localizedDescription
+            try? store.documentSettings.recordTestLoad(modelID: model.id, result: "failed: integrity verification")
+            return
+        }
         isBusy = true
         embeddingVerifyInFlight = true
         defer {
@@ -295,7 +303,8 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
               warmedEmbeddingModelID != selectedEmbeddingModel?.id,
               let model = selectedEmbeddingModel,
               embeddingTestPassed,
-              let path = model.localPath, !path.isEmpty else { return }
+              let path = model.localPath, !path.isEmpty,
+              (try? Self.verifyManagedEmbeddingModel(model)) != nil else { return }
         embeddingWarmInFlight = true
         warmedEmbeddingModelID = model.id
         let request = LoadEmbeddingModelRequest(
@@ -313,6 +322,19 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             } catch {
                 warmedEmbeddingModelID = nil // allow a retry on the next trigger
             }
+        }
+    }
+
+    private static func verifyManagedEmbeddingModel(_ model: DocumentEmbeddingModelRecord) throws {
+        guard let path = model.localPath, !path.isEmpty else {
+            throw ManagedModelIntegrityError.manifestMissing
+        }
+        guard ManagedModelStorage.isManagedEmbedding(path: path) else { return }
+        let manifest = try ManagedModelStorage.loadVerifiedManifest(
+            at: URL(fileURLWithPath: path, isDirectory: true)
+        )
+        guard manifest.repositoryID == model.repoID, manifest.revision == model.revision else {
+            throw ManagedModelIntegrityError.manifestMismatch
         }
     }
 

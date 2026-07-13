@@ -71,19 +71,31 @@ public final class ModelDownloadController: ObservableObject {
         state = .preparing(repoID: repoID)
 
         do {
+            let manifest = try await fetcher.fetchManifest(repoID: repoID)
+            try manifest.validateStructure()
+            guard manifest.repositoryID == repoID else {
+                throw ManagedModelIntegrityError.manifestMismatch
+            }
             // Reject incompatible architectures up front, before downloading
-            // gigabytes of weights for a model the runtime can't load. Best-effort:
-            // a failed config probe must not abort an otherwise-valid download.
-            if let configJSON = try? await fetcher.fetchConfigJSON(repoID: repoID),
-               let reason = ModelCompatibility.unsupportedReason(configJSON: configJSON) {
+            // gigabytes of weights for a model the runtime can't load. This probe is
+            // pinned to the same resolved revision and fails closed.
+            guard let configJSON = try await fetcher.fetchConfigJSON(
+                repoID: repoID,
+                revision: manifest.revision
+            ) else {
+                throw ManagedModelIntegrityError.missingRequiredFile("config.json")
+            }
+            guard let configArtifact = manifest.files.first(where: { $0.relativePath == "config.json" }) else {
+                throw ManagedModelIntegrityError.missingRequiredFile("config.json")
+            }
+            try ModelArtifactIntegrity.verify(configJSON, against: configArtifact)
+            if let reason = ModelCompatibility.unsupportedReason(configJSON: configJSON) {
                 state = .failed(message: reason)
                 return
             }
 
-            // Parallel + checkpointed: files transfer concurrently, and any already on
-            // disk (from a prior interrupted run) are skipped.
             try await ManagedModelDownloader.downloadFiles(
-                repoID: repoID,
+                manifest: manifest,
                 destinationRoot: destinationRoot,
                 fetcher: fetcher
             ) { [weak self] completed, total, file in
@@ -92,7 +104,11 @@ public final class ModelDownloadController: ObservableObject {
                 )
             }
 
-            registerIfNeeded(displayName: name, path: destinationRoot.path)
+            let installed = try ManagedModelStorage.loadVerifiedManifest(at: destinationRoot)
+            guard installed == manifest.canonicalized() else {
+                throw ManagedModelIntegrityError.manifestMismatch
+            }
+            try registerIfNeeded(displayName: name, path: destinationRoot.path)
             state = .finished(repoID: repoID, displayName: name)
         } catch {
             // Keep completed files in place so a re-run resumes rather than restarts.
@@ -106,12 +122,12 @@ public final class ModelDownloadController: ObservableObject {
         }
     }
 
-    private func registerIfNeeded(displayName: String, path: String) {
+    private func registerIfNeeded(displayName: String, path: String) throws {
         let alreadyRegistered = (try? store.models.fetchModels())?.contains { $0.path == path } ?? false
         guard !alreadyRegistered else {
             modelLibrary.refresh()
             return
         }
-        _ = try? modelLibrary.addModel(displayName: displayName, path: path, bookmarkData: nil)
+        _ = try modelLibrary.addModel(displayName: displayName, path: path, bookmarkData: nil)
     }
 }

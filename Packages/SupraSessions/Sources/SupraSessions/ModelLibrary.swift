@@ -31,15 +31,21 @@ public final class ModelLibrary: ObservableObject {
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
+    private let managedModelRoots: [URL]
     private var hasPersistedRoleAssignments: Bool
     /// Whether the runtime is mid-generation. Speculative pre-warms consult this so
     /// they never evict the model out from under an in-flight generation; wired by the
     /// app to the runtime status (defaults to "not generating" for tests/headless).
     public var isRuntimeGenerating: () -> Bool = { false }
 
-    public init(store: SupraStore, runtimeClient: any RuntimeClientProtocol) {
+    public init(
+        store: SupraStore,
+        runtimeClient: any RuntimeClientProtocol,
+        managedModelRoots: [URL] = [ManagedModelStorage.modelsDirectory()]
+    ) {
         self.store = store
         self.runtimeClient = runtimeClient
+        self.managedModelRoots = managedModelRoots
         if let stored = try? store.appSettings.getSetting(
             ModelRoleAssignments.settingsKey,
             as: ModelRoleAssignments.self
@@ -312,7 +318,11 @@ public final class ModelLibrary: ObservableObject {
     public func reconcileLoadedModel(_ runtimeModelID: ModelID?) {
         guard case .idle = loadState, let runtimeModelID else { return }
         let idString = runtimeModelID.rawValue.uuidString
-        guard (try? store.models.fetchModel(id: idString)) != nil else { return }
+        guard let record = try? store.models.fetchModel(id: idString) else { return }
+        if ManagedModelStorage.isManaged(path: record.path, roots: managedModelRoots),
+           (try? ManagedModelStorage.loadVerifiedManifest(at: URL(fileURLWithPath: record.path))) == nil {
+            return
+        }
         loadState = .loaded(modelID: idString)
     }
 
@@ -363,7 +373,7 @@ public final class ModelLibrary: ObservableObject {
         }
 
         // Reclaim disk only for app-managed downloads — never delete a user folder.
-        if ManagedModelStorage.isManaged(path: record.path) {
+        if ManagedModelStorage.isManaged(path: record.path, roots: managedModelRoots) {
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: record.path))
         }
 
@@ -391,7 +401,7 @@ public final class ModelLibrary: ObservableObject {
     /// Whether the model's files live in app-managed storage (so deleting it frees
     /// disk) versus a user-registered folder (delete only unregisters it).
     public func isManagedDownload(_ model: ModelSummary) -> Bool {
-        ManagedModelStorage.isManaged(path: model.path)
+        ManagedModelStorage.isManaged(path: model.path, roots: managedModelRoots)
     }
 
     /// Marks the given model active in the store and loads it into the runtime service.
@@ -406,6 +416,17 @@ public final class ModelLibrary: ObservableObject {
         else {
             loadState = .failed(message: "The selected model could not be found.")
             return
+        }
+
+        if ManagedModelStorage.isManaged(path: record.path, roots: managedModelRoots) {
+            do {
+                _ = try ManagedModelStorage.loadVerifiedManifest(
+                    at: URL(fileURLWithPath: record.path, isDirectory: true)
+                )
+            } catch {
+                loadState = .failed(message: error.localizedDescription)
+                return
+            }
         }
 
         do {
@@ -442,7 +463,7 @@ public final class ModelLibrary: ObservableObject {
                 refresh()
             }
             modelBookmark = access.makeTransferableBookmark()
-        } else if ManagedModelStorage.isManaged(path: record.path) {
+        } else if ManagedModelStorage.isManaged(path: record.path, roots: managedModelRoots) {
             // App-downloaded model: the app owns the files, so it can mint a plain
             // transferable bookmark directly without a security scope.
             guard let managedBookmark = try? URL(fileURLWithPath: record.path, isDirectory: true)

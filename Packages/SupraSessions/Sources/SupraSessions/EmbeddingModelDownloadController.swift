@@ -100,10 +100,13 @@ public final class EmbeddingModelDownloadController: ObservableObject {
         state = .preparing(repoID: repoID)
 
         do {
-            // Parallel + checkpointed: files transfer concurrently, and any already on
-            // disk (from a prior interrupted run) are skipped.
+            let manifest = try await fetcher.fetchManifest(repoID: repoID)
+            try manifest.validateStructure()
+            guard manifest.repositoryID == repoID else {
+                throw ManagedModelIntegrityError.manifestMismatch
+            }
             try await ManagedModelDownloader.downloadFiles(
-                repoID: repoID,
+                manifest: manifest,
                 destinationRoot: destinationRoot,
                 fetcher: fetcher
             ) { [weak self] completed, total, file in
@@ -111,12 +114,17 @@ public final class EmbeddingModelDownloadController: ObservableObject {
                     repoID: repoID, completedFiles: completed, totalFiles: total, currentFile: file
                 )
             }
+            let installed = try ManagedModelStorage.loadVerifiedManifest(at: destinationRoot)
+            guard installed == manifest.canonicalized() else {
+                throw ManagedModelIntegrityError.manifestMismatch
+            }
 
             try registerModel(
                 repoID: repoID,
                 displayName: displayName,
                 dimension: dimension,
                 runtimeFamily: runtimeFamily,
+                revision: manifest.revision,
                 path: destinationRoot.path,
                 select: selectAfterDownload
             )
@@ -140,6 +148,7 @@ public final class EmbeddingModelDownloadController: ObservableObject {
         displayName: String,
         dimension: Int,
         runtimeFamily: String,
+        revision: String,
         path: String,
         select: Bool
     ) throws {
@@ -152,6 +161,7 @@ public final class EmbeddingModelDownloadController: ObservableObject {
             displayName: displayName,
             dimension: dimension,
             runtimeFamily: runtimeFamily,
+            revision: revision,
             isDefault: existing?.isDefault ?? (repoID == EmbeddingModelCatalog.defaultModel.repoID),
             isSelected: existing?.isSelected ?? false,
             createdAt: existing?.createdAt ?? Date()

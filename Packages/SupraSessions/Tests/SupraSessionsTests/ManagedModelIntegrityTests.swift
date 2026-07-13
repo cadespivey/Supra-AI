@@ -10,6 +10,18 @@ final class ManagedModelIntegrityTests: XCTestCase {
     private let revisionA = String(repeating: "a", count: 40)
     private let revisionB = String(repeating: "b", count: 40)
 
+    func testACR_MODEL_hubBlobMetadataDecodesGitAndLFSDigests() throws {
+        let metadata = Data(
+            #"{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","siblings":[{"rfilename":"config.json","size":23,"blobId":"1111111111111111111111111111111111111111","lfs":null},{"rfilename":"model.safetensors","size":128,"blobId":"2222222222222222222222222222222222222222","lfs":{"sha256":"3333333333333333333333333333333333333333333333333333333333333333","size":128,"pointerSize":130}}]}"#.utf8
+        )
+
+        let manifest = try HuggingFaceClient.decodeManifest(repoID: repoID, data: metadata)
+
+        XCTAssertEqual(manifest.revision, revisionA)
+        XCTAssertEqual(manifest.files.first { $0.relativePath == "config.json" }?.digestAlgorithm, .gitBlobSHA1)
+        XCTAssertEqual(manifest.files.first { $0.relativePath == "model.safetensors" }?.digestAlgorithm, .sha256)
+    }
+
     @MainActor
     func testACR_MODEL_successWritesRevisionBoundVerifiedManifest() async throws {
         let context = try makeContext()
@@ -28,6 +40,40 @@ final class ManagedModelIntegrityTests: XCTestCase {
         XCTAssertTrue(installed.files.allSatisfy { $0.size > 0 && !$0.digest.isEmpty })
         XCTAssertEqual(Set(fetcher.requestedRevisions()), [revisionA], "every file URL must be revision-pinned")
         XCTAssertFalse(containsPartialFile(in: modelDirectory))
+    }
+
+    @MainActor
+    func testACR_MODEL_embeddingRegistrationPersistsVerifiedRevision() async throws {
+        let storeDirectory = tempDir()
+        try FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
+        let store = try SupraStore(url: storeDirectory.appendingPathComponent("test.sqlite"))
+        let modelsDirectory = tempDir()
+        let payloads = [
+            "config.json": Data(#"{"model_type":"bert"}"#.utf8),
+            "model.safetensors": Data(repeating: 0xBC, count: 64),
+        ]
+        let manifest = makeManifest(repoID: repoID, revision: revisionA, payloads: payloads)
+        let controller = EmbeddingModelDownloadController(
+            store: store,
+            fetcher: IntegrityFetcher(manifest: manifest, payloads: payloads),
+            modelsDirectory: modelsDirectory
+        )
+
+        await controller.performDownload(
+            repoID: repoID,
+            displayName: "Verified Embedder",
+            dimension: 384,
+            runtimeFamily: "bert",
+            selectAfterDownload: false
+        )
+
+        guard case .finished = controller.state else { return XCTFail("embedding download must finish") }
+        let record = try XCTUnwrap(store.documentSettings.fetchEmbeddingModels().first)
+        XCTAssertEqual(record.revision, revisionA)
+        XCTAssertEqual(
+            try ManagedModelStorage.loadVerifiedManifest(at: URL(fileURLWithPath: record.localPath!)),
+            manifest
+        )
     }
 
     @MainActor
@@ -90,6 +136,27 @@ final class ManagedModelIntegrityTests: XCTestCase {
     }
 
     @MainActor
+    func testACR_MODEL_configProbeMustMatchRevisionManifestBeforeWeightsDownload() async throws {
+        let context = try makeContext()
+        let payloads = validPayloads()
+        let manifest = makeManifest(repoID: repoID, revision: revisionA, payloads: payloads)
+        let config = try XCTUnwrap(payloads["config.json"])
+        let fetcher = IntegrityFetcher(
+            manifest: manifest,
+            payloads: payloads,
+            configProbe: Data(repeating: 0x58, count: config.count)
+        )
+        let controller = context.controller(fetcher: fetcher)
+
+        await controller.performDownload(repoID: repoID, displayName: "Mismatched Probe")
+
+        guard case .failed = controller.state else { return XCTFail("mismatched config probe must fail") }
+        XCTAssertTrue(fetcher.downloadedFiles().isEmpty)
+        context.library.refresh()
+        XCTAssertTrue(context.library.models.isEmpty)
+    }
+
+    @MainActor
     func testACR_MODEL_fourByteConfigNeverRegisters() async throws {
         let context = try makeContext()
         let payloads = [
@@ -117,6 +184,22 @@ final class ManagedModelIntegrityTests: XCTestCase {
 
         guard case .failed = controller.state else { return XCTFail("missing config must fail") }
         context.library.refresh()
+        XCTAssertTrue(context.library.models.isEmpty)
+    }
+
+    @MainActor
+    func testACR_MODEL_tokenizerFileCannotMasqueradeAsMissingWeights() async throws {
+        let context = try makeContext()
+        let payloads = [
+            "config.json": Data(#"{"model_type":"qwen2"}"#.utf8),
+            "tokenizer.bin": Data("not-model-weights".utf8),
+        ]
+        let manifest = makeManifest(repoID: repoID, revision: revisionA, payloads: payloads)
+        let controller = context.controller(fetcher: IntegrityFetcher(manifest: manifest, payloads: payloads))
+
+        await controller.performDownload(repoID: repoID, displayName: "No Weights")
+
+        guard case .failed = controller.state else { return XCTFail("missing model weights must fail") }
         XCTAssertTrue(context.library.models.isEmpty)
     }
 
@@ -153,6 +236,30 @@ final class ManagedModelIntegrityTests: XCTestCase {
             try ManagedModelStorage.loadVerifiedManifest(at: context.modelDirectory(repoID: repoID)).revision,
             revisionB
         )
+    }
+
+    @MainActor
+    func testACR_MODEL_symlinkArtifactCannotEscapeEvenWhenTargetHashMatches() async throws {
+        let context = try makeContext()
+        let payloads = validPayloads()
+        let manifest = makeManifest(repoID: repoID, revision: revisionA, payloads: payloads)
+        await context.controller(fetcher: IntegrityFetcher(manifest: manifest, payloads: payloads))
+            .performDownload(repoID: repoID, displayName: "Verified")
+
+        let outside = tempDir().appendingPathComponent("outside-weights")
+        try FileManager.default.createDirectory(at: outside.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try payloads["model.safetensors"]!.write(to: outside)
+        let weight = context.modelDirectory(repoID: repoID).appendingPathComponent("model.safetensors")
+        try FileManager.default.removeItem(at: weight)
+        try FileManager.default.createSymbolicLink(at: weight, withDestinationURL: outside)
+
+        XCTAssertThrowsError(
+            try ManagedModelStorage.loadVerifiedManifest(at: context.modelDirectory(repoID: repoID))
+        )
+        let repair = IntegrityFetcher(manifest: manifest, payloads: payloads)
+        await context.controller(fetcher: repair).performDownload(repoID: repoID, displayName: "Verified")
+        XCTAssertEqual(Set(repair.downloadedFiles()), Set(payloads.keys))
+        XCTAssertFalse(ManagedModelStorage.containsSymbolicLinks(in: context.modelDirectory(repoID: repoID)))
     }
 
     @MainActor
@@ -206,6 +313,13 @@ final class ManagedModelIntegrityTests: XCTestCase {
         var tampered = manifest
         tampered.files[0].digest = String(repeating: "0", count: 64)
         try JSONEncoder().encode(tampered).write(to: ManagedModelStorage.manifestURL(in: directory))
+        XCTAssertThrowsError(try ManagedModelStorage.loadVerifiedManifest(at: directory))
+
+        // Restore the authentic manifest, then tamper with an artifact. The load
+        // boundary must re-hash rather than trust a previously successful install.
+        try JSONEncoder().encode(manifest).write(to: ManagedModelStorage.manifestURL(in: directory))
+        let weight = directory.appendingPathComponent("model.safetensors")
+        try Data(repeating: 0x00, count: payloads["model.safetensors"]!.count).write(to: weight)
         XCTAssertThrowsError(try ManagedModelStorage.loadVerifiedManifest(at: directory))
 
         await context.library.activateAndLoad(modelID: model.id)
@@ -290,6 +404,7 @@ private final class ModelIntegrityContext {
 private final class IntegrityFetcher: ModelRepositoryFetching, @unchecked Sendable {
     let manifest: ModelArtifactManifest
     private let payloads: [String: Data]
+    private let configProbe: Data?
     private let failureFile: String?
     private let failure: Error?
     private let lock = NSLock()
@@ -299,11 +414,13 @@ private final class IntegrityFetcher: ModelRepositoryFetching, @unchecked Sendab
     init(
         manifest: ModelArtifactManifest,
         payloads: [String: Data],
+        configProbe: Data? = nil,
         failureFile: String? = nil,
         failure: Error? = nil
     ) {
         self.manifest = manifest
         self.payloads = payloads
+        self.configProbe = configProbe
         self.failureFile = failureFile
         self.failure = failure
     }
@@ -327,7 +444,7 @@ private final class IntegrityFetcher: ModelRepositoryFetching, @unchecked Sendab
     }
 
     func fetchConfigJSON(repoID: String, revision: String) async throws -> Data? {
-        payloads["config.json"]
+        configProbe ?? payloads["config.json"]
     }
 
     func downloadedFiles() -> [String] { lock.withLock { downloads } }
@@ -347,11 +464,16 @@ private func makeManifest(
         repositoryID: repoID,
         revision: revision,
         files: payloads.map { path, data in
-            ModelArtifactManifest.File(
+            let algorithm: ModelArtifactManifest.DigestAlgorithm = path.hasSuffix(".safetensors")
+                ? .sha256
+                : .gitBlobSHA1
+            return ModelArtifactManifest.File(
                 relativePath: path,
                 size: Int64(data.count),
-                digestAlgorithm: .sha256,
-                digest: ModelArtifactIntegrity.sha256Hex(data)
+                digestAlgorithm: algorithm,
+                digest: algorithm == .sha256
+                    ? ModelArtifactIntegrity.sha256Hex(data)
+                    : ModelArtifactIntegrity.gitBlobSHA1Hex(data)
             )
         }
     )

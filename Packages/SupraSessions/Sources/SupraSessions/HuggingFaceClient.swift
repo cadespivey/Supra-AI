@@ -4,19 +4,26 @@ import SupraNetworking
 /// Abstracts listing and downloading a model repository's files so the download
 /// controller can be unit-tested against a stub.
 public protocol ModelRepositoryFetching: Sendable {
-    /// All file paths in the repo (relative, may include subdirectories).
-    func listModelFiles(repoID: String) async throws -> [String]
-    /// Downloads a single repo file to `destination` (parent dirs created by caller).
-    func downloadFile(repoID: String, file: String, to destination: URL) async throws
-    /// The repo's `config.json` contents, or `nil` if it has none. Used to check
-    /// architecture compatibility before downloading gigabytes of weights.
-    func fetchConfigJSON(repoID: String) async throws -> Data?
+    /// Resolves the repository's floating name to one immutable commit and returns
+    /// complete size/digest metadata for every artifact.
+    func fetchManifest(repoID: String) async throws -> ModelArtifactManifest
+    /// Downloads one artifact from the resolved revision to a caller-owned partial path.
+    func downloadFile(
+        repoID: String,
+        revision: String,
+        artifact: ModelArtifactManifest.File,
+        to destination: URL
+    ) async throws
+    /// Fetches `config.json` from the same immutable revision for the early
+    /// compatibility check performed before multi-gigabyte weights are transferred.
+    func fetchConfigJSON(repoID: String, revision: String) async throws -> Data?
 }
 
 public enum HuggingFaceError: Error, LocalizedError {
     case invalidRepoID(String)
     case requestFailed(String, Int)
     case emptyRepository(String)
+    case incompleteMetadata(String)
 
     public var errorDescription: String? {
         switch self {
@@ -26,6 +33,8 @@ public enum HuggingFaceError: Error, LocalizedError {
             "Download failed for \(file) (HTTP \(code))."
         case let .emptyRepository(repo):
             "No files found in \(repo)."
+        case let .incompleteMetadata(file):
+            "The repository did not provide verifiable size and digest metadata for \(file)."
         }
     }
 }
@@ -39,11 +48,16 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         self.transport = PolicyEnforcingURLSessionTransport(session: session)
     }
 
-    public func listModelFiles(repoID: String) async throws -> [String] {
+    public func fetchManifest(repoID: String) async throws -> ModelArtifactManifest {
         try Self.validate(repoID)
-        guard let url = URL(string: "\(host)/api/models/\(repoID)") else {
+        guard var components = URLComponents(string: "\(host)/api/models/\(repoID)") else {
             throw HuggingFaceError.invalidRepoID(repoID)
         }
+        // `blobs=true` is the Hub API switch that supplies `size`, `blobId`, and
+        // LFS SHA-256 metadata for every sibling. Without it the listing is not
+        // sufficient to make an integrity decision.
+        components.queryItems = [URLQueryItem(name: "blobs", value: "true")]
+        guard let url = components.url else { throw HuggingFaceError.invalidRepoID(repoID) }
         try Self.enforceHost(url)
         let result = try await transport.data(
             for: URLRequest(url: url),
@@ -51,20 +65,62 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         )
         try Self.check(result.response, file: "model index")
 
-        let info = try JSONDecoder().decode(ModelInfo.self, from: result.data)
-        let files = info.siblings.map(\.rfilename).filter { !$0.isEmpty }
-        guard !files.isEmpty else { throw HuggingFaceError.emptyRepository(repoID) }
-        return files
+        return try Self.decodeManifest(repoID: repoID, data: result.data)
     }
 
-    public func downloadFile(repoID: String, file: String, to destination: URL) async throws {
+    static func decodeManifest(repoID: String, data: Data) throws -> ModelArtifactManifest {
+        let info = try JSONDecoder().decode(ModelInfo.self, from: data)
+        guard !info.siblings.isEmpty else { throw HuggingFaceError.emptyRepository(repoID) }
+        let files = try info.siblings.map { sibling -> ModelArtifactManifest.File in
+            if let lfs = sibling.lfs {
+                guard !lfs.sha256.isEmpty else {
+                    throw HuggingFaceError.incompleteMetadata(sibling.rfilename)
+                }
+                return ModelArtifactManifest.File(
+                    relativePath: sibling.rfilename,
+                    size: lfs.size,
+                    digestAlgorithm: .sha256,
+                    digest: lfs.sha256
+                )
+            }
+            guard let size = sibling.size, let blobID = sibling.blobId, !blobID.isEmpty else {
+                throw HuggingFaceError.incompleteMetadata(sibling.rfilename)
+            }
+            return ModelArtifactManifest.File(
+                relativePath: sibling.rfilename,
+                size: size,
+                digestAlgorithm: .gitBlobSHA1,
+                digest: blobID
+            )
+        }
+        let manifest = ModelArtifactManifest(
+            repositoryID: repoID,
+            revision: info.sha,
+            files: files
+        )
+        try manifest.validateStructure()
+        return manifest
+    }
+
+    public func downloadFile(
+        repoID: String,
+        revision: String,
+        artifact: ModelArtifactManifest.File,
+        to destination: URL
+    ) async throws {
         try Self.validate(repoID)
-        let encodedFile = file
+        guard revision.count == 40, revision.allSatisfy(\.isHexDigit) else {
+            throw HuggingFaceError.incompleteMetadata(artifact.relativePath)
+        }
+        try ModelArtifactManifest.validate(relativePath: artifact.relativePath)
+        var allowedPathComponent = CharacterSet.urlPathAllowed
+        allowedPathComponent.remove(charactersIn: "/?#")
+        let encodedFile = artifact.relativePath
             .split(separator: "/", omittingEmptySubsequences: false)
-            .map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }
+            .map { $0.addingPercentEncoding(withAllowedCharacters: allowedPathComponent) ?? String($0) }
             .joined(separator: "/")
-        guard let url = URL(string: "\(host)/\(repoID)/resolve/main/\(encodedFile)") else {
-            throw HuggingFaceError.requestFailed(file, -1)
+        guard let url = URL(string: "\(host)/\(repoID)/resolve/\(revision)/\(encodedFile)") else {
+            throw HuggingFaceError.requestFailed(artifact.relativePath, -1)
         }
         try Self.enforceHost(url)
 
@@ -73,7 +129,11 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
             policy: RedirectPolicy.huggingFace(initialURL: url)
         )
         do {
-            try Self.check(result.response, file: file)
+            try Self.check(result.response, file: artifact.relativePath)
+            let responseLength = result.response.expectedContentLength
+            if responseLength >= 0, responseLength != artifact.size {
+                throw ManagedModelIntegrityError.artifactSizeMismatch(artifact.relativePath)
+            }
         } catch {
             try? FileManager.default.removeItem(at: result.temporaryURL)
             throw error
@@ -90,9 +150,10 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         try fileManager.moveItem(at: result.temporaryURL, to: destination)
     }
 
-    public func fetchConfigJSON(repoID: String) async throws -> Data? {
+    public func fetchConfigJSON(repoID: String, revision: String) async throws -> Data? {
         try Self.validate(repoID)
-        guard let url = URL(string: "\(host)/\(repoID)/resolve/main/config.json") else {
+        guard revision.count == 40, revision.allSatisfy(\.isHexDigit) else { return nil }
+        guard let url = URL(string: "\(host)/\(repoID)/resolve/\(revision)/config.json") else {
             return nil
         }
         try Self.enforceHost(url)
@@ -100,7 +161,10 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
             for: URLRequest(url: url),
             policy: RedirectPolicy.huggingFace(initialURL: url)
         )
-        if let http = result.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        guard let http = result.response as? HTTPURLResponse else {
+            throw HuggingFaceError.requestFailed("config.json", -1)
+        }
+        if !(200..<300).contains(http.statusCode) {
             return nil
         }
         return result.data
@@ -123,14 +187,26 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
     }
 
     private static func check(_ response: URLResponse, file: String) throws {
-        guard let http = response as? HTTPURLResponse else { return }
+        guard let http = response as? HTTPURLResponse else {
+            throw HuggingFaceError.requestFailed(file, -1)
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw HuggingFaceError.requestFailed(file, http.statusCode)
         }
     }
 
     private struct ModelInfo: Decodable {
+        let sha: String
         let siblings: [Sibling]
-        struct Sibling: Decodable { let rfilename: String }
+        struct Sibling: Decodable {
+            let rfilename: String
+            let size: Int64?
+            let blobId: String?
+            let lfs: LFS?
+        }
+        struct LFS: Decodable {
+            let sha256: String
+            let size: Int64
+        }
     }
 }
