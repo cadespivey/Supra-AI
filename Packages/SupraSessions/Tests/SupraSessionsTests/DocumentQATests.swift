@@ -120,7 +120,10 @@ final class DocumentQATests: XCTestCase {
         let generated = await qa.generate(question: "What is the indemnification cap?", modelID: ModelID())
         let result = try XCTUnwrap(generated)
         XCTAssertTrue(result.unsupported)
-        XCTAssertEqual(result.status, StructuredOutputStatus.complete.rawValue)
+        // A refusal based on a retrieved subset cannot prove absence across the
+        // selected scope, so WP0-05 records it as review-required rather than
+        // manufacturing clean support evidence.
+        XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue)
     }
 
     func testDocumentQAUsesStructuredOutputRouteOptionsAndPrompt() async throws {
@@ -323,6 +326,46 @@ final class DocumentQATests: XCTestCase {
         XCTAssertTrue(persistedSources.allSatisfy { row in
             row.documentID.map(selectedDocumentIDs.contains) ?? false
         })
+    }
+
+    func testDocumentScopedStructuredOutputCompletesOnlyWithTransactionalSupportProvenance() async throws {
+        // ACR-DOCSUP-INT-06 expected RED: document-scoped structured outputs used
+        // section presence alone and attached their source set after version commit.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Matter A")
+        try await indexDoc(store, matter.id, "agreement.txt", "Payment was due March 3, 2025.")
+        let contract = try XCTUnwrap(StructuredOutputContracts.contract(for: .draftingSkeleton))
+        let markdown = contract.requiredHeadings
+            .map { "\($0)\n\nPayment was due March 3, 2025 [S1]." }
+            .joined(separator: "\n\n")
+        let runtime = StubRuntimeClient(outcome: { request in
+            XCTAssertTrue(request.prompt.contains("BEGIN_UNTRUSTED_SOURCE_DATA"))
+            return .events([
+                .event(request, 0, .token, token: markdown),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let controller = StructuredOutputController(
+            store: store,
+            runtimeClient: runtime,
+            matterID: matter.id,
+            embedder: nil
+        )
+
+        let created = await controller.createOutput(
+            type: .draftingSkeleton,
+            context: "payment due date",
+            scope: .wholeMatter,
+            modelID: ModelID()
+        )
+        XCTAssertTrue(created)
+        let output = try XCTUnwrap(try store.structuredOutputs.fetchOutputs(matterID: matter.id).first)
+        XCTAssertEqual(output.status, StructuredOutputStatus.complete.rawValue)
+        let version = try XCTUnwrap(try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).first)
+        XCTAssertEqual(version.verificationStatus, OutputVerificationStatus.allSupported.rawValue)
+        XCTAssertEqual(version.verificationVersion, DocumentSupportVerifier.version)
+        XCTAssertNotNil(version.verificationJSON)
+        XCTAssertNotNil(try store.documentSources.fetchSourceSet(structuredOutputVersionID: version.id))
     }
 
     // MARK: - Helpers

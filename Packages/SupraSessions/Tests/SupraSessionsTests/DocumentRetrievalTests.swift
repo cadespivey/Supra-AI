@@ -135,7 +135,11 @@ final class DocumentRetrievalTests: XCTestCase {
             metadata: "Real Estate & Property · 2023-05-01"
         )
         let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: "When is rent due?", sources: [source], mode: .short)
-        XCTAssertTrue(prompt.contains("[S1] lease.pdf (p.1) — Real Estate & Property · 2023-05-01:"))
+        XCTAssertTrue(prompt.contains("BEGIN_UNTRUSTED_SOURCE_DATA"))
+        XCTAssertTrue(prompt.contains(#""label":"S1""#))
+        XCTAssertTrue(prompt.contains(#""document_name":"lease.pdf""#))
+        XCTAssertTrue(prompt.contains(#""locator":"p.1""#))
+        XCTAssertTrue(prompt.contains(#""metadata":"Real Estate & Property · 2023-05-01""#))
     }
 
     func testExpandedChunkReportsCharSpanAcrossFoldedNeighbors() {
