@@ -7,6 +7,7 @@ struct MainShellView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @State private var selection: SidebarSelection? = .route(.globalChats)
     @State private var showNewMatter = false
+    @State private var windowContentHeight: CGFloat?
 
     var body: some View {
         NavigationSplitView {
@@ -15,6 +16,7 @@ struct MainShellView: View {
                 matters: environment.mattersController,
                 onNewMatter: { showNewMatter = true }
             )
+            .frame(height: windowContentHeight)
         } detail: {
             VStack(spacing: 0) {
                 if environment.usingFallbackStore {
@@ -28,7 +30,9 @@ struct MainShellView: View {
                 detailView
                     .frame(minWidth: 640, minHeight: 420)
             }
+            .frame(height: windowContentHeight)
         }
+        .background(WindowContentHeightReader(height: $windowContentHeight))
         .onReceive(NotificationCenter.default.publisher(for: .supraNavigateToRoute)) { note in
             if let route = note.object as? AppRoute { selection = .route(route) }
         }
@@ -184,6 +188,80 @@ struct MainShellView: View {
         }
     }
 
+}
+
+/// SwiftUI can ask a pushed NavigationStack destination for its unconstrained
+/// ideal height while a NavigationSplitView is hosted in a macOS WindowGroup.
+/// Long-form scroll surfaces then advertise a screen-sized intrinsic height and
+/// center the split content outside the window. Read the owning window's live
+/// content-layout height and use that finite proposal for both split columns.
+private struct WindowContentHeightReader: NSViewRepresentable {
+    @Binding var height: CGFloat?
+
+    func makeNSView(context: Context) -> WindowContentHeightView {
+        let view = WindowContentHeightView()
+        configureHeightCallback(for: view)
+        return view
+    }
+
+    func updateNSView(_ view: WindowContentHeightView, context: Context) {
+        configureHeightCallback(for: view)
+        view.reportHeight()
+    }
+
+    private func configureHeightCallback(for view: WindowContentHeightView) {
+        view.onHeightChange = { newHeight in
+            // NSViewRepresentable update callbacks participate in SwiftUI's render
+            // pass. Defer the binding write by one main-queue turn to avoid mutating
+            // view state synchronously from updateNSView.
+            DispatchQueue.main.async {
+                if height != newHeight { height = newHeight }
+            }
+        }
+    }
+
+    static func dismantleNSView(_ view: WindowContentHeightView, coordinator: ()) {
+        view.stopObserving()
+    }
+}
+
+private final class WindowContentHeightView: NSView {
+    var onHeightChange: ((CGFloat) -> Void)?
+    private var resizeObserver: NSObjectProtocol?
+    private var lastHeight: CGFloat?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stopObserving()
+        guard let window else { return }
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reportHeight()
+        }
+        reportHeight()
+    }
+
+    func reportHeight() {
+        guard let height = window?.contentLayoutRect.height,
+              height > 0,
+              height != lastHeight else { return }
+        lastHeight = height
+        onHeightChange?(height)
+    }
+
+    func stopObserving() {
+        if let resizeObserver {
+            NotificationCenter.default.removeObserver(resizeObserver)
+        }
+        resizeObserver = nil
+    }
+
+    deinit {
+        stopObserving()
+    }
 }
 
 /// Hosts a matter's workspace, resolving the matter from the (observed) controller

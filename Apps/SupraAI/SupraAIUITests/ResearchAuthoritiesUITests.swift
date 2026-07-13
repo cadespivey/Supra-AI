@@ -17,7 +17,11 @@ final class ResearchAuthoritiesUITests: XCTestCase {
 
     private func launchApp(extraArguments: [String] = []) throws -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-uiTestMode"] + extraArguments
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestResetWindowRestoration",
+        ] + extraArguments
         let tabCommandURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SupraAI-UITest-\(UUID().uuidString)-matter-tab.txt")
         try "".write(to: tabCommandURL, atomically: true, encoding: .utf8)
@@ -28,10 +32,10 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         app.launchEnvironment["SUPRA_UI_TEST_TAB_COMMAND_FILE"] = tabCommandURL.path
         app.launch()
         app.activate()
-        if !app.windows.firstMatch.waitForExistence(timeout: 5) {
-            app.typeKey("n", modifierFlags: .command)
-            _ = app.windows.firstMatch.waitForExistence(timeout: 10)
-        }
+        XCTAssertTrue(
+            app.windows.firstMatch.waitForExistence(timeout: 10),
+            "UI-test window restoration reset did not publish a fresh WindowGroup"
+        )
         return app
     }
 
