@@ -376,6 +376,41 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
         XCTAssertEqual(wrongIdentityClient.unloadCallCount, 1)
     }
 
+    func testMissingOrWrongVerifiedModelHashNeverGeneratesAndStillUnloads() async throws {
+        let returnedHashes: [String?] = [
+            nil,
+            String(repeating: "0", count: 64),
+        ]
+
+        for returnedHash in returnedHashes {
+            let fixture = try makeFixture()
+            let authorization = try authorize(fixture)
+            let client = SignedSmokeRuntimeClientFake(
+                load: { request in
+                    LoadModelResponse(
+                        status: .loaded,
+                        modelID: request.modelID,
+                        metrics: RuntimeMetrics(loadTimeMs: Self.loadTimeMs),
+                        verifiedModelSHA256: returnedHash
+                    )
+                },
+                stream: { request in Self.stream(events: Self.validEvents(for: request)) }
+            )
+            let runner = SignedReleaseSmokeRunner(
+                runtimeClient: client,
+                authorization: authorization,
+                metadata: metadata
+            )
+
+            let error = await capturedError { try await runner.run() }
+
+            XCTAssertNotNil(error, "verified hash \(String(describing: returnedHash)) must fail")
+            XCTAssertEqual(client.calls, ["connect", "load", "unload"])
+            XCTAssertEqual(client.generateCallCount, 0)
+            XCTAssertEqual(client.unloadCallCount, 1)
+        }
+    }
+
     func testPostflightArtifactMutationRejectsAttestation() async throws {
         let fixture = try makeFixture()
         let authorization = try authorize(fixture)
@@ -804,7 +839,8 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
             LoadModelResponse(
                 status: .loaded,
                 modelID: request.modelID,
-                metrics: RuntimeMetrics(loadTimeMs: 123)
+                metrics: RuntimeMetrics(loadTimeMs: 123),
+                verifiedModelSHA256: request.contentBinding?.fingerprintSHA256
             )
         },
         stream: @escaping Stream,

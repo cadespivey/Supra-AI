@@ -30,6 +30,22 @@ final class SignedReleaseModelAuthorizationTests: XCTestCase {
         XCTAssertEqual(request.managedRootPath, fixture.managedRoot.path)
         XCTAssertFalse(request.modelBookmark?.isEmpty ?? true)
         XCTAssertNotNil(request.modelDirectoryIdentity)
+        let binding = try XCTUnwrap(request.contentBinding)
+        XCTAssertEqual(binding.algorithm, SignedReleaseModelAuthorization.fingerprintAlgorithm)
+        XCTAssertEqual(binding.schemaVersion, 1)
+        XCTAssertEqual(binding.repositoryID, "mlx-community/Release-Smoke-4bit")
+        XCTAssertEqual(binding.revision, String(repeating: "a", count: 40))
+        XCTAssertEqual(binding.files.map(\.path), ["config.json", "model.safetensors"])
+        XCTAssertEqual(binding.files.map(\.size), [22, 31])
+        XCTAssertEqual(
+            binding.files.map(\.declaredDigestAlgorithm),
+            ["sha256", "sha256"]
+        )
+        XCTAssertEqual(
+            binding.files.map(\.actualSHA256),
+            binding.files.map(\.declaredDigest)
+        )
+        XCTAssertEqual(binding.fingerprintSHA256, expectedFingerprint)
         XCTAssertNoThrow(try authorization.reverify())
     }
 
