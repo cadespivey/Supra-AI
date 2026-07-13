@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import OSLog
 import SupraRuntimeInterface
 
 /// An independently-owned, content-verified model tree used for one runtime
@@ -16,40 +17,49 @@ public final class RuntimeModelSnapshot: @unchecked Sendable {
     private let stateLock = NSLock()
     private var isRemoved = false
 
+    private static let constructionLock = NSLock()
+    private static let failedConstructionCleanupRegistry =
+        FailedConstructionCleanupRegistry()
+    private static let cleanupLogger = Logger(
+        subsystem: "com.cadespivey.SupraAI",
+        category: "RuntimeModelSnapshotCleanup"
+    )
+
     public init(
         sourceURL: URL,
         contentBinding: RuntimeModelContentBinding
     ) throws {
         try Self.verifyBindingFingerprint(contentBinding)
 
+        Self.constructionLock.lock()
+        defer { Self.constructionLock.unlock() }
+        try Self.drainFailedConstructionCleanups()
+
         let sourceRoot = try Self.openRootDirectory(
             at: sourceURL.standardizedFileURL,
             purpose: .source
         )
         let privateRoot = try Self.makePrivateTemporaryRoot()
-        var keepPrivateRoot = false
-        defer {
-            if !keepPrivateRoot {
-                try? Self.removeOwnedRoot(privateRoot)
-            }
+        do {
+            try Self.copyDeclaredFiles(
+                contentBinding.files,
+                sourceRoot: sourceRoot,
+                snapshotRoot: privateRoot.descriptor
+            )
+            let identities = try Self.captureVerifiedSnapshot(
+                root: privateRoot.descriptor,
+                files: contentBinding.files
+            )
+
+            self.snapshotURL = privateRoot.url
+            self.verifiedModelSHA256 = contentBinding.fingerprintSHA256
+            self.contentBinding = contentBinding
+            self.expectedNodeIdentities = identities
+            self.privateRoot = privateRoot
+        } catch {
+            Self.cleanupFailedConstruction(privateRoot)
+            throw error
         }
-
-        try Self.copyDeclaredFiles(
-            contentBinding.files,
-            sourceRoot: sourceRoot,
-            snapshotRoot: privateRoot.descriptor
-        )
-        let identities = try Self.captureVerifiedSnapshot(
-            root: privateRoot.descriptor,
-            files: contentBinding.files
-        )
-
-        self.snapshotURL = privateRoot.url
-        self.verifiedModelSHA256 = contentBinding.fingerprintSHA256
-        self.contentBinding = contentBinding
-        self.expectedNodeIdentities = identities
-        self.privateRoot = privateRoot
-        keepPrivateRoot = true
     }
 
     deinit {
@@ -105,6 +115,7 @@ public enum RuntimeModelSnapshotError: Error, Equatable, Sendable {
     case sourceAndSnapshotShareInode(String)
     case unexpectedSnapshotEntry(String)
     case missingSnapshotEntry(String)
+    case crossDeviceDirectory(String)
     case snapshotIdentityChanged
     case snapshotRemoved
 }
@@ -144,6 +155,8 @@ extension RuntimeModelSnapshotError: LocalizedError {
             "The model snapshot contains an undeclared entry: \(path)."
         case let .missingSnapshotEntry(path):
             "The model snapshot is missing a declared entry: \(path)."
+        case let .crossDeviceDirectory(path):
+            "Snapshot cleanup refused to cross a filesystem boundary at \(path)."
         case .snapshotIdentityChanged:
             "The retained model snapshot identity changed."
         case .snapshotRemoved:
@@ -163,6 +176,41 @@ private extension RuntimeModelSnapshot {
         let name: String
         let parentDescriptor: OwnedFileDescriptor
         let descriptor: OwnedFileDescriptor
+    }
+
+    final class FailedConstructionCleanupRegistry: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pendingRoots: [PrivateRoot] = []
+
+        func retain(_ privateRoot: PrivateRoot) {
+            lock.lock()
+            pendingRoots.append(privateRoot)
+            lock.unlock()
+        }
+
+        func drain(
+            using cleanup: (PrivateRoot) throws -> Void
+        ) throws {
+            lock.lock()
+            defer { lock.unlock() }
+
+            var remaining: [PrivateRoot] = []
+            var firstError: Error?
+            for privateRoot in pendingRoots {
+                do {
+                    try cleanup(privateRoot)
+                } catch {
+                    remaining.append(privateRoot)
+                    if firstError == nil {
+                        firstError = error
+                    }
+                }
+            }
+            pendingRoots = remaining
+            if let firstError {
+                throw firstError
+            }
+        }
     }
 
     struct NodeIdentity: Equatable, Sendable {
@@ -330,6 +378,32 @@ private extension RuntimeModelSnapshot {
         return owned
     }
 
+    static func cleanupFailedConstruction(_ privateRoot: PrivateRoot) {
+        do {
+            try removeOwnedRoot(privateRoot)
+        } catch {
+            failedConstructionCleanupRegistry.retain(privateRoot)
+            let diagnostic = String(describing: error)
+            cleanupLogger.fault(
+                "Failed model snapshot construction cleanup; retained for retry: \(diagnostic, privacy: .private)"
+            )
+        }
+    }
+
+    static func drainFailedConstructionCleanups() throws {
+        do {
+            try failedConstructionCleanupRegistry.drain { privateRoot in
+                try removeOwnedRoot(privateRoot)
+            }
+        } catch {
+            let diagnostic = String(describing: error)
+            cleanupLogger.fault(
+                "Pending model snapshot construction cleanup still failed; refusing another allocation: \(diagnostic, privacy: .private)"
+            )
+            throw error
+        }
+    }
+
     static func removeOwnedRoot(_ privateRoot: PrivateRoot) throws {
         let rootStatus = try status(
             of: privateRoot.descriptor.rawValue,
@@ -340,7 +414,8 @@ private extension RuntimeModelSnapshot {
 
         try removeDirectoryContents(
             descriptor: privateRoot.descriptor.rawValue,
-            relativePath: ""
+            relativePath: "",
+            rootDevice: rootStatus.st_dev
         )
 
         for _ in 0..<3 {
@@ -403,7 +478,8 @@ private extension RuntimeModelSnapshot {
 
     static func removeDirectoryContents(
         descriptor: Int32,
-        relativePath: String
+        relativePath: String,
+        rootDevice: dev_t
     ) throws {
         let names = try directoryEntryNames(
             descriptor: descriptor,
@@ -420,12 +496,18 @@ private extension RuntimeModelSnapshot {
             }
 
             if entryStatus.st_mode & S_IFMT == S_IFDIR {
+                guard entryStatus.st_dev == rootDevice else {
+                    throw RuntimeModelSnapshotError.crossDeviceDirectory(path)
+                }
                 let child = try openDirectory(
                     at: descriptor,
                     name: name,
                     path: path
                 )
                 let openedStatus = try status(of: child.rawValue, path: path)
+                guard openedStatus.st_dev == rootDevice else {
+                    throw RuntimeModelSnapshotError.crossDeviceDirectory(path)
+                }
                 let childIdentity = NodeIdentity(openedStatus)
                 guard childIdentity == NodeIdentity(entryStatus) else {
                     throw RuntimeModelSnapshotError.snapshotIdentityChanged
@@ -433,7 +515,8 @@ private extension RuntimeModelSnapshot {
 
                 try removeDirectoryContents(
                     descriptor: child.rawValue,
-                    relativePath: path
+                    relativePath: path,
+                    rootDevice: rootDevice
                 )
                 guard let beforeUnlink = try status(
                     at: descriptor,
