@@ -1,4 +1,5 @@
 import Foundation
+import SupraNetworking
 
 /// Abstracts listing and downloading a model repository's files so the download
 /// controller can be unit-tested against a stub.
@@ -31,11 +32,11 @@ public enum HuggingFaceError: Error, LocalizedError {
 
 /// Downloads MLX model repositories directly from the Hugging Face Hub over HTTPS.
 public struct HuggingFaceClient: ModelRepositoryFetching {
-    private let session: URLSession
+    private let transport: PolicyEnforcingURLSessionTransport
     private let host = "https://huggingface.co"
 
     public init(session: URLSession = .shared) {
-        self.session = session
+        self.transport = PolicyEnforcingURLSessionTransport(session: session)
     }
 
     public func listModelFiles(repoID: String) async throws -> [String] {
@@ -44,10 +45,13 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
             throw HuggingFaceError.invalidRepoID(repoID)
         }
         try Self.enforceHost(url)
-        let (data, response) = try await session.data(from: url)
-        try Self.check(response, file: "model index")
+        let result = try await transport.data(
+            for: URLRequest(url: url),
+            policy: RedirectPolicy.huggingFace(initialURL: url)
+        )
+        try Self.check(result.response, file: "model index")
 
-        let info = try JSONDecoder().decode(ModelInfo.self, from: data)
+        let info = try JSONDecoder().decode(ModelInfo.self, from: result.data)
         let files = info.siblings.map(\.rfilename).filter { !$0.isEmpty }
         guard !files.isEmpty else { throw HuggingFaceError.emptyRepository(repoID) }
         return files
@@ -64,11 +68,14 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         }
         try Self.enforceHost(url)
 
-        let (tempURL, response) = try await session.download(from: url)
+        let result = try await transport.download(
+            for: URLRequest(url: url),
+            policy: RedirectPolicy.huggingFace(initialURL: url)
+        )
         do {
-            try Self.check(response, file: file)
+            try Self.check(result.response, file: file)
         } catch {
-            try? FileManager.default.removeItem(at: tempURL)
+            try? FileManager.default.removeItem(at: result.temporaryURL)
             throw error
         }
 
@@ -80,7 +87,7 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         if fileManager.fileExists(atPath: destination.path) {
             try fileManager.removeItem(at: destination)
         }
-        try fileManager.moveItem(at: tempURL, to: destination)
+        try fileManager.moveItem(at: result.temporaryURL, to: destination)
     }
 
     public func fetchConfigJSON(repoID: String) async throws -> Data? {
@@ -89,11 +96,14 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
             return nil
         }
         try Self.enforceHost(url)
-        let (data, response) = try await session.data(from: url)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        let result = try await transport.data(
+            for: URLRequest(url: url),
+            policy: RedirectPolicy.huggingFace(initialURL: url)
+        )
+        if let http = result.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             return nil
         }
-        return data
+        return result.data
     }
 
     private static func validate(_ repoID: String) throws {
@@ -103,12 +113,9 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         }
     }
 
-    /// Fail-closed host guard mirroring the app's default-deny network posture. This
-    /// client is deliberately outside `SupraNetworking.NetworkPolicyService` — it fetches
-    /// public, token-free model weights, never legal data or credentialed endpoints — so
-    /// it enforces its own https-only, single-host allow-list here. Any URL that is not
-    /// HTTPS `huggingface.co` throws rather than being sent, so a future change to `host`
-    /// (or a maliciously-shaped repo/file id) can't silently open a new egress path.
+    /// Fail-closed initial-host guard mirroring the app's default-deny network posture.
+    /// Every request must begin at HTTPS `huggingface.co`; the shared redirect transport
+    /// separately permits only the named token-free CDN origin in `RedirectPolicy`.
     private static func enforceHost(_ url: URL) throws {
         guard url.scheme?.lowercased() == "https", url.host?.lowercased() == "huggingface.co" else {
             throw HuggingFaceError.requestFailed(url.absoluteString, -1)

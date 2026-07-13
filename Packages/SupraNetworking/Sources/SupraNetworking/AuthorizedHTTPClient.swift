@@ -28,7 +28,8 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
     private let policy: any NetworkPolicyServiceProtocol
     private let logger: NetworkRequestLogger
     private let rateLimitTracker: RateLimitTracker
-    private let transport: HTTPTransport
+    private let policyTransport: PolicyEnforcingURLSessionTransport
+    private let injectedTestTransport: HTTPTransport?
     private let redactsQueryValues: Bool
 
     public init(
@@ -37,16 +38,34 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         logger: NetworkRequestLogger,
         rateLimitTracker: RateLimitTracker = RateLimitTracker(),
         redactsQueryValues: Bool = true,
-        transport: @escaping HTTPTransport = { request in
-            try await URLSession.shared.data(for: request)
-        }
+        policyTransport: PolicyEnforcingURLSessionTransport = PolicyEnforcingURLSessionTransport()
     ) {
         self.keyStore = keyStore
         self.policy = policy
         self.logger = logger
         self.rateLimitTracker = rateLimitTracker
         self.redactsQueryValues = redactsQueryValues
-        self.transport = transport
+        self.policyTransport = policyTransport
+        self.injectedTestTransport = nil
+    }
+
+    /// Closure injection is internal and available to `@testable` package tests only. A public
+    /// arbitrary closure could hide a redirecting `URLSession` and recreate SA-ACR-005.
+    init(
+        keyStore: any APIKeyStoreProtocol,
+        policy: any NetworkPolicyServiceProtocol,
+        logger: NetworkRequestLogger,
+        rateLimitTracker: RateLimitTracker = RateLimitTracker(),
+        redactsQueryValues: Bool = true,
+        transport: @escaping HTTPTransport
+    ) {
+        self.keyStore = keyStore
+        self.policy = policy
+        self.logger = logger
+        self.rateLimitTracker = rateLimitTracker
+        self.redactsQueryValues = redactsQueryValues
+        self.policyTransport = PolicyEnforcingURLSessionTransport()
+        self.injectedTestTransport = transport
     }
 
     public func send(
@@ -122,6 +141,19 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
             outgoing.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
         }
 
+        let credentialOwner: String?
+        if authenticated {
+            credentialOwner = "courtlistener-api"
+        } else if RedirectPolicy.containsCredentialHeaders(outgoing) {
+            credentialOwner = "request-credential:\(url.host?.lowercased() ?? "unknown")"
+        } else {
+            credentialOwner = nil
+        }
+        let redirectPolicy = try policy.redirectPolicy(
+            for: url,
+            credentialOwner: credentialOwner
+        )
+
         let logID = try await logger.recordApprovedRequest(
             url: url,
             method: method,
@@ -130,7 +162,18 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
         )
 
         do {
-            let (data, response) = try await transport(outgoing)
+            let data: Data
+            let response: URLResponse
+            let redirects: [RedirectAuditHop]
+            if let injectedTestTransport {
+                (data, response) = try await injectedTestTransport(outgoing)
+                redirects = []
+            } else {
+                let result = try await policyTransport.data(for: outgoing, policy: redirectPolicy)
+                data = result.data
+                response = result.response
+                redirects = result.redirects
+            }
             guard let httpResponse = response as? HTTPURLResponse else {
                 try await logger.finishRequest(
                     id: logID,
@@ -139,13 +182,72 @@ public final class AuthorizedHTTPClient: AuthorizedHTTPClientProtocol, @unchecke
                 )
                 throw AuthorizedHTTPClientError.invalidResponse
             }
+            await recordAllowedRedirects(
+                redirects,
+                finalStatusCode: httpResponse.statusCode,
+                relatedResearchSessionID: relatedResearchSessionID
+            )
             // Best-effort: a logging failure must not discard a successful response
             // (the catch below would otherwise re-log this success as a failure).
-            try? await logger.finishRequest(id: logID, statusCode: httpResponse.statusCode)
+            try? await logger.finishRequest(
+                id: logID,
+                statusCode: redirects.first?.statusCode ?? httpResponse.statusCode
+            )
             return (data, httpResponse)
+        } catch NetworkPolicyError.redirectRejected(let rejection) {
+            await recordAllowedRedirects(
+                rejection.allowedHops,
+                finalStatusCode: rejection.statusCode,
+                relatedResearchSessionID: relatedResearchSessionID,
+                terminalError: "redirectRejected"
+            )
+            let blockedURL = rejection.destinationURL ?? url
+            var blockedRequest = URLRequest(url: blockedURL)
+            blockedRequest.httpMethod = method
+            _ = try? await logger.recordBlockedRequest(
+                url: blockedURL,
+                method: method,
+                blockedReason: "redirectRejected:\(String(describing: rejection.reason))",
+                relatedResearchSessionID: relatedResearchSessionID,
+                requestMetadataJSON: requestMetadataJSON(for: blockedRequest)
+            )
+            try? await logger.finishRequest(
+                id: logID,
+                statusCode: rejection.allowedHops.first?.statusCode,
+                errorMessage: "redirectRejected"
+            )
+            throw NetworkPolicyError.redirectRejected(rejection)
         } catch {
             try? await logger.finishRequest(id: logID, statusCode: nil, errorMessage: error.localizedDescription)
             throw error
+        }
+    }
+
+    private func recordAllowedRedirects(
+        _ redirects: [RedirectAuditHop],
+        finalStatusCode: Int,
+        relatedResearchSessionID: String?,
+        terminalError: String? = nil
+    ) async {
+        for (index, hop) in redirects.enumerated() {
+            var request = URLRequest(url: hop.destinationURL)
+            request.httpMethod = hop.method
+            guard let id = try? await logger.recordApprovedRequest(
+                url: hop.destinationURL,
+                method: hop.method,
+                relatedResearchSessionID: relatedResearchSessionID,
+                requestMetadataJSON: requestMetadataJSON(for: request)
+            ) else {
+                continue
+            }
+            let statusCode = redirects.indices.contains(index + 1)
+                ? redirects[index + 1].statusCode
+                : finalStatusCode
+            try? await logger.finishRequest(
+                id: id,
+                statusCode: statusCode,
+                errorMessage: index == redirects.count - 1 ? terminalError : nil
+            )
         }
     }
 
