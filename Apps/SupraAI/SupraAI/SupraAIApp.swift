@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 
-@main
 struct SupraAIApp: App {
     @NSApplicationDelegateAdaptor(SupraApplicationDelegate.self) private var applicationDelegate
     @StateObject private var environment = AppEnvironment()

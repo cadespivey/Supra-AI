@@ -15,6 +15,7 @@
 		4E4BB1F8196E2C8E3DDBF739 /* SupraTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70160F9EC6701AF74DA1E3A5 /* SupraTheme.swift */; };
 		58BC6CD3754B6B7C554C2FCF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A9C463ED2E226080392F154A /* Assets.xcassets */; };
 		5A0000000000000000000001 /* SupraAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000101 /* SupraAIApp.swift */; };
+		A42B02040000000000000004 /* SignedReleaseSmokeHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02040000000000000104 /* SignedReleaseSmokeHost.swift */; };
 		5A0000000000000000000002 /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000102 /* AppEnvironment.swift */; };
 		5A0000000000000000000003 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000103 /* RootView.swift */; };
 		5A0000000000000000000004 /* MainShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000104 /* MainShellView.swift */; };
@@ -108,6 +109,7 @@
 /* Begin PBXFileReference section */
 		45DF0346474345DA98F88B95 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		5A0000000000000000000101 /* SupraAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupraAIApp.swift; sourceTree = "<group>"; };
+		A42B02040000000000000104 /* SignedReleaseSmokeHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignedReleaseSmokeHost.swift; sourceTree = "<group>"; };
 		5A0000000000000000000102 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
 		5A0000000000000000000103 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000104 /* MainShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainShellView.swift; sourceTree = "<group>"; };
@@ -218,6 +220,7 @@
 			isa = PBXGroup;
 			children = (
 				5A0000000000000000000101 /* SupraAIApp.swift */,
+				A42B02040000000000000104 /* SignedReleaseSmokeHost.swift */,
 				5A0000000000000000000102 /* AppEnvironment.swift */,
 				5A0000000000000000000103 /* RootView.swift */,
 				A42B02020000000000000102 /* RuntimeXPCIntegrationView.swift */,
@@ -570,6 +573,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5A0000000000000000000001 /* SupraAIApp.swift in Sources */,
+				A42B02040000000000000004 /* SignedReleaseSmokeHost.swift in Sources */,
 				5A0000000000000000000002 /* AppEnvironment.swift in Sources */,
 				5A0000000000000000000003 /* RootView.swift in Sources */,
 				A42B02020000000000000002 /* RuntimeXPCIntegrationView.swift in Sources */,
@@ -828,6 +832,7 @@
 				MARKETING_VERSION = 2.2.1;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.supra.SupraAI;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SUPRA_SIGNED_RELEASE_SMOKE_HOST";
 				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
