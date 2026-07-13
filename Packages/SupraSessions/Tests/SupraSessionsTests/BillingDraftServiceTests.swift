@@ -329,4 +329,114 @@ final class BillingDraftServiceTests: XCTestCase {
         XCTAssertEqual(BillingDraftService.normalizedDate("2026-06-22"), "2026-06-22")
         XCTAssertNil(BillingDraftService.normalizedDate("June 22"))
     }
+
+    // MARK: - Adversarial evidence-scope gates (SA-ACR-007)
+
+    func testACRBILL001UnrelatedMatterIdentityAndRulesNeverReachPrompt() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let unrelatedID = try store.matters.createMatter(
+            name: "SECRET CANARY MATTER",
+            clientNames: "SECRET CANARY CLIENT"
+        ).id
+        try store.billing.upsertBillingProfile(
+            matterID: unrelatedID,
+            overrideInstructions: "SECRET CANARY BILLING RULE",
+            billingCodeSet: .litigation
+        )
+        let sourceID = try XCTUnwrap(store.scratchPad.entries(dayID: dayID).first?.id)
+        var captured = ""
+        let json = #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Drafted opposition.","hours":1.0,"sourceEntryIDs":["\#(sourceID)"]}]}"#
+
+        _ = try await BillingDraftService(store: store) { _, prompt in
+            captured = prompt
+            return json
+        }.generateDraft(
+            dayID: dayID,
+            sensitivity: 0.5,
+            timekeeper: timekeeper,
+            invoiceDate: "2026-06-22"
+        )
+
+        XCTAssertFalse(captured.contains("SECRET CANARY MATTER"))
+        XCTAssertFalse(captured.contains("SECRET CANARY CLIENT"))
+        XCTAssertFalse(captured.contains("SECRET CANARY BILLING RULE"))
+    }
+
+    func testACRBILL002FabricatedSourceEntryRejectsWholePayloadBeforePersistence() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let json = #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Invented work.","hours":1.0,"sourceEntryIDs":["fabricated-entry"]}]}"#
+
+        do {
+            _ = try await service(store, returning: json).generateDraft(
+                dayID: dayID,
+                sensitivity: 0.5,
+                timekeeper: timekeeper,
+                invoiceDate: "2026-06-22"
+            )
+            XCTFail("fabricated evidence must reject the entire payload")
+        } catch {
+            XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
+        }
+    }
+
+    func testACRBILL003ValidEntryCannotSelectForeignMatter() async throws {
+        let (store, _, dayID) = try makeStoreWithMatterAndDay()
+        let foreignID = try store.matters.createMatter(name: "Foreign Matter").id
+        let sourceID = try XCTUnwrap(store.scratchPad.entries(dayID: dayID).first?.id)
+        let json = #"{"lineItems":[{"matterID":"\#(foreignID)","narrative":"Misassigned work.","hours":1.0,"sourceEntryIDs":["\#(sourceID)"]}]}"#
+
+        do {
+            _ = try await service(store, returning: json).generateDraft(
+                dayID: dayID,
+                sensitivity: 0.5,
+                timekeeper: timekeeper,
+                invoiceDate: "2026-06-22"
+            )
+            XCTFail("a source entry may not authorize an unrelated matter")
+        } catch {
+            XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
+        }
+    }
+
+    func testACRBILL004EmptySourceListRejectsWholePayload() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let json = #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Untraceable work.","hours":1.0,"sourceEntryIDs":[]}]}"#
+
+        do {
+            _ = try await service(store, returning: json).generateDraft(
+                dayID: dayID,
+                sensitivity: 0.5,
+                timekeeper: timekeeper,
+                invoiceDate: "2026-06-22"
+            )
+            XCTFail("every generated line requires included source evidence")
+        } catch {
+            XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
+        }
+    }
+
+    func testACRBILL005ConflictingEntryAndAttachmentMatterRequiresUnassignedReview() async throws {
+        let (store, mentionedMatterID, dayID) = try makeStoreWithMatterAndDay()
+        let conflictingMatterID = try store.matters.createMatter(name: "Conflicting Matter").id
+        let sourceID = try XCTUnwrap(store.scratchPad.entries(dayID: dayID).first?.id)
+        try store.scratchPad.addAttachment(
+            dayID: dayID,
+            entryID: sourceID,
+            matterID: conflictingMatterID,
+            evidenceKind: .workProduct
+        )
+        let json = #"{"lineItems":[{"matterID":"\#(mentionedMatterID)","narrative":"Ambiguous work.","hours":1.0,"sourceEntryIDs":["\#(sourceID)"]}]}"#
+
+        do {
+            _ = try await service(store, returning: json).generateDraft(
+                dayID: dayID,
+                sensitivity: 0.5,
+                timekeeper: timekeeper,
+                invoiceDate: "2026-06-22"
+            )
+            XCTFail("conflicting matter evidence must not be assigned automatically")
+        } catch {
+            XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
+        }
+    }
 }
