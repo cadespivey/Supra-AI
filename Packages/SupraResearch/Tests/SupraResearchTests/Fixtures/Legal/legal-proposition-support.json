@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "reviewStatus": "pending_attorney_review",
+  "cases": [
+    {
+      "id": "short-source",
+      "answer": "The statute of limitations requires filing the claim within two years [A1].",
+      "authorities": [
+        {
+          "id": "short-a1",
+          "caseName": "Fictional Limitations Case",
+          "citation": "101 F.4th 101",
+          "snippet": "A short search-result snippet mentions a filing deadline.",
+          "text": "A short snippet mentions a deadline."
+        }
+      ],
+      "expectedStatuses": ["unverifiable"],
+      "expectedPassed": false
+    },
+    {
+      "id": "missing-source",
+      "answer": "A court must provide notice before entering the requested injunction [A1].",
+      "authorities": [
+        {
+          "id": "missing-a1",
+          "caseName": "Fictional Notice Case",
+          "citation": "202 F.4th 202"
+        }
+      ],
+      "expectedStatuses": ["unverifiable"],
+      "expectedPassed": false
+    },
+    {
+      "id": "truncated-source",
+      "answer": "The court requires meaningful notice before entering default judgment [A1].",
+      "authorities": [
+        {
+          "id": "truncated-a1",
+          "caseName": "Fictional Default Case",
+          "citation": "303 F.4th 303",
+          "text": "The court discussed meaningful notice before entering default judgment. [text truncated to fit the context window]"
+        }
+      ],
+      "expectedStatuses": ["unverifiable"],
+      "expectedPassed": false
+    },
+    {
+      "id": "unrelated-source",
+      "answer": "Punitive damages are categorically unavailable for every securities-fraud claim [A1].",
+      "authorities": [
+        {
+          "id": "unrelated-a1",
+          "caseName": "Fictional Lease Case",
+          "citation": "404 F.4th 404",
+          "text": "The parties negotiated a commercial warehouse lease containing a renewal option. The opinion resolves whether timely written notice exercised that option, applies ordinary contract interpretation principles, and remands for calculation of base rent. The record contains no securities transaction, fraud theory, punitive-damages request, or categorical remedial rule. The court instead construes the lease language in light of the parties' course of performance and the dates on which renewal notices were delivered."
+        }
+      ],
+      "expectedStatuses": ["unsupported"],
+      "expectedPassed": false
+    },
+    {
+      "id": "contradictory-source",
+      "answer": "The limitations rule requires every claim to be filed within two years of discovery [A1].",
+      "authorities": [
+        {
+          "id": "contradiction-a1",
+          "caseName": "Fictional Discovery Case",
+          "citation": "505 F.4th 505",
+          "text": "The limitations rule does not require every claim to be filed within two years of discovery. The opinion rejects that proposed uniform period because the governing enactment supplies different accrual rules for distinct claims. It holds that the plaintiff's contract count accrued at breach and expressly declines to adopt a discovery rule for every cause of action."
+        }
+      ],
+      "expectedStatuses": ["unsupported"],
+      "expectedPassed": false
+    },
+    {
+      "id": "faithful-paraphrase",
+      "answer": "The limitations period for the securities-fraud claim runs two years from discovery of the violation [A1].",
+      "authorities": [
+        {
+          "id": "supported-a1",
+          "caseName": "Fictional Securities Case",
+          "citation": "606 F.4th 606",
+          "url": "https://example.test/opinion/606",
+          "text": "We hold that a securities-fraud claim must be filed no later than two years after discovery of the facts constituting the violation. The discovery period begins when the plaintiff actually discovers, or a reasonably diligent plaintiff would have discovered, those facts. The judgment is affirmed because the complaint was filed more than two years after discovery."
+        }
+      ],
+      "expectedStatuses": ["supported"],
+      "expectedPassed": true
+    },
+    {
+      "id": "same-label-different-proposition",
+      "answer": "A securities-fraud claim must be filed within two years after discovery [A1]. Punitive damages are categorically unavailable for that claim [A1].",
+      "authorities": [
+        {
+          "id": "split-a1",
+          "caseName": "Fictional Securities Case",
+          "citation": "707 F.4th 707",
+          "text": "A securities-fraud claim must be filed no later than two years after discovery of the facts constituting the violation. The opinion addresses accrual and reasonable diligence in discovering those facts. It does not decide remedies because the only issue presented is whether the complaint was timely filed under the limitations provision."
+        }
+      ],
+      "expectedStatuses": ["supported", "unsupported"],
+      "expectedPassed": false
+    },
+    {
+      "id": "mixed-outcome",
+      "answer": "The court requires meaningful notice before entering default judgment [A1]. A court must award treble damages whenever notice is delayed [A2].",
+      "authorities": [
+        {
+          "id": "mixed-a1",
+          "caseName": "Fictional Notice Case",
+          "citation": "808 F.4th 808",
+          "text": "Before entering default judgment, the court must ensure that the defendant received meaningful notice of the proceeding and an opportunity to respond. Because service was defective, the judgment is vacated and the matter is remanded for renewed notice. The opinion emphasizes that notice must be reasonably calculated to reach the affected party before judgment is entered."
+        },
+        {
+          "id": "mixed-a2",
+          "caseName": "Fictional Evidence Case",
+          "citation": "909 F.4th 909",
+          "text": "This appeal concerns authentication of archived business records. The court holds that the records custodian supplied an adequate foundation and that admission of the exhibits was harmless. The opinion neither considers delayed notice nor discusses damages, multipliers, statutory remedies, or any requirement to award treble damages."
+        }
+      ],
+      "expectedStatuses": ["supported", "unsupported"],
+      "expectedPassed": false
+    }
+  ]
+}

@@ -22,14 +22,27 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertLessThan(packet.count, longText.count, "an overlong authority must be trimmed to its budget")
     }
 
-    func testInRangePacketLabelCountsAsACitation() {
-        let authorities = [LegalAuthority(id: "a1", authorityType: .case, caseName: "Foo v. Bar", citation: "1 U.S. 1")]
+    func testShortBarePacketLabelIsUnverifiableAndFailsReport() throws {
+        // ACR-LEGAL-01 expected RED: the old <1,200-character shortcut treats
+        // this bare label as grounded even though no opinion text was hydrated.
+        let authorities = [LegalAuthority(
+            id: "a1",
+            authorityType: .case,
+            caseName: "Foo v. Bar",
+            citation: "1 U.S. 1",
+            snippet: "A short search-result snippet about an unrelated procedural history."
+        )]
         let answer = "The statute of limitations requires filing the claim within two years [A1]."
         let report = LegalCitationVerifier.verify(answer: answer, authorities: authorities)
+
         XCTAssertFalse(
             report.issues.contains { $0.kind == .missingCitation },
-            "a proposition ending in an in-range [A#] label should be treated as cited"
+            "the label is structurally present; the failure must be source support"
         )
+        XCTAssertFalse(report.passed, "a bare label and short snippet must never produce a clean report")
+        let encoded = String(decoding: try JSONEncoder().encode(report), as: UTF8.self)
+        XCTAssertTrue(encoded.contains(#""status":"unverifiable""#), encoded)
+        XCTAssertFalse(encoded.contains(#""status":"supported""#), encoded)
     }
 
     func testLabelBeyondPacketCapIsFlaggedEvenWhenMoreAuthoritiesRetrieved() {
