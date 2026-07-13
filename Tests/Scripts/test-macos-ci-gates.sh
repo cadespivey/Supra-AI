@@ -184,11 +184,26 @@ run_case \
 
 xpc_hook="${temporary_dir}/RuntimeXPCIntegrationTests.swift"
 printf '%s\n' 'final class RuntimeXPCIntegrationTests: XCTestCase {}' >"$xpc_hook"
+
 run_case \
-  "the exact hosted XPC selector satisfies the hook" \
+  "a missing remediation accessibility smoke test fails closed" \
+  1 \
+  "remediation accessibility smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$missing_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+accessibility_hook="${temporary_dir}/ResearchAuthoritiesUITests.swift"
+printf '%s\n' \
+  'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
+  'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  >"$accessibility_hook"
+run_case \
+  "the exact hosted XPC and accessibility selectors satisfy the hook" \
   0 \
   "Hosted XPC integration hook passed." \
   env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
     bash "${scripts}/run-app-smoke-tests.sh" --check
 
 run_case \
