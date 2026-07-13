@@ -33,6 +33,7 @@ struct MainShellView: View {
             if let route = note.object as? AppRoute { selection = .route(route) }
         }
         #if DEBUG
+        .onAppear { applyUITestInitialSelection() }
         // Sandboxes (the app's and any automation harness's) exclude each
         // other's filesystems, so the DEBUG automation channel rides
         // distributed notifications instead of a command file.
@@ -124,6 +125,20 @@ struct MainShellView: View {
             }
         default:
             break
+        }
+    }
+
+    private func applyUITestInitialSelection() {
+        guard AppEnvironment.isUITestMode else { return }
+        let arguments = ProcessInfo.processInfo.arguments
+        if let routeFlag = arguments.firstIndex(of: "-uiTestInitialRoute"),
+           arguments.indices.contains(routeFlag + 1),
+           let route = AppRoute(rawValue: arguments[routeFlag + 1]) {
+            selection = .route(route)
+        } else if arguments.contains("-uiTestSelectFirstMatter"),
+                  let id = environment.mattersController.matters.first?.id {
+            environment.mattersController.select(matterID: id)
+            selection = .matter(id)
         }
     }
     #endif

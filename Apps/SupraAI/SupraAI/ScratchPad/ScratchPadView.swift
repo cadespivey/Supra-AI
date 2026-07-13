@@ -53,6 +53,10 @@ struct ScratchPadView: View {
             }
         }
         .onAppear {
+            if AppEnvironment.isUITestMode,
+               ProcessInfo.processInfo.arguments.contains("-uiTestInitialBillingTab") {
+                tab = .draft
+            }
             controller.refreshCalendarState()
             billing.applySettings(billingSettings.settings)
         }
@@ -218,7 +222,10 @@ struct ScratchPadView: View {
                 .font(.supraTitle)
             GhostSegmentedControl(
                 selection: $tab,
-                segments: [(.note, "Note", ""), (.draft, "Billing draft", "")]
+                segments: [
+                    (.note, "Note", "scratchpad.tab.note"),
+                    (.draft, "Billing draft", "scratchpad.tab.billing"),
+                ]
             )
         }
     }

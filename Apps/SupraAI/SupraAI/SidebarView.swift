@@ -15,6 +15,7 @@ struct SidebarView: View {
                 Label(route.title, systemImage: route.systemImage)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
+                    .accessibilityIdentifier("sidebar.route.\(route.rawValue)")
                     .onHover { setRowHover($0, .route(route)) }
                     .listRowBackground(rowHoverBackground(.route(route)))
                     .tag(SidebarSelection.route(route))

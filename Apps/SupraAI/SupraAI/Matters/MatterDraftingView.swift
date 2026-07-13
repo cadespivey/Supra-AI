@@ -166,9 +166,12 @@ struct MatterDraftingView: View {
                     .foregroundStyle(.orange)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Previous draft artifacts need review").font(.supraHeadline)
+                    Text("Previous draft artifacts need review")
+                        .font(.supraHeadline)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text("\(controller.legacyDraftsNeedReviewCount) artifact(s) were generated before the current pre-render verification gate. Review the matter Audit and exports, and regenerate anything you plan to use.")
                         .font(.supraCaption)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
                 Button("I Reviewed Them") {
@@ -178,6 +181,8 @@ struct MatterDraftingView: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("drafting.legacyReviewWarning")
+            .accessibilityLabel("Draft artifact review required")
+            .accessibilityValue("\(controller.legacyDraftsNeedReviewCount) previous artifact(s) need review or regeneration before use.")
         }
     }
 

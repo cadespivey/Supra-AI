@@ -58,6 +58,7 @@ struct MatterOutputsView: View {
                         .foregroundStyle(.secondary)
                     }
                 }
+                .accessibilityIdentifier("output.row.\(output.title)")
             }
         }
     }

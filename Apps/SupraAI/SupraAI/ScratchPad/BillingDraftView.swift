@@ -87,19 +87,34 @@ struct BillingDraftView: View {
             }
             Spacer()
             if billing.hasDraft {
-                Menu {
-                    Section("Format") {
-                        ForEach(BillingExportFormat.allCases) { format in
-                            Button(format.label) { export(format) }
+                if billing.canExport {
+                    Menu {
+                        Section("Format") {
+                            ForEach(BillingExportFormat.allCases) { format in
+                                Button(format.label) { export(format) }
+                            }
                         }
+                    } label: {
+                        Label("Export", systemImage: "square.and.arrow.up")
                     }
-                } label: {
-                    Label("Export", systemImage: "square.and.arrow.up")
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .accessibilityIdentifier("billing.export")
+                    .accessibilityLabel("Export billing draft, available")
+                    .accessibilityHint("Choose a billing export format")
+                    .help("Export billing draft")
+                } else {
+                    Button(action: {}) {
+                        Label("Export", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.borderless)
+                    .fixedSize()
+                    .disabled(true)
+                    .accessibilityIdentifier("billing.export")
+                    .accessibilityLabel("Export billing draft unavailable until migrated matter assignments are reviewed")
+                    .accessibilityHint("Review every migrated matter assignment to enable export")
+                    .help("Review this migrated multi-matter draft before export")
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .disabled(!billing.canExport)
-                .help(billing.canExport ? "Export billing draft" : "Review this migrated multi-matter draft before export")
             }
         }
         .padding(12)
@@ -111,18 +126,23 @@ struct BillingDraftView: View {
                 .foregroundStyle(.orange)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Legacy multi-matter draft needs review").font(.supraHeadline)
+                Text("Legacy multi-matter draft needs review")
+                    .font(.supraHeadline)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text("Confirm every matter assignment and source entry. This draft was created before evidence-reachable matter isolation was enforced.")
                     .font(.supraCaption)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier("billing.legacyReviewWarning")
+            .accessibilityLabel("Billing draft review required. Legacy multi-matter draft. Confirm every matter assignment and source entry before export.")
+            .accessibilityValue("Legacy multi-matter draft. Confirm every matter assignment and source entry before export.")
             Spacer()
             Button("I Reviewed Assignments") { billing.confirmLegacyReview() }
                 .accessibilityHint("Records explicit review and enables export")
         }
         .padding(10)
         .background(Color.orange.opacity(0.12))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("billing.legacyReviewWarning")
     }
 
     private func statusRow(_ message: String) -> some View {

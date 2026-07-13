@@ -71,6 +71,11 @@ final class ModelAutoAssignLoadTests: XCTestCase {
     func testAssigningModelAutoLoadsItWhenIdle() async throws {
         let store = try makeStore()
         let stub = StubRuntimeClient()
+        let loadRequested = expectation(description: "assigned model load requested")
+        stub.onLoadModel = { [weak stub] _ in
+            stub?.onLoadModel = nil
+            loadRequested.fulfill()
+        }
         let library = ModelLibrary(store: store, runtimeClient: stub)
         let model = try library.addModel(displayName: "Draft model", path: "/tmp/draft", bookmarkData: nil)
 
@@ -78,8 +83,8 @@ final class ModelAutoAssignLoadTests: XCTestCase {
         // first assignment auto-loads. Drive an explicit assignment too and confirm a
         // load was requested.
         library.assignModel(model.id, to: .drafting)
-        // Let the auto-load Task run.
-        try await Task.sleep(nanoseconds: 50_000_000)
+        await fulfillment(of: [loadRequested], timeout: 1)
+        stub.onLoadModel = nil
 
         XCTAssertFalse(stub.loadRequests.isEmpty, "assigning a model should auto-load it")
         XCTAssertEqual(stub.loadRequests.last?.modelID.rawValue.uuidString, model.id)
@@ -104,8 +109,12 @@ final class ModelAutoAssignLoadTests: XCTestCase {
         let countAfterFirstLoad = stub.loadRequests.count
 
         // Assigning `second` to a role must NOT swap the loaded model out (loaded state).
+        let unexpectedLoad = expectation(description: "no replacement model load")
+        unexpectedLoad.isInverted = true
+        stub.onLoadModel = { _ in unexpectedLoad.fulfill() }
         library.assignModel(second.id, to: .critique)
-        try await Task.sleep(nanoseconds: 50_000_000)
+        await fulfillment(of: [unexpectedLoad], timeout: 0.2)
+        stub.onLoadModel = nil
 
         XCTAssertEqual(stub.loadRequests.count, countAfterFirstLoad, "assignment must not auto-load while another model is loaded")
         if case let .loaded(id) = library.loadState {

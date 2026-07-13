@@ -147,38 +147,51 @@ final class ResearchAuthoritiesUITests: XCTestCase {
     }
 
     func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() throws {
-        let app = try launchApp(extraArguments: ["-uiTestRemediationWarnings"])
+        let app = try launchApp(extraArguments: [
+            "-uiTestRemediationWarnings",
+            "-uiTestSelectFirstMatter",
+            "-uiTestInitialMatterTab", "Outputs",
+        ])
 
-        let matter = seededMatterRow(in: app)
-        XCTAssertTrue(matter.waitForExistence(timeout: 20), "Seeded matter did not appear in the sidebar")
-        matter.click()
+        XCTAssertTrue(
+            seededMatterRow(in: app).waitForExistence(timeout: 20),
+            "Seeded matter did not appear in the sidebar"
+        )
 
-        try selectMatterTab("Outputs")
+        XCTAssertTrue(
+            app.buttons["matterTab.Outputs"].waitForExistence(timeout: 10),
+            "Outputs tab did not appear before navigation"
+        )
         let output = app.descendants(matching: .any)["output.row.Legacy Verification Fixture"]
         XCTAssertTrue(output.waitForExistence(timeout: 10), "Legacy output fixture did not appear")
         output.click()
 
         let warning = app.descendants(matching: .any)["output.verificationWarning"]
         XCTAssertTrue(warning.waitForExistence(timeout: 10), "Legacy verification warning was not shown")
-        XCTAssertEqual(warning.label, "Output verification status")
-        XCTAssertTrue(
-            warning.value as? String == "Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it.",
-            "VoiceOver value did not describe the verification state and required action: \(warning.value ?? "nil")"
+        XCTAssertEqual(
+            warning.label,
+            "Output verification status. Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
         )
 
         let export = app.descendants(matching: .any)["output.export"]
         XCTAssertTrue(export.exists, "Unavailable export action should remain discoverable")
         XCTAssertFalse(export.isEnabled, "Legacy output must not be exportable")
-        XCTAssertEqual(export.value as? String, "Unavailable until the output is reverified or regenerated")
+        XCTAssertEqual(export.label, "Export output unavailable until the output is reverified or regenerated")
 
         let reverify = app.buttons["Reverify Sources"]
         XCTAssertTrue(reverify.exists)
-        XCTAssertTrue(reverify.isHittable, "Warning repair action must be keyboard and pointer reachable")
+        XCTAssertTrue(
+            reverify.isHittable,
+            "Warning repair action must be keyboard and pointer reachable: \(reverify.debugDescription)"
+        )
     }
 
     func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() throws {
-        let app = try launchApp(extraArguments: ["-uiTestRemediationWarnings"])
-        navigate(to: "scratchpad")
+        let app = try launchApp(extraArguments: [
+            "-uiTestRemediationWarnings",
+            "-uiTestInitialRoute", "scratchpad",
+            "-uiTestInitialBillingTab",
+        ])
 
         let billingTab = app.buttons["scratchpad.tab.billing"]
         XCTAssertTrue(billingTab.waitForExistence(timeout: 10), "ScratchPad billing tab did not appear")
@@ -186,27 +199,19 @@ final class ResearchAuthoritiesUITests: XCTestCase {
 
         let warning = app.descendants(matching: .any)["billing.legacyReviewWarning"]
         XCTAssertTrue(warning.waitForExistence(timeout: 10), "Legacy billing warning was not shown")
-        XCTAssertEqual(warning.label, "Billing draft review required")
         XCTAssertEqual(
-            warning.value as? String,
-            "Legacy multi-matter draft. Confirm every matter assignment and source entry before export."
+            warning.label,
+            "Billing draft review required. Legacy multi-matter draft. Confirm every matter assignment and source entry before export."
         )
 
         let export = app.descendants(matching: .any)["billing.export"]
         XCTAssertTrue(export.exists, "Unavailable billing export should remain discoverable")
         XCTAssertFalse(export.isEnabled, "Migrated billing draft must not be exportable before review")
-        XCTAssertEqual(export.value as? String, "Unavailable until migrated matter assignments are reviewed")
+        XCTAssertEqual(export.label, "Export billing draft unavailable until migrated matter assignments are reviewed")
 
         let review = app.buttons["I Reviewed Assignments"]
         XCTAssertTrue(review.exists)
         XCTAssertTrue(review.isHittable, "Billing review action must be keyboard and pointer reachable")
-    }
-
-    private func navigate(to route: String) {
-        DistributedNotificationCenter.default().post(
-            name: .init("SupraDebugNav"),
-            object: "route \(route)"
-        )
     }
 
     private func selectMatterTab(_ rawValue: String) throws {

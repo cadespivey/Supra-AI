@@ -352,6 +352,67 @@ final class AppEnvironment: ObservableObject {
             mattersController.loadMatters()
         }
         seedUITestCitationsChatIfNeeded()
+        seedUITestRemediationWarningsIfNeeded()
+    }
+
+    /// Seeds explicit legacy-state fixtures only for the remediation accessibility
+    /// smoke test. Keeping this behind a separate launch argument prevents the
+    /// normal UI suite from depending on migrated data.
+    private func seedUITestRemediationWarningsIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestRemediationWarnings"),
+              let matterID = mattersController.matters.first?.id
+        else { return }
+
+        do {
+            let existing = try store.structuredOutputs.fetchOutputs(matterID: matterID)
+            if !existing.contains(where: { $0.title == "Legacy Verification Fixture" }) {
+                let output = try store.structuredOutputs.createOutput(
+                    matterID: matterID,
+                    title: "Legacy Verification Fixture",
+                    outputType: .documentQA,
+                    status: .needsReview
+                )
+                _ = try store.structuredOutputs.createVersion(
+                    structuredOutputID: output.id,
+                    contentMarkdown: "# Legacy Verification Fixture\n\nSynthetic UI-test content.",
+                    requiredSections: [],
+                    presentSections: [],
+                    missingSections: [],
+                    verificationStatus: .legacyUnverified,
+                    outputStatus: .needsReview
+                )
+                _ = try store.remediationRecovery.requireReview(
+                    kind: .legacyStructuredOutput,
+                    matterID: matterID,
+                    relatedTable: "structured_outputs",
+                    relatedID: output.id
+                )
+            }
+
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = .current
+            formatter.dateFormat = "yyyy-MM-dd"
+            let day = try store.scratchPad.fetchOrCreateDay(formatter.string(from: Date()))
+            let draft = try store.billing.drafts(dayID: day.id).first ?? store.billing.createDraft(
+                dayID: day.id,
+                lineItems: [BillingLineItemInput(
+                    matterID: matterID,
+                    narrative: "Synthetic migrated billing assignment",
+                    hours: 0.5,
+                    workDate: day.day
+                )]
+            )
+            _ = try store.remediationRecovery.requireReview(
+                kind: .multiMatterBillingDraft,
+                matterID: nil,
+                relatedTable: "billing_drafts",
+                relatedID: draft.id
+            )
+        } catch {
+            assertionFailure("Could not seed remediation accessibility fixture: \(error)")
+        }
     }
 
     /// Seeds a global chat whose assistant answer carries clickable `[A1]` (authority)

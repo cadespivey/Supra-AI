@@ -105,25 +105,38 @@ struct OutputDetailView: View {
                     .font(.supraCaption).foregroundStyle(.secondary)
             }
             Spacer()
-            Menu {
-                Section("Format") {
-                    ForEach(DocumentExportFormat.allCases, id: \.self) { format in
-                        Button(format.fileExtension.uppercased()) {
-                            if let url = controller.exportOutput(outputID: outputID, format: format) {
-                                NSWorkspace.shared.activateFileViewerSelecting([url])
+            if selected?.verificationStatus == OutputVerificationStatus.allSupported.rawValue {
+                Menu {
+                    Section("Format") {
+                        ForEach(DocumentExportFormat.allCases, id: \.self) { format in
+                            Button(format.fileExtension.uppercased()) {
+                                if let url = controller.exportOutput(outputID: outputID, format: format) {
+                                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                                }
                             }
                         }
                     }
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
                 }
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.up")
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityIdentifier("output.export")
+                .accessibilityLabel("Export output, available")
+                .accessibilityHint("Choose an export format")
+                .help("Export verified output")
+            } else {
+                Button(action: {}) {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.borderless)
+                .fixedSize()
+                .disabled(true)
+                .accessibilityIdentifier("output.export")
+                .accessibilityLabel("Export output unavailable until the output is reverified or regenerated")
+                .accessibilityHint("Reverify retained sources or regenerate from fresh sources to enable export")
+                .help("Reverify or regenerate before export")
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .disabled(selected?.verificationStatus != OutputVerificationStatus.allSupported.rawValue)
-            .help(selected?.verificationStatus == OutputVerificationStatus.allSupported.rawValue
-                ? "Export verified output"
-                : "Reverify or regenerate before export")
             let activeMissing = versions.first { $0.isActive }?.missingSections ?? []
             if !activeMissing.isEmpty {
                 VStack(alignment: .trailing, spacing: 2) {
@@ -149,23 +162,38 @@ struct OutputDetailView: View {
                         ? "Previous output needs revalidation"
                         : "Output support needs review")
                         .font(.supraHeadline)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
                         ? "This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
                         : "One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active.")
                         .font(.supraCaption)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityIdentifier("output.verificationWarning")
+                .accessibilityLabel(
+                    version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
+                        ? "Output verification status. Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
+                        : "Output verification status. Output support needs review. One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active."
+                )
+                .accessibilityValue(
+                    version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
+                        ? "Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
+                        : "Output support needs review. One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active."
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer()
                 if version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue {
                     Button("Reverify Sources") {
                         _ = controller.reverifyOutput(outputID)
                     }
+                    .fixedSize()
+                    .layoutPriority(1)
                     .accessibilityHint("Checks this version against its retained source packet without deleting the original")
                 }
             }
             .padding(10)
             .background(Color.orange.opacity(0.12))
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("output.verificationWarning")
         }
     }
 

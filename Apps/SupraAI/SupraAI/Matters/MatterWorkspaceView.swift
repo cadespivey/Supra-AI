@@ -68,7 +68,10 @@ struct MatterWorkspaceView: View {
         } message: {
             Text("This hides the matter and its chats. You can't undo this from the app.")
         }
-        .task { await pollUITestTabCommand() }
+        .task {
+            applyUITestInitialTab()
+            await pollUITestTabCommand()
+        }
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .supraDebugSelectMatterTab)) { note in
             guard let command = note.object as? String else { return }
@@ -145,6 +148,16 @@ struct MatterWorkspaceView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
+    }
+
+    @MainActor
+    private func applyUITestInitialTab() {
+        guard AppEnvironment.isUITestMode else { return }
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flag = arguments.firstIndex(of: "-uiTestInitialMatterTab"),
+              arguments.indices.contains(flag + 1),
+              let target = MatterTab(rawValue: arguments[flag + 1]) else { return }
+        tab = target
     }
 
     @MainActor

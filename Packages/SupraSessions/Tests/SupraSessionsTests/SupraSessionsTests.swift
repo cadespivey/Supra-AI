@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import SupraCore
 import SupraNetworking
 import SupraResearch
@@ -1791,25 +1792,25 @@ final class SupraSessionsTests: XCTestCase {
         let defaults = try makeScratchDefaults()
         let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
 
-        // Distinct creation instants so the date sorts have something to order.
+        // Creation order is imposed explicitly below so this test is independent
+        // of scheduler and clock resolution.
         let zebra = try controller.createMatter(
             MatterDraft(name: "Zebra Holdings v. Apex", jurisdiction: "Florida", clientNames: "Landau Corp.", clientID: "10")
         )
-        try await Task.sleep(nanoseconds: 30_000_000)
         let acme = try controller.createMatter(
             MatterDraft(name: "Acme v. Widgets", jurisdiction: "Florida", clientNames: "Yost Industries", clientID: "9")
         )
-        try await Task.sleep(nanoseconds: 30_000_000)
         let noClient = try controller.createMatter(
             MatterDraft(name: "Middleton Estate", jurisdiction: "Florida")
         )
+        try imposeMatterTimeline([zebra.id, acme.id, noClient.id], in: store)
+        controller.loadMatters()
 
         // Default is date-modified (newest first) — matches the pre-sort behavior.
         XCTAssertEqual(controller.sortMode, .dateModified)
         XCTAssertEqual(controller.matters.map(\.id), [noClient.id, acme.id, zebra.id])
 
         // Touching the oldest matter surfaces it under date-modified…
-        try await Task.sleep(nanoseconds: 30_000_000)
         var draft = try XCTUnwrap(controller.draft(forMatter: zebra.id))
         draft.notes = "touched"
         try controller.updateMatter(id: zebra.id, draft: draft)
@@ -1841,10 +1842,10 @@ final class SupraSessionsTests: XCTestCase {
         let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
 
         let first = try controller.createMatter(name: "First")
-        try await Task.sleep(nanoseconds: 30_000_000)
         let second = try controller.createMatter(name: "Second")
-        try await Task.sleep(nanoseconds: 30_000_000)
         let third = try controller.createMatter(name: "Third")
+        try imposeMatterTimeline([first.id, second.id, third.id], in: store)
+        controller.loadMatters()
 
         // Entering manual mode keeps the order the user was looking at
         // (date-modified: newest first).
@@ -1978,10 +1979,10 @@ final class SupraSessionsTests: XCTestCase {
         let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
 
         let alpha = try controller.createMatter(name: "Alpha")
-        try await Task.sleep(nanoseconds: 30_000_000)
         let bravo = try controller.createMatter(name: "Bravo")
-        try await Task.sleep(nanoseconds: 30_000_000)
         let charlie = try controller.createMatter(name: "Charlie")
+        try imposeMatterTimeline([alpha.id, bravo.id, charlie.id], in: store)
+        controller.loadMatters()
 
         controller.setSortMode(.name)
         XCTAssertEqual(controller.matters.map(\.id), [alpha.id, bravo.id, charlie.id])
@@ -2023,10 +2024,10 @@ final class SupraSessionsTests: XCTestCase {
         let controller = MattersController(store: store, runtimeClient: stub, defaults: defaults)
 
         let alpha = try controller.createMatter(name: "Alpha")
-        try await Task.sleep(nanoseconds: 30_000_000)
         let bravo = try controller.createMatter(name: "Bravo")
-        try await Task.sleep(nanoseconds: 30_000_000)
         let charlie = try controller.createMatter(name: "Charlie")
+        try imposeMatterTimeline([alpha.id, bravo.id, charlie.id], in: store)
+        controller.loadMatters()
 
         controller.setPinned(matterID: charlie.id, pinned: true)
         controller.setSortMode(.manual)
@@ -3673,6 +3674,21 @@ final class SupraSessionsTests: XCTestCase {
         return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
     }
 
+    /// Assigns stable, increasing creation/update instants without waiting for
+    /// wall-clock resolution. IDs are ordered oldest to newest.
+    private func imposeMatterTimeline(_ matterIDs: [String], in store: SupraStore) throws {
+        let baseline = Date(timeIntervalSince1970: 1_700_000_000)
+        try store.database.writer.write { db in
+            for (index, matterID) in matterIDs.enumerated() {
+                let timestamp = baseline.addingTimeInterval(TimeInterval(index))
+                try db.execute(
+                    sql: "UPDATE matters SET created_at = ?, updated_at = ? WHERE id = ?",
+                    arguments: [timestamp, timestamp, matterID]
+                )
+            }
+        }
+    }
+
     /// An isolated UserDefaults suite, wiped up front so persisted preferences
     /// (e.g. the matter sort mode) start clean and stay hermetic per test.
     private func makeScratchDefaults() throws -> UserDefaults {
@@ -3696,6 +3712,7 @@ final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private var _cancelledGenerationIDs: [GenerationID] = []
     private var _loadRequests: [LoadModelRequest] = []
+    private var _onLoadModel: (@Sendable (LoadModelRequest) -> Void)?
 
     var cancelledGenerationIDs: [GenerationID] {
         lock.withLock { _cancelledGenerationIDs }
@@ -3703,6 +3720,11 @@ final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
 
     var loadRequests: [LoadModelRequest] {
         lock.withLock { _loadRequests }
+    }
+
+    var onLoadModel: (@Sendable (LoadModelRequest) -> Void)? {
+        get { lock.withLock { _onLoadModel } }
+        set { lock.withLock { _onLoadModel = newValue } }
     }
 
     init(
@@ -3716,7 +3738,11 @@ final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     func connect() async throws {}
 
     func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
-        lock.withLock { _loadRequests.append(request) }
+        let callback = lock.withLock {
+            _loadRequests.append(request)
+            return _onLoadModel
+        }
+        callback?(request)
         return loadResult
     }
 
