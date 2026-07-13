@@ -64,7 +64,9 @@ approved release job and destroyed or wiped immediately afterward. It must use a
 noninteractive release UID with no interactive login, concurrent job, background service, or
 untrusted same-UID process. Never reuse this runner for pull requests, ordinary CI, developer
 work, or multiple concurrent release jobs. Mount the protected model directory only for the
-approved job and remove access during teardown.
+approved job and remove access during teardown. Restrict the runner group to this repository
+and to the two protected release workflows; repository labels alone are not an access-control
+boundary.
 
 This isolation is part of the signed-smoke security boundary, not merely an operations
 preference. The runtime service copies the authorized model into a private, verified snapshot,

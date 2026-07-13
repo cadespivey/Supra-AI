@@ -44,6 +44,17 @@ fi
 release_workflow="${repo_root}/.github/workflows/release.yml"
 rehearsal_workflow="${repo_root}/.github/workflows/release-rehearsal.yml"
 rollback_workflow="${repo_root}/.github/workflows/emergency-release-rollback.yml"
+
+while IFS= read -r workflow; do
+  case "$workflow" in
+    "$release_workflow"|"$rehearsal_workflow") ;;
+    *)
+      fail 'isolated release runner label is used outside protected release workflows'
+      break
+      ;;
+  esac
+done < <(grep -RslF 'supra-release-isolated' "${repo_root}/.github/workflows" || true)
+
 if [[ -f "$release_workflow" ]]; then
   grep -Fq 'environment: production-release' "$release_workflow" \
     || fail 'release workflow is not bound to production-release'
@@ -101,10 +112,23 @@ if [[ -f "$release_script" ]]; then
   for call in release-preflight.sh verify-release-artifacts.sh publish-release-transaction.sh; do
     grep -Fq "$call" "$release_script" || fail "release entrypoint omits required stage: ${call}"
   done
-  grep -Fq 'SUPRA_RELEASE_ISOLATED_RUNNER' "$release_script" \
-    || fail 'release entrypoint does not require the isolated release runner'
+  if ! grep -Fqx "[[ \"\${SUPRA_RELEASE_ISOLATED_RUNNER:-0}\" == '1' ]] \\" \
+      "$release_script" \
+    || ! grep -Fqx \
+      "  || release_die 'signed release qualification requires the dedicated isolated release runner'" \
+      "$release_script"; then
+    fail 'release entrypoint does not enforce the isolated release runner'
+  fi
   grep -Fq 'no GitHub release, tag, upload, appcast, push, or deployment was attempted' "$release_script" \
     || fail 'signed rehearsal has no explicit non-publication terminal state'
+fi
+
+release_protection_doc="${repo_root}/Docs/Release-Protection.md"
+if [[ -f "$release_protection_doc" ]]; then
+  grep -Fq 'same-UID' "$release_protection_doc" \
+    || fail 'release protection documentation omits the same-UID threat boundary'
+  grep -Fq 'ephemeral' "$release_protection_doc" \
+    || fail 'release protection documentation omits the ephemeral runner boundary'
 fi
 
 if grep -Rqs -- '--admin' \
