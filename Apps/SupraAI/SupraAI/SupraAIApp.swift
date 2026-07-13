@@ -35,14 +35,6 @@ struct SupraAIApp: App {
 private final class SupraApplicationDelegate: NSObject, NSApplicationDelegate {
     private var freshWindowOpenScheduled = false
 
-    func applicationShouldRestoreState(_ app: NSApplication) -> Bool {
-        !shouldResetWindowRestorationForUITest
-    }
-
-    func applicationShouldSaveState(_ app: NSApplication) -> Bool {
-        !shouldResetWindowRestorationForUITest
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         scheduleFreshUITestWindowIfNeeded(notification.object as? NSApplication)
     }
@@ -52,7 +44,7 @@ private final class SupraApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleFreshUITestWindowIfNeeded(_ app: NSApplication?) {
-        guard shouldResetWindowRestorationForUITest,
+        guard shouldEnsureFreshUITestWindow,
               let app,
               app.windows.isEmpty,
               !freshWindowOpenScheduled else { return }
@@ -70,9 +62,9 @@ private final class SupraApplicationDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private var shouldResetWindowRestorationForUITest: Bool {
+    private var shouldEnsureFreshUITestWindow: Bool {
 #if DEBUG
-        ProcessInfo.processInfo.arguments.contains("-uiTestResetWindowRestoration")
+        ProcessInfo.processInfo.arguments.contains("-uiTestEnsureFreshWindow")
 #else
         false
 #endif

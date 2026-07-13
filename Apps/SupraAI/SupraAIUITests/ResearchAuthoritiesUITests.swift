@@ -20,7 +20,7 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
             "-uiTestMode",
-            "-uiTestResetWindowRestoration",
+            "-uiTestEnsureFreshWindow",
         ] + extraArguments
         let tabCommandURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SupraAI-UITest-\(UUID().uuidString)-matter-tab.txt")

@@ -239,7 +239,9 @@ private final class WindowContentHeightView: NSView {
             object: window,
             queue: .main
         ) { [weak self] _ in
-            self?.reportHeight()
+            DispatchQueue.main.async { [weak self] in
+                self?.reportHeight()
+            }
         }
         reportHeight()
     }
@@ -259,9 +261,6 @@ private final class WindowContentHeightView: NSView {
         resizeObserver = nil
     }
 
-    deinit {
-        stopObserving()
-    }
 }
 
 /// Hosts a matter's workspace, resolving the matter from the (observed) controller
