@@ -125,25 +125,28 @@ struct MatterDraftingView: View {
                 }
                 workProductSection
                 selectedForm
-                if let errorText {
-                    Section {
-                        Label(errorText, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                            .font(.supraCaption)
-                            .accessibilityElement(children: .ignore)
-                            .accessibilityIdentifier("drafting.blocked")
-                            .accessibilityLabel("Draft generation blocked. \(errorText)")
-                    }
-                }
                 if let result {
                     resultSection(result)
                 }
             }
             .formStyle(.grouped)
+            if let errorText {
+                Divider()
+                Label(errorText, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.supraCaption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.vertical, 10)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("drafting.blocked")
+                    .accessibilityLabel("Draft generation blocked. \(errorText)")
+            }
             Divider()
             footer
         }
-        .frame(minWidth: 520, idealWidth: 640, maxWidth: .infinity, minHeight: 560, idealHeight: 700, maxHeight: 700)
+        .frame(minWidth: 520, idealWidth: 640, maxWidth: .infinity, minHeight: 560, idealHeight: 640, maxHeight: 640)
         .onAppear {
             library.refresh()
             controller.refreshLegacyDraftReviewState(matterID: matterID)

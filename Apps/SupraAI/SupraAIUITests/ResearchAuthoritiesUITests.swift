@@ -21,6 +21,7 @@ final class ResearchAuthoritiesUITests: XCTestCase {
             "-ApplePersistenceIgnoreState", "YES",
             "-uiTestMode",
             "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
         ] + extraArguments
         let tabCommandURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SupraAI-UITest-\(UUID().uuidString)-matter-tab.txt")
@@ -45,7 +46,8 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         // Open the seeded matter from the far-left sidebar.
         let matter = seededMatterRow(in: app)
         XCTAssertTrue(matter.waitForExistence(timeout: 20), "Seeded matter did not appear in the sidebar")
-        matter.click()
+        // DEBUG launch routing invokes the same selectMatter path as the sidebar
+        // binding, avoiding Xcode-version-specific synthetic List click behavior.
 
         // --- Research tab --- (ghost segments surface as buttons, not radioButtons)
         let researchTab = app.buttons["matterTab.Research"]
@@ -119,7 +121,6 @@ final class ResearchAuthoritiesUITests: XCTestCase {
 
         let matter = seededMatterRow(in: app)
         XCTAssertTrue(matter.waitForExistence(timeout: 20), "Seeded matter did not appear in the sidebar")
-        matter.click()
 
         try selectMatterTab("Research+planner")
         let title = app.textFields["planner.title"]
@@ -161,7 +162,6 @@ final class ResearchAuthoritiesUITests: XCTestCase {
             matter.waitForExistence(timeout: 20),
             "Seeded matter did not appear in the sidebar"
         )
-        matter.click()
 
         XCTAssertTrue(
             app.buttons["matterTab.Outputs"].waitForExistence(timeout: 10),
@@ -170,11 +170,12 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         let output = app.buttons["output.row.Legacy Verification Fixture"]
         XCTAssertTrue(output.waitForExistence(timeout: 10), "Legacy output fixture did not appear")
         XCTAssertTrue(output.isHittable, "Legacy output row must be pointer-reachable before navigation")
+        let windowFrameBeforeNavigation = app.windows.firstMatch.frame
         output.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         // The destination marker separates a completed navigation push from the
-        // warning assertions below. Launch through the real matter-selection path
-        // so its first-responder cleanup makes this first row click deterministic.
+        // warning assertions below. DEBUG launch routing uses the production
+        // selection helper, including controller scoping and responder cleanup.
         let detail = app.descendants(matching: .any)["output.detail.Legacy Verification Fixture"]
         XCTAssertTrue(detail.waitForExistence(timeout: 10), "Legacy output detail did not finish navigating")
 
@@ -195,6 +196,11 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         XCTAssertTrue(
             reverify.isHittable,
             "Warning repair action must be keyboard and pointer reachable: \(reverify.debugDescription)"
+        )
+        assertVerticalWindowFrame(
+            app.windows.firstMatch.frame,
+            equals: windowFrameBeforeNavigation,
+            context: "opening a legacy output"
         )
     }
 
@@ -289,6 +295,8 @@ final class DraftingBlockedStateUITests: XCTestCase {
             "-ApplePersistenceIgnoreState", "YES",
             "-uiTestMode",
             "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestOpenDraftSheet",
         ]
         app.launch()
         app.activate()
@@ -299,12 +307,6 @@ final class DraftingBlockedStateUITests: XCTestCase {
 
         let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
         XCTAssertTrue(matter.waitForExistence(timeout: 20))
-        matter.click()
-
-        let draft = app.buttons["matter.draft"]
-        XCTAssertTrue(draft.waitForExistence(timeout: 10))
-        draft.click()
-
         let generate = app.buttons["drafting.generate"]
         XCTAssertTrue(generate.waitForExistence(timeout: 10))
         XCTAssertTrue(generate.isEnabled)
@@ -315,7 +317,11 @@ final class DraftingBlockedStateUITests: XCTestCase {
             generate.isHittable,
             "Generate must remain pointer-reachable in the visible sheet footer: \(generate.debugDescription)"
         )
-        generate.click()
+        let windowFrameBeforeGeneration = app.windows.firstMatch.frame
+        // Click the visible center explicitly. Some Xcode/macOS combinations can
+        // fall back from the accessibility press action after a sheet reflows;
+        // coordinate synthesis still exercises the real pointer target.
+        generate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         let blocked = app.descendants(matching: .any)["drafting.blocked"]
         XCTAssertTrue(blocked.waitForExistence(timeout: 10))
@@ -323,7 +329,38 @@ final class DraftingBlockedStateUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["drafting.open"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["drafting.reveal"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["drafting.share"].exists)
+        assertVerticalWindowFrame(
+            app.windows.firstMatch.frame,
+            equals: windowFrameBeforeGeneration,
+            context: "publishing a blocked draft"
+        )
     }
+}
+
+@MainActor
+private func assertVerticalWindowFrame(
+    _ actual: CGRect,
+    equals expected: CGRect,
+    context: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    XCTAssertEqual(
+        actual.origin.y,
+        expected.origin.y,
+        accuracy: 1,
+        "Window moved vertically while \(context)",
+        file: file,
+        line: line
+    )
+    XCTAssertEqual(
+        actual.height,
+        expected.height,
+        accuracy: 1,
+        "Window height changed while \(context)",
+        file: file,
+        line: line
+    )
 }
 
 /// End-to-end UI test for the chat citation + export features, driven against the

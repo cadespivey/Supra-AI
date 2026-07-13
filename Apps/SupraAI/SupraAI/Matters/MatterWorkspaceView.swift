@@ -70,6 +70,7 @@ struct MatterWorkspaceView: View {
         }
         .task {
             applyUITestInitialTab()
+            applyUITestInitialDraftSheet()
             await pollUITestTabCommand()
         }
         #if DEBUG
@@ -158,6 +159,16 @@ struct MatterWorkspaceView: View {
               arguments.indices.contains(flag + 1),
               let target = MatterTab(rawValue: arguments[flag + 1]) else { return }
         tab = target
+    }
+
+    @MainActor
+    private func applyUITestInitialDraftSheet() {
+#if DEBUG
+        guard AppEnvironment.isUITestMode,
+              ProcessInfo.processInfo.arguments.contains("-uiTestOpenDraftSheet"),
+              controller.draftingController != nil else { return }
+        showDraftSheet = true
+#endif
     }
 
     @MainActor

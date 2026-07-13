@@ -7,10 +7,7 @@ struct MainShellView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @State private var selection: SidebarSelection? = .route(.globalChats)
     @State private var showNewMatter = false
-    // Give WindowGroup a finite first-pass proposal before AppKit attaches the
-    // content view. Without this bootstrap value, older SwiftUI releases can size
-    // the window from a long descendant before the live window height is readable.
-    @State private var windowContentHeight: CGFloat? = 640
+    @State private var windowContentHeight: CGFloat = 720
 
     var body: some View {
         NavigationSplitView {
@@ -19,7 +16,7 @@ struct MainShellView: View {
                 matters: environment.mattersController,
                 onNewMatter: { showNewMatter = true }
             )
-            .frame(height: windowContentHeight)
+            .frame(height: windowContentHeight, alignment: .top)
         } detail: {
             VStack(spacing: 0) {
                 if environment.usingFallbackStore {
@@ -33,9 +30,11 @@ struct MainShellView: View {
                 detailView
                     .frame(minWidth: 640, minHeight: 420)
             }
-            .frame(height: windowContentHeight)
+            .frame(height: windowContentHeight, alignment: .top)
         }
-        .background(WindowContentHeightReader(height: $windowContentHeight))
+        .frame(minWidth: 880)
+        .frame(height: windowContentHeight, alignment: .top)
+        .background(WindowLiveResizeHeightReader(height: $windowContentHeight))
         .onReceive(NotificationCenter.default.publisher(for: .supraNavigateToRoute)) { note in
             if let route = note.object as? AppRoute { selection = .route(route) }
         }
@@ -69,21 +68,25 @@ struct MainShellView: View {
         Binding(
             get: { selection },
             set: { newValue in
-                selection = newValue
                 if case let .matter(id) = newValue {
-                    // Clear any control that still holds keyboard focus — chiefly the
-                    // Global Chats composer, which auto-focuses at launch. Left focused,
-                    // its text-field edit session lingers into the matter workspace and
-                    // eats the first click on a matter tab (finalizing the edit instead
-                    // of switching tabs); the second click then works. Dropping first
-                    // responder here means the first tab click lands on the first try.
-                    NSApp.keyWindow?.makeFirstResponder(nil)
-                    Task { @MainActor in
-                        environment.mattersController.select(matterID: id)
-                    }
+                    selectMatter(id)
+                } else {
+                    selection = newValue
                 }
             }
         )
+    }
+
+    /// Clears the outgoing editor and scopes every per-matter controller before
+    /// the workspace is rendered. DEBUG launch routing calls this same path so UI
+    /// tests do not depend on version-specific synthetic List-selection clicks.
+    private func selectMatter(_ id: String) {
+        // The Global Chats composer auto-focuses at launch. If its edit session
+        // survives the transition, the first click in a matter workspace merely
+        // ends that session instead of activating the intended control.
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        environment.mattersController.select(matterID: id)
+        selection = .matter(id)
     }
 
     @ViewBuilder
@@ -123,8 +126,7 @@ struct MainShellView: View {
             }
         case "matter-first":
             if let id = environment.mattersController.matters.first?.id {
-                environment.mattersController.select(matterID: id)
-                selection = .matter(id)
+                selectMatter(id)
             }
         case "tab":
             if pieces.count > 1 {
@@ -144,8 +146,7 @@ struct MainShellView: View {
             selection = .route(route)
         } else if arguments.contains("-uiTestSelectFirstMatter"),
                   let id = environment.mattersController.matters.first?.id {
-            environment.mattersController.select(matterID: id)
-            selection = .matter(id)
+            selectMatter(id)
         }
     }
     #endif
@@ -193,75 +194,100 @@ struct MainShellView: View {
 
 }
 
-/// SwiftUI can ask a pushed NavigationStack destination for its unconstrained
-/// ideal height while a NavigationSplitView is hosted in a macOS WindowGroup.
-/// Long-form scroll surfaces then advertise a screen-sized intrinsic height and
-/// center the split content outside the window. Read the owning window's live
-/// content-layout height and use that finite proposal for both split columns.
-private struct WindowContentHeightReader: NSViewRepresentable {
-    @Binding var height: CGFloat?
+/// Publishes a finite initial window height and subsequent user-driven live
+/// resizes only. Programmatic layout changes are deliberately ignored: feeding
+/// every AppKit resize back into SwiftUI caused long pushed destinations to grow
+/// the window, update the binding, and repeat while recentering vertically.
+private struct WindowLiveResizeHeightReader: NSViewRepresentable {
+    @Binding var height: CGFloat
 
-    func makeNSView(context: Context) -> WindowContentHeightView {
-        let view = WindowContentHeightView()
+    func makeNSView(context: Context) -> WindowLiveResizeHeightView {
+        let view = WindowLiveResizeHeightView()
         configureHeightCallback(for: view)
         return view
     }
 
-    func updateNSView(_ view: WindowContentHeightView, context: Context) {
+    func updateNSView(_ view: WindowLiveResizeHeightView, context: Context) {
         configureHeightCallback(for: view)
-        view.reportHeight()
     }
 
-    private func configureHeightCallback(for view: WindowContentHeightView) {
+    private func configureHeightCallback(for view: WindowLiveResizeHeightView) {
         view.onHeightChange = { newHeight in
-            // NSViewRepresentable update callbacks participate in SwiftUI's render
-            // pass. Defer the binding write by one main-queue turn to avoid mutating
-            // view state synchronously from updateNSView.
             DispatchQueue.main.async {
                 if height != newHeight { height = newHeight }
             }
         }
     }
 
-    static func dismantleNSView(_ view: WindowContentHeightView, coordinator: ()) {
+    static func dismantleNSView(_ view: WindowLiveResizeHeightView, coordinator: ()) {
         view.stopObserving()
     }
 }
 
-private final class WindowContentHeightView: NSView {
+private final class WindowLiveResizeHeightView: NSView {
     var onHeightChange: ((CGFloat) -> Void)?
+    private var liveResizeStartObserver: NSObjectProtocol?
     private var resizeObserver: NSObjectProtocol?
+    private var liveResizeEndObserver: NSObjectProtocol?
+    private var isUserResizing = false
     private var lastHeight: CGFloat?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         stopObserving()
         guard let window else { return }
+        reportHeight(of: window, isInitialMeasurement: true)
+        liveResizeStartObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willStartLiveResizeNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.isUserResizing = true
+        }
         resizeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification,
             object: window,
             queue: .main
-        ) { [weak self] _ in
-            DispatchQueue.main.async { [weak self] in
-                self?.reportHeight()
-            }
+        ) { [weak self, weak window] _ in
+            guard let self, self.isUserResizing, let window else { return }
+            self.reportHeight(of: window, isInitialMeasurement: false)
         }
-        reportHeight()
+        liveResizeEndObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didEndLiveResizeNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let self, let window else { return }
+            self.reportHeight(of: window, isInitialMeasurement: false)
+            self.isUserResizing = false
+        }
     }
 
-    func reportHeight() {
-        guard let height = window?.contentLayoutRect.height,
-              height > 0,
-              height != lastHeight else { return }
-        lastHeight = height
-        onHeightChange?(height)
+    private func reportHeight(of window: NSWindow, isInitialMeasurement: Bool) {
+        let currentHeight = window.contentRect(forFrameRect: window.frame).height
+        let visibleScreenHeight = window.screen?.visibleFrame.height
+            ?? NSScreen.main?.visibleFrame.height
+            ?? 900
+        guard currentHeight > 0 else { return }
+        let boundedHeight: CGFloat
+        if isInitialMeasurement, currentHeight > visibleScreenHeight {
+            boundedHeight = min(800, max(420, visibleScreenHeight - 80))
+        } else {
+            boundedHeight = min(currentHeight, max(420, visibleScreenHeight))
+        }
+        guard boundedHeight != lastHeight else { return }
+        lastHeight = boundedHeight
+        onHeightChange?(boundedHeight)
     }
 
     func stopObserving() {
-        if let resizeObserver {
-            NotificationCenter.default.removeObserver(resizeObserver)
+        for observer in [liveResizeStartObserver, resizeObserver, liveResizeEndObserver] {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
         }
+        liveResizeStartObserver = nil
         resizeObserver = nil
+        liveResizeEndObserver = nil
+        isUserResizing = false
     }
 }
 
