@@ -14,6 +14,8 @@ import XCTest
 /// prompts when data is missing).
 final class MatterDraftingControllerTests: XCTestCase {
 
+    private enum PersistenceFailure: Error { case stop }
+
     // MARK: - Helpers
 
     private func makeStore() throws -> SupraStore {
@@ -201,6 +203,71 @@ final class MatterDraftingControllerTests: XCTestCase {
         guard case .failure(.emptyDescription) = result else {
             return XCTFail("expected .emptyDescription, got \(result)")
         }
+    }
+
+    // ACR-EXPORT-009: drafting persistence uses the same atomic writer and does
+    // not audit a draft whose validated file was never installed.
+    @MainActor
+    func testDraftPersistenceFailurePreservesCanaryAndWritesNoAudit() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Atomic matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("Atomic-outline-fixed.md")
+        let canary = Data("reviewed-canary".utf8)
+        try canary.write(to: destination)
+        let writer = DurableFileWriter { stage in
+            if stage == .beforeInstall { throw PersistenceFailure.stop }
+        }
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "Atomic outline", description: "Preserve the old file.")
+        )
+        guard case .failure = result else { return XCTFail("expected persistence failure") }
+        XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertFalse(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "draft_generated" })
+    }
+
+    // ACR-EXPORT-010: a required audit failure is explicitly compensated after
+    // install, restoring a preexisting draft byte-for-byte.
+    @MainActor
+    func testDraftAuditFailureRestoresCanary() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Atomic matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("Atomic-outline-fixed.md")
+        let canary = Data("reviewed-canary".utf8)
+        try canary.write(to: destination)
+        var auditObservedInstalledFile = false
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { event in
+                auditObservedInstalledFile = event.eventType == "draft_generated"
+                    && (try? DocumentExportValidator.validate(destination, as: .markdown)) != nil
+                throw PersistenceFailure.stop
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "Atomic outline", description: "Install then compensate.")
+        )
+        guard case .failure = result else { return XCTFail("expected audit failure") }
+        XCTAssertTrue(auditObservedInstalledFile)
+        XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
     // MARK: - Demand Letter (LLM-backed)

@@ -6,6 +6,8 @@ import SupraStore
 import XCTest
 
 final class DocumentExportTests: XCTestCase {
+    private enum InjectedFailure: Error { case stop }
+
     func testExportWritesFileRecordsAndAudits() throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
@@ -70,6 +72,81 @@ final class DocumentExportTests: XCTestCase {
         let appendixCount = md.components(separatedBy: "## Sources").count - 1
         XCTAssertEqual(appendixCount, 1, "exactly one Sources appendix expected, found \(appendixCount)")
         XCTAssertTrue(md.contains("Answer body [S1]."))
+    }
+
+    // ACR-EXPORT-007: an exporter failure must not overwrite a prior artifact
+    // or create either half of the success metadata pair.
+    func testFailedInstallPreservesCanaryAndWritesNoExportOrAuditRecord() throws {
+        let fixture = try makeFixture()
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("Q-A-v1.md")
+        let canary = Data("prior-reviewed-export".utf8)
+        try canary.write(to: destination)
+        let writer = DurableFileWriter { stage in
+            if stage == .beforeInstall { throw InjectedFailure.stop }
+        }
+        let service = DocumentExportService(store: fixture.store, storage: fixture.storage, fileWriter: writer)
+
+        XCTAssertThrowsError(
+            try service.export(matterID: fixture.matterID, structuredOutputID: fixture.outputID, format: .markdown)
+        )
+        XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertTrue(try fixture.store.documentSources.fetchExports(structuredOutputID: fixture.outputID).isEmpty)
+        XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains { $0.eventType == "export_completed" })
+    }
+
+    // ACR-EXPORT-008: the DB/audit completion transaction starts only after a
+    // parseable file is installed. A transaction failure compensates back to the
+    // prior destination rather than returning an unrecorded new export.
+    func testCompletionFailureRestoresCanaryAfterValidatedInstall() throws {
+        let fixture = try makeFixture()
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("Q-A-v1.md")
+        let canary = Data("prior-reviewed-export".utf8)
+        try canary.write(to: destination)
+        var recorderObservedInstalledFile = false
+        let service = DocumentExportService(
+            store: fixture.store,
+            storage: fixture.storage,
+            completionRecorder: { _, _ in
+                recorderObservedInstalledFile = FileManager.default.fileExists(atPath: destination.path)
+                    && (try? DocumentExportValidator.validate(destination, as: .markdown)) != nil
+                throw InjectedFailure.stop
+            }
+        )
+
+        XCTAssertThrowsError(
+            try service.export(matterID: fixture.matterID, structuredOutputID: fixture.outputID, format: .markdown)
+        )
+        XCTAssertTrue(recorderObservedInstalledFile)
+        XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertTrue(try fixture.store.documentSources.fetchExports(structuredOutputID: fixture.outputID).isEmpty)
+        XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains { $0.eventType == "export_completed" })
+    }
+
+    private func makeFixture() throws -> (store: SupraStore, storage: DocumentStorage, matterID: String, outputID: String) {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme")
+        let output = try store.structuredOutputs.createOutput(
+            matterID: matter.id,
+            title: "Q&A",
+            outputType: .documentQA,
+            status: .complete
+        )
+        _ = try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id,
+            versionIndex: 1,
+            contentMarkdown: "Grounded answer.",
+            requiredSections: [],
+            presentSections: [],
+            missingSections: []
+        )
+        let storage = DocumentStorage(
+            root: FileManager.default.temporaryDirectory.appendingPathComponent("ExportFixture-\(UUID().uuidString)")
+        )
+        return (store, storage, matter.id, output.id)
     }
 
     private func makeStore() throws -> SupraStore {
