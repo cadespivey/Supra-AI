@@ -242,6 +242,10 @@ public enum DocumentSupportVerifier {
         let propositionTokens = significantTokens(in: proposition)
         guard propositionTokens.count >= 2 else { return nil }
         let propositionCritical = criticalTokens(in: proposition)
+        let propositionCriticalOrder = orderedBoundCriticalTokens(in: proposition)
+        let propositionDates = canonicalDates(in: proposition)
+        let propositionOrder = orderedMaterialTokens(in: proposition)
+        let propositionQualifiers = limitingQualifiers(in: proposition)
         let propositionNegated = containsNegation(proposition)
 
         let nsSource = sourceText as NSString
@@ -253,19 +257,167 @@ public enum DocumentSupportVerifier {
         } ?? []
         let searchCandidates = candidates.isEmpty ? [sourceText] : candidates
 
-        var best: (text: String, coverage: Double)?
+        var best: (text: String, extraTokenCount: Int)?
         for candidate in searchCandidates {
-            let sourceTokens = Set(significantTokens(in: candidate))
+            let sourceTokens = significantTokens(in: candidate)
             let sourceCritical = criticalTokens(in: candidate)
+            let sourceDates = canonicalDates(in: candidate)
             guard propositionCritical.isSubset(of: sourceCritical) else { continue }
+            guard isPlainOrderedSubsequence(
+                propositionCriticalOrder,
+                of: orderedBoundCriticalTokens(in: candidate)
+            ) else { continue }
+            guard propositionDates.isSubset(of: sourceDates) else { continue }
             guard propositionNegated == containsNegation(candidate) else { continue }
+            guard limitingQualifiers(in: candidate).isSubset(of: propositionQualifiers) else { continue }
+            guard multiset(sourceTokens, contains: propositionTokens) else { continue }
+            guard isOrderedSubsequence(
+                propositionOrder,
+                of: orderedMaterialTokens(in: candidate)
+            ) else { continue }
 
-            let matched = propositionTokens.filter(sourceTokens.contains).count
-            let coverage = Double(matched) / Double(propositionTokens.count)
-            guard coverage >= 0.72 else { continue }
-            if best == nil || coverage > best!.coverage { best = (candidate, coverage) }
+            let extraTokenCount = sourceTokens.count - propositionTokens.count
+            if best == nil || extraTokenCount < best!.extraTokenCount {
+                best = (candidate, extraTokenCount)
+            }
         }
         return best?.text
+    }
+
+    /// Every normalized material token in the proposition must be accounted for
+    /// by the cited sentence. This deliberately rejects a mostly-extractive
+    /// sentence with even one new factual clause.
+    private static func multiset(_ available: [String], contains required: [String]) -> Bool {
+        var counts = available.reduce(into: [String: Int]()) { partial, token in
+            partial[token, default: 0] += 1
+        }
+        for token in required {
+            guard let count = counts[token], count > 0 else { return false }
+            counts[token] = count - 1
+        }
+        return true
+    }
+
+    /// Preserve the order of word-bearing material tokens while allowing dates
+    /// to move into a chronology table's leading Date column. Reversing actors in
+    /// an otherwise identical sentence therefore fails closed.
+    private static func orderedMaterialTokens(in text: String) -> [String] {
+        normalizedWords(in: text).filter { token in
+            (!stopWords.contains(token) || relationshipMarkers.contains(token))
+                && !token.contains(where: \.isNumber)
+                && !token.contains("@")
+                && !token.hasPrefix("$")
+        }
+    }
+
+    private static func limitingQualifiers(in text: String) -> Set<String> {
+        Set(normalizedWords(in: text).filter { token in
+            limitingQualifierTokens.contains(token)
+        })
+    }
+
+    /// Currency and identity-bearing values must occur in the same order as the
+    /// proposition so equal value sets cannot be reassigned to different actors.
+    private static func orderedBoundCriticalTokens(in text: String) -> [String] {
+        normalizedWords(in: text).filter { token in
+            token.hasPrefix("$") || token.contains("@")
+        }
+    }
+
+    private static func isPlainOrderedSubsequence(_ required: [String], of available: [String]) -> Bool {
+        guard !required.isEmpty else { return true }
+        var nextAvailableIndex = 0
+        for token in required {
+            guard nextAvailableIndex < available.count,
+                  let matchIndex = available[nextAvailableIndex...].firstIndex(of: token)
+            else { return false }
+            nextAvailableIndex = matchIndex + 1
+        }
+        return true
+    }
+
+    private static func isOrderedSubsequence(_ required: [String], of available: [String]) -> Bool {
+        guard !required.isEmpty else { return true }
+        var nextAvailableIndex = 0
+        var matchedIndices: [Int] = []
+
+        for requiredToken in required {
+            guard nextAvailableIndex < available.count,
+                  let matchIndex = available[nextAvailableIndex...].firstIndex(of: requiredToken)
+            else { return false }
+            matchedIndices.append(matchIndex)
+            nextAvailableIndex = matchIndex + 1
+        }
+
+        guard let first = matchedIndices.first, let last = matchedIndices.last else { return false }
+        let requiredRelationships = required.filter(relationshipMarkers.contains)
+        let availableRelationships = available[first...last].filter(relationshipMarkers.contains)
+        return requiredRelationships == availableRelationships
+    }
+
+    private static let relationshipMarkers: Set<String> = [
+        "after", "against", "before", "between", "by", "from", "through", "to", "under", "via",
+    ]
+
+    private static let limitingQualifierTokens: Set<String> = [
+        "allegedly", "claim", "conditional", "contingent", "could", "estimat", "expected",
+        "if", "may", "might", "only", "pending", "possible", "possibly", "purported",
+        "reported", "subject", "unless", "would",
+    ]
+
+    /// Normalize the date forms emitted by document Q&A and chronology output so
+    /// a token-set collision such as March 8 versus August 3 cannot pass merely
+    /// because both contain the numbers 3 and 8.
+    private static func canonicalDates(in text: String) -> Set<String> {
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        var values = Set<String>()
+
+        func capture(_ match: NSTextCheckingResult, _ index: Int) -> String? {
+            let range = match.range(at: index)
+            guard range.location != NSNotFound else { return nil }
+            return nsText.substring(with: range)
+        }
+
+        func insert(year: Int, month: Int, day: Int) {
+            guard (1...12).contains(month), (1...31).contains(day) else { return }
+            values.insert(String(format: "%04d-%02d-%02d", year, month, day))
+        }
+
+        if let iso = try? NSRegularExpression(pattern: #"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b"#) {
+            for match in iso.matches(in: text, range: fullRange) {
+                guard let year = capture(match, 1).flatMap(Int.init),
+                      let month = capture(match, 2).flatMap(Int.init),
+                      let day = capture(match, 3).flatMap(Int.init)
+                else { continue }
+                insert(year: year, month: month, day: day)
+            }
+        }
+
+        if let slash = try? NSRegularExpression(pattern: #"\b(\d{1,2})/(\d{1,2})/(\d{4})\b"#) {
+            for match in slash.matches(in: text, range: fullRange) {
+                guard let month = capture(match, 1).flatMap(Int.init),
+                      let day = capture(match, 2).flatMap(Int.init),
+                      let year = capture(match, 3).flatMap(Int.init)
+                else { continue }
+                insert(year: year, month: month, day: day)
+            }
+        }
+
+        let monthNames = months.keys.sorted { $0.count > $1.count }.joined(separator: "|")
+        let namedPattern = #"\b("# + monthNames + #")\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{4})\b"#
+        if let named = try? NSRegularExpression(pattern: namedPattern, options: .caseInsensitive) {
+            for match in named.matches(in: text, range: fullRange) {
+                guard let monthName = capture(match, 1)?.lowercased(),
+                      let month = months[monthName].flatMap(Int.init),
+                      let day = capture(match, 2).flatMap(Int.init),
+                      let year = capture(match, 3).flatMap(Int.init)
+                else { continue }
+                insert(year: year, month: month, day: day)
+            }
+        }
+
+        return values
     }
 
     private static func materialText(_ text: String) -> String {
@@ -347,6 +499,7 @@ public enum DocumentSupportVerifier {
         let phrases: [(String, String)] = [
             ("no later than", " due "),
             ("must be received", " due "),
+            ("due by", " due "),
             ("took place", " occurred "),
         ]
         for (phrase, replacement) in phrases {
