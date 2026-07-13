@@ -296,6 +296,13 @@ final class DraftingBlockedStateUITests: XCTestCase {
         let generate = app.buttons["drafting.generate"]
         XCTAssertTrue(generate.waitForExistence(timeout: 10))
         XCTAssertTrue(generate.isEnabled)
+        // Expected RED before the stable-Xcode layout fix: the sheet expands to
+        // its full Form height and places this pinned footer thousands of points
+        // below the visible window, so an enabled action cannot be reached.
+        XCTAssertTrue(
+            generate.isHittable,
+            "Generate must remain pointer-reachable in the visible sheet footer: \(generate.debugDescription)"
+        )
         generate.click()
 
         let blocked = app.descendants(matching: .any)["drafting.blocked"]

@@ -350,6 +350,19 @@ run_case \
   env SUPRA_MIGRATION_FIXTURE_TEST_FILE="$migration_hook" \
     bash "${scripts}/run-shipping-migration-fixtures.sh" --check
 
+# Expected RED before the hosted-boundary harness fix: the combined app smoke
+# disables signing even though Debug XPC authentication requires identifier-
+# bearing ad-hoc signatures on both the app and its embedded service.
+app_smoke_script="${scripts}/run-app-smoke-tests.sh"
+if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \
+    || ! grep -Fq 'CODE_SIGNING_ALLOWED=YES' "$app_smoke_script" \
+    || ! grep -Fq 'CODE_SIGNING_REQUIRED=YES' "$app_smoke_script" \
+    || ! grep -Fq 'CODE_SIGN_IDENTITY=-' "$app_smoke_script"; then
+  record_failure "hosted XPC app smoke is not configured for identifier-bearing ad-hoc signatures"
+else
+  printf '%s\n' 'PASS: hosted XPC app smoke uses identifier-bearing ad-hoc signatures'
+fi
+
 npm_stub="${temporary_dir}/npm-stub.sh"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
