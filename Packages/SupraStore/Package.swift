@@ -29,6 +29,9 @@ let package = Package(
             dependencies: [
                 "SupraStore",
                 .product(name: "SupraCore", package: "SupraCore")
+            ],
+            resources: [
+                .copy("Fixtures/ShippingMigrations")
             ]
         )
     ]
