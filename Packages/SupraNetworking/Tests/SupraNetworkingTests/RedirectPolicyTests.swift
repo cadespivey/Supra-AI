@@ -425,33 +425,47 @@ private final class LoopbackHTTPServer: @unchecked Sendable {
 
     private func receiveRequest(on connection: NWConnection, accumulated: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
-            if self == nil { return }
-            let self = self!
-            var requestData = accumulated
-            if let data { requestData.append(data) }
-            if requestData.range(of: Data("\r\n\r\n".utf8)) == nil, !isComplete, error == nil {
-                receiveRequest(on: connection, accumulated: requestData)
-                return
-            }
-
-            let request = String(data: requestData, encoding: .utf8) ?? ""
-            let requestLine = request.split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? ""
-            stateQueue.sync {
-                storedRequestCount += 1
-                storedRequestLines.append(requestLine)
-            }
-            let response = responder(request)
-            var header = "HTTP/1.1 \(response.status)\r\n"
-            for (name, value) in response.headers {
-                header += "\(name): \(value)\r\n"
-            }
-            header += "Content-Length: \(response.body.count)\r\nConnection: close\r\n\r\n"
-            var bytes = Data(header.utf8)
-            bytes.append(response.body)
-            connection.send(content: bytes, completion: .contentProcessed { _ in
-                connection.cancel()
-            })
+            self?.processReceived(
+                data,
+                isComplete: isComplete,
+                error: error,
+                on: connection,
+                accumulated: accumulated
+            )
         }
+    }
+
+    private func processReceived(
+        _ data: Data?,
+        isComplete: Bool,
+        error: NWError?,
+        on connection: NWConnection,
+        accumulated: Data
+    ) {
+        var requestData = accumulated
+        if let data { requestData.append(data) }
+        if requestData.range(of: Data("\r\n\r\n".utf8)) == nil, !isComplete, error == nil {
+            receiveRequest(on: connection, accumulated: requestData)
+            return
+        }
+
+        let request = String(data: requestData, encoding: .utf8) ?? ""
+        let requestLine = request.split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? ""
+        stateQueue.sync {
+            storedRequestCount += 1
+            storedRequestLines.append(requestLine)
+        }
+        let response = responder(request)
+        var header = "HTTP/1.1 \(response.status)\r\n"
+        for (name, value) in response.headers {
+            header += "\(name): \(value)\r\n"
+        }
+        header += "Content-Length: \(response.body.count)\r\nConnection: close\r\n\r\n"
+        var bytes = Data(header.utf8)
+        bytes.append(response.body)
+        connection.send(content: bytes, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
     }
 
     deinit {
