@@ -425,7 +425,8 @@ private final class LoopbackHTTPServer: @unchecked Sendable {
 
     private func receiveRequest(on connection: NWConnection, accumulated: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
+            if self == nil { return }
+            let self = self!
             var requestData = accumulated
             if let data { requestData.append(data) }
             if requestData.range(of: Data("\r\n\r\n".utf8)) == nil, !isComplete, error == nil {
