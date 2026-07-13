@@ -307,6 +307,49 @@ final class RuntimeModelSnapshotTests: XCTestCase {
         XCTAssertThrowsError(try snapshot.reverify())
     }
 
+    func testRemoveDeletesRenamedOwnedRootWithoutDeletingPathReplacement() throws {
+        let declared = FixtureFile(
+            path: "weights/model.safetensors",
+            data: Data("model bytes".utf8)
+        )
+        let sourceURL = try makeSourceDirectory(containing: [declared])
+        let snapshot = try RuntimeModelSnapshot(
+            sourceURL: sourceURL,
+            contentBinding: makeBinding(for: [declared])
+        )
+        let publishedURL = snapshot.snapshotURL
+        let renamedURL = publishedURL.deletingLastPathComponent()
+            .appendingPathComponent(
+                publishedURL.lastPathComponent + "-renamed-" + UUID().uuidString,
+                isDirectory: true
+            )
+        cleanupURLs.append(renamedURL)
+        cleanupURLs.append(publishedURL)
+
+        try FileManager.default.moveItem(at: publishedURL, to: renamedURL)
+        try FileManager.default.createDirectory(
+            at: publishedURL,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let sentinelURL = publishedURL.appendingPathComponent("replacement-sentinel")
+        let sentinel = Data("must survive snapshot cleanup".utf8)
+        try sentinel.write(to: sentinelURL)
+
+        XCTAssertNoThrow(try snapshot.remove())
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: renamedURL.path),
+            "cleanup must remove the owned root through its retained identity"
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: sentinelURL),
+            sentinel,
+            "cleanup must not recurse through a replacement at the published path"
+        )
+        XCTAssertNoThrow(try snapshot.remove())
+        XCTAssertThrowsError(try snapshot.reverify())
+    }
+
     func testDeinitRemovesOwnedPrivateRoot() throws {
         let declared = FixtureFile(
             path: "model.safetensors",
