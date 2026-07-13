@@ -1,0 +1,13 @@
+# Release, workflow, and security-claim controls require review by the repository
+# security/release owner. Branch protection must require Code Owner approval.
+/.github/workflows/ @cadespivey
+/.github/CODEOWNERS @cadespivey
+/Scripts/release.sh @cadespivey
+/Scripts/release-*.sh @cadespivey
+/Scripts/*release*.sh @cadespivey
+/Scripts/verify-product-claims.sh @cadespivey
+/Docs/Verified-Product-Claims.yml @cadespivey
+/Docs/Release-Protection.md @cadespivey
+/Docs/Schemas/release-preflight-manifest.schema.json @cadespivey
+/SECURITY.md @cadespivey
+/website/app/privacy/ @cadespivey

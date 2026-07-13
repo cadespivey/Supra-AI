@@ -105,6 +105,10 @@ that adds or modifies behavior.
   `Audit fixes: generation-failure handling, dead code, data race`.
 - **Open a PR into `main`.** Keep PRs focused (one feature/fix area). Describe what changed,
   why, and how you verified it. Note any deviation from a milestone plan.
+- **Protected release controls require Code Owner review.** Changes to workflows, release
+  scripts, security claims, `SECURITY.md`, or public privacy copy follow
+  [`Docs/Release-Protection.md`](Docs/Release-Protection.md); do not use an administrator
+  merge, force push, direct tag/release, or direct appcast update.
 - **Tests must pass** and new behavior should be covered. Pipeline/domain logic gets
   deterministic package tests; model-dependent behavior is exercised by the Diagnostics
   validation suites.

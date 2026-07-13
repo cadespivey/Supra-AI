@@ -1,187 +1,155 @@
 #!/usr/bin/env bash
-#
-# Build, Developer ID-sign, notarize, staple, package, and publish a Supra AI
-# release, then upload the notarized .zip as a GitHub release asset (which the
-# in-app updater downloads).
-#
-# One-time prerequisites
-#   1. "Developer ID Application" cert installed in your login Keychain
-#      (team 2DP657YB3K). Check: security find-identity -v -p codesigning
-#   2. A notarization credential profile in your Keychain:
-#        xcrun notarytool store-credentials "supra-notary" \
-#          --apple-id "you@example.com" --team-id 2DP657YB3K \
-#          --password "<app-specific-password from appleid.apple.com>"
-#   3. gh authenticated: gh auth status
-#   4. Sparkle EdDSA signing key in your login Keychain (Sparkle's generate_keys).
-#      The matching public key is embedded in the app's Info.plist (SUPublicEDKey).
-#
-# Usage
-#   Scripts/release.sh 1.2.0
-#
-# What it does with versions/updates
-#   - Sets MARKETING_VERSION = <version> and CURRENT_PROJECT_VERSION = git commit
-#     count (a monotonic CFBundleVersion Sparkle requires) before archiving.
-#   - After uploading the notarized .zip, EdDSA-signs it, prepends an <item> to
-#     website/public/appcast.xml, and bumps website/lib/constants.ts. Commit those
-#     to main to publish the seamless update (deploy-website workflow).
-#
-# Notes
-#   - The first notarized build MUST be smoke-tested (load a model + generate)
-#     because hardened runtime is only on for Release; if MLX fails, add the
-#     needed code-signing entitlement (e.g. com.apple.security.cs.allow-jit) to
-#     SupraRuntimeService.entitlements and re-run.
+# Protected, fail-closed release entrypoint. It performs no repository source
+# edits: version/build values are build inputs and every published byte is tied
+# to the reviewed source SHA by a signed preflight manifest.
 set -euo pipefail
 
-VERSION="${1:?usage: Scripts/release.sh <version>  (e.g. 1.2.0)}"
-TAG="v${VERSION}"
-PROFILE="${NOTARY_PROFILE:-supra-notary}"
+root="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=Scripts/lib/release-common.sh
+source "${root}/Scripts/lib/release-common.sh"
+
+usage() {
+  printf '%s\n' \
+    'Usage: release.sh --repository OWNER/REPO --version X.Y.Z --build N --expected-sha SHA --ci-run-id ID [--no-publish]' >&2
+  exit 2
+}
+
+repository=''; version=''; build_number=''; expected_sha=''; ci_run_id=''; publish=1
+while (( $# > 0 )); do
+  case "$1" in
+    --repository) repository="${2:-}"; shift 2 ;;
+    --version) version="${2:-}"; shift 2 ;;
+    --build) build_number="${2:-}"; shift 2 ;;
+    --expected-sha) expected_sha="${2:-}"; shift 2 ;;
+    --ci-run-id) ci_run_id="${2:-}"; shift 2 ;;
+    --no-publish) publish=0; shift ;;
+    *) usage ;;
+  esac
+done
+
+[[ "$ci_run_id" =~ ^[1-9][0-9]*$ ]] || usage
+release_validate_repository "$repository"
+release_validate_version "$version"
+release_validate_build "$build_number"
+release_validate_sha "$expected_sha"
+[[ "${SUPRA_RELEASE_TESTING:-0}" != '1' ]] \
+  || release_die 'the production release entrypoint cannot run in mock-testing mode'
+release_require_protected_environment
+
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
+team_id="${SUPRA_RELEASE_TEAM_ID:-2DP657YB3K}"
+notary_profile="${NOTARY_PROFILE:-supra-notary}"
+sign_identity="${SIGN_IDENTITY:-Developer ID Application}"
+manifest_identity="${MANIFEST_SIGNING_IDENTITY:-$sign_identity}"
+sparkle_bin="${SPARKLE_BIN:?SPARKLE_BIN must identify the reviewed Sparkle tools}"
+sign_update="${sparkle_bin}/sign_update"
+smoke_model_sha="${SUPRA_RELEASE_SMOKE_MODEL_SHA256:?SUPRA_RELEASE_SMOKE_MODEL_SHA256 is required}"
+release_validate_digest "$smoke_model_sha"
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD="${ROOT}/build/release"
-ARCHIVE="${BUILD}/SupraAI.xcarchive"
-EXPORT_DIR="${BUILD}/export"
-APP="${EXPORT_DIR}/SupraAI.app"
-ZIP="${BUILD}/SupraAI-${VERSION}.zip"
-DMG="${BUILD}/SupraAI-${VERSION}.dmg"
-SIGN_ID="${SIGN_IDENTITY:-Developer ID Application}"
-PBXPROJ="${ROOT}/Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
-APPCAST="${ROOT}/website/public/appcast.xml"
-CONSTANTS="${ROOT}/website/lib/constants.ts"
+temporary_dir="$(mktemp -d)"
+trap 'rm -rf "$temporary_dir"' EXIT
+source_manifest="${temporary_dir}/source-preflight.json"
 
-echo "▶︎ Verifying local and public repository assets…"
-"${ROOT}/Scripts/verify-public-font-license.sh"
-"${ROOT}/Scripts/verify-public-repository-assets.sh"
+bash "${root}/Scripts/release-preflight.sh" \
+  --repo-root "$root" --repository "$repository" --version "$version" \
+  --build "$build_number" --expected-sha "$expected_sha" \
+  --ci-run-id "$ci_run_id" --output "$source_manifest"
 
-echo "▶︎ Verifying catalog model IDs resolve on Hugging Face…"
-"${ROOT}/Scripts/verify-model-ids.sh"
+build_root="${root}/build/release"
+archive="${build_root}/SupraAI.xcarchive"
+export_dir="${build_root}/export"
+app="${export_dir}/SupraAI.app"
+zip="${build_root}/SupraAI-${version}.zip"
+dmg="${build_root}/SupraAI-${version}.dmg"
+stage="${build_root}/dmg-stage"
+manifest="${build_root}/preflight-manifest.json"
+manifest_signature="${manifest}.cms"
+smoke_result="${build_root}/signed-runtime-smoke.json"
 
-# Sparkle compares CFBundleVersion (sparkle:version). It MUST increase every
-# release or updates are never offered. Derive a monotonic build number from the
-# commit count and write both versions into the project before archiving.
-BUILD_NUMBER="$(git -C "${ROOT}" rev-list --count HEAD)"
-echo "▶︎ Setting MARKETING_VERSION=${VERSION}, CURRENT_PROJECT_VERSION=${BUILD_NUMBER}…"
-PROJECT_DIR="${ROOT}/Apps/SupraAI/SupraAI.xcodeproj" \
-MARKETING_VERSION="${VERSION}" BUILD_NUMBER="${BUILD_NUMBER}" ruby <<'RUBY'
-require 'xcodeproj'
-proj = Xcodeproj::Project.open(ENV.fetch('PROJECT_DIR'))
-proj.targets.find { |t| t.name == 'SupraAI' }.build_configurations.each do |c|
-  c.build_settings['MARKETING_VERSION'] = ENV.fetch('MARKETING_VERSION')
-  c.build_settings['CURRENT_PROJECT_VERSION'] = ENV.fetch('BUILD_NUMBER')
-end
-proj.save
-RUBY
+rm -rf "$build_root"
+mkdir -p "$build_root"
+cp "$source_manifest" "${build_root}/source-preflight.json"
 
-rm -rf "${BUILD}"
-mkdir -p "${BUILD}"
-
-echo "▶︎ Archiving (Release, hardened runtime, Developer ID)…"
+printf '%s\n' 'Building signed Release archive from unchanged source…'
 xcodebuild archive \
-  -workspace "${ROOT}/SupraAI.xcworkspace" \
+  -workspace "${root}/SupraAI.xcworkspace" \
   -scheme SupraAI \
   -configuration Release \
   -destination 'generic/platform=macOS' \
-  -archivePath "${ARCHIVE}" \
+  -archivePath "$archive" \
+  MARKETING_VERSION="$version" \
+  CURRENT_PROJECT_VERSION="$build_number" \
   ENABLE_HARDENED_RUNTIME=YES
-
-echo "▶︎ Exporting…"
 xcodebuild -exportArchive \
-  -archivePath "${ARCHIVE}" \
-  -exportPath "${EXPORT_DIR}" \
-  -exportOptionsPlist "${ROOT}/Scripts/ExportOptions.plist"
+  -archivePath "$archive" \
+  -exportPath "$export_dir" \
+  -exportOptionsPlist "${root}/Scripts/ExportOptions.plist"
 
-echo "▶︎ Verifying Sparkle helpers are embedded and Developer ID-signed (hardened)…"
-SPARKLE_FW="${APP}/Contents/Frameworks/Sparkle.framework/Versions/B"
-for helper in "XPCServices/Installer.xpc" "Autoupdate" "Updater.app"; do
-  [ -e "${SPARKLE_FW}/${helper}" ] || { echo "✗ Sparkle helper missing: ${helper}"; exit 1; }
-  codesign -dv "${SPARKLE_FW}/${helper}" >/dev/null 2>&1 || { echo "✗ Sparkle helper unsigned: ${helper}"; exit 1; }
+[[ -d "$app" ]] || release_die 'archive export did not produce SupraAI.app'
+sparkle_framework="${app}/Contents/Frameworks/Sparkle.framework/Versions/B"
+for helper in XPCServices/Installer.xpc Autoupdate Updater.app; do
+  [[ -e "${sparkle_framework}/${helper}" ]] || release_die "Sparkle helper is missing: $helper"
+  codesign --verify --strict "${sparkle_framework}/${helper}" >/dev/null 2>&1 \
+    || release_die "Sparkle helper signature is invalid: $helper"
 done
 
-echo "▶︎ Notarizing app (this can take a few minutes)…"
-ditto -c -k --keepParent "${APP}" "${BUILD}/notarize.zip"
-xcrun notarytool submit "${BUILD}/notarize.zip" --keychain-profile "${PROFILE}" --wait
-xcrun stapler staple "${APP}"
-xcrun stapler validate "${APP}"
+printf '%s\n' 'Submitting signed app for notarization and stapling…'
+notary_zip="${temporary_dir}/SupraAI-notary.zip"
+ditto -c -k --keepParent "$app" "$notary_zip"
+xcrun notarytool submit "$notary_zip" --keychain-profile "$notary_profile" --wait
+xcrun stapler staple "$app"
+xcrun stapler validate "$app"
 
-echo "▶︎ Building DMG (drag-to-Applications)…"
-STAGE="${BUILD}/dmg"
-rm -rf "${STAGE}"
-mkdir -p "${STAGE}"
-cp -R "${APP}" "${STAGE}/"
-ln -s /Applications "${STAGE}/Applications"
-hdiutil create -volname "Supra AI ${VERSION}" -srcfolder "${STAGE}" -ov -format UDZO "${DMG}"
-codesign --force --timestamp --sign "${SIGN_ID}" "${DMG}"
+printf '%s\n' 'Creating, signing, notarizing, and stapling DMG…'
+mkdir -p "$stage"
+cp -R "$app" "$stage/"
+ln -s /Applications "${stage}/Applications"
+hdiutil create -volname "Supra AI ${version}" -srcfolder "$stage" -ov -format UDZO "$dmg"
+codesign --force --timestamp --sign "$sign_identity" "$dmg"
+xcrun notarytool submit "$dmg" --keychain-profile "$notary_profile" --wait
+xcrun stapler staple "$dmg"
+xcrun stapler validate "$dmg"
 
-echo "▶︎ Notarizing DMG…"
-xcrun notarytool submit "${DMG}" --keychain-profile "${PROFILE}" --wait
-xcrun stapler staple "${DMG}"
-xcrun stapler validate "${DMG}"
+printf '%s\n' 'Packaging the exact stapled app bytes…'
+ditto -c -k --keepParent "$app" "$zip"
 
-echo "▶︎ Packaging app zip…"
-ditto -c -k --keepParent "${APP}" "${ZIP}"
+# Create a preliminary manifest only to derive the stable signed-app tree hash
+# used by the real model/XPC smoke attestation. The final manifest is rebuilt
+# with that attestation and signed after the smoke passes.
+preliminary_manifest="${temporary_dir}/preliminary-manifest.json"
+bash "${root}/Scripts/create-preflight-manifest.sh" \
+  --source-manifest "$source_manifest" --app "$app" --zip "$zip" --dmg "$dmg" \
+  --team-id "$team_id" --output "$preliminary_manifest"
+app_sha="$(jq -r '.artifacts[] | select(.kind == "app") | .sha256' "$preliminary_manifest")"
 
-echo "▶︎ Re-checking local release artifacts for prohibited font binaries…"
-"${ROOT}/Scripts/verify-public-font-license.sh"
+bash "${root}/Scripts/run-signed-release-smoke.sh" \
+  --app "$app" --source-sha "$expected_sha" --app-sha "$app_sha" \
+  --model-sha "$smoke_model_sha" --output "$smoke_result"
+bash "${root}/Scripts/verify-signed-runtime-smoke-result.sh" \
+  --result "$smoke_result" --source-sha "$expected_sha" \
+  --app-sha "$app_sha" --model-sha "$smoke_model_sha"
 
-echo "▶︎ Publishing release ${TAG}…"
-if ! gh release view "${TAG}" >/dev/null 2>&1; then
-  gh release create "${TAG}" --title "Supra AI ${VERSION}" --generate-notes
-fi
-gh release upload "${TAG}" "${DMG}" "${ZIP}" --clobber
+bash "${root}/Scripts/create-preflight-manifest.sh" \
+  --source-manifest "$source_manifest" --app "$app" --zip "$zip" --dmg "$dmg" \
+  --team-id "$team_id" --smoke-result "$smoke_result" --output "$manifest"
+security cms -S -N "$manifest_identity" -i "$manifest" -o "$manifest_signature"
 
-echo "▶︎ Signing the update (EdDSA) and updating the appcast…"
-# Sparkle's sign_update ships in the resolved SPM artifact bundle. Sign the EXACT
-# .zip that was just uploaded — never re-zip after this.
-# Honor a releaser-provided SPARKLE_BIN (custom DerivedData, CI, multiple Xcode
-# builds) before falling back to the DerivedData search — the escape hatch the
-# failure message below promises.
-SPARKLE_BIN="${SPARKLE_BIN:-$(find ~/Library/Developer/Xcode/DerivedData -path '*artifacts/sparkle/Sparkle/bin' -type d 2>/dev/null | head -1)}"
-[ -x "${SPARKLE_BIN}/sign_update" ] || { echo "✗ Sparkle sign_update not found (build SupraAI once, or set SPARKLE_BIN)"; exit 1; }
-SIG_FRAGMENT="$("${SPARKLE_BIN}/sign_update" "${ZIP}")"   # -> sparkle:edSignature="…" length="…"
-case "${SIG_FRAGMENT}" in *edSignature=*length=*) ;; *) echo "✗ unexpected sign_update output: ${SIG_FRAGMENT}"; exit 1;; esac
-DISK_LEN="$(stat -f%z "${ZIP}")"
-case "${SIG_FRAGMENT}" in *length=\"${DISK_LEN}\"*) ;; *) echo "✗ appcast length != on-disk zip size (${DISK_LEN})"; exit 1;; esac
-BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "${APP}/Contents/Info.plist")"
-PUB_DATE="$(date -u +'%a, %d %b %Y %H:%M:%S +0000')"
+bash "${root}/Scripts/verify-release-artifacts.sh" \
+  --app "$app" --zip "$zip" --dmg "$dmg" \
+  --manifest "$manifest" --manifest-signature "$manifest_signature" \
+  --version "$version" --build "$build_number" --source-sha "$expected_sha" --team-id "$team_id"
 
-# Prepend a new <item> (newest first) at the marker, unless this version is already there.
-if grep -q "<sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>" "${APPCAST}"; then
-  echo "  appcast already contains ${VERSION}; leaving it unchanged"
-else
-  ITEM="    <item>
-      <title>Supra AI ${VERSION}</title>
-      <sparkle:releaseNotesLink>https://github.com/cadespivey/Supra-AI/releases/tag/${TAG}</sparkle:releaseNotesLink>
-      <pubDate>${PUB_DATE}</pubDate>
-      <sparkle:version>${BUNDLE_VERSION}</sparkle:version>
-      <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-      <enclosure url=\"https://github.com/cadespivey/Supra-AI/releases/download/${TAG}/SupraAI-${VERSION}.zip\" type=\"application/octet-stream\" ${SIG_FRAGMENT} />
-    </item>"
-  # Insert ITEM immediately after the marker line.
-  MARKER='<!-- APPCAST_ITEMS:'
-  python3 - "${APPCAST}" "${MARKER}" <<PY
-import sys
-path, marker = sys.argv[1], sys.argv[2]
-item = """${ITEM}"""
-lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
-out = []
-for ln in lines:
-    out.append(ln)
-    if marker in ln:
-        out.append(item + "\n")
-open(path, "w", encoding="utf-8").write("".join(out))
-PY
-  echo "  appcast updated with ${VERSION} (build ${BUNDLE_VERSION})"
+if (( publish == 0 )); then
+  printf 'Signed release-candidate rehearsal passed for v%s (%s) at %s; no GitHub release, tag, upload, appcast, push, or deployment was attempted.\n' \
+    "$version" "$build_number" "$expected_sha"
+  exit 0
 fi
 
-# Bump the website's pinned download fallback.
-sed -i '' "s|FALLBACK_RELEASE_TAG = \"v[0-9.]*\"|FALLBACK_RELEASE_TAG = \"${TAG}\"|" "${CONSTANTS}"
-sed -i '' "s|FALLBACK_RELEASE_VERSION = \"[0-9.]*\"|FALLBACK_RELEASE_VERSION = \"${VERSION}\"|" "${CONSTANTS}"
+bash "${root}/Scripts/publish-release-transaction.sh" \
+  --repo-root "$root" --repository "$repository" --source-sha "$expected_sha" \
+  --version "$version" --build "$build_number" --zip "$zip" --dmg "$dmg" \
+  --manifest "$manifest" --manifest-signature "$manifest_signature" \
+  --appcast-in "${root}/website/public/appcast.xml" \
+  --constants-in "${root}/website/lib/constants.ts" --sign-update "$sign_update"
 
-echo "✓ Released ${TAG} — DMG + zip, notarized + stapled: ${DMG}"
-echo ""
-echo "  NEXT (publishes the seamless update to existing users):"
-echo "    1. Review:  git diff -- Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj website/public/appcast.xml website/lib/constants.ts"
-echo "    2. Commit the version bump + appcast + constants and merge to 'main'"
-echo "       (the deploy-website workflow publishes https://supralegal.ai/appcast.xml)."
-echo "    The GitHub asset is already live, so the appcast can safely reference it."
+printf 'Release v%s (%s) completed from exact source %s.\n' "$version" "$build_number" "$expected_sha"

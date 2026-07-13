@@ -57,7 +57,15 @@ case "$name" in
         [[ "${MOCK_DEPLOY_FAIL:-0}" != "1" ]]
         ;;
       "release view")
-        [[ "${MOCK_RELEASE_EXISTS:-0}" == "1" ]]
+        if [[ " $* " == *" --json "* ]]; then
+          jq -n \
+            --arg tagName "${MOCK_RELEASE_TAG:-v2.3.0}" \
+            --arg targetCommitish "${MOCK_SOURCE_SHA:-}" \
+            --arg url "https://github.com/example/supra/releases/tag/${MOCK_RELEASE_TAG:-v2.3.0}" \
+            '{tagName: $tagName, targetCommitish: $targetCommitish, url: $url, isDraft: false}'
+        else
+          [[ "${MOCK_RELEASE_EXISTS:-0}" == "1" ]]
+        fi
         ;;
       "release create")
         [[ "${MOCK_DRAFT_FAIL:-0}" != "1" ]]
@@ -109,6 +117,7 @@ case "$name" in
       mountpoint="$(argument_value -mountpoint "$@")"
       mkdir -p "$mountpoint"
       cp -R "${MOCK_APP_SOURCE}" "${mountpoint}/SupraAI.app"
+      ln -s /Applications "${mountpoint}/Applications"
     fi
     ;;
   security)
@@ -139,6 +148,12 @@ case "$name" in
     case "$url" in
       *appcast.xml)
         cp "${MOCK_PUBLIC_APPCAST_DEST}" "$output"
+        ;;
+      *preflight-manifest.json.cms)
+        cp "${MOCK_SIGNATURE_SOURCE}" "$output"
+        ;;
+      *preflight-manifest.json)
+        cp "${MOCK_MANIFEST_SOURCE}" "$output"
         ;;
       *.zip)
         if [[ "${MOCK_POST_DIGEST_FAIL:-0}" == "1" ]]; then

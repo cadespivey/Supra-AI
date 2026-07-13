@@ -1,0 +1,67 @@
+name: Protected emergency release rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published semantic version to withdraw
+        required: true
+        type: string
+      source_sha:
+        description: Exact source SHA recorded in the release manifest
+        required: true
+        type: string
+      appcast_commit:
+        description: Exact appcast merge commit recorded by the release transaction
+        required: true
+        type: string
+      reason:
+        description: Non-privileged incident reason for the audit record
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: protected-production-release
+  cancel-in-progress: false
+
+jobs:
+  withdraw:
+    name: Return release to draft and revert appcast through review
+    runs-on: [self-hosted, macOS, ARM64, supra-release]
+    environment: production-release
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.SUPRA_RELEASE_GITHUB_TOKEN }}
+      SUPRA_PROTECTED_RELEASE_ENVIRONMENT: "1"
+      SUPRA_RELEASE_GIT_NAME: ${{ vars.SUPRA_RELEASE_GIT_NAME }}
+      SUPRA_RELEASE_GIT_EMAIL: ${{ vars.SUPRA_RELEASE_GIT_EMAIL }}
+      SUPRA_RELEASE_GIT_SIGNING_KEY: ${{ vars.SUPRA_RELEASE_GIT_SIGNING_KEY }}
+      SUPRA_RELEASE_GIT_SIGNING_FORMAT: ${{ vars.SUPRA_RELEASE_GIT_SIGNING_FORMAT }}
+    steps:
+      - name: Checkout reviewed main without workflow credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Establish explicit main branch
+        run: git switch -C main --track origin/main
+      - name: Withdraw release and protected appcast commit
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_APPCAST_COMMIT: ${{ inputs.appcast_commit }}
+          RELEASE_ROLLBACK_REASON: ${{ inputs.reason }}
+        run: |
+          bash Scripts/emergency-release-rollback.sh \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --version "${RELEASE_VERSION}" \
+            --source-sha "${RELEASE_SOURCE_SHA}" \
+            --appcast-commit "${RELEASE_APPCAST_COMMIT}" \
+            --reason "${RELEASE_ROLLBACK_REASON}"

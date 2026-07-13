@@ -49,8 +49,8 @@ make_source_repo() {
     "${SOURCE_REPO}/website/public" \
     "${SOURCE_REPO}/website/lib"
   printf '%s\n' \
-    'MARKETING_VERSION = 2.2.0;' \
-    'CURRENT_PROJECT_VERSION = 386;' \
+    'MARKETING_VERSION = 2.3.0;' \
+    'CURRENT_PROJECT_VERSION = 387;' \
     >"${SOURCE_REPO}/Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
   printf '%s\n' \
     '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel>' \
@@ -168,6 +168,16 @@ else
   printf '%s\n' 'PASS: missing or failed font gate blocks release'
 fi
 
+make_source_repo release-gate-fail
+release_gate_output="${temporary_dir}/release-gate-failure.log"
+release_gate_status=0
+MOCK_RELEASE_GATE_FAIL=1 preflight "$SOURCE_REPO" "$SOURCE_SHA" "${temporary_dir}/release-gate.json" >"$release_gate_output" 2>&1 || release_gate_status=$?
+if [[ "$release_gate_status" -ne 1 ]] || ! grep -Fq 'release integration gate failed' "$release_gate_output"; then
+  fail 'failed package/integration release gate did not block release'
+else
+  printf '%s\n' 'PASS: failed package/integration release gate blocks release'
+fi
+
 make_source_repo credential-fail
 credential_output="${temporary_dir}/credential-failure.log"
 credential_status=0
@@ -219,6 +229,7 @@ run_case \
 cp "$final_manifest" "${final_manifest}.cms" 2>/dev/null || true
 
 artifact_verify() {
+  local requested_build="${1:-387}"
   env \
     PATH="${mock_bin}:$PATH" \
     MOCK_RELEASE_LOG="$mock_log" \
@@ -226,10 +237,11 @@ artifact_verify() {
     MOCK_APP_ENTITLEMENTS="$app_entitlements" \
     MOCK_SERVICE_ENTITLEMENTS="$service_entitlements" \
     MOCK_TEAM_ID=2DP657YB3K \
+    SUPRA_RELEASE_TESTING=1 \
     bash "${scripts}/verify-release-artifacts.sh" \
       --app "$app" --zip "$zip" --dmg "$dmg" \
       --manifest "$final_manifest" --manifest-signature "${final_manifest}.cms" \
-      --version 2.3.0 --build 387 --source-sha "$(jq -r '.source.sha' "$source_manifest" 2>/dev/null || printf '%040d' 0)" \
+      --version 2.3.0 --build "$requested_build" --source-sha "$(jq -r '.source.sha' "$source_manifest" 2>/dev/null || printf '%040d' 0)" \
       --team-id 2DP657YB3K
 }
 
@@ -238,6 +250,21 @@ run_case \
   0 \
   'Release artifacts verified' \
   artifact_verify
+
+run_case \
+  'artifact build drift cannot be published under the release tag' \
+  1 \
+  'preflight manifest metadata does not match requested release' \
+  artifact_verify 386
+
+cms_output="${temporary_dir}/cms-failure.log"
+cms_status=0
+MOCK_CMS_FAIL=1 artifact_verify >"$cms_output" 2>&1 || cms_status=$?
+if [[ "$cms_status" -ne 1 ]] || ! grep -Fq 'manifest CMS signature verification failed' "$cms_output"; then
+  fail 'manifest signature failure did not block artifact verification'
+else
+  printf '%s\n' 'PASS: manifest signature failure blocks artifact verification'
+fi
 
 sign_output="${temporary_dir}/sign-failure.log"
 sign_status=0
@@ -346,7 +373,9 @@ publish_transaction() {
     SUPRA_APPCAST_ROLLBACK_COMMAND="${mock_bin}/appcast-rollback" \
     MOCK_RELEASE_LOG="$mock_log" \
     MOCK_ZIP_SOURCE="$zip" MOCK_DMG_SOURCE="$dmg" \
+    MOCK_MANIFEST_SOURCE="$final_manifest" MOCK_SIGNATURE_SOURCE="${final_manifest}.cms" \
     MOCK_PUBLIC_APPCAST_DEST="$public_appcast" \
+    MOCK_SOURCE_SHA="$(jq -r '.source.sha' "$source_manifest" 2>/dev/null || true)" \
     bash "${scripts}/publish-release-transaction.sh" \
       --repo-root "$publish_root" --repository example/supra \
       --source-sha "$(jq -r '.source.sha' "$source_manifest" 2>/dev/null || true)" \
@@ -438,6 +467,43 @@ if grep -Eq 'xcodeproj|proj\.save|MARKETING_VERSION.*project' "${scripts}/releas
 else
   printf '%s\n' 'PASS: release.sh does not mutate project version source'
 fi
+
+run_case \
+  'repository release-protection hooks are complete' \
+  0 \
+  'Release protection verification passed.' \
+  bash "${scripts}/verify-release-protection.sh" "$repo_root"
+
+no_publish_line="$(grep -n 'if (( publish == 0 ))' "${scripts}/release.sh" | head -1 | cut -d: -f1 || true)"
+publisher_line="$(grep -n 'Scripts/publish-release-transaction.sh' "${scripts}/release.sh" | head -1 | cut -d: -f1 || true)"
+if [[ -z "$no_publish_line" || -z "$publisher_line" || "$no_publish_line" -ge "$publisher_line" ]]; then
+  fail 'signed rehearsal does not stop before the publication transaction'
+else
+  printf '%s\n' 'PASS: signed rehearsal stops before every publication command'
+fi
+
+protection_fixture="${temporary_dir}/release-protection-fixture"
+mkdir -p "${protection_fixture}/.github/workflows" "${protection_fixture}/Docs" "${protection_fixture}/Scripts"
+cp "${repo_root}/.github/CODEOWNERS" "${protection_fixture}/.github/CODEOWNERS"
+cp "${repo_root}/.github/workflows/macos-ci.yml" "${protection_fixture}/.github/workflows/macos-ci.yml"
+cp "${repo_root}/.github/workflows/security-scheduled.yml" "${protection_fixture}/.github/workflows/security-scheduled.yml"
+cp "${repo_root}/.github/workflows/release.yml" "${protection_fixture}/.github/workflows/release.yml"
+cp "${repo_root}/.github/workflows/release-rehearsal.yml" "${protection_fixture}/.github/workflows/release-rehearsal.yml"
+cp "${repo_root}/.github/workflows/emergency-release-rollback.yml" "${protection_fixture}/.github/workflows/emergency-release-rollback.yml"
+cp "${repo_root}/Docs/Release-Protection.md" "${protection_fixture}/Docs/Release-Protection.md"
+for script in release.sh release-preflight.sh publish-release-transaction.sh publish-release-appcast.sh rollback-release-appcast.sh emergency-release-rollback.sh; do
+  cp "${scripts}/${script}" "${protection_fixture}/Scripts/${script}"
+done
+awk '$0 !~ /environment: production-release/' \
+  "${protection_fixture}/.github/workflows/release.yml" \
+  >"${protection_fixture}/.github/workflows/release.yml.tmp"
+mv "${protection_fixture}/.github/workflows/release.yml.tmp" \
+  "${protection_fixture}/.github/workflows/release.yml"
+run_case \
+  'removing protected release environment fails closed' \
+  1 \
+  'release workflow is not bound to production-release' \
+  bash "${scripts}/verify-release-protection.sh" "$protection_fixture"
 
 if (( failures != 0 )); then
   printf 'Release transaction tests failed: %d\n' "$failures" >&2

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://supralegal.ai/schemas/release-preflight-manifest-v1.json",
+  "title": "Supra AI release preflight manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "manifestKind",
+    "generatedAt",
+    "sourceManifestSHA256",
+    "repository",
+    "source",
+    "release",
+    "reviewedBuildMetadata",
+    "toolchain",
+    "dependencyLocks",
+    "ciRuns",
+    "gates",
+    "signing",
+    "artifacts",
+    "signedRuntimeSmoke"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "manifestKind": { "const": "supra-release-preflight" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "sourceManifestSHA256": { "$ref": "#/$defs/sha256" },
+    "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["branch", "sha", "tree", "originMain"],
+      "properties": {
+        "branch": { "const": "main" },
+        "sha": { "$ref": "#/$defs/gitSHA" },
+        "tree": { "$ref": "#/$defs/gitSHA" },
+        "originMain": { "$ref": "#/$defs/gitSHA" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "build", "tag"],
+      "properties": {
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$" },
+        "build": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+        "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$" }
+      }
+    },
+    "reviewedBuildMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["marketingVersion", "currentProjectVersion"],
+      "properties": {
+        "marketingVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$" },
+        "currentProjectVersion": { "type": "string", "pattern": "^[1-9][0-9]*$" }
+      }
+    },
+    "toolchain": { "type": "object" },
+    "dependencyLocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "ciRuns": { "type": "array", "minItems": 1 },
+    "gates": { "type": "object" },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["teamID", "appBundleIdentifier", "xpcBundleIdentifier", "hardenedRuntimeRequired", "notarizationRequired"],
+      "properties": {
+        "teamID": { "type": "string", "pattern": "^[A-Z0-9]{10}$" },
+        "appBundleIdentifier": { "const": "ai.supra.SupraAI" },
+        "xpcBundleIdentifier": { "const": "ai.supra.SupraAI.SupraRuntimeService" },
+        "hardenedRuntimeRequired": { "const": true },
+        "notarizationRequired": { "const": true }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "name", "digestType", "sha256", "sizeBytes"],
+        "properties": {
+          "kind": { "enum": ["app", "zip", "dmg"] },
+          "name": { "type": "string", "minLength": 1 },
+          "digestType": { "enum": ["sha256", "supra-directory-sha256-v1"] },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "sizeBytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "signedRuntimeSmoke": {
+      "type": ["object", "null"]
+    }
+  },
+  "$defs": {
+    "gitSHA": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

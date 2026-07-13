@@ -78,6 +78,9 @@ required_workflows=(
   .github/workflows/deploy-website.yml
   .github/workflows/macos-ci.yml
   .github/workflows/security-scheduled.yml
+  .github/workflows/release.yml
+  .github/workflows/release-rehearsal.yml
+  .github/workflows/emergency-release-rollback.yml
   .github/workflows/verify-model-ids.yml
   .github/workflows/verify-public-repository-assets.yml
 )
@@ -127,6 +130,7 @@ fi
 
 bash "${repo_root}/Scripts/verify-entitlements.sh" || status=1
 bash "${repo_root}/Scripts/verify-public-font-license.sh" || status=1
+bash "${repo_root}/Scripts/verify-release-protection.sh" || status=1
 
 if (( status != 0 )); then
   printf '%s\n' 'Repository facts verification failed.' >&2

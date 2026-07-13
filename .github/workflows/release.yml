@@ -1,0 +1,73 @@
+name: Protected production release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic marketing version
+        required: true
+        type: string
+      build:
+        description: Monotonic positive build number
+        required: true
+        type: string
+      expected_sha:
+        description: Exact 40-character origin/main SHA with green protected CI
+        required: true
+        type: string
+      ci_run_id:
+        description: Protected macOS CI run ID for expected_sha
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: protected-production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: SHA-bound signed release transaction
+    runs-on: [self-hosted, macOS, ARM64, supra-release]
+    environment: production-release
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ secrets.SUPRA_RELEASE_GITHUB_TOKEN }}
+      SUPRA_PROTECTED_RELEASE_ENVIRONMENT: "1"
+      SUPRA_RELEASE_TEAM_ID: ${{ vars.SUPRA_RELEASE_TEAM_ID }}
+      SIGN_IDENTITY: ${{ vars.SIGN_IDENTITY }}
+      MANIFEST_SIGNING_IDENTITY: ${{ vars.MANIFEST_SIGNING_IDENTITY }}
+      NOTARY_PROFILE: ${{ vars.NOTARY_PROFILE }}
+      SPARKLE_BIN: ${{ vars.SPARKLE_BIN }}
+      SUPRA_SIGNED_SMOKE_DRIVER: ${{ vars.SUPRA_SIGNED_SMOKE_DRIVER }}
+      SUPRA_RELEASE_SMOKE_MODEL_SHA256: ${{ vars.SUPRA_RELEASE_SMOKE_MODEL_SHA256 }}
+      SUPRA_RELEASE_GIT_NAME: ${{ vars.SUPRA_RELEASE_GIT_NAME }}
+      SUPRA_RELEASE_GIT_EMAIL: ${{ vars.SUPRA_RELEASE_GIT_EMAIL }}
+      SUPRA_RELEASE_GIT_SIGNING_KEY: ${{ vars.SUPRA_RELEASE_GIT_SIGNING_KEY }}
+      SUPRA_RELEASE_GIT_SIGNING_FORMAT: ${{ vars.SUPRA_RELEASE_GIT_SIGNING_FORMAT }}
+    steps:
+      - name: Checkout reviewed main without workflow credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Establish explicit main branch
+        run: git switch -C main --track origin/main
+      - name: Execute protected release transaction
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_BUILD: ${{ inputs.build }}
+          RELEASE_SHA: ${{ inputs.expected_sha }}
+          RELEASE_CI_RUN_ID: ${{ inputs.ci_run_id }}
+        run: |
+          bash Scripts/release.sh \
+            --repository "${GITHUB_REPOSITORY}" \
+            --version "${RELEASE_VERSION}" \
+            --build "${RELEASE_BUILD}" \
+            --expected-sha "${RELEASE_SHA}" \
+            --ci-run-id "${RELEASE_CI_RUN_ID}"

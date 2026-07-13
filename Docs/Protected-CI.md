@@ -41,3 +41,8 @@ license, updating this table and the SHA references together, and passing
 | `actions/upload-pages-artifact` | `7b1f4a764d45c48632c6b24a0339c27f5614fb0b` | `v4` | MIT |
 | `actions/deploy-pages` | `d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e` | `v4` | MIT |
 | `actions/dependency-review-action` | `2031cfc080254a8a887f58cffee85186f0e49e48` | `v4.9.0` | MIT |
+
+Release, signed-rehearsal, tag, and emergency-withdrawal controls are documented in
+[`Release-Protection.md`](Release-Protection.md). Run
+`Scripts/verify-release-protection.sh` to verify that the repository-owned half of those
+controls has not drifted; attach live GitHub ruleset and environment evidence separately.

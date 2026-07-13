@@ -28,3 +28,20 @@ Protected CI gates:
 
 Run `Tests/Scripts/test-macos-ci-gates.sh` to exercise deliberate failure fixtures.
 See `Docs/Protected-CI.md` for branch-protection names and reviewed Action licenses/pins.
+
+Protected release controls:
+
+- `release-preflight.sh` is the stable, read-only source/SHA/CI/gate entrypoint.
+- `release.sh` builds the exact reviewed SHA without editing source versions, verifies signed
+  artifacts and model/XPC smoke evidence, then delegates to the transactional publisher.
+- `create-preflight-manifest.sh`, `verify-release-artifacts.sh`, and
+  `prepare-release-appcast.sh` bind and validate the app, ZIP, DMG, Team ID, entitlements,
+  notarization, digests, Sparkle metadata, and release provenance.
+- `publish-release-transaction.sh` uses a draft-first release and rolls back public state on
+  appcast/deployment/digest failure. `emergency-release-rollback.sh` uses the same protected
+  environment and a reviewed appcast-revert PR; it has no permanent branch bypass.
+- `verify-release-protection.sh` checks repository-owned protection hooks. The hermetic
+  failure-injection rehearsal is `Tests/Scripts/test-release-transaction.sh`.
+
+See `Docs/Release-Protection.md` for the required live GitHub rulesets, environment approval,
+signed rehearsal, evidence, and withdrawal procedure.
