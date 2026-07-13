@@ -246,6 +246,13 @@ final class RedirectPolicyTests: XCTestCase {
     /// ACR-NET-04. Expected RED: no redirect layer imposes a five-hop ceiling.
     func testRedirectPolicyAcceptsRedirectStatusVariantsButRejectsSixthHop() throws {
         let initial = try XCTUnwrap(URL(string: "https://api.example.test/start"))
+        XCTAssertThrowsError(
+            try RedirectPolicy(
+                initialURL: initial,
+                service: "synthetic-service",
+                maximumHops: RedirectPolicy.maximumPermittedHops + 1
+            )
+        )
         let policy = try RedirectPolicy(initialURL: initial, service: "synthetic-service", maximumHops: 5)
         let statuses = [301, 302, 303, 307, 308]
 
