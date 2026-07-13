@@ -108,7 +108,7 @@ final class AtomicExportTests: XCTestCase {
                 to: url,
                 faultInjector: { stage in
                     if stage == .beforeValidation {
-                        withUnsafeCurrentTask { $0?.cancel() }
+                        throw CancellationError()
                     }
                 }
             )
@@ -141,6 +141,20 @@ final class AtomicExportTests: XCTestCase {
                 data.subdata(in: Int(position)..<(Int(position) + size))
             }
             XCTAssertThrowsError(try DocumentExportValidator.validate(url, as: format), "accepted incomplete \(format)")
+        }
+
+        let malformedXMLURL = directory.appendingPathComponent("malformed-xml.docx")
+        let malformedArchive = try Archive(url: malformedXMLURL, accessMode: .create, pathEncoding: nil)
+        try addEntry("[Content_Types].xml", contents: "<?xml version=\"1.0\"?><Types/>", to: malformedArchive)
+        try addEntry("_rels/.rels", contents: "<?xml version=\"1.0\"?><Relationships/>", to: malformedArchive)
+        try addEntry("word/document.xml", contents: "<w:document>", to: malformedArchive)
+        XCTAssertThrowsError(try DocumentExportValidator.validate(malformedXMLURL, as: .docx))
+    }
+
+    private func addEntry(_ path: String, contents: String, to archive: Archive) throws {
+        let data = Data(contents.utf8)
+        try archive.addEntry(with: path, type: .file, uncompressedSize: Int64(data.count)) { position, size in
+            data.subdata(in: Int(position)..<(Int(position) + size))
         }
     }
 

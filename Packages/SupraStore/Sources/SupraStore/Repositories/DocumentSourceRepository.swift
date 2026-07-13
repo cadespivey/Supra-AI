@@ -128,6 +128,19 @@ public final class DocumentSourceRepository: @unchecked Sendable {
         }
     }
 
+    /// Records the durable file's export row and corresponding success audit as
+    /// one database transaction. Callers must invoke this only after the file is
+    /// validated and atomically installed.
+    public func recordExportCompletion(
+        _ export: DocumentExportRecord,
+        auditEvent: AuditEventRecord
+    ) throws {
+        try writer.write { db in
+            try export.insert(db)
+            try auditEvent.insert(db)
+        }
+    }
+
     public func fetchExports(structuredOutputID: String) throws -> [DocumentExportRecord] {
         try writer.read { db in
             try DocumentExportRecord.fetchAll(

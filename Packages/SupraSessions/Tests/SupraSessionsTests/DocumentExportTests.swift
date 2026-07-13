@@ -47,6 +47,9 @@ final class DocumentExportTests: XCTestCase {
         // Export records persisted, and a single matter export audit exists.
         let exports = try store.documentSources.fetchExports(structuredOutputID: output.id)
         XCTAssertGreaterThanOrEqual(exports.count, DocumentExportFormat.allCases.count)
+        let exportAudits = try store.auditEvents.fetchEvents(matterID: matter.id)
+            .filter { $0.eventType == "export_completed" }
+        XCTAssertGreaterThanOrEqual(exportAudits.count, DocumentExportFormat.allCases.count)
     }
 
     func testExportDoesNotDuplicateEmbeddedAppendix() throws {

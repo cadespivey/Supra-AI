@@ -540,6 +540,49 @@ final class Milestone3SchemaTests: XCTestCase {
         XCTAssertEqual(stored.reportJSON, #"{"imported":8,"failed":1}"#)
     }
 
+    // ACR-EXPORT-012: export metadata and its success audit are one database
+    // transaction. If the audit insert fails, no orphan success row survives.
+    func testExportCompletionRollsBackExportWhenAuditInsertFails() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Atomic export")
+        let output = try store.structuredOutputs.createOutput(
+            matterID: matter.id,
+            title: "Q&A",
+            outputType: .documentQA
+        )
+        let version = try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id,
+            versionIndex: 1,
+            contentMarkdown: "Answer.",
+            requiredSections: [],
+            presentSections: [],
+            missingSections: []
+        )
+        let duplicateAuditID = "duplicate-audit"
+        _ = try store.auditEvents.recordEvent(
+            AuditEventRecord(id: duplicateAuditID, matterID: matter.id, eventType: "existing", actor: "system", summary: "Existing")
+        )
+        let export = DocumentExportRecord(
+            structuredOutputID: output.id,
+            structuredOutputVersionID: version.id,
+            matterID: matter.id,
+            format: "markdown",
+            managedRelativePath: "exports/\(matter.id)/qa.md"
+        )
+        let conflictingAudit = AuditEventRecord(
+            id: duplicateAuditID,
+            matterID: matter.id,
+            eventType: "export_completed",
+            actor: "user",
+            summary: "Exported Q&A"
+        )
+
+        XCTAssertThrowsError(
+            try store.documentSources.recordExportCompletion(export, auditEvent: conflictingAudit)
+        )
+        XCTAssertTrue(try store.documentSources.fetchExports(structuredOutputID: output.id).isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func floatBlob(_ values: [Float]) -> Data {

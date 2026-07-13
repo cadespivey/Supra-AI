@@ -8,22 +8,41 @@ import SupraStore
 /// app-managed storage, and records the export (plan §10). No raw imported
 /// documents are embedded.
 public final class DocumentExportService: @unchecked Sendable {
+    public typealias CompletionRecorder = (DocumentExportRecord, AuditEventRecord) throws -> Void
+
     private let store: SupraStore
     private let storage: DocumentStorage
+    private let fileWriter: DurableFileWriter
+    private let completionRecorder: CompletionRecorder
 
-    public init(store: SupraStore, storage: DocumentStorage = .makeDefault()) {
+    public init(
+        store: SupraStore,
+        storage: DocumentStorage = .makeDefault(),
+        fileWriter: DurableFileWriter = DurableFileWriter(),
+        completionRecorder: CompletionRecorder? = nil
+    ) {
         self.store = store
         self.storage = storage
+        self.fileWriter = fileWriter
+        self.completionRecorder = completionRecorder ?? { export, auditEvent in
+            try store.documentSources.recordExportCompletion(export, auditEvent: auditEvent)
+        }
     }
 
     public enum ExportError: Error, LocalizedError {
         case outputNotFound
         case noActiveVersion
+        case completionRecordingFailed(String)
+        case partialFailure(recording: String, compensation: String)
 
         public var errorDescription: String? {
             switch self {
             case .outputNotFound: "The output to export was not found."
             case .noActiveVersion: "The output has no active version to export."
+            case let .completionRecordingFailed(detail):
+                "The export was not recorded and the file change was rolled back: \(detail)"
+            case let .partialFailure(recording, compensation):
+                "The export file was installed, but recording failed (\(recording)) and rollback also failed (\(compensation))."
             }
         }
     }
@@ -44,24 +63,59 @@ public final class DocumentExportService: @unchecked Sendable {
         let directory = storage.exportsDirectory(forMatterID: matterID)
         let fileName = "\(sanitize(output.title))-v\(activeVersion.versionIndex).\(format.fileExtension)"
         let url = directory.appendingPathComponent(fileName)
-        try DocumentExportBuilder.write(payload, format: format, to: url)
+        let previousData = try snapshotExistingFile(at: url)
+        try DocumentExportBuilder.write(payload, format: format, to: url, writer: fileWriter)
 
         let relativePath = "exports/\(matterID)/\(fileName)"
-        _ = try store.documentSources.recordExport(
-            DocumentExportRecord(
-                structuredOutputID: structuredOutputID,
-                structuredOutputVersionID: activeVersion.id,
-                matterID: matterID,
-                format: format.rawValue,
-                managedRelativePath: relativePath
-            )
+        let exportRecord = DocumentExportRecord(
+            structuredOutputID: structuredOutputID,
+            structuredOutputVersionID: activeVersion.id,
+            matterID: matterID,
+            format: format.rawValue,
+            managedRelativePath: relativePath
         )
-        _ = try? store.auditEvents.recordEvent(
-            matterID: matterID, eventType: "export_completed", actor: "user",
+        let auditEvent = AuditEventRecord(
+            matterID: matterID,
+            eventType: "export_completed",
+            actor: "user",
             summary: "Exported \(output.title) as \(format.rawValue)",
-            relatedTable: "structured_outputs", relatedID: structuredOutputID
+            relatedTable: "structured_outputs",
+            relatedID: structuredOutputID
         )
+        do {
+            try completionRecorder(exportRecord, auditEvent)
+        } catch {
+            let recordingDescription = error.localizedDescription
+            do {
+                try compensateFile(at: url, previousData: previousData)
+            } catch {
+                throw ExportError.partialFailure(
+                    recording: recordingDescription,
+                    compensation: error.localizedDescription
+                )
+            }
+            throw ExportError.completionRecordingFailed(recordingDescription)
+        }
         return url
+    }
+
+    /// `nil` means the path did not exist; non-nil data is an exact rollback
+    /// snapshot. An unreadable existing artifact fails before rendering.
+    private func snapshotExistingFile(at url: URL) throws -> Data? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try Data(contentsOf: url, options: .mappedIfSafe)
+    }
+
+    private func compensateFile(at url: URL, previousData: Data?) throws {
+        if let previousData {
+            // The snapshot is restored exactly, even if it predates current
+            // validators. It was the caller's preexisting artifact.
+            try fileWriter.write(previousData, to: url) { _ in }
+        } else if FileManager.default.fileExists(atPath: url.path) {
+            // The snapshot proved this destination was absent before export;
+            // remove only the newly installed, unrecorded artifact.
+            try FileManager.default.removeItem(at: url)
+        }
     }
 
     private func makePayload(output: StructuredOutputRecord, version: StructuredOutputVersionRecord, matterID: String) throws -> DocumentExportPayload {

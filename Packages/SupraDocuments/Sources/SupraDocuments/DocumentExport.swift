@@ -65,25 +65,50 @@ public struct DocumentExportPayload: Sendable, Equatable {
 /// citations + a source appendix + a review warning. No raw imported documents
 /// are embedded (plan §10.3).
 public enum DocumentExportBuilder {
-    public static func write(_ payload: DocumentExportPayload, format: DocumentExportFormat, to url: URL) throws {
+    public enum FaultStage: String, Sendable {
+        case beforeRender
+        case beforeValidation
+    }
+
+    public typealias FaultInjector = (FaultStage) throws -> Void
+
+    public static func write(
+        _ payload: DocumentExportPayload,
+        format: DocumentExportFormat,
+        to url: URL,
+        writer: DurableFileWriter = DurableFileWriter(),
+        faultInjector: FaultInjector = { _ in }
+    ) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Task.checkCancellation()
+        try faultInjector(.beforeRender)
+        try Task.checkCancellation()
+        let data = try render(payload, format: format)
+        try Task.checkCancellation()
+        try writer.write(data, to: url) { temporaryURL in
+            try faultInjector(.beforeValidation)
+            try DocumentExportValidator.validate(temporaryURL, as: format)
+        }
+    }
+
+    private static func render(_ payload: DocumentExportPayload, format: DocumentExportFormat) throws -> Data {
         switch format {
         case .markdown:
-            try writeMarkdown(payload, to: url)
+            return renderMarkdown(payload)
         case .csv:
-            try writeCSV(payload, to: url)
+            return renderCSV(payload)
         case .pdf:
-            try writePDF(payload, to: url)
+            return try renderPDF(payload)
         case .docx:
-            try writeDOCX(payload, to: url)
+            return try renderDOCX(payload)
         case .xlsx:
-            try writeXLSX(payload, to: url)
+            return try renderXLSX(payload)
         }
     }
 
     // MARK: - Markdown
 
-    private static func writeMarkdown(_ payload: DocumentExportPayload, to url: URL) throws {
+    private static func renderMarkdown(_ payload: DocumentExportPayload) -> Data {
         var text = "# \(payload.title)\n\n> \(payload.reviewWarning)\n\n\(payload.contentMarkdown)\n"
         if !payload.sources.isEmpty {
             text += "\n## Sources\n"
@@ -93,17 +118,17 @@ public enum DocumentExportBuilder {
                 if !source.excerpt.isEmpty { text += "  > \(source.excerpt)\n" }
             }
         }
-        try text.data(using: .utf8)?.write(to: url)
+        return Data(text.utf8)
     }
 
     // MARK: - CSV (source appendix table)
 
-    private static func writeCSV(_ payload: DocumentExportPayload, to url: URL) throws {
+    private static func renderCSV(_ payload: DocumentExportPayload) -> Data {
         var rows = ["Label,Document,Locator,Warnings,Excerpt"]
         for source in payload.sources {
             rows.append([source.label, source.documentName, source.locator, source.warnings, source.excerpt].map(csvField).joined(separator: ","))
         }
-        try rows.joined(separator: "\n").data(using: .utf8)?.write(to: url)
+        return Data(rows.joined(separator: "\n").utf8)
     }
 
     private static func csvField(_ value: String) -> String {
@@ -113,9 +138,11 @@ public enum DocumentExportBuilder {
 
     // MARK: - PDF (CoreText, paginated)
 
-    private static func writePDF(_ payload: DocumentExportPayload, to url: URL) throws {
+    private static func renderPDF(_ payload: DocumentExportPayload) throws -> Data {
         var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
-        guard let context = CGContext(url as CFURL, mediaBox: &mediaBox, nil) else {
+        let output = NSMutableData()
+        guard let consumer = CGDataConsumer(data: output as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
             throw ExtractionError.fileUnreadable("Could not create PDF context.")
         }
         let inset: CGFloat = 54
@@ -137,15 +164,13 @@ public enum DocumentExportBuilder {
             context.endPDFPage()
         } while start < total
         context.closePDF()
+        return output as Data
     }
 
     // MARK: - DOCX (minimal Office Open XML)
 
-    private static func writeDOCX(_ payload: DocumentExportPayload, to url: URL) throws {
-        try? FileManager.default.removeItem(at: url)
-        guard let archive = try? Archive(url: url, accessMode: .create, pathEncoding: nil) else {
-            throw ExtractionError.fileUnreadable("Could not create DOCX.")
-        }
+    private static func renderDOCX(_ payload: DocumentExportPayload) throws -> Data {
+        let archive = try Archive(data: Data(), accessMode: .create, pathEncoding: nil)
         let paragraphs = payload.plainText.split(separator: "\n", omittingEmptySubsequences: false)
             .map { "<w:p><w:r><w:t xml:space=\"preserve\">\(xmlEscape(String($0)))</w:t></w:r></w:p>" }
             .joined()
@@ -164,15 +189,16 @@ public enum DocumentExportBuilder {
         try addEntry(archive, "[Content_Types].xml", contentTypes)
         try addEntry(archive, "_rels/.rels", rels)
         try addEntry(archive, "word/document.xml", document)
+        guard let data = archive.data else {
+            throw ExtractionError.fileUnreadable("Could not finish DOCX.")
+        }
+        return data
     }
 
     // MARK: - XLSX (minimal Office Open XML — source appendix table)
 
-    private static func writeXLSX(_ payload: DocumentExportPayload, to url: URL) throws {
-        try? FileManager.default.removeItem(at: url)
-        guard let archive = try? Archive(url: url, accessMode: .create, pathEncoding: nil) else {
-            throw ExtractionError.fileUnreadable("Could not create XLSX.")
-        }
+    private static func renderXLSX(_ payload: DocumentExportPayload) throws -> Data {
+        let archive = try Archive(data: Data(), accessMode: .create, pathEncoding: nil)
         var rowsXML = ""
         func row(_ number: Int, _ values: [String]) -> String {
             let cells = values.enumerated().map { index, value in
@@ -210,6 +236,10 @@ public enum DocumentExportBuilder {
         try addEntry(archive, "xl/workbook.xml", workbook)
         try addEntry(archive, "xl/_rels/workbook.xml.rels", workbookRels)
         try addEntry(archive, "xl/worksheets/sheet1.xml", sheet)
+        guard let data = archive.data else {
+            throw ExtractionError.fileUnreadable("Could not finish XLSX.")
+        }
+        return data
     }
 
     // MARK: - Helpers

@@ -2,6 +2,7 @@ import Foundation
 import SupraCore
 import SupraDrafting
 import SupraDraftingCore
+import SupraExports
 import SupraRuntimeInterface
 @testable import SupraSessions
 import SupraDocuments
@@ -268,6 +269,45 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertTrue(auditObservedInstalledFile)
         XCTAssertEqual(try Data(contentsOf: destination), canary)
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-011: rendered DOCX drafts take the same validated temporary
+    // path; an install fault cannot truncate a previously reviewed filing.
+    @MainActor
+    func testDOCXDraftInstallFailurePreservesCanaryAndWritesNoAudit() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(
+            name: "Atomic filing",
+            court: "IN THE CIRCUIT COURT OF DUVAL COUNTY, FLORIDA",
+            docketNumber: "2026-CA-001847"
+        )
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("Notice-of-Appearance-fixed.docx")
+        let canary = Data("previous-reviewed-docx".utf8)
+        try canary.write(to: destination)
+        let writer = DurableFileWriter { stage in
+            if stage == .beforeInstall { throw PersistenceFailure.stop }
+        }
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" }
+        )
+
+        let result = await controller.draftNoticeOfAppearance(
+            matterID: matter.id,
+            parties: sampleParties(),
+            partyRepresented: "Defendant",
+            representedPartyName: "Liberty Rail, LLC",
+            recipients: sampleRecipients()
+        )
+        guard case .failure = result else { return XCTFail("expected DOCX persistence failure") }
+        XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertFalse(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "draft_generated" })
     }
 
     // MARK: - Demand Letter (LLM-backed)
@@ -777,6 +817,6 @@ final class StyleSpyRenderer: Renderer, @unchecked Sendable {
     func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {
         renderCount += 1
         captured = style
-        return Data()
+        return try CompositeRenderer().render(input, style: style)
     }
 }

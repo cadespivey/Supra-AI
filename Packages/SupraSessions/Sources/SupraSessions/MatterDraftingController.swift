@@ -22,6 +22,8 @@ import SupraStore
 /// of guessing.
 @MainActor
 public final class MatterDraftingController: ObservableObject {
+    public typealias DraftAuditRecorder = (AuditEventRecord) throws -> Void
+
     public struct DraftArtifact: Sendable, Equatable {
         /// What produced this artifact — a wired catalog kind, or a free-form custom
         /// description. A custom artifact has no `DraftKindID`, so we never fake one.
@@ -83,6 +85,9 @@ public final class MatterDraftingController: ObservableObject {
 
     private let store: SupraStore
     private let storage: DocumentStorage
+    private let fileWriter: DurableFileWriter
+    private let fileStampProvider: @Sendable () -> String
+    private let auditRecorder: DraftAuditRecorder
     private let pipelineFactory: @Sendable () -> DraftPipeline
     /// Present when the app can call the on-device model — required for the LLM-backed
     /// kinds (`letterDemand`). The deterministic notice path works without it.
@@ -96,12 +101,20 @@ public final class MatterDraftingController: ObservableObject {
         store: SupraStore,
         runtimeClient: (any RuntimeClientProtocol)? = nil,
         storage: DocumentStorage = .makeDefault(),
+        fileWriter: DurableFileWriter = DurableFileWriter(),
+        fileStampProvider: (@Sendable () -> String)? = nil,
+        auditRecorder: DraftAuditRecorder? = nil,
         firmStyleProfile: FirmStyleProfile? = nil,
         pipelineFactory: (@Sendable () -> DraftPipeline)? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.storage = storage
+        self.fileWriter = fileWriter
+        self.fileStampProvider = fileStampProvider ?? { Self.fileStamp() }
+        self.auditRecorder = auditRecorder ?? { event in
+            try store.auditEvents.recordEvent(event)
+        }
         self.firmStyleProfile = firmStyleProfile
         // Default: deterministic verifier + the court/letter renderers. Injectable for tests.
         self.pipelineFactory = pipelineFactory ?? { DraftPipeline.makeDefault() }
@@ -188,9 +201,14 @@ public final class MatterDraftingController: ObservableObject {
         }
 
         do {
-            let url = try persist(data: result.docx, matterID: matterID, title: NoticeAppearance.title, fileExtension: "docx")
+            let url = try persist(
+                data: result.docx,
+                matterID: matterID,
+                title: NoticeAppearance.title,
+                format: .docx,
+                auditLabel: DraftKindID.noticeAppearance.rawValue
+            )
             let followUps = result.followUps.map { DraftFollowUp(isBlocking: $0.severity == .blocking, message: $0.message) }
-            recordAudit(matterID: matterID, label: DraftKindID.noticeAppearance.rawValue, fileName: url.lastPathComponent)
             return .success(DraftArtifact(source: .kind(.noticeAppearance), format: .docx, title: NoticeAppearance.title, fileURL: url, followUps: followUps))
         } catch {
             return .failure(.renderFailed(error.localizedDescription))
@@ -263,8 +281,13 @@ public final class MatterDraftingController: ObservableObject {
             matter: matter
         )
         do {
-            let url = try persist(data: Data(markdown.utf8), matterID: matterID, title: title, fileExtension: "md")
-            recordAudit(matterID: matterID, label: "custom work-product description", fileName: url.lastPathComponent)
+            let url = try persist(
+                data: Data(markdown.utf8),
+                matterID: matterID,
+                title: title,
+                format: .markdown,
+                auditLabel: "custom work-product description"
+            )
             let note = DraftFollowUp(
                 isBlocking: false,
                 message: "This is a work-product description in your own words — not a court-ready or model-generated filing. Use it as a drafting brief or starting point."
@@ -344,9 +367,14 @@ public final class MatterDraftingController: ObservableObject {
 
         do {
             let title = "Demand Letter"
-            let url = try persist(data: result.docx, matterID: matterID, title: title, fileExtension: "docx")
+            let url = try persist(
+                data: result.docx,
+                matterID: matterID,
+                title: title,
+                format: .docx,
+                auditLabel: DraftKindID.letterDemand.rawValue
+            )
             let followUps = result.followUps.map { DraftFollowUp(isBlocking: $0.severity == .blocking, message: $0.message) }
-            recordAudit(matterID: matterID, label: DraftKindID.letterDemand.rawValue, fileName: url.lastPathComponent)
             return .success(DraftArtifact(source: .kind(.letterDemand), format: .docx, title: title, fileURL: url, followUps: followUps))
         } catch {
             return .failure(.renderFailed(error.localizedDescription))
@@ -559,25 +587,75 @@ public final class MatterDraftingController: ObservableObject {
 
     // MARK: - Persistence
 
-    private func persist(data: Data, matterID: String, title: String, fileExtension: String) throws -> URL {
-        let directory = storage.exportsDirectory(forMatterID: matterID)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let stamp = Self.fileStamp()
-        let fileName = "\(sanitize(title))-\(stamp).\(fileExtension)"
-        let url = directory.appendingPathComponent(fileName)
-        try data.write(to: url)
-        return url
+    private enum PersistenceError: Error, LocalizedError {
+        case auditFailed(String)
+        case partialFailure(audit: String, compensation: String)
+
+        var errorDescription: String? {
+            switch self {
+            case let .auditFailed(detail):
+                "The draft audit failed and the file change was rolled back: \(detail)"
+            case let .partialFailure(audit, compensation):
+                "The draft was installed, but auditing failed (\(audit)) and rollback also failed (\(compensation))."
+            }
+        }
     }
 
-    private func recordAudit(matterID: String, label: String, fileName: String) {
-        _ = try? store.auditEvents.recordEvent(
+    private func persist(
+        data: Data,
+        matterID: String,
+        title: String,
+        format: DocumentExportFormat,
+        auditLabel: String
+    ) throws -> URL {
+        let directory = storage.exportsDirectory(forMatterID: matterID)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileName = "\(sanitize(title))-\(fileStampProvider()).\(format.fileExtension)"
+        let url = directory.appendingPathComponent(fileName)
+        let previousData: Data?
+        if FileManager.default.fileExists(atPath: url.path) {
+            previousData = try Data(contentsOf: url, options: .mappedIfSafe)
+        } else {
+            previousData = nil
+        }
+
+        try fileWriter.write(data, to: url) { temporaryURL in
+            try DocumentExportValidator.validate(temporaryURL, as: format)
+        }
+
+        let event = AuditEventRecord(
             matterID: matterID,
             eventType: "draft_generated",
             actor: "user",
-            summary: "Generated \(label) draft (\(fileName))",
+            summary: "Generated \(auditLabel) draft (\(fileName))",
             relatedTable: "matters",
             relatedID: matterID
         )
+        do {
+            try auditRecorder(event)
+        } catch {
+            let auditDescription = error.localizedDescription
+            do {
+                try compensateFile(at: url, previousData: previousData)
+            } catch {
+                throw PersistenceError.partialFailure(
+                    audit: auditDescription,
+                    compensation: error.localizedDescription
+                )
+            }
+            throw PersistenceError.auditFailed(auditDescription)
+        }
+        return url
+    }
+
+    private func compensateFile(at url: URL, previousData: Data?) throws {
+        if let previousData {
+            try fileWriter.write(previousData, to: url) { _ in }
+        } else if FileManager.default.fileExists(atPath: url.path) {
+            // No prior artifact existed; this removes only the newly installed
+            // draft whose required audit failed.
+            try FileManager.default.removeItem(at: url)
+        }
     }
 
     private func sanitize(_ title: String) -> String {
@@ -586,7 +664,7 @@ public final class MatterDraftingController: ObservableObject {
         return cleaned.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: " ", with: "-").prefix(60).description
     }
 
-    private static func fileStamp() -> String {
+    nonisolated private static func fileStamp() -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
