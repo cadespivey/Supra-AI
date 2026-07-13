@@ -174,6 +174,9 @@ public enum DocumentSupportVerifier {
         }
 
         for source in citedSources {
+            guard !hasMaterialContradiction(to: proposition.text, in: source.text) else {
+                return try result(.unsupported, ["Cited source text contains materially contradictory evidence for proposition \(proposition.id)."])
+            }
             guard let excerpt = supportingExcerpt(for: proposition.text, in: source.text) else { continue }
             let evidence = SupportEvidence(
                 sourceID: source.sourceID,
@@ -458,14 +461,14 @@ public enum DocumentSupportVerifier {
         let normalized = text.folding(
             options: [.caseInsensitive, .diacriticInsensitive],
             locale: Locale(identifier: "en_US_POSIX")
-        )
+        ).lowercased()
         let compact = normalized.replacingOccurrences(
             of: #"\s+"#,
             with: " ",
             options: .regularExpression
         )
         let patterns = [
-            #"\bignore\b.{0,80}\b(instruction|prompt|system|developer|assistant)\b"#,
+            #"\bignore\b.{0,80}\b(instructions?|prompt|system|developer|assistant)\b"#,
             #"\b(reveal|disclose|print|show)\b.{0,80}\b(other )?(source|prompt|secret|instruction)s?\b"#,
             #"\b(change|switch|override|assume)\b.{0,40}\b(role|persona|identity)\b"#,
             #"\b(output|state|claim|answer|say)\b.{0,80}\b(false|fabricated|untrue|unsupported)\b"#,
@@ -526,6 +529,24 @@ public enum DocumentSupportVerifier {
     private static func containsNegation(_ text: String) -> Bool {
         let tokens = Set(normalizedWords(in: text))
         return !tokens.isDisjoint(with: ["no", "not", "never", "without", "none"])
+    }
+
+    private static func hasMaterialContradiction(to proposition: String, in sourceText: String) -> Bool {
+        let terms = Set(significantTokens(in: proposition))
+        guard terms.count >= 2 else { return false }
+        let propositionNegated = containsNegation(proposition)
+        let nsSource = sourceText as NSString
+        let fullRange = NSRange(location: 0, length: nsSource.length)
+        guard let regex = try? NSRegularExpression(pattern: #"[^.!?\n]+(?:[.!?]+|\n|$)"#) else {
+            return false
+        }
+        return regex.matches(in: sourceText, range: fullRange).contains { match in
+            let sentence = nsSource.substring(with: match.range)
+            guard containsNegation(sentence) != propositionNegated else { return false }
+            let matched = terms.intersection(significantTokens(in: sentence)).count
+            return matched >= min(3, terms.count)
+                && Double(matched) / Double(terms.count) >= 0.6
+        }
     }
 
     private static func orderedUnique(_ values: [String]) -> [String] {

@@ -221,6 +221,29 @@ public enum LegalCitationVerifier {
                     )
                 }
             }
+            // Packet labels are the primary legal-output citation contract. A
+            // label-only answer must receive the same per-authority jurisdiction
+            // check as a conventional reporter citation.
+            for proposition in propositions {
+                for label in proposition.citationLabels {
+                    for index in packetLabelIndices(in: label) where index >= 1 && index <= packetSize {
+                        let authority = authorities[index - 1]
+                        guard !isNationallyBinding(authority) else { continue }
+                        let jurisdictionStrings = [authority.jurisdiction, authority.court, authority.courtID]
+                            .compactMap { $0 }
+                        let matches = jurisdictionStrings.contains {
+                            jurisdictionMatches(expectedJurisdiction, $0)
+                        }
+                        if !matches, flaggedExcerpts.insert(label).inserted {
+                            issues.append(LegalVerificationIssue(
+                                kind: .jurisdictionMismatch,
+                                message: "The cited authority does not clearly belong to the requested jurisdiction (\(expectedJurisdiction)).",
+                                excerpt: label
+                            ))
+                        }
+                    }
+                }
+            }
         }
 
         // In-range packet labels count as cited strings, so a label-only answer (the
@@ -924,6 +947,14 @@ public enum LegalCitationVerifier {
                 continue
             }
             let text = authority.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !containsInstructionLikeContent(text) else {
+                unverifiableReasons.append("\(label) contains instruction-shaped text and cannot be treated as authority evidence.")
+                continue
+            }
+            guard !hasMaterialContradiction(to: proposition.text, in: text) else {
+                unsupportedReasons.append("\(label) contains materially contradictory treatment of the proposition.")
+                continue
+            }
             let match = bestEvidenceMatch(for: proposition.text, terms: propositionTerms, in: text)
             let requiredMatches = min(3, propositionTerms.count)
             guard match.matchedTerms >= requiredMatches, match.coverage >= 0.45 else {
@@ -932,6 +963,17 @@ public enum LegalCitationVerifier {
             }
             guard negationPolarity(in: proposition.text) == negationPolarity(in: match.excerpt) else {
                 unsupportedReasons.append("\(label) contradicts the proposition's affirmative/negative meaning.")
+                continue
+            }
+            guard !isQualifiedOrNonholdingSupport(match.excerpt, for: proposition.text) else {
+                unsupportedReasons.append("\(label) supplies dicta, dissent, or expressly unresolved treatment rather than the claimed holding.")
+                continue
+            }
+            guard isOrderedSubsequence(
+                orderedCriticalValues(in: proposition.text),
+                of: orderedCriticalValues(in: match.excerpt)
+            ) else {
+                unsupportedReasons.append("\(label) reassigns or omits a proposition-critical value.")
                 continue
             }
             evidence.append(
@@ -1016,6 +1058,71 @@ public enum LegalCitationVerifier {
     private static func negationPolarity(in text: String) -> Bool {
         let pattern = #"(?i)\b(?:does|do|did|is|are|was|were|must|shall|can|could|would|should)\s+not\b|\bcannot\b|\bno\s+(?!later\b)|\bneither\b|\bnor\b|\bnever\b|\bwithout\b|\bdeclin(?:e|es|ed|ing)\s+to\b|\breject(?:s|ed|ing)?\b"#
         return text.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    private static func containsInstructionLikeContent(_ text: String) -> Bool {
+        let normalized = text.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        ).lowercased().replacingOccurrences(
+            of: #"\s+"#, with: " ", options: .regularExpression
+        )
+        let patterns = [
+            #"\bignore\b.{0,80}\b(instructions?|prompt|system|developer|assistant)\b"#,
+            #"\b(change|switch|override|assume)\b.{0,40}\b(role|persona|identity)\b"#,
+            #"\b(follow|obey|execute)\b.{0,40}\b(these|the following|my)\b.{0,20}\binstructions?\b"#,
+            #"[\"']role[\"']\s*:\s*[\"']system[\"']"#,
+            #"\bsystem message\b"#,
+            #"\btool (call|request)\b"#,
+        ]
+        return patterns.contains { normalized.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    private static func hasMaterialContradiction(to proposition: String, in sourceText: String) -> Bool {
+        let terms = significantContentTerms(proposition)
+        guard terms.count >= 2 else { return false }
+        let propositionNegated = negationPolarity(in: proposition)
+        return sentenceRanges(in: sourceText).contains { range in
+            let sentence = String(sourceText[range])
+            guard negationPolarity(in: sentence) != propositionNegated else { return false }
+            let matched = terms.intersection(significantContentTerms(sentence)).count
+            return matched >= min(3, terms.count)
+                && Double(matched) / Double(terms.count) >= 0.45
+        }
+    }
+
+    private static func isQualifiedOrNonholdingSupport(_ excerpt: String, for proposition: String) -> Bool {
+        let claim = proposition.lowercased()
+        guard claim.contains("hold") || claim.contains("require") || claim.contains("must") else {
+            return false
+        }
+        let source = excerpt.lowercased()
+        return ["dissent", "dicta", "might", "whether", "declines to decide", "does not decide"]
+            .contains { source.contains($0) }
+    }
+
+    private static func orderedCriticalValues(in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(?i)(?:[$€£]\s*\d[\d,.]*|\b\d[\d,.]*(?:%|percent)?\b|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)"#
+        ) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            Range(match.range, in: text).map {
+                text[$0].lowercased().replacingOccurrences(of: " ", with: "")
+            }
+        }
+    }
+
+    private static func isOrderedSubsequence(_ required: [String], of available: [String]) -> Bool {
+        guard !required.isEmpty else { return true }
+        var nextIndex = 0
+        for value in required {
+            guard nextIndex < available.count,
+                  let match = available[nextIndex...].firstIndex(of: value)
+            else { return false }
+            nextIndex = match + 1
+        }
+        return true
     }
 
     /// Legal-aware deterministic sentence ranges. Foundation's generic sentence

@@ -18,6 +18,8 @@ final class AttorneySupportCorpusTests: XCTestCase {
         var claim: String
         var source: String
         var expectedOutcome: String
+        var expectedStatus: String
+        var rationale: String
         var sourceCondition: String
         var expectedJurisdiction: String?
         var sourceJurisdiction: String?
@@ -38,6 +40,8 @@ final class AttorneySupportCorpusTests: XCTestCase {
         XCTAssertEqual(corpus.reviewStatus, "pending_attorney_review")
         XCTAssertEqual(Set(corpus.cases.map(\.category)), requiredCategories)
         XCTAssertEqual(Set(corpus.cases.map(\.id)).count, corpus.cases.count)
+        XCTAssertTrue(corpus.cases.allSatisfy { ["supported", "unsupported", "unverifiable"].contains($0.expectedStatus) })
+        XCTAssertTrue(corpus.cases.allSatisfy { !$0.rationale.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
     }
 
     func testSameCorpusNeverProducesFalseCleanAcrossAdapters() async throws {

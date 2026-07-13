@@ -204,6 +204,37 @@ public struct DraftVerifier: Verifier, Sendable {
                 continue
             }
 
+            if Self.containsNegation(text) != Self.containsNegation(combinedSource) {
+                appendBlocked(
+                    proposition: proposition,
+                    status: .unsupported,
+                    reason: "generated proposition conflicts with negative or contradictory source text",
+                    gate: .factProvenance,
+                    evidence: evidence,
+                    failures: &failures,
+                    followUps: &followUps,
+                    supportResults: &supportResults
+                )
+                continue
+            }
+
+            if !Self.isOrderedSubsequence(
+                Self.orderedCriticalValues(in: text),
+                of: Self.orderedCriticalValues(in: combinedSource)
+            ) {
+                appendBlocked(
+                    proposition: proposition,
+                    status: .unsupported,
+                    reason: "generated proposition reassigns or omits a source-critical value",
+                    gate: .factProvenance,
+                    evidence: evidence,
+                    failures: &failures,
+                    followUps: &followUps,
+                    supportResults: &supportResults
+                )
+                continue
+            }
+
             let unsupportedTokens = Self.materialTokens(in: text)
                 .subtracting(Self.tokens(in: combinedSource))
             if !unsupportedTokens.isEmpty {
@@ -308,6 +339,37 @@ public struct DraftVerifier: Verifier, Sendable {
             "ignore previous", "ignore all previous", "system prompt", "assistant:",
             "developer message", "tool call", "change your role", "output format"
         ].contains { lower.contains($0) }
+    }
+
+    private static func containsNegation(_ text: String) -> Bool {
+        text.range(
+            of: #"(?i)\bnot\b|\bnever\b|\bwithout\b|\bnone\b|\bno\s+(?!later\b)"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    private static func orderedCriticalValues(in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(?i)(?:[$€£]\s*\d[\d,.]*|\b\d[\d,.]*(?:%|percent)?\b|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)"#
+        ) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            Range(match.range, in: text).map {
+                text[$0].lowercased().replacingOccurrences(of: " ", with: "")
+            }
+        }
+    }
+
+    private static func isOrderedSubsequence(_ required: [String], of available: [String]) -> Bool {
+        guard !required.isEmpty else { return true }
+        var nextIndex = 0
+        for value in required {
+            guard nextIndex < available.count,
+                  let match = available[nextIndex...].firstIndex(of: value)
+            else { return false }
+            nextIndex = match + 1
+        }
+        return true
     }
 
     private static func containsCitationShape(_ text: String) -> Bool {
