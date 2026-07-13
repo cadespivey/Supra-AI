@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import SupraCore
 
 public struct StructuredOutputVersionRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Identifiable {
     public static let databaseTableName = "structured_output_versions"
@@ -14,6 +15,10 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
     public var missingSectionsJSON: String
     public var repairReason: String?
     public var generationSessionID: String?
+    public var verificationStatus: String
+    public var verificationVersion: String?
+    public var verificationJSON: String?
+    public var verifiedAt: Date?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -28,6 +33,10 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
         missingSectionsJSON: String = "[]",
         repairReason: String? = nil,
         generationSessionID: String? = nil,
+        verificationStatus: String = OutputVerificationStatus.legacyUnverified.rawValue,
+        verificationVersion: String? = nil,
+        verificationJSON: String? = nil,
+        verifiedAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -41,6 +50,10 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
         self.missingSectionsJSON = missingSectionsJSON
         self.repairReason = repairReason
         self.generationSessionID = generationSessionID
+        self.verificationStatus = verificationStatus
+        self.verificationVersion = verificationVersion
+        self.verificationJSON = verificationJSON
+        self.verifiedAt = verifiedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -56,6 +69,10 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
         case missingSectionsJSON = "missing_sections_json"
         case repairReason = "repair_reason"
         case generationSessionID = "generation_session_id"
+        case verificationStatus = "verification_status"
+        case verificationVersion = "verification_version"
+        case verificationJSON = "verification_json"
+        case verifiedAt = "verified_at"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }

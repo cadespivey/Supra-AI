@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import SupraCore
 
 public enum SupraMigrator {
     public static func makeMigrator() -> DatabaseMigrator {
@@ -939,6 +940,32 @@ public enum SupraMigrator {
             try db.alter(table: "matters") { table in
                 table.add(column: "pinned_at", .datetime)
             }
+        }
+
+        migrator.registerMigration("v055_add_output_verification_provenance") { db in
+            try db.alter(table: "structured_output_versions") { table in
+                table.add(column: "verification_status", .text)
+                    .notNull()
+                    .defaults(to: "legacy_unverified")
+                table.add(column: "verification_version", .text)
+                table.add(column: "verification_json", .text)
+                table.add(column: "verified_at", .datetime)
+            }
+
+            // Existing generated content predates proposition-level verification.
+            // Preserve every byte and source attachment, but never grandfather a
+            // formerly complete output into the new clean state.
+            try db.execute(
+                sql: """
+                UPDATE structured_outputs
+                SET status = ?
+                WHERE status = ?
+                """,
+                arguments: [
+                    StructuredOutputStatus.needsReview.rawValue,
+                    StructuredOutputStatus.complete.rawValue,
+                ]
+            )
         }
 
         return migrator
