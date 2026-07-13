@@ -128,33 +128,45 @@ Before handoff:
 
 ## Remediation verification — 2026-07-13
 
-This section is separate from the historical review log above. It records final remediation evidence produced on `remediation/acr-program` at source snapshot `19e06b451cd585f7b7b360ea916e992339b46845`. Commands ran with that exact HEAD in the primary checkout. The untracked review directory was present but was not an input to the source build/test commands; this section does not claim the precommit checkout was clean. The evidence-only commit is the commit containing this report and is resolved with `git log -1 --format=%H -- review/adversarial-code-review/12-remediation-execution-report.md`.
+This section is separate from the historical review log above. It records final remediation evidence produced on `remediation/acr-program`. The initial integrated record was produced at `19e06b451cd585f7b7b360ea916e992339b46845`; the final release-hardening rerun below was produced from clean source snapshot `fce83ebf462c76b60203eb9ccb5db4ed00c7a0de`. The evidence-only commit is the commit containing this report and is resolved with `git log -1 --format=%H -- review/adversarial-code-review/12-remediation-execution-report.md`.
 
-### Final integrated evidence
+### Initial integrated evidence
 
 | Command / evidence | Result summary |
 |---|---|
-| `git rev-parse HEAD` before final gates | `19e06b451cd585f7b7b360ea916e992339b46845`. |
+| `git rev-parse HEAD` before the initial integrated gates | `19e06b451cd585f7b7b360ea916e992339b46845`. |
 | Three targeted remediation/accessibility UI selectors | 3/3 passed: `testLegacyBillingWarningAnnouncesReviewAndUnavailableExport`, `testLegacyOutputWarningAnnouncesStatusAndUnavailableExport`, and `testBlockedDraftIsAnnouncedWithoutFileActions`. xcresult: `/tmp/SupraAI-FINAL-UI-WARNFIX-2/Logs/Test/Test-SupraAI-2026.07.13_09-34-25--0400.xcresult`. One Xcode internal QoS priority-inversion runtime warning; zero project-source warnings; four MLX dependency parse warnings. |
 | Two targeted XPC UI selectors | 2/2 passed: `testHostedBoundaryLifecycle` and `testSwitchBindingAndKeyboardTraversal`; lifecycle assertion 20/20. xcresult: `/tmp/SupraAI-FINAL-SOURCE-XPC/Logs/Test/Test-SupraAI-2026.07.13_09-37-12--0400.xcresult`. No test runtime warning; zero project-source diagnostics; four MLX parse warnings, AppIntents metadata messages, and one Xcode/MLX graph warning. |
 | `Scripts/verify-runtime-xpc-boundary.sh` | Passed the embedded signed-boundary source/entitlement gate. |
 | XPC ownership, cancellation, and model-directory controls | Invalid/nil grants, missing identities, same-path replacement, containment escape, foreign cancellation, reused IDs, reservation-before-admission, reconnect, and concurrent load/unload cases passed. App-signer stale persistent bookmarks require reauthorization; cross-signer stale resolution is accepted only with active scope, canonical containment/existence, and matching device/inode identity. This does not claim content-hash protection against in-place shard mutation. |
 | `bash Tests/Scripts/test-macos-ci-gates.sh` | 18/18 integration-hook cases passed. |
-| `bash Scripts/verify-repo-facts.sh` | Passed: 3 targets, 14 packages, app 2.2.0 build 386, XPC build 17. |
-| `bash Tests/Scripts/test-verify-product-claims.sh`; `bash Scripts/verify-product-claims.sh` | Wrapper passed 4/4 normal/mutation cases; 20 claims across 14 packages passed with latest migration v057. |
 | `bash Scripts/verify-migration-sequence.sh`; `DEVELOPER_DIR=... bash Scripts/run-shipping-migration-fixtures.sh` | Migration sequence 57/57 from v001 through v057; shipping fixtures 5/5 passed with zero failures. Fixtures are synthetic. |
-| `DEVELOPER_DIR=... bash Scripts/test-all-packages.sh` | All 14/14 package suites passed with zero test failures. |
 | `DEVELOPER_DIR=... bash Scripts/build-macos-app.sh Debug`; same command with `Release` | Both unsigned app and embedded-XPC builds passed with zero project-source warnings. Each log contains four MLX dependency warnings and two AppIntents metadata warnings. Logs: `/var/folders/sm/f_hldqys7m10_0nddgs0n3fc0000gn/T/SupraAI-Debug.xcodebuild.log` and `/var/folders/sm/f_hldqys7m10_0nddgs0n3fc0000gn/T/SupraAI-Release.xcodebuild.log`. |
-| `bash Scripts/test-website.sh` | Final-source rerun passed the pre/post public-font guards, `npm ci`, ESLint, TypeScript, static Next.js build, and audit threshold. Registry audit reported two moderate transitive Next/PostCSS findings and no high/critical finding; the offered forced fix was breaking and was not applied. |
-| `bash Tests/Scripts/test-release-transaction.sh` | 32/32 hermetic release-transaction and rollback cases passed; no tag, release, upload, setting, public ref, or live appcast state changed. |
-| RuntimeClient TSan and ASan | 4/4 passed under each sanitizer at the final source snapshot. |
-| Hosted lifecycle TSan | 1/1 passed with no sanitizer finding. xcresult: `/var/folders/sm/f_hldqys7m10_0nddgs0n3fc0000gn/T/SupraAI-XPC-thread-50164/Logs/Test/Test-SupraAI-2026.07.13_09-45-24--0400.xcresult`. |
-| Hosted lifecycle ASan | 1/1 passed with no sanitizer finding. xcresult: `/var/folders/sm/f_hldqys7m10_0nddgs0n3fc0000gn/T/SupraAI-XPC-address-51847/Logs/Test/Test-SupraAI-2026.07.13_09-46-50--0400.xcresult`. |
+| RuntimeClient TSan and ASan | 4/4 passed under each sanitizer at the initial integrated snapshot `19e06b451cd585f7b7b360ea916e992339b46845`; this was not rerun at `fce83eb`. |
+| Hosted lifecycle TSan | 1/1 passed at the initial integrated snapshot with no sanitizer finding. xcresult: `/var/folders/sm/f_hldqys7m10_0nddgs0n3fc0000gn/T/SupraAI-XPC-thread-50164/Logs/Test/Test-SupraAI-2026.07.13_09-45-24--0400.xcresult`. |
+| Hosted lifecycle ASan | 1/1 passed at the initial integrated snapshot with no sanitizer finding. xcresult: `/var/folders/sm/f_hldqys7m10_0nddgs0n3fc0000gn/T/SupraAI-XPC-address-51847/Logs/Test/Test-SupraAI-2026.07.13_09-46-50--0400.xcresult`. |
 | Hosted lifecycle UBSan | Excluded after an attempted run: the embedded XPC failed to link because `___ubsan_handle_*` runtime symbols were unresolved; no test executed and no pass is claimed. xcresult: `/var/folders/sm/f_hldqys7m10_0nddgs0n3fc0000gn/T/SupraAI-XPC-undefined-53443/Logs/Test/Test-SupraAI-2026.07.13_09-48-48--0400.xcresult`. |
+
+### Final 2.2.1 and signed-smoke hardening rerun
+
+| Command / evidence | Result summary |
+|---|---|
+| `git rev-parse HEAD` before final gates | `fce83ebf462c76b60203eb9ccb5db4ed00c7a0de`; source changes were clean and only evidence-document edits remained outside the source inputs. |
+| `bash Scripts/verify-repo-facts.sh` | Passed: 3 targets, 14 packages, app 2.2.1 build 387, XPC build 387. |
+| `DEVELOPER_DIR=... bash Scripts/test-all-packages.sh` | All 14/14 package suites passed with zero failures; `SupraRuntimeInterface` passed 27/27 and `SupraSessions` passed 493/493. |
+| `bash Tests/Scripts/test-macos-ci-gates.sh` | All current integration-hook mutation cases passed. |
+| `bash Tests/Scripts/test-verify-product-claims.sh`; `bash Scripts/verify-product-claims.sh` | Wrapper normal/mutation cases passed; 21 claims across 14 packages passed with latest migration v057. |
+| `bash Tests/Scripts/test-release-transaction.sh`; `bash Scripts/verify-release-protection.sh` | All current hermetic release-transaction, rollback, signed-evidence, and isolated-runner policy cases passed. No tag, release, upload, setting, public ref, or live appcast state changed. |
+| Migration gates | Migration sequence 57/57 and shipping migration fixtures 5/5 passed with zero failures; fixtures remain synthetic. |
+| Final content-bound hosted lifecycle selector | 1/1 passed at the final SHA with the exact model fingerprint attested through XPC. xcresult: `/tmp/SupraAI-XPC-GREEN-FINAL/Logs/Test/Test-SupraAI-2026.07.13_13-52-41--0400.xcresult`. The earlier full hosted selector pair passed 2/2 before the final snapshot-cleanup-only hardening commits. |
+| Final vertical-window regression selectors | 2/2 passed: `testBlockedDraftIsAnnouncedWithoutFileActions` and `testLegacyOutputWarningAnnouncesStatusAndUnavailableExport`. Both assert stable window y-origin and height. xcresult: `/tmp/SupraAI-XPC-GREEN-FINAL/Logs/Test/Test-SupraAI-2026.07.13_13-56-21--0400.xcresult`; one Xcode internal QoS runtime warning remains recorded. |
+| XPC content binding and snapshot cleanup | Exact canonical fields, tree hash, and fingerprint are bound into authorization; the private snapshot is reverified after load and retained through generation/unload. Snapshot tests passed 15/15, including descriptor-anchored deletion and bounded retry. Same-UID pathname mutation/cleanup races remain isolated-runner threats rather than claimed closed. |
+| Current Debug and Release build evidence | The current Debug app/XPC built as part of the hosted test. A fresh and incremental universal unsigned Release app/XPC build succeeded at `/tmp/supra-content-bound-release`. Xcode emitted known dependency/AppIntents diagnostics; no new changed-source compiler failure occurred. |
+| `bash Scripts/test-website.sh` | Pre/post public-font guards, `npm ci`, lint, typecheck, static build, and audit threshold passed. Registry audit reported two moderate transitive Next/PostCSS findings and no high/critical finding; the offered forced fix was breaking and was not applied. |
 | CSV/deliverable validation and patch hygiene | 13 files match 13 manifest entries; CSV has 15 headers and 15 data rows, 15 fields per row, and unique contiguous SA-ACR-001…015 IDs. SA-ACR-004's Status is the intentional disposition edit. `git diff --check` and staged `git diff --cached --check` pass. |
 
 ### Evidence boundaries
 
 - Current GitHub hidden pull-request refs/caches are not a local verification gate for this execution; the repository owner assigned existing public objects to GitHub Support. Preventive source controls remain mandatory.
 - No real release, tag, appcast, upload, GitHub setting, or public ref was mutated during remediation verification.
-- No attorney approval, real protected model weight, production credential/provider, live protected ruleset, hostile Developer ID peer, forced service kill/relaunch, or Developer ID signed/notarized remediated release candidate was available. These are release qualifications, not silently inferred successes.
+- No attorney approval, real protected model weight, production credential/provider, live protected ruleset, dedicated ephemeral isolated runner/private model mount, hostile Developer ID peer, forced service kill/relaunch, or Developer ID signed/notarized remediated release candidate was available. These are release qualifications, not silently inferred successes.

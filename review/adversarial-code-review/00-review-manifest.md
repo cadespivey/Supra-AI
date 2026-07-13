@@ -8,7 +8,7 @@ The independent review below remains a historical record of `main` at `24a802cb0
 |---|---|
 | Historical reviewed commit | `24a802cb0ab763a225982813a7b1c374864bbdeb` |
 | Pre-XPC-integration implementation snapshot | `815180c2fbf2ca6921e913923383cf13e20a215d` |
-| Final integrated implementation snapshot | `19e06b451cd585f7b7b360ea916e992339b46845` |
+| Final integrated implementation snapshot | `fce83ebf462c76b60203eb9ccb5db4ed00c7a0de` |
 | Evidence-only deliverable commit | Self-locating: `git log -1 --format=%H -- review/adversarial-code-review/12-remediation-execution-report.md` |
 | Remediation branch | `remediation/acr-program` |
 | Execution date | 2026-07-13 |
