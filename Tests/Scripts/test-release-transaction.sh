@@ -634,6 +634,19 @@ else
   fail 'signed model smoke is not fail-closed on the dedicated isolated release runner'
 fi
 
+run_case \
+  'release entrypoint rejects a missing isolated-runner attestation before credentials' \
+  1 \
+  'signed release qualification requires the dedicated isolated release runner' \
+  env SUPRA_PROTECTED_RELEASE_ENVIRONMENT=1 \
+  bash "$release_script" \
+    --repository example/supra \
+    --version 2.3.0 \
+    --build 387 \
+    --expected-sha 1111111111111111111111111111111111111111 \
+    --ci-run-id 42 \
+    --no-publish
+
 if grep -Eq 'SUPRA_SIGNED_SMOKE_DRIVER' \
   "$release_script" "${scripts}/run-signed-release-smoke.sh" \
   "${repo_root}/.github/workflows/release.yml" \
@@ -746,6 +759,12 @@ cp "${repo_root}/Docs/Release-Protection.md" "${protection_fixture}/Docs/Release
 for script in release.sh release-preflight.sh publish-release-transaction.sh publish-release-appcast.sh rollback-release-appcast.sh emergency-release-rollback.sh verify-release-version-state.sh; do
   cp "${scripts}/${script}" "${protection_fixture}/Scripts/${script}"
 done
+run_case \
+  'complete release-protection fixture passes before mutation' \
+  0 \
+  'Release protection verification passed.' \
+  bash "${scripts}/verify-release-protection.sh" "$protection_fixture"
+
 isolation_fixture="${temporary_dir}/release-isolation-fixture"
 cp -R "$protection_fixture" "$isolation_fixture"
 sed 's/, supra-release-isolated//' \
@@ -758,6 +777,48 @@ run_case \
   1 \
   'release workflow is not bound to the isolated release runner' \
   bash "${scripts}/verify-release-protection.sh" "$isolation_fixture"
+
+guard_fixture="${temporary_dir}/release-isolation-guard-fixture"
+cp -R "$protection_fixture" "$guard_fixture"
+awk '
+  $0 !~ /SUPRA_RELEASE_ISOLATED_RUNNER/ &&
+  $0 !~ /signed release qualification requires the dedicated isolated release runner/
+' "${guard_fixture}/Scripts/release.sh" >"${guard_fixture}/Scripts/release.sh.tmp"
+mv "${guard_fixture}/Scripts/release.sh.tmp" "${guard_fixture}/Scripts/release.sh"
+printf '%s\n' '# SUPRA_RELEASE_ISOLATED_RUNNER policy marker only' \
+  >>"${guard_fixture}/Scripts/release.sh"
+run_case \
+  'replacing the isolated-runner guard with a comment fails closed' \
+  1 \
+  'release entrypoint does not enforce the isolated release runner' \
+  bash "${scripts}/verify-release-protection.sh" "$guard_fixture"
+
+foreign_runner_fixture="${temporary_dir}/foreign-isolated-runner-fixture"
+cp -R "$protection_fixture" "$foreign_runner_fixture"
+printf '%s\n' \
+  '  unauthorized-release-runner:' \
+  '    runs-on: [self-hosted, macOS, ARM64, supra-release, supra-release-isolated]' \
+  '    steps:' \
+  '      - run: exit 0' \
+  >>"${foreign_runner_fixture}/.github/workflows/macos-ci.yml"
+run_case \
+  'using the isolated release label outside protected workflows fails closed' \
+  1 \
+  'isolated release runner label is used outside protected release workflows' \
+  bash "${scripts}/verify-release-protection.sh" "$foreign_runner_fixture"
+
+boundary_docs_fixture="${temporary_dir}/release-boundary-docs-fixture"
+cp -R "$protection_fixture" "$boundary_docs_fixture"
+sed 's/same-UID/same user/g' \
+  "${boundary_docs_fixture}/Docs/Release-Protection.md" \
+  >"${boundary_docs_fixture}/Docs/Release-Protection.md.tmp"
+mv "${boundary_docs_fixture}/Docs/Release-Protection.md.tmp" \
+  "${boundary_docs_fixture}/Docs/Release-Protection.md"
+run_case \
+  'removing the documented same-UID isolation boundary fails closed' \
+  1 \
+  'release protection documentation omits the same-UID threat boundary' \
+  bash "${scripts}/verify-release-protection.sh" "$boundary_docs_fixture"
 
 awk '$0 !~ /environment: production-release/' \
   "${protection_fixture}/.github/workflows/release.yml" \
