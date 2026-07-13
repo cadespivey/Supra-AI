@@ -37,6 +37,31 @@ final class DocumentSupportVerifierTests: XCTestCase {
         XCTAssertTrue([unrelated, contradiction, negation].allSatisfy(\.requiresReview))
     }
 
+    func testHighTokenOverlapCannotReverseActorsAppendFactsOrSwapDateComponents() throws {
+        // ACR-DOCSUP-10 expected RED: the initial overlap threshold accepts all
+        // three propositions because most or all normalized tokens are present.
+        let payment = source(
+            text: "Alpha LLC paid Beta Inc on March 8, 2025 after receiving the invoice."
+        )
+        let reversedActors = try verify(
+            "Beta Inc paid Alpha LLC on March 8, 2025 [S1].",
+            sources: [payment]
+        )
+        let appendedFact = try verify(
+            "Alpha LLC paid Beta Inc on March 8, 2025 after receiving the invoice, and Beta waived all defenses [S1].",
+            sources: [payment]
+        )
+        let swappedDate = try verify(
+            "Alpha LLC paid Beta Inc on August 3, 2025 [S1].",
+            sources: [payment]
+        )
+
+        XCTAssertEqual(reversedActors.results.map(\.status), [.unsupported])
+        XCTAssertEqual(appendedFact.results.map(\.status), [.unsupported])
+        XCTAssertEqual(swappedDate.results.map(\.status), [.unsupported])
+        XCTAssertTrue([reversedActors, appendedFact, swappedDate].allSatisfy(\.requiresReview))
+    }
+
     func testMixedAnswerFailsWhenOnePropositionIsUnsupported() throws {
         // ACR-DOCSUP-04 expected RED: coverage aggregates labels, not propositions.
         let report = try verify(
