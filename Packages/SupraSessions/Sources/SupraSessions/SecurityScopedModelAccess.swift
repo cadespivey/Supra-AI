@@ -11,17 +11,21 @@ import Foundation
 /// to the (still sandboxed) service — see Docs/Architecture/RuntimeFileAccess.md.
 struct SecurityScopedModelAccess {
     private let accessedURL: URL?
+    private let shouldStopAccessing: Bool
 
     /// `true` when the persisted bookmark resolved as stale (folder moved/renamed).
     /// The host should re-mint and re-persist a fresh `.withSecurityScope` bookmark.
     let isStale: Bool
 
-    /// Whether the app currently holds security-scoped access to the directory.
+    /// Whether this host can mint a bookmark for the directory. In the sandboxed
+    /// app this means scoped access is active; unsandboxed test hosts use a plain
+    /// bookmark and rely on the service to reject missing transferred authority.
     var hasAccess: Bool { accessedURL != nil }
 
     init(bookmarkData: Data?) {
         guard let bookmarkData else {
             accessedURL = nil
+            shouldStopAccessing = false
             isStale = false
             return
         }
@@ -36,10 +40,51 @@ struct SecurityScopedModelAccess {
             url.startAccessingSecurityScopedResource()
         else {
             accessedURL = nil
+            shouldStopAccessing = false
             isStale = stale
             return
         }
         accessedURL = url
+        shouldStopAccessing = true
+        isStale = stale
+    }
+
+    /// Opens an app-owned model directory through the same scoped-to-plain
+    /// transfer used for user-selected folders. A plain bookmark minted without
+    /// an actively held scope does not carry authority to the XPC sandbox.
+    init(url: URL) {
+        guard let bookmarkData = try? url.bookmarkData(
+            options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        ) else {
+            // ScopedBookmarksAgent is unavailable to unsandboxed SwiftPM and
+            // command-line hosts. Preserve a plain-bookmark test path; a real
+            // sandboxed XPC service still rejects it unless authority transfers.
+            accessedURL = url
+            shouldStopAccessing = false
+            isStale = false
+            return
+        }
+
+        var stale = false
+        let resolvedURL = try? URL(
+            resolvingBookmarkData: bookmarkData,
+            options: [.withSecurityScope],
+            relativeTo: nil,
+            bookmarkDataIsStale: &stale
+        )
+        if let resolvedURL, resolvedURL.startAccessingSecurityScopedResource() {
+            accessedURL = resolvedURL
+            shouldStopAccessing = true
+        } else {
+            // Unsandboxed package/command-line hosts legitimately return false
+            // from startAccessing. They can still mint a plain bookmark; the XPC
+            // service remains the fail-closed authority and will reject it if it
+            // carries no usable extension in a sandboxed production launch.
+            accessedURL = url
+            shouldStopAccessing = false
+        }
         isStale = stale
     }
 
@@ -58,6 +103,8 @@ struct SecurityScopedModelAccess {
     }
 
     func release() {
-        accessedURL?.stopAccessingSecurityScopedResource()
+        if shouldStopAccessing {
+            accessedURL?.stopAccessingSecurityScopedResource()
+        }
     }
 }

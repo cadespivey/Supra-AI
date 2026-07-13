@@ -18,6 +18,10 @@ enum RuntimeErrorMapper {
         RuntimeError(category: "generationActive", message: "The model cannot be unloaded while a generation is active.")
     }
 
+    static func modelMutationWhileGenerating() -> RuntimeError {
+        RuntimeError(category: "generationActive", message: "The model cannot be replaced while a generation is active.")
+    }
+
     static func modelLoadFailed(_ error: Error) -> RuntimeError {
         let details = error.localizedDescription
         if looksLikeMemoryPressure(details) {
@@ -32,6 +36,10 @@ enum RuntimeErrorMapper {
             message: "The MLX model could not be loaded.",
             technicalDetails: details
         )
+    }
+
+    static func modelAccessFailed(_ error: RuntimeModelDirectoryAccessError) -> RuntimeError {
+        invalidRequest(error.localizedDescription)
     }
 
     static func embeddingFailed(_ error: Error) -> RuntimeError {

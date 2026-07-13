@@ -14,10 +14,34 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
 
         let result = app.staticTexts["runtimeXPCIntegration.result"]
         XCTAssertTrue(
-            result.waitForExistence(timeout: 45),
+            result.waitForExistence(timeout: 90),
             "The hosted XPC lifecycle harness did not publish a result."
         )
-        XCTAssertEqual(result.label, "PASS", app.staticTexts["runtimeXPCIntegration.detail"].label)
+        XCTAssertEqual(
+            result.value as? String,
+            "PASS",
+            app.staticTexts["runtimeXPCIntegration.detail"].value as? String ?? "No lifecycle detail."
+        )
+        XCTAssertEqual(app.staticTexts["runtimeXPCIntegration.iterations"].value as? String, "20/20")
+
+        for checkID in [
+            "statusRoundTrip",
+            "nilBookmarkRejected",
+            "invalidBookmarkRejected",
+            "staleBookmarkRejected",
+            "managedRootEscapeRejected",
+            "controlledModelLoaded",
+            "streamCompletedOnce",
+            "cancelExactlyOnce",
+            "clientTermination",
+            "concurrentLoadUnload",
+            "reconnect",
+            "resourceBound",
+        ] {
+            let check = app.staticTexts["runtimeXPCIntegration.check.\(checkID)"]
+            XCTAssertTrue(check.exists, "Missing lifecycle assertion \(checkID).")
+            XCTAssertEqual(check.value as? String, "PASS", "Lifecycle assertion failed: \(checkID).")
+        }
     }
 
     func testSwitchBindingAndKeyboardTraversal() {
@@ -29,7 +53,10 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
         toggle.click()
         XCTAssertEqual(toggle.value as? String, "1", "NSSwitch action must update its SwiftUI binding.")
 
-        app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
+        // Target the AppKit-backed control explicitly: macOS's "click focuses
+        // controls" preference is user-configurable, while typeKey(on:) first
+        // establishes the deterministic responder under test.
+        toggle.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
         XCTAssertTrue(
             app.staticTexts["runtimeXPCIntegration.afterSwitchFocused"].waitForExistence(timeout: 5),
             "Tab from the NSSwitch must move to the next control exactly once."
@@ -50,6 +77,16 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
         ]
         app.launch()
         app.activate()
+        // macOS can preserve the user's last "all windows closed" state even
+        // when application state restoration is disabled. Open the WindowGroup
+        // explicitly so the hosted harness is mounted and its task can run.
+        if !app.windows.firstMatch.waitForExistence(timeout: 5) {
+            app.typeKey("n", modifierFlags: .command)
+            XCTAssertTrue(
+                app.windows.firstMatch.waitForExistence(timeout: 10),
+                "SupraAI did not publish a window for the hosted integration surface."
+            )
+        }
         return app
     }
 }

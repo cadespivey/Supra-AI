@@ -32,7 +32,8 @@ final class RuntimeXPCCodecTests: XCTestCase {
             modelID: modelID,
             modelPath: "/models/local",
             displayName: "Local",
-            modelBookmark: bookmark
+            modelBookmark: bookmark,
+            managedRootPath: "/models"
         )
 
         let data = try RuntimeXPCCodec.encode(request)
@@ -41,16 +42,17 @@ final class RuntimeXPCCodecTests: XCTestCase {
         XCTAssertEqual(decoded.modelID, modelID)
         XCTAssertEqual(decoded.modelPath, "/models/local")
         XCTAssertEqual(decoded.modelBookmark, bookmark)
+        XCTAssertEqual(decoded.managedRootPath, "/models")
     }
 
     func testLoadModelRequestDefaultsBookmarkToNil() throws {
         let request = LoadModelRequest(modelID: ModelID(), modelPath: "/m", displayName: "M")
         let decoded = try RuntimeXPCCodec.decode(LoadModelRequest.self, from: try RuntimeXPCCodec.encode(request))
         XCTAssertNil(decoded.modelBookmark)
+        XCTAssertNil(decoded.managedRootPath)
     }
 
     func testDefaultServiceNameMatchesAppXPCBundleIdentifier() {
         XCTAssertEqual(RuntimeXPCServiceNames.defaultServiceName, "ai.supra.SupraAI.SupraRuntimeService")
     }
 }
-

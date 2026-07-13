@@ -243,7 +243,15 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             embeddingVerifyInFlight = false
         }
 
-        let bookmark = try? URL(fileURLWithPath: path, isDirectory: true).bookmarkData(options: [])
+        let access = SecurityScopedModelAccess(
+            url: URL(fileURLWithPath: path, isDirectory: true)
+        )
+        defer { access.release() }
+        guard access.hasAccess, let bookmark = access.makeTransferableBookmark() else {
+            embeddingTestPassed = false
+            message = "The embedding model folder could not be authorized for the runtime service."
+            return
+        }
         let request = LoadEmbeddingModelRequest(
             embeddingModelID: DocumentEmbeddingModelID(UUID(uuidString: model.id) ?? UUID()),
             modelPath: path,
@@ -252,7 +260,10 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             // A non-positive stored dimension means "unknown" (e.g. a custom repo):
             // skip the post-load assertion and discover the real value from the probe.
             expectedDimension: model.dimension > 0 ? model.dimension : nil,
-            modelBookmark: bookmark
+            modelBookmark: bookmark,
+            managedRootPath: ManagedModelStorage.isManagedEmbedding(path: path)
+                ? ManagedModelStorage.embeddingModelsDirectory().path
+                : nil
         )
         do {
             let response = try await runtimeClient.loadEmbeddingModel(request)
@@ -307,16 +318,30 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
               (try? Self.verifyManagedEmbeddingModel(model)) != nil else { return }
         embeddingWarmInFlight = true
         warmedEmbeddingModelID = model.id
+        let access = SecurityScopedModelAccess(
+            url: URL(fileURLWithPath: path, isDirectory: true)
+        )
+        guard access.hasAccess, let bookmark = access.makeTransferableBookmark() else {
+            embeddingWarmInFlight = false
+            warmedEmbeddingModelID = nil
+            return
+        }
         let request = LoadEmbeddingModelRequest(
             embeddingModelID: DocumentEmbeddingModelID(UUID(uuidString: model.id) ?? UUID()),
             modelPath: path,
             displayName: model.displayName,
             revision: model.revision,
             expectedDimension: model.dimension > 0 ? model.dimension : nil,
-            modelBookmark: try? URL(fileURLWithPath: path, isDirectory: true).bookmarkData(options: [])
+            modelBookmark: bookmark,
+            managedRootPath: ManagedModelStorage.isManagedEmbedding(path: path)
+                ? ManagedModelStorage.embeddingModelsDirectory().path
+                : nil
         )
         Task {
-            defer { embeddingWarmInFlight = false }
+            defer {
+                access.release()
+                embeddingWarmInFlight = false
+            }
             do {
                 _ = try await runtimeClient.loadEmbeddingModel(request)
             } catch {

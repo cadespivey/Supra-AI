@@ -28,19 +28,29 @@ file-access entitlement.
 - **App Group + shared bookmark** — same bundle-id binding; the shared container lets both processes read the same bytes but only the app can turn them back into access. Adds signing surface for no benefit.
 - **Raw FD / `NSFileHandle` / byte streaming** — MLX opens the directory by path itself; there is no API to inject FDs, and streaming ~20 GB over XPC would destroy `mmap` and roughly double memory/IO.
 
-## Fallback: unsandboxed service
-If on-device testing shows the plain-bookmark transfer is broken (the
-security-scoped bookmark APIs have regressed on recent macOS betas), remove
-`com.apple.security.app-sandbox` from `SupraRuntimeService.entitlements`. The raw
-`modelPath` flow then works with zero bookmark plumbing (the current code falls
-back to `modelPath` when `modelBookmark` is `nil`). Cost: the service that parses
-untrusted model files loses filesystem confinement, and Mac App Store is
-foreclosed. Treat this as a last resort. Hardened Runtime stays on either way
-(notarization needs Hardened Runtime, not the sandbox).
+## Fail-closed access policy
+
+There is no raw-path or unsandboxed fallback. A nil, invalid, moved/stale, or
+non-activatable bookmark is rejected before MLX sees the directory. The service
+canonicalizes both the bookmark target and requested path after symlink
+resolution and requires an exact match. App-managed downloads additionally carry
+their managed-root path; the canonical target must be a child of that root.
+
+Foundation can report an otherwise valid plain transferable bookmark as stale when
+the differently signed service resolves it. Staleness is therefore fail-closed at
+the authorization boundary: a stale bookmark is rejected if its resolved target
+differs from the requested canonical path or no longer exists. A signer-stale
+bookmark is accepted only when its sandbox extension activates, the target matches
+exactly, it remains a directory, and managed-root containment also passes.
+
+If bookmark transfer regresses on a future macOS release, loading is unavailable
+until the user re-selects/re-downloads the model or the signed boundary is fixed.
+Do not remove the service sandbox or add broad file entitlements as a workaround.
 
 ## Must be verified on a real device
-This was implemented from Apple documentation + DTS forum guidance and **builds
-clean, but the sandbox behavior cannot be exercised in CI**. Before relying on it:
-1. Confirm the sandboxed service resolves a plain bookmark and reads a file with **no** file-access entitlement (a ~30-minute spike). If it fails, switch to the fallback.
+The hosted integration gate exercises bookmark transfer through the embedded,
+ad-hoc-signed service with no service file-access entitlement. Release qualification
+still must:
+1. Run `Scripts/run-hosted-xpc-lifecycle.sh` on the protected macOS runner and retain its signed-boundary evidence.
 2. Load a real ~20 GB multi-shard model end-to-end and confirm the recursive scope covers every shard through the full `mmap` load without being reclaimed under memory pressure.
 3. After a Developer ID + notarized archive, inspect the embedded service: `codesign -d --entitlements - SupraAI.app/Contents/XPCServices/SupraRuntimeService.xpc` — `com.apple.security.app-sandbox` must still be `true` with no file-access entitlement added.

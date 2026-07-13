@@ -7,7 +7,11 @@ import SupraCore
 import SupraRuntimeInterface
 
 protocol ChatModelController: Sendable {
-    func loadModel(bookmark: Data?, path: String) async throws -> RuntimeMetrics
+    func loadModel(
+        bookmark: Data?,
+        path: String,
+        managedRootPath: String?
+    ) async throws -> RuntimeMetrics
 
     func generate(
         prompt: String,
@@ -43,38 +47,45 @@ actor MLXModelController: ChatModelController {
     /// flag (Qwen3-style reasoning models). For those we suppress the reasoning
     /// trace at generation time so it never reaches the chat or the validator.
     private var templateSupportsThinkingToggle = false
+#if DEBUG
+    private static let lifecycleTestMarker = ".supra-xpc-lifecycle-test-model"
+    private static let lifecycleTestMarkerContents = "SUPRA-XPC-LIFECYCLE-V1\n"
+    private var isLifecycleTestModel = false
+#endif
 
-    func loadModel(bookmark: Data?, path: String) async throws -> RuntimeMetrics {
+    func loadModel(
+        bookmark: Data?,
+        path: String,
+        managedRootPath: String?
+    ) async throws -> RuntimeMetrics {
         let startedAt = Date()
 
-        // Resolve a plain bookmark sent by the app to gain read access to the
-        // model directory while staying sandboxed. The security scope must stay
-        // open for the ENTIRE load — the multi-gigabyte weight shards are read
-        // during `loadModelContainer`, so `stopAccessing` runs only on return.
-        let resolvedURL: URL
-        var scopedURL: URL?
-        if let bookmark {
-            var isStale = false
-            let url = try URL(
-                resolvingBookmarkData: bookmark,
-                options: [],
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
-            guard url.startAccessingSecurityScopedResource() else {
-                throw MLXModelControllerError.modelDirectoryMissing(path)
-            }
-            scopedURL = url
-            resolvedURL = url
-        } else {
-            resolvedURL = URL(fileURLWithPath: path, isDirectory: true)
-        }
-        defer { scopedURL?.stopAccessingSecurityScopedResource() }
+        // Hold the validated transferable bookmark's scope across the complete
+        // model load. A raw path is never treated as authority.
+        let access = try RuntimeModelDirectoryAccess(
+            bookmark: bookmark,
+            requestedPath: path,
+            managedRootPath: managedRootPath
+        )
+        defer { access.close() }
+        let resolvedURL = access.url
 
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: resolvedURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw MLXModelControllerError.modelDirectoryMissing(resolvedURL.path)
+#if DEBUG
+        // A deterministic, generated-at-runtime lifecycle model lets the signed
+        // hosted-XPC test exercise load/generate/cancel/reconnect without checking
+        // model weights into source control. This branch is absent from Release.
+        let marker = resolvedURL.appendingPathComponent(Self.lifecycleTestMarker)
+        if let contents = try? String(contentsOf: marker, encoding: .utf8),
+           contents == Self.lifecycleTestMarkerContents {
+            container = nil
+            loadedPath = resolvedURL.path
+            cancellationRequested = false
+            templateSupportsThinkingToggle = false
+            isLifecycleTestModel = true
+            await Task.yield()
+            return RuntimeMetrics(loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000))
         }
+#endif
 
         let loadedContainer = try await MLXLMTokenizers.loadModelContainer(from: resolvedURL)
 
@@ -82,6 +93,9 @@ actor MLXModelController: ChatModelController {
         loadedPath = resolvedURL.path
         cancellationRequested = false
         templateSupportsThinkingToggle = Self.templateSupportsThinkingToggle(in: resolvedURL)
+#if DEBUG
+        isLifecycleTestModel = false
+#endif
 
         return RuntimeMetrics(loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000))
     }
@@ -93,6 +107,19 @@ actor MLXModelController: ChatModelController {
         options rawOptions: GenerationOptions,
         onToken: @escaping @Sendable (String) async -> Void
     ) async throws -> RuntimeMetrics {
+#if DEBUG
+        if isLifecycleTestModel {
+            cancellationRequested = false
+            if prompt == "SUPRA-XPC-TEST-HOLD" {
+                while !Task.isCancelled, !cancellationRequested {
+                    await Task.yield()
+                }
+                throw CancellationError()
+            }
+            await onToken("xpc-boundary-canary")
+            return RuntimeMetrics(generatedTokenCount: 1, truncated: false)
+        }
+#endif
         guard let container else {
             throw MLXModelControllerError.modelNotLoaded
         }
@@ -166,6 +193,9 @@ actor MLXModelController: ChatModelController {
         cancellationRequested = true
         container = nil
         loadedPath = nil
+#if DEBUG
+        isLifecycleTestModel = false
+#endif
     }
 
     /// Detects whether the model's chat template references `enable_thinking`,

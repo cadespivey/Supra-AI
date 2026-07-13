@@ -3,20 +3,32 @@ import SupraCore
 import SupraRuntimeInterface
 
 final class RuntimeGenerationCoordinator: @unchecked Sendable {
+    private enum Phase {
+        case running
+        case cancelling
+    }
+
     private struct ActiveGeneration {
         let request: GenerateRequest
         let eventSink: any GenerationEventSinkProtocol
         var task: Task<Void, Never>?
+        var phase: Phase = .running
     }
 
     private let lock = NSLock()
     private let eventBuffer: GenerationEventBuffer
     private let modelController: any ChatModelController
+    private let onTerminal: @Sendable (GenerationID) -> Void
     private var activeGeneration: ActiveGeneration?
 
-    init(eventBuffer: GenerationEventBuffer, modelController: any ChatModelController) {
+    init(
+        eventBuffer: GenerationEventBuffer,
+        modelController: any ChatModelController,
+        onTerminal: @escaping @Sendable (GenerationID) -> Void
+    ) {
         self.eventBuffer = eventBuffer
         self.modelController = modelController
+        self.onTerminal = onTerminal
     }
 
     func startGeneration(
@@ -40,46 +52,52 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         activeGeneration = ActiveGeneration(request: request, eventSink: eventSink)
         lock.unlock()
 
-        reply(GenerateStartResponse(status: .started, generationID: request.generationID))
         deliver(type: .generationStarted, generationID: request.generationID, eventSink: eventSink)
         startModelGenerationTask(for: request)
+        // Publish acceptance only after the task is installed. A client can issue
+        // cancel as soon as this reply arrives; replying first left a window where
+        // cancellation could clear the slot before the old task even existed.
+        reply(GenerateStartResponse(status: .started, generationID: request.generationID))
     }
 
-    func cancelGeneration(_ generationID: GenerationID) -> CancelGenerationResponse {
+    func cancelGeneration(
+        _ generationID: GenerationID,
+        reply: @escaping (CancelGenerationResponse) -> Void
+    ) {
         lock.lock()
-        guard let activeGeneration, activeGeneration.request.generationID == generationID else {
+        guard var activeGeneration,
+              activeGeneration.request.generationID == generationID,
+              activeGeneration.phase == .running else {
             lock.unlock()
-            return CancelGenerationResponse(status: .notFound, generationID: generationID)
+            reply(CancelGenerationResponse(status: .notFound, generationID: generationID))
+            return
         }
 
+        activeGeneration.phase = .cancelling
         let task = activeGeneration.task
-        let eventSink = activeGeneration.eventSink
-        self.activeGeneration = nil
+        self.activeGeneration = activeGeneration
         lock.unlock()
 
         task?.cancel()
-        Task { [modelController] in
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        let reply = GenerationCancellationReply(reply)
+        Task { [weak self, modelController, task, reply] in
+            // The model actor owns a shared cancellation flag. Do not expose the
+            // generation slot until that actor has observed cancellation and the
+            // old task has fully unwound, or a delayed cancel can hit its successor.
             await modelController.cancel()
+            await task?.value
+            let elapsedNanoseconds = DispatchTime.now().uptimeNanoseconds - startedAt
+            let latencyMs = Int((elapsedNanoseconds + 999_999) / 1_000_000)
+            guard let response = self?.finishCancellation(
+                generationID: generationID,
+                latencyMs: latencyMs
+            ) else {
+                reply(CancelGenerationResponse(status: .notFound, generationID: generationID))
+                return
+            }
+            reply(response)
         }
-
-        // Cancellation is acknowledged immediately — the cancelled event is delivered
-        // here, before the model task unwinds — so request→ack latency is ~0.
-        let metrics = RuntimeMetrics(cancellationLatencyMs: 0)
-        deliver(
-            type: .generationCancelled,
-            generationID: generationID,
-            message: "Generation cancelled.",
-            metrics: metrics,
-            eventSink: eventSink
-        )
-        return CancelGenerationResponse(status: .cancelled, generationID: generationID, metrics: metrics)
-    }
-
-    func activeGenerationID() -> GenerationID? {
-        lock.lock()
-        defer { lock.unlock() }
-
-        return activeGeneration?.request.generationID
     }
 
     private func startModelGenerationTask(for request: GenerateRequest) {
@@ -119,7 +137,9 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
 
     private func emitToken(_ token: String, generationID: GenerationID) {
         lock.lock()
-        guard let activeGeneration, activeGeneration.request.generationID == generationID else {
+        guard let activeGeneration,
+              activeGeneration.request.generationID == generationID,
+              activeGeneration.phase == .running else {
             lock.unlock()
             return
         }
@@ -132,7 +152,9 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
 
     private func completeGeneration(generationID: GenerationID, metrics: RuntimeMetrics) {
         lock.lock()
-        guard let activeGeneration, activeGeneration.request.generationID == generationID else {
+        guard let activeGeneration,
+              activeGeneration.request.generationID == generationID,
+              activeGeneration.phase == .running else {
             lock.unlock()
             return
         }
@@ -143,11 +165,14 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
 
         deliver(type: .metrics, generationID: generationID, metrics: metrics, eventSink: eventSink)
         deliver(type: .generationCompleted, generationID: generationID, metrics: metrics, eventSink: eventSink)
+        onTerminal(generationID)
     }
 
     private func completeCancelledGeneration(generationID: GenerationID) {
         lock.lock()
-        guard let activeGeneration, activeGeneration.request.generationID == generationID else {
+        guard let activeGeneration,
+              activeGeneration.request.generationID == generationID,
+              activeGeneration.phase == .running else {
             lock.unlock()
             return
         }
@@ -156,9 +181,7 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         self.activeGeneration = nil
         lock.unlock()
 
-        // Cancellation is acknowledged immediately — the cancelled event is delivered
-        // here, before the model task unwinds — so request→ack latency is ~0.
-        let metrics = RuntimeMetrics(cancellationLatencyMs: 0)
+        let metrics = RuntimeMetrics()
         deliver(
             type: .generationCancelled,
             generationID: generationID,
@@ -166,11 +189,14 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
             metrics: metrics,
             eventSink: eventSink
         )
+        onTerminal(generationID)
     }
 
     private func failGeneration(generationID: GenerationID, error: Error) {
         lock.lock()
-        guard let activeGeneration, activeGeneration.request.generationID == generationID else {
+        guard let activeGeneration,
+              activeGeneration.request.generationID == generationID,
+              activeGeneration.phase == .running else {
             lock.unlock()
             return
         }
@@ -186,6 +212,35 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
             error: RuntimeErrorMapper.generationFailed(error),
             eventSink: eventSink
         )
+        onTerminal(generationID)
+    }
+
+    private func finishCancellation(
+        generationID: GenerationID,
+        latencyMs: Int
+    ) -> CancelGenerationResponse? {
+        lock.lock()
+        guard let activeGeneration,
+              activeGeneration.request.generationID == generationID,
+              activeGeneration.phase == .cancelling else {
+            lock.unlock()
+            return nil
+        }
+
+        let eventSink = activeGeneration.eventSink
+        self.activeGeneration = nil
+        lock.unlock()
+
+        let metrics = RuntimeMetrics(cancellationLatencyMs: latencyMs)
+        deliver(
+            type: .generationCancelled,
+            generationID: generationID,
+            message: "Generation cancelled.",
+            metrics: metrics,
+            eventSink: eventSink
+        )
+        onTerminal(generationID)
+        return CancelGenerationResponse(status: .cancelled, generationID: generationID, metrics: metrics)
     }
 
     private func deliver(
@@ -206,5 +261,17 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
             error: error
         )
         eventSink.receive(event) {}
+    }
+}
+
+private struct GenerationCancellationReply: @unchecked Sendable {
+    private let reply: (CancelGenerationResponse) -> Void
+
+    init(_ reply: @escaping (CancelGenerationResponse) -> Void) {
+        self.reply = reply
+    }
+
+    func callAsFunction(_ response: CancelGenerationResponse) {
+        reply(response)
     }
 }

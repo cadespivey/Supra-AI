@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import SupraCore
 import SupraRuntimeInterface
@@ -7,16 +8,29 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     private let eventBuffer = GenerationEventBuffer()
     private let modelController: any ChatModelController = MLXModelController()
     private let embeddingController: any EmbeddingModelController = MLXEmbeddingModelController()
+    /// Orders chat-model mutations by XPC arrival order. Without this, an async
+    /// load could commit after a later unload and leave reported/runtime state split.
+    private let modelOperations = RuntimeSerialOperationQueue()
+    private let embeddingModelOperations = RuntimeSerialOperationQueue()
     private lazy var generationCoordinator = RuntimeGenerationCoordinator(
         eventBuffer: eventBuffer,
-        modelController: modelController
+        modelController: modelController,
+        onTerminal: { [weak self] generationID in
+            self?.finishGeneration(generationID)
+        }
     )
 
     private var loadedModelID: ModelID?
     private var currentModelRequest: LoadModelRequest?
+    /// One state lock owns both model mutations and generation reservations. A
+    /// request reserves its transition synchronously, before any actor hop, so
+    /// load/unload can never slip underneath an accepted generation (or vice versa).
+    private var pendingModelMutationCount = 0
+    private var activeGenerationReservationID: GenerationID?
     /// The XPC connection that started the in-flight generation, so a dropped
     /// client can have its orphaned generation cancelled (guarded by stateLock).
     private weak var activeGenerationConnection: NSXPCConnection?
+    private var activeGenerationOwnerID: GenerationID?
     // Milestone 3 embedding state, guarded by stateLock.
     private var loadedEmbeddingModelID: DocumentEmbeddingModelID?
     private var embeddingDimension: Int?
@@ -36,12 +50,36 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             return
         }
 
+        guard reserveModelMutation() else {
+            reply(
+                LoadModelResponse(
+                    status: .failed,
+                    modelID: request.modelID,
+                    error: RuntimeErrorMapper.modelMutationWhileGenerating()
+                )
+            )
+            return
+        }
+
         let reply = RuntimeReply(reply)
-        Task { [weak self, modelController, reply] in
+        modelOperations.enqueue { [self, modelController, reply] in
+            defer { finishModelMutation() }
             do {
-                let metrics = try await modelController.loadModel(bookmark: request.modelBookmark, path: request.modelPath)
-                self?.setLoadedModel(request)
+                let metrics = try await modelController.loadModel(
+                    bookmark: request.modelBookmark,
+                    path: request.modelPath,
+                    managedRootPath: request.managedRootPath
+                )
+                setLoadedModel(request)
                 reply(LoadModelResponse(status: .loaded, modelID: request.modelID, metrics: metrics))
+            } catch let error as RuntimeModelDirectoryAccessError {
+                reply(
+                    LoadModelResponse(
+                        status: .failed,
+                        modelID: request.modelID,
+                        error: RuntimeErrorMapper.modelAccessFailed(error)
+                    )
+                )
             } catch {
                 reply(
                     LoadModelResponse(
@@ -59,11 +97,19 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         eventSink: GenerationEventSinkProtocol,
         reply: @escaping (GenerateStartResponse) -> Void
     ) {
+        beginGeneration(request, eventSink: eventSink, ownerConnection: nil, reply: reply)
+    }
+
+    private func beginGeneration(
+        _ request: GenerateRequest,
+        eventSink: GenerationEventSinkProtocol,
+        ownerConnection: NSXPCConnection?,
+        reply: @escaping (GenerateStartResponse) -> Void
+    ) {
         stateLock.lock()
         let loadedModelID = loadedModelID
-        stateLock.unlock()
-
         guard loadedModelID == request.modelID else {
+            stateLock.unlock()
             reply(
                 GenerateStartResponse(
                     status: .modelNotLoaded,
@@ -74,32 +120,58 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             return
         }
 
-        generationCoordinator.startGeneration(request, eventSink: eventSink, reply: reply)
+        guard pendingModelMutationCount == 0, activeGenerationReservationID == nil else {
+            stateLock.unlock()
+            reply(
+                GenerateStartResponse(
+                    status: .busy,
+                    generationID: request.generationID,
+                    error: RuntimeErrorMapper.generationBusy()
+                )
+            )
+            return
+        }
+
+        // Reserve and attribute ownership before the coordinator publishes a
+        // started reply. Rejected/busy requests never overwrite the real owner.
+        activeGenerationReservationID = request.generationID
+        activeGenerationConnection = ownerConnection
+        activeGenerationOwnerID = ownerConnection == nil ? nil : request.generationID
+        stateLock.unlock()
+
+        generationCoordinator.startGeneration(request, eventSink: eventSink) { [weak self] response in
+            if response.status != .started {
+                self?.finishGeneration(request.generationID)
+            }
+            reply(response)
+        }
     }
 
     /// Cancels the active generation if it was started by a connection that has
     /// just dropped, freeing the single generation slot for future clients.
     func handleConnectionTermination(_ connection: NSXPCConnection?) {
-        guard let activeID = generationCoordinator.activeGenerationID() else { return }
         stateLock.lock()
+        let activeID = activeGenerationReservationID
         let owner = activeGenerationConnection
+        let ownerID = activeGenerationOwnerID
         stateLock.unlock()
         // Only cancel on a POSITIVE ownership match. A generation that cannot be
         // positively attributed to the dropped connection is left alone — cancelling
         // on a "can't tell" (nil owner/connection) could kill a newer, live
         // generation owned by a different client when a stale handler runs late.
-        guard let owner, let connection, owner === connection else { return }
-        _ = generationCoordinator.cancelGeneration(activeID)
-        stateLock.lock()
-        activeGenerationConnection = nil
-        stateLock.unlock()
+        guard let activeID,
+              ownerID == activeID,
+              let owner,
+              let connection,
+              owner === connection else { return }
+        generationCoordinator.cancelGeneration(activeID) { _ in }
     }
 
     func cancelGeneration(
         _ generationID: GenerationID,
         reply: @escaping (CancelGenerationResponse) -> Void
     ) {
-        reply(generationCoordinator.cancelGeneration(generationID))
+        generationCoordinator.cancelGeneration(generationID, reply: reply)
     }
 
     func recentEvents(
@@ -111,27 +183,32 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     }
 
     func unloadModel(reply: @escaping (UnloadModelResponse) -> Void) {
-        guard generationCoordinator.activeGenerationID() == nil else {
+        guard reserveModelMutation() else {
             reply(UnloadModelResponse(status: .failed, error: RuntimeErrorMapper.unloadWhileGenerating()))
             return
         }
 
-        stateLock.lock()
-        guard loadedModelID != nil else {
-            stateLock.unlock()
-            reply(UnloadModelResponse(status: .noModelLoaded))
-            return
+        let reply = RuntimeReply(reply)
+        modelOperations.enqueue { [self, modelController, reply] in
+            defer { finishModelMutation() }
+            guard hasLoadedModel() else {
+                reply(UnloadModelResponse(status: .noModelLoaded))
+                return
+            }
+
+            do {
+                try await modelController.unload()
+                clearLoadedModel()
+                reply(UnloadModelResponse(status: .unloaded))
+            } catch {
+                reply(
+                    UnloadModelResponse(
+                        status: .failed,
+                        error: RuntimeErrorMapper.modelLoadFailed(error)
+                    )
+                )
+            }
         }
-
-        loadedModelID = nil
-        currentModelRequest = nil
-        stateLock.unlock()
-
-        Task { [modelController] in
-            try? await modelController.unload()
-        }
-
-        reply(UnloadModelResponse(status: .unloaded))
     }
 
     func reloadCurrentModel(reply: @escaping (LoadModelResponse) -> Void) {
@@ -149,27 +226,35 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             return
         }
 
-        loadChatModel(currentModelRequest, reply: reply)
+        reply(
+            LoadModelResponse(
+                status: .failed,
+                modelID: currentModelRequest.modelID,
+                error: RuntimeErrorMapper.invalidRequest(
+                    "Reload requires a fresh app-authorized bookmark; load the model through Model Library."
+                )
+            )
+        )
     }
 
     func runtimeStatus(reply: @escaping (RuntimeStatus) -> Void) {
-        let activeGenerationID = generationCoordinator.activeGenerationID()
         stateLock.lock()
         let loadedModelID = loadedModelID
+        let activeGenerationID = activeGenerationReservationID
+        let hasPendingModelMutation = pendingModelMutationCount > 0
+        let loadedEmbeddingModelID = loadedEmbeddingModelID
         stateLock.unlock()
 
         let state: RuntimeServiceState
         if activeGenerationID != nil {
             state = .generating
+        } else if hasPendingModelMutation {
+            state = .modelLoading
         } else if loadedModelID != nil {
             state = .modelLoaded
         } else {
             state = .modelUnloaded
         }
-
-        stateLock.lock()
-        let loadedEmbeddingModelID = loadedEmbeddingModelID
-        stateLock.unlock()
 
         reply(
             RuntimeStatus(
@@ -177,7 +262,10 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
                 loadedModelID: loadedModelID,
                 activeGenerationID: activeGenerationID,
                 message: "Runtime service available.",
-                metrics: nil,
+                // This is RUSAGE_SELF inside the embedded XPC process, not the
+                // UI host. The hosted qualification compares its peak across
+                // repeated lifecycle runs to detect service-side growth.
+                metrics: RuntimeMetrics(peakMemoryMb: Self.maximumResidentMiB()),
                 embeddingModelID: loadedEmbeddingModelID
             )
         )
@@ -199,31 +287,41 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         }
 
         let reply = RuntimeReply(reply)
-        Task { [weak self, embeddingController, reply] in
+        embeddingModelOperations.enqueue { [self, embeddingController, reply] in
             let startedAt = Date()
             do {
-                let dimension = try await embeddingController.loadModel(bookmark: request.modelBookmark, path: request.modelPath)
-                if let expected = request.expectedDimension, expected != dimension {
-                    await embeddingController.unload()
-                    self?.clearLoadedEmbeddingModel()
-                    reply(LoadEmbeddingModelResponse(
-                        state: .failed,
-                        embeddingModelID: request.embeddingModelID,
-                        error: RuntimeErrorMapper.invalidRequest(
-                            "Embedding dimension mismatch: expected \(expected), model produced \(dimension)."
-                        )
-                    ))
-                    return
-                }
-                self?.setLoadedEmbeddingModel(request.embeddingModelID, dimension: dimension)
+                let dimension = try await embeddingController.loadModel(
+                    bookmark: request.modelBookmark,
+                    path: request.modelPath,
+                    managedRootPath: request.managedRootPath,
+                    expectedDimension: request.expectedDimension
+                )
+                setLoadedEmbeddingModel(request.embeddingModelID, dimension: dimension)
                 reply(LoadEmbeddingModelResponse(
                     state: .loaded,
                     embeddingModelID: request.embeddingModelID,
                     dimension: dimension,
                     loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000)
                 ))
+            } catch let error as RuntimeModelDirectoryAccessError {
+                reply(LoadEmbeddingModelResponse(
+                    state: .failed,
+                    embeddingModelID: request.embeddingModelID,
+                    error: RuntimeErrorMapper.modelAccessFailed(error)
+                ))
+            } catch let error as EmbeddingModelControllerError {
+                let runtimeError: RuntimeError
+                if case .dimensionMismatch = error {
+                    runtimeError = RuntimeErrorMapper.invalidRequest(error.localizedDescription)
+                } else {
+                    runtimeError = RuntimeErrorMapper.modelLoadFailed(error)
+                }
+                reply(LoadEmbeddingModelResponse(
+                    state: .failed,
+                    embeddingModelID: request.embeddingModelID,
+                    error: runtimeError
+                ))
             } catch {
-                self?.clearLoadedEmbeddingModel()
                 reply(LoadEmbeddingModelResponse(
                     state: .failed,
                     embeddingModelID: request.embeddingModelID,
@@ -294,13 +392,6 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         stateLock.unlock()
     }
 
-    private func clearLoadedEmbeddingModel() {
-        stateLock.lock()
-        loadedEmbeddingModelID = nil
-        embeddingDimension = nil
-        stateLock.unlock()
-    }
-
     private func setLoadedModel(_ request: LoadModelRequest) {
         stateLock.lock()
         loadedModelID = request.modelID
@@ -312,9 +403,56 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             modelID: request.modelID,
             modelPath: request.modelPath,
             displayName: request.displayName,
-            modelBookmark: nil
+            modelBookmark: nil,
+            managedRootPath: request.managedRootPath
         )
         stateLock.unlock()
+    }
+
+    private func clearLoadedModel() {
+        stateLock.lock()
+        loadedModelID = nil
+        currentModelRequest = nil
+        stateLock.unlock()
+    }
+
+    private func reserveModelMutation() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard activeGenerationReservationID == nil else { return false }
+        pendingModelMutationCount += 1
+        return true
+    }
+
+    private func finishModelMutation() {
+        stateLock.lock()
+        precondition(pendingModelMutationCount > 0, "Unbalanced runtime model mutation reservation")
+        pendingModelMutationCount -= 1
+        stateLock.unlock()
+    }
+
+    private func finishGeneration(_ generationID: GenerationID) {
+        stateLock.lock()
+        if activeGenerationReservationID == generationID {
+            activeGenerationReservationID = nil
+        }
+        if activeGenerationOwnerID == generationID {
+            activeGenerationOwnerID = nil
+            activeGenerationConnection = nil
+        }
+        stateLock.unlock()
+    }
+
+    private func hasLoadedModel() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return loadedModelID != nil
+    }
+
+    private static func maximumResidentMiB() -> Int {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
+        return Int(usage.ru_maxrss / (1_024 * 1_024))
     }
 }
 
@@ -327,6 +465,24 @@ private struct RuntimeReply<Response: Sendable>: @unchecked Sendable {
 
     func callAsFunction(_ response: Response) {
         reply(response)
+    }
+}
+
+/// A lock-protected async tail queue. Enqueue order is the XPC request order;
+/// each mutation waits for its predecessor before touching the model actor.
+private final class RuntimeSerialOperationQueue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tail: Task<Void, Never>?
+
+    func enqueue(_ operation: @escaping @Sendable () async -> Void) {
+        lock.lock()
+        let predecessor = tail
+        let task = Task {
+            await predecessor?.value
+            await operation()
+        }
+        tail = task
+        lock.unlock()
     }
 }
 
@@ -363,13 +519,12 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
     ) {
         do {
             let request = try RuntimeXPCCodec.decode(GenerateRequest.self, from: requestData)
-            // Record the owning connection so a dropped client can have its
-            // orphaned generation cancelled (see handleConnectionTermination).
             let connection = NSXPCConnection.current()
-            stateLock.lock()
-            activeGenerationConnection = connection
-            stateLock.unlock()
-            generate(request, eventSink: XPCGenerationEventSinkAdapter(eventSink: eventSink)) { response in
+            beginGeneration(
+                request,
+                eventSink: XPCGenerationEventSinkAdapter(eventSink: eventSink),
+                ownerConnection: connection
+            ) { response in
                 reply(Self.encoded(response))
             }
         } catch {

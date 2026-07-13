@@ -12,7 +12,12 @@ import SupraRuntimeInterface
 protocol EmbeddingModelController: Sendable {
     /// Loads the model from a managed directory (resolving a sandbox bookmark if
     /// provided) and returns its vector dimension.
-    func loadModel(bookmark: Data?, path: String) async throws -> Int
+    func loadModel(
+        bookmark: Data?,
+        path: String,
+        managedRootPath: String?,
+        expectedDimension: Int?
+    ) async throws -> Int
     func embed(texts: [String], normalize: Bool) async throws -> [[Float]]
     func unload() async
 }
@@ -21,6 +26,7 @@ enum EmbeddingModelControllerError: LocalizedError {
     case modelDirectoryMissing(String)
     case modelNotLoaded
     case emptyEmbedding
+    case dimensionMismatch(expected: Int, actual: Int)
 
     var errorDescription: String? {
         switch self {
@@ -30,6 +36,8 @@ enum EmbeddingModelControllerError: LocalizedError {
             "No embedding model is loaded."
         case .emptyEmbedding:
             "The embedding model produced no output."
+        case let .dimensionMismatch(expected, actual):
+            "Embedding dimension mismatch: expected \(expected), model produced \(actual)."
         }
     }
 }
@@ -38,45 +46,40 @@ actor MLXEmbeddingModelController: EmbeddingModelController {
     private var container: EmbedderModelContainer?
     private var dimension: Int?
 
-    func loadModel(bookmark: Data?, path: String) async throws -> Int {
-        // Resolve a sandbox bookmark (if any) and keep the scope open for the
-        // whole load, mirroring MLXModelController.
-        let resolvedURL: URL
-        var scopedURL: URL?
-        if let bookmark {
-            var isStale = false
-            let url = try URL(
-                resolvingBookmarkData: bookmark,
-                options: [],
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
-            guard url.startAccessingSecurityScopedResource() else {
-                throw EmbeddingModelControllerError.modelDirectoryMissing(path)
-            }
-            scopedURL = url
-            resolvedURL = url
-        } else {
-            resolvedURL = URL(fileURLWithPath: path, isDirectory: true)
-        }
-        defer { scopedURL?.stopAccessingSecurityScopedResource() }
-
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: resolvedURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw EmbeddingModelControllerError.modelDirectoryMissing(resolvedURL.path)
-        }
+    func loadModel(
+        bookmark: Data?,
+        path: String,
+        managedRootPath: String?,
+        expectedDimension: Int?
+    ) async throws -> Int {
+        let access = try RuntimeModelDirectoryAccess(
+            bookmark: bookmark,
+            requestedPath: path,
+            managedRootPath: managedRootPath
+        )
+        defer { access.close() }
+        let resolvedURL = access.url
 
         let loaded = try await EmbedderModelFactory.shared.loadContainer(
             from: resolvedURL,
             using: TokenizersLoader()
         )
-        container = loaded
-
         // Determine the output dimension with a tiny probe embedding.
         let probe = try await Self.embed(container: loaded, texts: ["dimension probe"], normalize: true)
         guard let first = probe.first, !first.isEmpty else {
             throw EmbeddingModelControllerError.emptyEmbedding
         }
+        if let expectedDimension, expectedDimension != first.count {
+            throw EmbeddingModelControllerError.dimensionMismatch(
+                expected: expectedDimension,
+                actual: first.count
+            )
+        }
+
+        // Commit only after access, factory load, probe, and dimension validation
+        // all succeed. A failed replacement therefore leaves the prior model live
+        // and consistent with the service's reported embedding state.
+        container = loaded
         dimension = first.count
         return first.count
     }

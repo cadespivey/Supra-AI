@@ -23,6 +23,9 @@ public struct LoadEmbeddingModelRequest: Codable, Sendable {
     /// A plain (non-security-scoped) bookmark of the model directory, minted by
     /// the app while it holds access, so the sandboxed runtime can read it.
     public let modelBookmark: Data?
+    /// Canonical managed root used to reject traversal and symlink escapes.
+    /// Custom user-selected model folders leave this nil.
+    public let managedRootPath: String?
 
     public init(
         embeddingModelID: DocumentEmbeddingModelID,
@@ -30,7 +33,8 @@ public struct LoadEmbeddingModelRequest: Codable, Sendable {
         displayName: String,
         revision: String? = nil,
         expectedDimension: Int? = nil,
-        modelBookmark: Data? = nil
+        modelBookmark: Data? = nil,
+        managedRootPath: String? = nil
     ) {
         self.embeddingModelID = embeddingModelID
         self.modelPath = modelPath
@@ -38,6 +42,7 @@ public struct LoadEmbeddingModelRequest: Codable, Sendable {
         self.revision = revision
         self.expectedDimension = expectedDimension
         self.modelBookmark = modelBookmark
+        self.managedRootPath = managedRootPath
     }
 }
 

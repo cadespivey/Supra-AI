@@ -98,7 +98,8 @@ The app talks to it through `SupraRuntimeClient`, using DTOs/protocols defined i
 
 Model weights may live outside the app sandbox. The app mints a transferable security-scoped
 bookmark while holding its own scope; the sandboxed service resolves it and holds the scope
-across the full load. The design and on-device verification steps
+across the full load. Nil/stale/invalid bookmarks and canonical managed-root escapes fail
+closed; raw paths grant no authority. The design and on-device verification steps
 are recorded in [`Docs/Architecture/RuntimeFileAccess.md`](Docs/Architecture/RuntimeFileAccess.md).
 
 Managed model downloads are bound to a repository revision and verified manifest, expected size, and SHA-256 digest before registration or load.

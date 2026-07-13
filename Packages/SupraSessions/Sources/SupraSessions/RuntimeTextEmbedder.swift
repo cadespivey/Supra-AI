@@ -76,7 +76,13 @@ public actor RuntimeTextEmbedder: TextEmbedder {
 
     private func ensureLoaded() async throws {
         if loaded { return }
-        let bookmark = try? URL(fileURLWithPath: modelPath, isDirectory: true).bookmarkData(options: [])
+        let access = SecurityScopedModelAccess(
+            url: URL(fileURLWithPath: modelPath, isDirectory: true)
+        )
+        defer { access.release() }
+        guard access.hasAccess, let bookmark = access.makeTransferableBookmark() else {
+            throw TextEmbedderError.loadFailed("the model-folder security scope could not be activated")
+        }
         let response = try await runtimeClient.loadEmbeddingModel(
             LoadEmbeddingModelRequest(
                 embeddingModelID: embeddingModelID,
@@ -87,7 +93,10 @@ public actor RuntimeTextEmbedder: TextEmbedder {
                 // verified): skip the assertion rather than fail the load. Auto-verify
                 // normally persists the real dimension before any indexing runs.
                 expectedDimension: dimension > 0 ? dimension : nil,
-                modelBookmark: bookmark
+                modelBookmark: bookmark,
+                managedRootPath: ManagedModelStorage.isManagedEmbedding(path: modelPath)
+                    ? ManagedModelStorage.embeddingModelsDirectory().path
+                    : nil
             )
         )
         guard response.state == .loaded else {

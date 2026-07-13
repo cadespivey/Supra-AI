@@ -342,6 +342,7 @@ struct FocusChainSwitch: NSViewRepresentable {
         control.focusChain = focusChain
         control.setAccessibilityIdentifier(accessibilityID)
         control.setAccessibilityLabel(accessibilityLabelText)
+        control.setAccessibilityValue(isOn ? "1" : "0")
         focusChain?.register(control, at: focusOrder, identifier: accessibilityID)
         return control
     }
@@ -349,6 +350,7 @@ struct FocusChainSwitch: NSViewRepresentable {
     func updateNSView(_ nsView: NSSwitch, context: Context) {
         nsView.state = isOn ? .on : .off
         nsView.setAccessibilityIdentifier(accessibilityID)
+        nsView.setAccessibilityValue(isOn ? "1" : "0")
         context.coordinator.isOn = $isOn
         context.coordinator.focusChain = focusChain
         if let chained = nsView as? ChainedSwitch {
@@ -381,6 +383,14 @@ struct FocusChainSwitch: NSViewRepresentable {
 
     final class ChainedSwitch: NSSwitch {
         weak var focusChain: SupraFocusChain?
+
+        override func mouseDown(with event: NSEvent) {
+            // Button-like controls do not necessarily take focus on click under
+            // every macOS keyboard-navigation preference. This switch participates
+            // in an explicit form chain, so make the clicked control the responder.
+            window?.makeFirstResponder(self)
+            super.mouseDown(with: event)
+        }
 
         override func keyDown(with event: NSEvent) {
             guard event.keyCode == 48 else {

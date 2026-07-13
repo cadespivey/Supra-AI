@@ -446,6 +446,7 @@ public final class ModelLibrary: ObservableObject {
         defer { scopedAccess?.release() }
 
         let modelBookmark: Data?
+        let managedRootPath: String?
         if record.bookmarkData != nil {
             // User-selected folder: hold the app's own access while minting.
             let access = SecurityScopedModelAccess(bookmarkData: record.bookmarkData)
@@ -463,25 +464,35 @@ public final class ModelLibrary: ObservableObject {
                 refresh()
             }
             modelBookmark = access.makeTransferableBookmark()
-        } else if ManagedModelStorage.isManaged(path: record.path, roots: managedModelRoots) {
-            // App-downloaded model: the app owns the files, so it can mint a plain
-            // transferable bookmark directly without a security scope.
-            guard let managedBookmark = try? URL(fileURLWithPath: record.path, isDirectory: true)
-                .bookmarkData(options: []) else {
+            managedRootPath = nil
+        } else if let managedRoot = managedModelRoots.first(where: {
+            ManagedModelStorage.isManaged(path: record.path, roots: [$0])
+        }) {
+            // App-downloaded model: establish an app-held scope before minting
+            // the plain bookmark. A path or unscoped bookmark is not authority.
+            let access = SecurityScopedModelAccess(
+                url: URL(fileURLWithPath: record.path, isDirectory: true)
+            )
+            scopedAccess = access
+            guard access.hasAccess, let managedBookmark = access.makeTransferableBookmark() else {
                 loadState = .failed(message: "The downloaded model files could not be found. Re-download the model.")
                 return
             }
             modelBookmark = managedBookmark
+            managedRootPath = managedRoot.path
         } else {
-            // No bookmark available; only readable if the service is unsandboxed.
+            // Raw paths are never authority at the service boundary. Preserve the
+            // explicit failure path so the user is told to re-add the folder.
             modelBookmark = nil
+            managedRootPath = nil
         }
 
         let request = LoadModelRequest(
             modelID: ModelID(uuid),
             modelPath: record.path,
             displayName: record.displayName,
-            modelBookmark: modelBookmark
+            modelBookmark: modelBookmark,
+            managedRootPath: managedRootPath
         )
 
         do {

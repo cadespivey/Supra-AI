@@ -49,3 +49,16 @@ Protected release controls:
 
 See `Docs/Release-Protection.md` for the required live GitHub rulesets, environment approval,
 signed rehearsal, evidence, and withdrawal procedure.
+
+Runtime/XPC qualification:
+
+- `verify-runtime-xpc-boundary.sh` checks reciprocal supported code-signing requirements,
+  the Release Team-ID binding, unchanged service sandbox/entitlements, and optional built
+  product signatures.
+- `run-hosted-xpc-lifecycle.sh` ad-hoc-signs the Debug app and embedded XPC, then runs the
+  exact `SupraAIUITests/RuntimeXPCIntegrationTests` selector. The lifecycle scenario performs
+  20 iterations and covers bookmark rejection/containment, load/unload concurrency,
+  reconnect, client drop, cancellation, and exactly-once stream completion.
+- `run-runtime-sanitizer.sh thread|address|undefined` applies the requested sanitizer to the
+  focused runtime package/hosted lifecycle gate. Tool exclusions and observed results live
+  in `Docs/Architecture/RuntimeXPCQualification.md`.

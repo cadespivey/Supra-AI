@@ -8,7 +8,20 @@ struct RootView: View {
     @AppStorage("supra.remediationNoticeV057Acknowledged") private var remediationNoticeAcknowledged = false
     @State private var showingRemediationNotice = false
 
+    @ViewBuilder
     var body: some View {
+#if DEBUG
+        if let scenario = Self.runtimeXPCIntegrationScenario {
+            RuntimeXPCIntegrationView(scenario: scenario)
+        } else {
+            applicationRoot
+        }
+#else
+        applicationRoot
+#endif
+    }
+
+    private var applicationRoot: some View {
         ZStack {
             // The main shell is a NavigationSplitView whose sidebar is backed by an
             // AppKit NSVisualEffectView (vibrancy). That material renders straight to
@@ -64,6 +77,18 @@ struct RootView: View {
             Text(remediationNoticeMessage)
         }
     }
+
+#if DEBUG
+    private static var runtimeXPCIntegrationScenario: String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains("-runtimeXPCIntegrationMode"),
+              let marker = arguments.firstIndex(of: "-runtimeXPCScenario"),
+              arguments.indices.contains(marker + 1) else {
+            return nil
+        }
+        return arguments[marker + 1]
+    }
+#endif
 
     private var remediationNoticeMessage: String {
         let summary = environment.remediationRecoverySummary

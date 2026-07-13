@@ -12,10 +12,11 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
 
     func testSetupGatingBlocksThenCompletesWhenAllStepsPass() async throws {
         let store = try makeStore()
+        let modelPath = try makeModelDirectory()
         // A downloaded, selected embedding model is already registered.
         let model = DocumentEmbeddingModelRecord(
             repoID: "BAAI/bge-base-en-v1.5",
-            localPath: "/tmp/embedder",
+            localPath: modelPath,
             displayName: "BGE Base",
             dimension: 768,
             runtimeFamily: "bert",
@@ -93,7 +94,7 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
 
     func testEmbeddingDimensionMismatchFailsTestLoad() async throws {
         let store = try makeStore()
-        let model = DocumentEmbeddingModelRecord(repoID: "r", localPath: "/tmp/e", displayName: "E", dimension: 768, runtimeFamily: "bert")
+        let model = DocumentEmbeddingModelRecord(repoID: "r", localPath: try makeModelDirectory(), displayName: "E", dimension: 768, runtimeFamily: "bert")
         try store.documentSettings.upsertEmbeddingModel(model)
         try store.documentSettings.selectEmbeddingModel(id: model.id)
 
@@ -112,7 +113,7 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
         let store = try makeStore()
         // A custom (non-curated) model registered without a known dimension.
         let model = DocumentEmbeddingModelRecord(
-            repoID: "acme/custom-embedder", localPath: "/tmp/custom",
+            repoID: "acme/custom-embedder", localPath: try makeModelDirectory(),
             displayName: "Custom", dimension: 0, runtimeFamily: ""
         )
         try store.documentSettings.upsertEmbeddingModel(model)
@@ -147,7 +148,7 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
         // Simulate a download that registered + selected a model directly in the store
         // (as EmbeddingModelDownloadController does), bypassing the controller's cache.
         let model = DocumentEmbeddingModelRecord(
-            repoID: "BAAI/bge-base-en-v1.5", localPath: "/tmp/bge",
+            repoID: "BAAI/bge-base-en-v1.5", localPath: try makeModelDirectory(),
             displayName: "BGE Base", dimension: 768, runtimeFamily: "bert"
         )
         try store.documentSettings.upsertEmbeddingModel(model)
@@ -170,6 +171,13 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
             .appendingPathComponent("SetupTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
+    }
+
+    private func makeModelDirectory() throws -> String {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SetupModel-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url.path
     }
 }
 

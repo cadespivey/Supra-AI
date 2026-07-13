@@ -251,6 +251,9 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
 
         let newConnection = NSXPCConnection(serviceName: serviceName)
         newConnection.remoteObjectInterface = RuntimeXPCInterfaces.serviceInterface()
+        // Public Foundation API validates the embedded service before the first
+        // message. The service applies the reciprocal app-client requirement.
+        newConnection.setCodeSigningRequirement(RuntimeXPCSigningRequirements.runtimeService)
         // The service crashing/restarting interrupts the connection; the client
         // tearing it down or the service failing to launch invalidates it.
         // Either way, in-flight generations are lost and must be failed so the
@@ -304,6 +307,13 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
         let existingConnection = connection
         connection = nil
         return existingConnection
+    }
+
+    /// Explicitly closes this client's hosted XPC session. Production callers use
+    /// restartRuntimeService(); the lifecycle integration gate uses this to prove
+    /// that a dropped client cancels an in-flight generation exactly once.
+    public func disconnect() {
+        invalidateConnection()?.invalidate()
     }
 
     private func encode<T: Encodable>(_ value: T) throws -> Data {
