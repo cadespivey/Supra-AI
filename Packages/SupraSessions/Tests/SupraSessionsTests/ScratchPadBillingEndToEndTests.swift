@@ -53,6 +53,8 @@ final class ScratchPadBillingEndToEndTests: XCTestCase {
             "TC w/ client re custodian list @McKernon", explicitMentions: ["McKernon": matterID]
         ))
         XCTAssertEqual(scratch.entries.count, 2)
+        let firstSourceID = scratch.entries[0].id
+        let secondSourceID = scratch.entries[1].id
 
         // 2) ATTACH — a local work-product file becomes day evidence (no model, no network).
         let fileURL = FileManager.default.temporaryDirectory
@@ -67,8 +69,8 @@ final class ScratchPadBillingEndToEndTests: XCTestCase {
         // 3) GENERATE — an injected deterministic model returns two litigation lines.
         let json = """
         {"lineItems":[
-          {"matterID":"\(matterID)","narrative":"Drafted opposition to Defendant's motion to compel.","hours":1.3,"workDate":"2026-06-22","taskCode":"L350","activityCode":"A103","confidence":"high","sourceEntryIDs":["e1"]},
-          {"matterID":"\(matterID)","narrative":"Telephone conference (TC) with client regarding custodian list.","hours":0.4,"workDate":"2026-06-22","taskCode":"L350","activityCode":"A106","confidence":"medium"}
+          {"matterID":"\(matterID)","narrative":"Drafted opposition to Defendant's motion to compel.","hours":1.3,"workDate":"2026-06-22","taskCode":"L350","activityCode":"A103","confidence":"high","sourceEntryIDs":["\(firstSourceID)"]},
+          {"matterID":"\(matterID)","narrative":"Telephone conference (TC) with client regarding custodian list.","hours":0.4,"workDate":"2026-06-22","taskCode":"L350","activityCode":"A106","confidence":"medium","sourceEntryIDs":["\(secondSourceID)"]}
         ]}
         """
         let billing = BillingDraftController(
@@ -118,9 +120,9 @@ final class ScratchPadBillingEndToEndTests: XCTestCase {
             ).insert(db)
         }
         let day = try store.scratchPad.fetchOrCreateDay("2026-06-22")
-        try store.scratchPad.addEntry(dayID: day.id, text: "Work @McKernon", mentions: [matterID])
+        let source = try store.scratchPad.addEntry(dayID: day.id, text: "Work @McKernon", mentions: [matterID])
 
-        let json = #"{"lineItems":[{"matterID":"m1","narrative":"Reviewed filings.","hours":0.5,"activityCode":"A104","confidence":"high"}]}"#
+        let json = #"{"lineItems":[{"matterID":"m1","narrative":"Reviewed filings.","hours":0.5,"activityCode":"A104","confidence":"high","sourceEntryIDs":["\#(source.id)"]}]}"#
         let billing = BillingDraftController(
             store: store,
             service: BillingDraftService(store: store) { _, _ in json },

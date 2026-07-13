@@ -24,7 +24,16 @@ final class BillingDraftControllerTests: XCTestCase {
             try MatterRecord(id: "m-mckernon", name: "McKernon Motors v. Liberty Rail", clientNames: "McKernon", internalMatterID: "12044-0007", clientID: "MCKERNON", clientMatterID: "VS-LIT-2026-031").insert(db)
         }
         let day = try store.scratchPad.fetchOrCreateDay("2026-06-22")
-        try store.scratchPad.addEntry(dayID: day.id, text: "Working on @McKernon", mentions: ["m-mckernon"])
+        try store.database.writer.write { db in
+            try ScratchPadEntryRecord(
+                id: "e1", dayID: day.id, seq: 1, text: "Drafting for @McKernon",
+                mentionsJSON: ScratchPadJSON.encodeStrings(["m-mckernon"])
+            ).insert(db)
+            try ScratchPadEntryRecord(
+                id: "e2", dayID: day.id, seq: 2, text: "Conference for @McKernon",
+                mentionsJSON: ScratchPadJSON.encodeStrings(["m-mckernon"])
+            ).insert(db)
+        }
         return (store, day.id)
     }
 

@@ -15,6 +15,7 @@ public enum BillingDraftError: Error, Equatable, Sendable {
     case emptyDay
     case unparseable
     case dayLocked
+    case invalidEvidenceScope(BillingEvidenceScopeViolation)
 }
 
 public struct BillingDraftResult: Sendable, Equatable {
@@ -90,18 +91,29 @@ public final class BillingDraftService {
         // notes-to-self and must never reach the billing model or the time math.
         // Filtering here (not via a prompt instruction) guarantees no fee line can
         // cite an excluded note (lines map back to entries by sourceEntryIDs).
-        let allEntries = (try? store.scratchPad.entries(dayID: dayID)) ?? []
+        let allEntries = try store.scratchPad.entries(dayID: dayID)
         let entries = allEntries.filter { !$0.isNonBillable }
         let excludedCount = allEntries.count - entries.count
         let includedEntryIDs = Set(entries.map(\.id))
         guard !entries.isEmpty else { throw BillingDraftError.emptyDay }
-        let allAttachments = (try? store.scratchPad.attachments(dayID: dayID)) ?? []
+        let allAttachments = try store.scratchPad.attachments(dayID: dayID)
         let attachments = allAttachments.filter { attachment in
             guard let entryID = attachment.entryID else { return true }
             return includedEntryIDs.contains(entryID)
         }
         let excludedAttachmentCount = allAttachments.count - attachments.count
-        let matters = (try? store.matters.fetchMatters()) ?? []
+        let rawCandidateMatterIDs = BillingEvidenceScope.rawCandidateMatterIDs(
+            entries: entries,
+            attachments: attachments
+        )
+        let matters = try rawCandidateMatterIDs.sorted().compactMap { matterID in
+            try store.matters.fetchMatter(id: matterID)
+        }
+        let evidenceScope = BillingEvidenceScope(
+            entries: entries,
+            attachments: attachments,
+            validMatterIDs: Set(matters.map(\.id))
+        )
         let matterRules = matters.map { rules(for: $0) }
         let dayDate = (try? store.scratchPad.fetchDay(id: dayID))?.day ?? invoiceDate
 
@@ -122,16 +134,23 @@ public final class BillingDraftService {
         guard let payload = Self.parse(raw) else { throw BillingDraftError.unparseable }
 
         let codeSetByMatter = Dictionary(uniqueKeysWithValues: matterRules.map { ($0.matterID, $0.codeSet) })
-        let inputs = Self.buildInputs(
-            payload: payload,
-            matters: matters,
-            codeSetByMatter: codeSetByMatter,
-            timekeeper: timekeeper,
-            dayDate: dayDate,
-            increment: increment
-        )
+        let inputs: [BillingLineItemInput]
+        do {
+            inputs = try Self.buildInputs(
+                payload: payload,
+                matters: matters,
+                codeSetByMatter: codeSetByMatter,
+                timekeeper: timekeeper,
+                dayDate: dayDate,
+                increment: increment,
+                evidenceScope: evidenceScope
+            )
+        } catch let violation as BillingEvidenceScopeViolation {
+            throw BillingDraftError.invalidEvidenceScope(violation)
+        }
         let lines = Self.billingLines(inputs: inputs, matters: matters, timekeeper: timekeeper)
         var reconciliation = BillingReconciliationEngine.reconcile(lines: lines, timekeeper: timekeeper, increment: increment)
+        reconciliation.evidenceValidation = evidenceScope.persistedSummary
         // Surface what #Note excluded so the review banner can show it.
         if excludedCount > 0 || excludedAttachmentCount > 0 {
             var parts: [String] = []
@@ -211,16 +230,24 @@ public final class BillingDraftService {
         codeSetByMatter: [String: BillingCodeSet],
         timekeeper: BillingTimekeeper,
         dayDate: String,
-        increment: Double
-    ) -> [BillingLineItemInput] {
-        payload.lineItems.compactMap { dto in
-            let narrative = dto.narrative.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !narrative.isEmpty else { return nil }
+        increment: Double,
+        evidenceScope: BillingEvidenceScope
+    ) throws -> [BillingLineItemInput] {
+        var inputs: [BillingLineItemInput] = []
+        for (lineIndex, dto) in payload.lineItems.enumerated() {
             let matter = resolveMatter(dto.matterID, in: matters)
+            let sourceEntryIDs = try evidenceScope.validate(
+                sourceEntryIDs: dto.sourceEntryIDs,
+                selectedMatter: matter,
+                rawMatterValue: dto.matterID,
+                lineIndex: lineIndex
+            )
+            let narrative = dto.narrative.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !narrative.isEmpty else { continue }
             let codeSet = matter.flatMap { codeSetByMatter[$0.id] } ?? .none
             let hours = roundToIncrement(max(0, dto.hours ?? 0), increment)
             let confidence = BillingConfidence(rawValue: (dto.confidence ?? "medium").lowercased()) ?? .medium
-            return BillingLineItemInput(
+            inputs.append(BillingLineItemInput(
                 clientID: matter?.clientID,
                 matterID: matter?.id,
                 narrative: narrative,
@@ -240,10 +267,11 @@ public final class BillingDraftService {
                 confidence: confidence,
                 evidenceJSON: trimmedOrNil(dto.evidence),
                 codeNote: trimmedOrNil(dto.codeNote),
-                sourceEntryIDs: dto.sourceEntryIDs ?? [],
+                sourceEntryIDs: sourceEntryIDs,
                 userEdited: false
-            )
+            ))
         }
+        return inputs
     }
 
     static func billingLines(inputs: [BillingLineItemInput], matters: [MatterRecord], timekeeper: BillingTimekeeper) -> [BillingLine] {

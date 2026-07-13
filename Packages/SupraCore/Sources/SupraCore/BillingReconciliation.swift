@@ -6,6 +6,25 @@ import Foundation
 // (totals, per-matter subtotals, amounts, rounding/confidence flags) is complete
 // and pure.
 
+public struct BillingEvidenceValidationSummary: Codable, Sendable, Equatable {
+    public var version: Int
+    public var candidateMatterIDs: [String]
+    public var includedEntryIDs: [String]
+    public var includedAttachmentIDs: [String]
+
+    public init(
+        version: Int,
+        candidateMatterIDs: [String],
+        includedEntryIDs: [String],
+        includedAttachmentIDs: [String]
+    ) {
+        self.version = version
+        self.candidateMatterIDs = candidateMatterIDs
+        self.includedEntryIDs = includedEntryIDs
+        self.includedAttachmentIDs = includedAttachmentIDs
+    }
+}
+
 public struct BillingReconciliation: Codable, Sendable, Equatable {
     public struct MatterSubtotal: Codable, Sendable, Equatable {
         public var matterKey: String
@@ -26,6 +45,9 @@ public struct BillingReconciliation: Codable, Sendable, Equatable {
     public var overlaps: [String]
     public var flags: [String]
     public var nonBillableExcluded: String?
+    /// The evidence-derived authorization scope used before this draft was persisted.
+    /// Optional for backwards-compatible decoding of existing reconciliation JSON.
+    public var evidenceValidation: BillingEvidenceValidationSummary?
 
     public init(
         billableTotalHours: Double,
@@ -34,7 +56,8 @@ public struct BillingReconciliation: Codable, Sendable, Equatable {
         gaps: [String] = [],
         overlaps: [String] = [],
         flags: [String] = [],
-        nonBillableExcluded: String? = nil
+        nonBillableExcluded: String? = nil,
+        evidenceValidation: BillingEvidenceValidationSummary? = nil
     ) {
         self.billableTotalHours = billableTotalHours
         self.totalAmount = totalAmount
@@ -43,6 +66,7 @@ public struct BillingReconciliation: Codable, Sendable, Equatable {
         self.overlaps = overlaps
         self.flags = flags
         self.nonBillableExcluded = nonBillableExcluded
+        self.evidenceValidation = evidenceValidation
     }
 }
 

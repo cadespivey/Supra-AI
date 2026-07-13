@@ -136,8 +136,17 @@ public enum BillingFidelityHarness {
             }
             _ = try? store.billing.upsertBillingProfile(matterID: matter.id, overrideInstructions: nil, billingCodeSet: matter.codeSet)
         }
-        for entry in testCase.entries {
-            _ = try? store.scratchPad.addEntry(dayID: day.id, text: entry.text, mentions: entry.mentionIDs, tags: entry.tags)
+        for (index, entry) in testCase.entries.enumerated() {
+            _ = try? await store.database.writer.write { db in
+                try ScratchPadEntryRecord(
+                    id: "e\(index + 1)",
+                    dayID: day.id,
+                    seq: index + 1,
+                    text: entry.text,
+                    mentionsJSON: ScratchPadJSON.encodeStrings(entry.mentionIDs),
+                    tagsJSON: ScratchPadJSON.encodeStrings(entry.tags)
+                ).insert(db)
+            }
         }
 
         let service = BillingDraftService(store: store, generate: generate)

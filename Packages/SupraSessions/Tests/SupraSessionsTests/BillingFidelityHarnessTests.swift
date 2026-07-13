@@ -41,8 +41,8 @@ final class BillingFidelityHarnessTests: XCTestCase {
     func testHarnessScoresCorrectGeneratorHigh() async {
         let json = """
         {"lineItems":[
-          {"matterID":"m-vystar","narrative":"Reviewed Defendant's motion to compel.","hours":0.6,"taskCode":"L350","activityCode":"A104","confidence":"medium"},
-          {"matterID":"m-vystar","narrative":"Drafted opposition to the motion to compel.","hours":1.3,"taskCode":"L350","activityCode":"A103","confidence":"high"}
+          {"matterID":"m-vystar","narrative":"Reviewed Defendant's motion to compel.","hours":0.6,"taskCode":"L350","activityCode":"A104","confidence":"medium","sourceEntryIDs":["e1"]},
+          {"matterID":"m-vystar","narrative":"Drafted opposition to the motion to compel.","hours":1.3,"taskCode":"L350","activityCode":"A103","confidence":"high","sourceEntryIDs":["e2"]}
         ]}
         """
         let result = await BillingFidelityHarness.run(BillingFidelityFixtures.vyStarLitigationDay, timekeeper: timekeeper) { _, _ in json }
@@ -53,7 +53,7 @@ final class BillingFidelityHarnessTests: XCTestCase {
 
     func testHarnessScoresWrongGeneratorLow() async {
         let json = """
-        {"lineItems":[{"matterID":"m-vystar","narrative":"Attention to file.","hours":3.0}]}
+        {"lineItems":[{"matterID":"m-vystar","narrative":"Attention to file.","hours":3.0,"sourceEntryIDs":["e1"]}]}
         """
         let result = await BillingFidelityHarness.run(BillingFidelityFixtures.vyStarLitigationDay, timekeeper: timekeeper) { _, _ in json }
         XCTAssertTrue(result.parsed)

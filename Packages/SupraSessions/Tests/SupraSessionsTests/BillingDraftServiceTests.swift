@@ -24,7 +24,16 @@ final class BillingDraftServiceTests: XCTestCase {
         // Litigation matter → L-codes validate (UTBMS code-set validation).
         try store.billing.upsertBillingProfile(matterID: matterID, overrideInstructions: nil, billingCodeSet: .litigation)
         let day = try store.scratchPad.fetchOrCreateDay("2026-06-22")
-        try store.scratchPad.addEntry(dayID: day.id, text: "Drafting opposition for @McKernon", mentions: [matterID], tags: ["drafting"])
+        try store.database.writer.write { db in
+            try ScratchPadEntryRecord(
+                id: "e1",
+                dayID: day.id,
+                seq: 1,
+                text: "Drafting opposition for @McKernon",
+                mentionsJSON: ScratchPadJSON.encodeStrings([matterID]),
+                tagsJSON: ScratchPadJSON.encodeStrings(["drafting"])
+            ).insert(db)
+        }
         return (store, matterID, day.id)
     }
 
@@ -37,7 +46,7 @@ final class BillingDraftServiceTests: XCTestCase {
         let json = """
         {"lineItems":[
           {"matterID":"\(matterID)","narrative":"Drafted opposition to Defendant's motion to compel.","hours":1.3,"workDate":"2026-06-22","taskCode":"L350","activityCode":"A103","confidence":"high","evidence":"stamp gap 09:12-10:30 + 9pp work product","sourceEntryIDs":["e1"]},
-          {"matterID":"\(matterID)","narrative":"Telephone conference re custodian list.","hours":0.4,"workDate":"2026-06-22","taskCode":"L350","activityCode":"A106","confidence":"medium","evidence":"wrote ~0.4h"}
+          {"matterID":"\(matterID)","narrative":"Telephone conference re custodian list.","hours":0.4,"workDate":"2026-06-22","taskCode":"L350","activityCode":"A106","confidence":"medium","evidence":"wrote ~0.4h","sourceEntryIDs":["e1"]}
         ]}
         """
         let result = try await service(store, returning: json).generateDraft(
@@ -62,14 +71,17 @@ final class BillingDraftServiceTests: XCTestCase {
         let reconJSON = try XCTUnwrap(draft.reconciliationJSON)
         let recon = try JSONDecoder().decode(BillingReconciliation.self, from: Data(reconJSON.utf8))
         XCTAssertEqual(recon.billableTotalHours, 1.7, accuracy: 0.001)
+        XCTAssertEqual(recon.evidenceValidation?.version, 1)
+        XCTAssertEqual(recon.evidenceValidation?.candidateMatterIDs, [matterID])
+        XCTAssertEqual(recon.evidenceValidation?.includedEntryIDs, ["e1"])
     }
 
-    func testRepairsUnknownMatterAndRoundsHours() async throws {
+    func testKeepsUnassignedLineAndRoundsHours() async throws {
         let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
         let json = """
         {"lineItems":[
-          {"matterID":"does-not-exist","narrative":"Reviewed filing","hours":null,"confidence":"low"},
-          {"matterID":"\(matterID)","narrative":"Researched proportionality","hours":0.17,"taskCode":"L350","activityCode":"A102","confidence":"medium"}
+          {"matterID":null,"narrative":"Reviewed filing","hours":null,"confidence":"low","sourceEntryIDs":["e1"]},
+          {"matterID":"\(matterID)","narrative":"Researched proportionality","hours":0.17,"taskCode":"L350","activityCode":"A102","confidence":"medium","sourceEntryIDs":["e1"]}
         ]}
         """
         let result = try await service(store, returning: json).generateDraft(
@@ -110,7 +122,7 @@ final class BillingDraftServiceTests: XCTestCase {
         var capturedUserPrompt = ""
         let service = BillingDraftService(store: store) { _, user in
             capturedUserPrompt = user
-            return #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103","confidence":"high"}]}"#
+            return #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103","confidence":"high","sourceEntryIDs":["e1"]}]}"#
         }
         let result = try await service.generateDraft(
             dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22"
@@ -155,7 +167,7 @@ final class BillingDraftServiceTests: XCTestCase {
         var capturedUserPrompt = ""
         let service = BillingDraftService(store: store) { _, user in
             capturedUserPrompt = user
-            return #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103","confidence":"high"}]}"#
+            return #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103","confidence":"high","sourceEntryIDs":["e1"]}]}"#
         }
         let result = try await service.generateDraft(
             dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22"
@@ -223,7 +235,7 @@ final class BillingDraftServiceTests: XCTestCase {
         var capturedUserPrompt = ""
         let service = BillingDraftService(store: store) { _, user in
             capturedUserPrompt = user
-            return #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103","confidence":"high"}]}"#
+            return #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103","confidence":"high","sourceEntryIDs":["e1"]}]}"#
         }
         _ = try await service.generateDraft(
             dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper,
@@ -266,8 +278,8 @@ final class BillingDraftServiceTests: XCTestCase {
         let (store, matterID, dayID) = try makeStoreWithMatterAndDay() // litigation profile
         let json = """
         {"lineItems":[
-          {"matterID":"\(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103"},
-          {"matterID":"\(matterID)","narrative":"Reviewed file.","hours":0.5,"taskCode":"L999","activityCode":"ZZZ"}
+          {"matterID":"\(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103","sourceEntryIDs":["e1"]},
+          {"matterID":"\(matterID)","narrative":"Reviewed file.","hours":0.5,"taskCode":"L999","activityCode":"ZZZ","sourceEntryIDs":["e1"]}
         ]}
         """
         let result = try await service(store, returning: json).generateDraft(
@@ -435,6 +447,51 @@ final class BillingDraftServiceTests: XCTestCase {
                 invoiceDate: "2026-06-22"
             )
             XCTFail("conflicting matter evidence must not be assigned automatically")
+        } catch {
+            XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
+        }
+    }
+
+    func testACRBILL006EntryWithoutMatterEvidenceCannotBorrowAnotherEntryMatter() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let unassigned = try store.scratchPad.addEntry(
+            dayID: dayID,
+            text: "Reviewed an unlabeled intake item",
+            mentions: []
+        )
+        let json = #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Reviewed intake item.","hours":0.3,"sourceEntryIDs":["\#(unassigned.id)"]}]}"#
+
+        do {
+            _ = try await service(store, returning: json).generateDraft(
+                dayID: dayID,
+                sensitivity: 0.5,
+                timekeeper: timekeeper,
+                invoiceDate: "2026-06-22"
+            )
+            XCTFail("unassigned evidence may not borrow a candidate from another entry")
+        } catch {
+            XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
+        }
+    }
+
+    func testACRBILL007MixedMatterSourcesCannotBeCollapsedIntoOneMatter() async throws {
+        let (store, firstMatterID, dayID) = try makeStoreWithMatterAndDay()
+        let secondMatterID = try store.matters.createMatter(name: "Second Matter").id
+        let secondSource = try store.scratchPad.addEntry(
+            dayID: dayID,
+            text: "Reviewed discovery for the second matter",
+            mentions: [secondMatterID]
+        )
+        let json = #"{"lineItems":[{"matterID":"\#(firstMatterID)","narrative":"Combined unrelated work.","hours":1.0,"sourceEntryIDs":["e1","\#(secondSource.id)"]}]}"#
+
+        do {
+            _ = try await service(store, returning: json).generateDraft(
+                dayID: dayID,
+                sensitivity: 0.5,
+                timekeeper: timekeeper,
+                invoiceDate: "2026-06-22"
+            )
+            XCTFail("mixed-matter evidence must not be collapsed into one matter")
         } catch {
             XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
         }

@@ -151,6 +151,8 @@ public final class BillingDraftController: ObservableObject {
             statusMessage = "Load a model (Models tab) to generate a billing draft."
         } catch BillingDraftError.unparseable {
             statusMessage = "The model's output couldn't be parsed into entries — try again."
+        } catch BillingDraftError.invalidEvidenceScope {
+            statusMessage = "The generated entries cited missing or conflicting evidence. No draft was saved — review the day's matter links and try again."
         } catch {
             statusMessage = "Generation failed: \(error.localizedDescription)"
         }

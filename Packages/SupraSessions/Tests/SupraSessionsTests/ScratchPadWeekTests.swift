@@ -253,7 +253,12 @@ final class ScratchPadWeekTests: XCTestCase {
             ).insert(db)
         }
         let day = try store.scratchPad.fetchOrCreateDay("2026-07-09")
-        try store.scratchPad.addEntry(dayID: day.id, text: "Working on @McKernon", mentions: ["m-mckernon"])
+        try store.database.writer.write { db in
+            try ScratchPadEntryRecord(
+                id: "e1", dayID: day.id, seq: 1, text: "Working on @McKernon",
+                mentionsJSON: ScratchPadJSON.encodeStrings(["m-mckernon"])
+            ).insert(db)
+        }
         return day.id
     }
 
