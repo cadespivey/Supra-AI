@@ -62,6 +62,28 @@ final class DocumentSupportVerifierTests: XCTestCase {
         XCTAssertTrue([reversedActors, appendedFact, swappedDate].allSatisfy(\.requiresReview))
     }
 
+    func testOmittedConditionsModalityAndPassiveAgentCannotBecomeClean() throws {
+        // ACR-DOCSUP-11 expected RED: ordered full-token containment still skips
+        // limiting source words and the passive-agent marker.
+        let modal = try verify(
+            "Payment was due March 3, 2025 [S1].",
+            sources: [source(text: "Payment may be due March 3, 2025 if the invoice is approved.")]
+        )
+        let conditional = try verify(
+            "Payment was due March 3, 2025 [S1].",
+            sources: [source(text: "Payment was due March 3, 2025 only if the invoice was approved.")]
+        )
+        let passiveAgent = try verify(
+            "Alpha LLC paid Beta Inc on March 8, 2025 [S1].",
+            sources: [source(text: "Alpha LLC was paid by Beta Inc on March 8, 2025.")]
+        )
+
+        XCTAssertEqual(modal.results.map(\.status), [.unsupported])
+        XCTAssertEqual(conditional.results.map(\.status), [.unsupported])
+        XCTAssertEqual(passiveAgent.results.map(\.status), [.unsupported])
+        XCTAssertTrue([modal, conditional, passiveAgent].allSatisfy(\.requiresReview))
+    }
+
     func testMixedAnswerFailsWhenOnePropositionIsUnsupported() throws {
         // ACR-DOCSUP-04 expected RED: coverage aggregates labels, not propositions.
         let report = try verify(
