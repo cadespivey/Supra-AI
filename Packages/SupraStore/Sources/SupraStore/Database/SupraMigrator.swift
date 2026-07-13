@@ -968,6 +968,16 @@ public enum SupraMigrator {
             )
         }
 
+        migrator.registerMigration("v056_add_document_blob_integrity") { db in
+            try db.alter(table: "document_blobs") { table in
+                table.add(column: "integrity_status", .text)
+                    .notNull()
+                    .defaults(to: DocumentBlobIntegrityStatus.unverified.rawValue)
+                table.add(column: "verified_at", .datetime)
+                table.add(column: "integrity_error", .text)
+            }
+        }
+
         return migrator
     }
 

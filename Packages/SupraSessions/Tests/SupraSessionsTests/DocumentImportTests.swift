@@ -217,6 +217,7 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(blob.sha256, DocumentStorage.sha256Hex(of: original))
         XCTAssertEqual(blob.byteSize, original.count)
         XCTAssertEqual(blob.integrityStatus, DocumentBlobIntegrityStatus.verified.rawValue)
+        XCTAssertEqual(document.extractedTextChecksum, blob.sha256, "the text fixture's extracted bytes must agree with the managed digest")
         XCTAssertEqual(outcome.report.importedCount, 1)
         XCTAssertEqual(try store.documentIndex.fetchParts(documentID: document.id).first?.normalizedText, "ORIGINAL-CANARY-42")
         XCTAssertFalse(try store.documentIndex.fetchParts(documentID: document.id).contains { $0.normalizedText.contains("MUTATED!") })
@@ -229,7 +230,7 @@ final class DocumentImportTests: XCTestCase {
         let source = sourceRoot.appendingPathComponent("database-failure.txt")
         let bytes = Data("DATABASE-FAILURE-CANARY".utf8)
         try bytes.write(to: source)
-        try store.database.writer.write { db in
+        try await store.database.writer.write { db in
             try db.execute(sql: """
                 CREATE TRIGGER acr_blob_insert_failure
                 BEFORE INSERT ON document_blobs

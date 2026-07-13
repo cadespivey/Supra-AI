@@ -65,6 +65,23 @@ final class BlobIntegrityServiceTests: XCTestCase {
         }
         XCTAssertEqual(try Data(contentsOf: fixture.storage.url(forManagedRelativePath: blob.managedRelativePath)), corrupt)
     }
+
+    func testACRBLOB011RepairAtomicallyReplacesCorruptDestination() throws {
+        // Expected RED: there was no verified repair path that could replace corrupt bytes without deleting the destination first.
+        let fixture = try Fixture()
+        let expected = Data("EXPECTED-ATOMIC-REPAIR".utf8)
+        let corrupt = Data("CORRUPT!-ATOMIC-REPAIR".utf8)
+        let blob = try fixture.insertBlob(id: "atomic-repair", bytes: expected, managedBytes: corrupt)
+        let reimport = fixture.base.appendingPathComponent("atomic-reimport.txt")
+        try expected.write(to: reimport)
+        let service = BlobIntegrityService(store: fixture.store, storage: fixture.storage)
+
+        let repaired = try service.repair(blobID: blob.id, reimportFrom: reimport)
+
+        XCTAssertEqual(repaired.state, .verified)
+        XCTAssertEqual(try Data(contentsOf: fixture.storage.url(forManagedRelativePath: blob.managedRelativePath)), expected)
+        XCTAssertNotEqual(try Data(contentsOf: fixture.storage.url(forManagedRelativePath: blob.managedRelativePath)), corrupt)
+    }
 }
 
 private struct Fixture {

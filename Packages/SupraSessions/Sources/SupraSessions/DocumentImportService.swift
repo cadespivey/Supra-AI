@@ -228,9 +228,9 @@ public final class DocumentImportService: @unchecked Sendable {
 
         // Copy + dedup the blob even for unsupported files so the instance can be
         // shown and managed; mark unsupported in the report.
-        let blob: DocumentBlobRecord
+        let managedBlob: ManagedImportedBlob
         do {
-            blob = try copyBlob(at: url)
+            managedBlob = try ingestBlob(at: url)
         } catch {
             report.items.append(DocumentImportReportItem(
                 displayName: displayName, sourceDisplayPath: sourceDisplayPath,
@@ -239,6 +239,7 @@ public final class DocumentImportService: @unchecked Sendable {
             ))
             return nil
         }
+        let blob = managedBlob.record
 
         let document = MatterDocumentRecord(
             matterID: matterID,
@@ -269,11 +270,10 @@ public final class DocumentImportService: @unchecked Sendable {
 
         // Extract, then OCR if needed.
         do {
-            var result = try await extraction.extract(fileURL: url)
+            var result = try await extraction.extract(fileURL: managedBlob.verifiedURL)
             if result.needsOCR, ocr != nil, let format {
-                let blobURL = storage.url(forManagedRelativePath: blob.managedRelativePath)
                 do {
-                    result = try await applyOCR(to: result, blobURL: blobURL, family: format.family)
+                    result = try await applyOCR(to: result, blobURL: managedBlob.verifiedURL, family: format.family)
                     _ = try? store.auditEvents.recordEvent(
                         matterID: matterID, eventType: "document_ocr_completed", actor: "system",
                         summary: "OCR completed for \(displayName)", relatedTable: "matter_documents", relatedID: document.id
@@ -287,7 +287,14 @@ public final class DocumentImportService: @unchecked Sendable {
                 }
             }
             try persistExtraction(result, documentID: document.id)
-            let disposition: DocumentImportDisposition = result.needsOCR ? .ocrNeeded : .imported
+            let disposition: DocumentImportDisposition
+            if result.needsOCR {
+                disposition = .ocrNeeded
+            } else if managedBlob.reused {
+                disposition = .duplicateBlobReused
+            } else {
+                disposition = .imported
+            }
             report.items.append(DocumentImportReportItem(
                 displayName: displayName, sourceDisplayPath: sourceDisplayPath,
                 disposition: disposition.rawValue,
@@ -506,28 +513,132 @@ public final class DocumentImportService: @unchecked Sendable {
         )
     }
 
-    private func copyBlob(at url: URL) throws -> DocumentBlobRecord {
-        let sha = try DocumentStorage.sha256Hex(ofFileAt: url)
-        if let existing = try store.documentLibrary.fetchBlob(sha256: sha) {
-            return existing
+    private struct ManagedImportedBlob {
+        let record: DocumentBlobRecord
+        let verifiedURL: URL
+        let reused: Bool
+    }
+
+    private func ingestBlob(at url: URL) throws -> ManagedImportedBlob {
+        let ingested: DocumentStorage.IngestResult
+        do {
+            ingested = try storage.ingest(source: url)
+        } catch let error as DocumentStorage.IntegrityError {
+            if case .corruptManagedBlob(let digest, _, let reason) = error,
+               let existing = try store.documentLibrary.fetchBlob(sha256: digest) {
+                // A row that points somewhere else may still be valid (for example,
+                // an older import kept a different extension). Prefer that verified
+                // identity; otherwise persist the typed corrupt state.
+                do {
+                    let verified = try storage.verifyManagedBlob(
+                        relativePath: existing.managedRelativePath,
+                        expectedSHA256: existing.sha256,
+                        expectedByteSize: existing.byteSize
+                    )
+                    try store.documentLibrary.updateBlobIntegrity(
+                        id: existing.id,
+                        status: .verified,
+                        verifiedAt: Date(),
+                        error: nil
+                    )
+                    let refreshed = try store.documentLibrary.fetchBlob(id: existing.id) ?? existing
+                    return ManagedImportedBlob(record: refreshed, verifiedURL: verified, reused: true)
+                } catch {
+                    try? store.documentLibrary.updateBlobIntegrity(
+                        id: existing.id,
+                        status: .corrupt,
+                        verifiedAt: nil,
+                        error: reason
+                    )
+                }
+            }
+            throw error
         }
-        let ext = url.pathExtension
-        let relativePath = DocumentStorage.blobRelativePath(sha256: sha, fileExtension: ext)
-        let destination = storage.url(forManagedRelativePath: relativePath)
-        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if !FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.copyItem(at: url, to: destination)
+
+        if let existing = try store.documentLibrary.fetchBlob(sha256: ingested.sha256) {
+            let verifiedURL: URL
+            do {
+                verifiedURL = try storage.verifyManagedBlob(
+                    relativePath: existing.managedRelativePath,
+                    expectedSHA256: existing.sha256,
+                    expectedByteSize: existing.byteSize
+                )
+            } catch let integrityError as DocumentStorage.IntegrityError {
+                let status: DocumentBlobIntegrityStatus
+                if case .missingManagedBlob = integrityError { status = .missing } else { status = .corrupt }
+                try? store.documentLibrary.updateBlobIntegrity(
+                    id: existing.id,
+                    status: status,
+                    verifiedAt: nil,
+                    error: Self.safeIntegrityReason(integrityError)
+                )
+                throw integrityError
+            }
+            try store.documentLibrary.updateBlobIntegrity(
+                id: existing.id,
+                status: .verified,
+                verifiedAt: Date(),
+                error: nil
+            )
+            if existing.managedRelativePath != ingested.managedRelativePath,
+               ingested.disposition == .installed {
+                // The unique sha row proves no database record can reference this
+                // alternate-extension path. It is safe to remove this new orphan.
+                try? FileManager.default.removeItem(at: ingested.managedURL)
+            }
+            let refreshed = try store.documentLibrary.fetchBlob(id: existing.id) ?? existing
+            return ManagedImportedBlob(record: refreshed, verifiedURL: verifiedURL, reused: true)
         }
-        let byteSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+
+        let now = Date()
         let result = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(
-                sha256: sha,
-                byteSize: byteSize,
-                originalExtension: ext,
-                managedRelativePath: relativePath
+                sha256: ingested.sha256,
+                byteSize: ingested.byteSize,
+                originalExtension: ingested.originalExtension,
+                managedRelativePath: ingested.managedRelativePath,
+                integrityStatus: DocumentBlobIntegrityStatus.verified.rawValue,
+                verifiedAt: now
             )
         )
-        return result.blob
+
+        // A concurrent writer may have won the unique-sha race between our read
+        // and upsert. Verify the returned row rather than trusting either path.
+        let verifiedURL = try storage.verifyManagedBlob(
+            relativePath: result.blob.managedRelativePath,
+            expectedSHA256: result.blob.sha256,
+            expectedByteSize: result.blob.byteSize
+        )
+        try store.documentLibrary.updateBlobIntegrity(
+            id: result.blob.id,
+            status: .verified,
+            verifiedAt: now,
+            error: nil
+        )
+        if result.reused,
+           result.blob.managedRelativePath != ingested.managedRelativePath,
+           ingested.disposition == .installed {
+            try? FileManager.default.removeItem(at: ingested.managedURL)
+        }
+        let refreshed = try store.documentLibrary.fetchBlob(id: result.blob.id) ?? result.blob
+        return ManagedImportedBlob(
+            record: refreshed,
+            verifiedURL: verifiedURL,
+            reused: result.reused || ingested.disposition == .reusedVerified
+        )
+    }
+
+    private static func safeIntegrityReason(_ error: DocumentStorage.IntegrityError) -> String {
+        switch error {
+        case .missingManagedBlob:
+            return "missing_managed_file"
+        case .corruptManagedBlob(_, _, let reason):
+            return reason
+        case .invalidManagedPath:
+            return "invalid_managed_path"
+        default:
+            return "managed_blob_verification_failed"
+        }
     }
 
     private func folder(

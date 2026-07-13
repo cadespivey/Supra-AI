@@ -52,6 +52,45 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
         }
     }
 
+    /// Fetches a deterministic, bounded page for integrity reconciliation.
+    /// IDs are opaque but stable and indexed by the primary key.
+    public func fetchBlobs(afterID: String? = nil, limit: Int) throws -> [DocumentBlobRecord] {
+        let boundedLimit = min(max(limit, 1), 200)
+        return try writer.read { db in
+            if let afterID {
+                return try DocumentBlobRecord.fetchAll(
+                    db,
+                    sql: "SELECT * FROM document_blobs WHERE id > ? ORDER BY id LIMIT ?",
+                    arguments: [afterID, boundedLimit]
+                )
+            }
+            return try DocumentBlobRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM document_blobs ORDER BY id LIMIT ?",
+                arguments: [boundedLimit]
+            )
+        }
+    }
+
+    public func updateBlobIntegrity(
+        id: String,
+        status: DocumentBlobIntegrityStatus,
+        verifiedAt: Date?,
+        error: String?
+    ) throws {
+        let boundedError = error.map { String($0.prefix(256)) }
+        try writer.write { db in
+            try db.execute(
+                sql: """
+                UPDATE document_blobs
+                SET integrity_status = ?, verified_at = ?, integrity_error = ?
+                WHERE id = ?
+                """,
+                arguments: [status.rawValue, verifiedAt, boundedError, id]
+            )
+        }
+    }
+
     /// Number of document instances (including soft-deleted) still referencing a
     /// blob. Used to decide when a blob can be physically removed.
     public func referenceCount(blobID: String) throws -> Int {
