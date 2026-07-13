@@ -64,6 +64,24 @@ run_case \
   "missing required field owner" \
   env SUPRA_CLAIMS_FILE="$missing_owner" bash "$verifier"
 
+hardcoded_release_version="${temporary_dir}/hardcoded-release-version.yml"
+awk '!changed && sub(/expected: "appcast-latest"/, "expected: \"2.2.0\"") { changed = 1 } { print }' \
+  "$claims" >"$hardcoded_release_version"
+run_case \
+  "a hardcoded published release version claim fails closed" \
+  1 \
+  "release-version claim must use appcast-latest" \
+  env SUPRA_CLAIMS_FILE="$hardcoded_release_version" bash "$verifier"
+
+stale_security_support="${temporary_dir}/stale-security-support.yml"
+awk '!changed && sub(/expected: "2.2.x"/, "expected: \"1.4.x\"") { changed = 1 } { print }' \
+  "$claims" >"$stale_security_support"
+run_case \
+  "a stale security support line fails closed" \
+  1 \
+  "security support claim expected 1.4.x, project marketing version resolves to 2.2.x" \
+  env SUPRA_CLAIMS_FILE="$stale_security_support" bash "$verifier"
+
 if (( failures != 0 )); then
   printf 'Product claims verifier tests failed: %d\n' "$failures" >&2
   exit 1

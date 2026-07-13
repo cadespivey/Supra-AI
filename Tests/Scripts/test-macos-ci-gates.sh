@@ -88,6 +88,64 @@ run_case \
   "migration sequence gap: expected v002, found v003" \
   bash "${scripts}/verify-migration-sequence.sh" "$migration_file"
 
+release_project="${temporary_dir}/release-project.pbxproj"
+release_appcast="${temporary_dir}/release-appcast.xml"
+release_constants="${temporary_dir}/release-constants.ts"
+printf '%s\n' \
+  'MARKETING_VERSION = 2.2.1;' \
+  'CURRENT_PROJECT_VERSION = 387;' \
+  'MARKETING_VERSION = 2.2.1;' \
+  'CURRENT_PROJECT_VERSION = 387;' \
+  'MARKETING_VERSION = 2.2.1;' \
+  'CURRENT_PROJECT_VERSION = 387;' \
+  'MARKETING_VERSION = 2.2.1;' \
+  'CURRENT_PROJECT_VERSION = 387;' >"$release_project"
+printf '%s\n' \
+  '<rss><channel><item>' \
+  '<sparkle:version>386</sparkle:version>' \
+  '<sparkle:shortVersionString>2.2.0</sparkle:shortVersionString>' \
+  '</item></channel></rss>' >"$release_appcast"
+printf '%s\n' \
+  'export const FALLBACK_RELEASE_TAG = "v2.2.0";' \
+  'export const FALLBACK_RELEASE_VERSION = "2.2.0";' >"$release_constants"
+
+run_case \
+  "a reviewed candidate may lead the published appcast" \
+  0 \
+  "Release version state passed: candidate 2.2.1 (387), published 2.2.0 (386)." \
+  bash "${scripts}/verify-release-version-state.sh" \
+    --project "$release_project" --appcast "$release_appcast" --constants "$release_constants"
+
+mixed_release_project="${temporary_dir}/mixed-release-project.pbxproj"
+sed '0,/CURRENT_PROJECT_VERSION = 387;/s//CURRENT_PROJECT_VERSION = 18;/' \
+  "$release_project" >"$mixed_release_project"
+run_case \
+  "mixed app and XPC candidate builds fail closed" \
+  1 \
+  "app and XPC build numbers must be one reviewed value" \
+  bash "${scripts}/verify-release-version-state.sh" \
+    --project "$mixed_release_project" --appcast "$release_appcast" --constants "$release_constants"
+
+stale_release_constants="${temporary_dir}/stale-release-constants.ts"
+sed 's/v2.2.0/v2.1.3/; s/"2.2.0"/"2.1.3"/' \
+  "$release_constants" >"$stale_release_constants"
+run_case \
+  "published fallback drift fails closed" \
+  1 \
+  "website fallback release metadata must match the newest appcast item" \
+  bash "${scripts}/verify-release-version-state.sh" \
+    --project "$release_project" --appcast "$release_appcast" --constants "$stale_release_constants"
+
+nonmonotonic_release_project="${temporary_dir}/nonmonotonic-release-project.pbxproj"
+sed 's/CURRENT_PROJECT_VERSION = 387;/CURRENT_PROJECT_VERSION = 386;/g' \
+  "$release_project" >"$nonmonotonic_release_project"
+run_case \
+  "a new marketing version requires a newer build" \
+  1 \
+  "candidate marketing version requires a build newer than the published appcast" \
+  bash "${scripts}/verify-release-version-state.sh" \
+    --project "$nonmonotonic_release_project" --appcast "$release_appcast" --constants "$release_constants"
+
 artifact_fixture="${temporary_dir}/artifacts"
 mkdir -p "${artifact_fixture}/Sources"
 printf 'ordinary source\n' >"${artifact_fixture}/Sources/Feature.swift"
