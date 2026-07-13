@@ -155,10 +155,13 @@ struct GroundedChatContext: Sendable, Equatable {
 /// open the in-app preview at the right page and highlight the cited passage.
 struct GroundedSourceRef: Sendable, Equatable {
     var label: String          // "S1", "S2", …
+    var sourceID: String
     var documentID: String
     var documentName: String
     var locator: DocumentSourceLocator
     var excerpt: String
+    var supportText: String
+    var lowConfidence: Bool
 }
 
 /// Grounds a matter chat in the matter's OWN documents. Inventory questions ("what's
@@ -283,6 +286,7 @@ final class MatterChatDocumentGrounding {
         let sources: [GroundingSource] = retrieved.enumerated().map { index, retrieved in
             let low = retrieved.ocrConfidence.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false
             return GroundingSource(
+                sourceID: "\(matterID)/\(retrieved.chunkID)",
                 label: "S\(index + 1)",
                 documentName: retrieved.documentName,
                 locatorDisplay: retrieved.locator.displayString,
@@ -295,10 +299,13 @@ final class MatterChatDocumentGrounding {
         let sourceRefs: [GroundedSourceRef] = retrieved.enumerated().map { index, retrieved in
             GroundedSourceRef(
                 label: "S\(index + 1)",
+                sourceID: "\(matterID)/\(retrieved.chunkID)",
                 documentID: retrieved.documentID,
                 documentName: retrieved.documentName,
                 locator: retrieved.locator,
-                excerpt: retrieved.excerpt
+                excerpt: retrieved.excerpt,
+                supportText: sources[index].packedText,
+                lowConfidence: sources[index].lowConfidence
             )
         }
 

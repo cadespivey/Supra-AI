@@ -52,12 +52,7 @@ public enum DocumentChronologyPromptBuilder {
             lines.append("- Output a narrative chronology in short dated paragraphs, each citing its source inline.")
         }
         lines.append("")
-        lines.append("SOURCES:")
-        for source in sources {
-            lines.append("[\(source.label)] \(source.documentName) (\(source.locatorDisplay)):")
-            lines.append(source.text)
-            lines.append("")
-        }
+        lines.append(contentsOf: UntrustedDocumentSourceEnvelope.promptLines(sources))
         lines.append("CHRONOLOGY:")
         return lines.joined(separator: "\n")
     }

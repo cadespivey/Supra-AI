@@ -118,16 +118,24 @@ public final class DocumentChronologyController: ObservableObject {
             }
             let prompt = DocumentChronologyPromptBuilder.build(sources: prepared.map(\.source), format: format)
             let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
-            let check = CitationCoverage.check(
-                answer: answer, availableLabels: prepared.map(\.source.label),
-                lowConfidenceLabels: Set(prepared.filter { $0.source.lowConfidence }.map(\.source.label)),
-                scopeFullyIndexed: readiness.isFullyReady
+            let verification = try DocumentSupportVerifier.verify(
+                answer: answer,
+                sources: prepared.map { item in
+                    DocumentSupportSource(
+                        sourceID: item.source.sourceID,
+                        label: item.source.label,
+                        locator: item.locatorJSON,
+                        text: item.source.packedText,
+                        lowConfidence: item.source.lowConfidence
+                    )
+                },
+                scopeFullyIndexed: readiness.isFullyReady && harvest.droppedCount == 0
             )
             let appendix = SourceAppendix(entries: prepared.map {
                 SourceAppendix.Entry(label: $0.source.label, documentName: $0.source.documentName, locatorDisplay: $0.source.locatorDisplay, excerpt: $0.source.excerpt, warnings: $0.warnings)
             })
-            let markdown = answer + "\n" + appendix.markdown()
-            let status: StructuredOutputStatus = check.requiresReview ? .needsReview : .complete
+            let markdown = verification.warningMarkdown + answer + "\n" + appendix.markdown()
+            let status: StructuredOutputStatus = verification.requiresReview ? .needsReview : .complete
 
             let outputID: String
             let parentVersionID: String?
@@ -135,18 +143,27 @@ public final class DocumentChronologyController: ObservableObject {
                 outputID = existingOutputID
                 let versions = (try? store.structuredOutputs.fetchVersions(structuredOutputID: existingOutputID)) ?? []
                 parentVersionID = versions.max(by: { $0.versionIndex < $1.versionIndex })?.id
-                try? store.structuredOutputs.updateStatus(outputID: existingOutputID, status: status)
             } else {
-                let output = try store.structuredOutputs.createOutput(matterID: matterID, title: "Chronology (\(format.rawValue))", outputType: format.outputType, status: status)
+                let output = try store.structuredOutputs.createOutput(
+                    matterID: matterID,
+                    title: "Chronology (\(format.rawValue))",
+                    outputType: format.outputType,
+                    status: .draft
+                )
                 outputID = output.id
                 parentVersionID = nil
             }
+            let sourceSetID = try prepareSourceSet(prepared: prepared, scope: scope)
             // versionIndex is computed atomically inside createVersion.
             let version = try store.structuredOutputs.createVersion(
                 structuredOutputID: outputID, contentMarkdown: markdown,
-                requiredSections: [], presentSections: [], missingSections: [], parentVersionID: parentVersionID
+                requiredSections: [], presentSections: [], missingSections: [], parentVersionID: parentVersionID,
+                verificationStatus: verification.verificationStatus,
+                verificationVersion: DocumentSupportVerifier.version,
+                verificationResults: verification.results,
+                sourceSetID: sourceSetID,
+                outputStatus: status
             )
-            try attachSources(prepared: prepared, scope: scope, versionID: version.id)
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "chronology_generated", actor: "runtime",
                 summary: "\(existingOutputID == nil ? "Generated" : "Regenerated") \(format.rawValue) chronology",
@@ -154,7 +171,9 @@ public final class DocumentChronologyController: ObservableObject {
             )
             let result = DocumentQAController.QAResult(
                 outputID: outputID, versionID: version.id, markdown: markdown, status: status.rawValue,
-                warnings: check.warnings, citationLabels: check.usedLabels, unsupported: check.appearsUnsupported
+                warnings: verification.warnings,
+                citationLabels: verification.usedLabels,
+                unsupported: verification.appearsUnsupported
             )
             lastResult = result
             return result
@@ -193,6 +212,7 @@ public final class DocumentChronologyController: ObservableObject {
                 let iso = ISO8601DateFormatter().string(from: metaDate)
                 prepared.append(PreparedSource(
                     source: GroundingSource(
+                        sourceID: "\(matterID)/\(document.id)#metadata-date",
                         label: label, documentName: document.displayName, locatorDisplay: "metadata date",
                         text: "Document metadata date: \(iso) (metadata date)", excerpt: iso, lowConfidence: false
                     ),
@@ -220,6 +240,7 @@ public final class DocumentChronologyController: ObservableObject {
                 let low = (chunk.ocrConfidence.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false)
                 prepared.append(PreparedSource(
                     source: GroundingSource(
+                        sourceID: "\(matterID)/\(chunk.id)",
                         label: label, documentName: document.displayName, locatorDisplay: locator.displayString,
                         text: chunk.normalizedText, excerpt: chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText), lowConfidence: low
                     ),
@@ -233,7 +254,9 @@ public final class DocumentChronologyController: ObservableObject {
         return (prepared, droppedCount)
     }
 
-    private func attachSources(prepared: [PreparedSource], scope: RetrievalScope, versionID: String) throws {
+    /// Leaves the source set pending until `createVersion` attaches it with the
+    /// provenance and output status in one transaction.
+    private func prepareSourceSet(prepared: [PreparedSource], scope: RetrievalScope) throws -> String {
         let scopeJSON = (try? JSONEncoder().encode(scope)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let sourceSet = try store.documentSources.createSourceSet(matterID: matterID, mode: .chronology, scopeJSON: scopeJSON, retrievalQuery: nil)
         let rows = prepared.map { source in
@@ -245,7 +268,7 @@ public final class DocumentChronologyController: ObservableObject {
             )
         }
         try store.documentSources.addOutputSources(rows)
-        try store.documentSources.attachSourceSet(id: sourceSet.id, structuredOutputVersionID: versionID)
+        return sourceSet.id
     }
 
     private func collect(prompt: String, modelID: ModelID, route: ModelRoute?) async throws -> String {

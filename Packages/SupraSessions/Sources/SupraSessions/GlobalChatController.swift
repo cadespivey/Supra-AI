@@ -665,23 +665,21 @@ public final class GlobalChatController: ObservableObject {
         return "\n" + lines.joined(separator: "\n")
     }
 
-    /// A warning footer for a grounded answer whose citations don't clear the coverage
-    /// bar — no inline `[S#]`, a label that doesn't resolve, or a still-indexing scope —
-    /// or nil when coverage is clean. Like the entity banner, the answer is always shown;
-    /// this only marks what the reader must verify.
-    nonisolated static func citationCoverageBanner(_ check: CitationCheckResult) -> String? {
-        guard check.requiresReview else { return nil }
-        let warnings = check.warnings
-        guard !warnings.isEmpty else { return nil }
+    /// A persistent, out-of-band warning for document-grounded chat. Generation
+    /// completion is only a transport state; this banner records whether each
+    /// proposition actually cleared deterministic source verification.
+    nonisolated static func documentSupportBanner(_ report: DocumentSupportReport) -> String? {
+        guard report.requiresReview else { return nil }
         var lines = [
             "",
             "---",
             "",
-            "⚠️ **Citation check — verify before relying on this answer.**"
+            "⚠️ **Document support check — verify before relying on this answer.**",
         ]
-        for warning in warnings {
-            lines.append("- \(warning)")
-        }
+        let warnings = report.warnings.isEmpty
+            ? ["Proposition support could not be established from the cited document text."]
+            : report.warnings
+        for warning in warnings { lines.append("- \(warning)") }
         return "\n" + lines.joined(separator: "\n")
     }
 
@@ -859,18 +857,31 @@ public final class GlobalChatController: ObservableObject {
                             streamedContent += banner
                         }
                     }
-                    // Citation-coverage check — the same bar the Documents-tab Q&A
-                    // enforces: a grounded answer with no inline [S#] citation, an
-                    // unresolved label, or one produced from a still-indexing scope is
-                    // flagged for review out-of-band, so the warning can't be dropped by
-                    // the model the way a soft in-prompt note can.
+                    // Proposition support check — resolved labels are structural only.
+                    // The warning is appended and persisted out-of-band so source text
+                    // cannot instruct the model to suppress it.
                     if !groundingSources.isEmpty {
-                        let coverage = CitationCoverage.check(
+                        let report = try? DocumentSupportVerifier.verify(
                             answer: answerText,
-                            availableLabels: groundingSources.map(\.label),
+                            sources: groundingSources.map { source in
+                                DocumentSupportSource(
+                                    sourceID: source.sourceID,
+                                    label: source.label,
+                                    locator: source.locator.encodedJSON(),
+                                    text: source.supportText,
+                                    lowConfidence: source.lowConfidence
+                                )
+                            },
                             scopeFullyIndexed: groundingScopeFullyIndexed
                         )
-                        if let banner = Self.citationCoverageBanner(coverage) {
+                        let banner = report.flatMap(Self.documentSupportBanner) ?? """
+
+                        ---
+
+                        ⚠️ **Document support check — verify before relying on this answer.**
+                        - Proposition verification could not be completed.
+                        """
+                        if report == nil || report?.requiresReview == true {
                             try? store.chats.appendToken(to: variant.id, token: banner)
                             streamedContent += banner
                         }

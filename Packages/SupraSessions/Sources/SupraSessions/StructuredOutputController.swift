@@ -199,6 +199,7 @@ public final class StructuredOutputController: ObservableObject {
             // passages and prepend them as cited grounding (mirrors Document Q&A).
             var groundedContext = context
             var prepared: [PreparedDocSource] = []
+            var scopeWasFullyIndexed = false
             let retrievalQuery = context.trimmingCharacters(in: .whitespacesAndNewlines)
             if let scope {
                 let readiness = scopeReadiness(scope: scope)
@@ -207,13 +208,15 @@ public final class StructuredOutputController: ObservableObject {
                     message = "The selected documents are still indexing (\(readiness.readyDocuments)/\(readiness.totalDocuments) ready). Try again once indexing finishes."
                     return false
                 }
+                scopeWasFullyIndexed = true
                 let result = try await retrieval.retrieve(matterID: matterID, query: retrievalQuery, scope: scope, limit: 10)
+                scopeWasFullyIndexed = scopeWasFullyIndexed && result.readiness.isFullyReady
                 prepared = result.sources.map { PreparedDocSource(label: "S\($0.rank + 1)", source: $0) }
                 guard !prepared.isEmpty else {
                     message = "No matching content was found in the selected documents."
                     return false
                 }
-                groundedContext = Self.groundingBlock(prepared) + "\n\n---\n\nADDITIONAL CONTEXT:\n" + context
+                groundedContext = groundingBlock(prepared) + "\n\n---\n\nADDITIONAL CONTEXT:\n" + context
             }
 
             let prompt = try StructuredOutputPromptBuilder.buildPrompt(for: contract, context: groundedContext)
@@ -226,24 +229,50 @@ public final class StructuredOutputController: ObservableObject {
             // ungrounded. Force review and flag it so it can never read as verified
             // good law. ([S1]-style document labels are not legal citations and are
             // not affected.)
-            let (markdown, status) = Self.guardUnverifiedCitations(
+            let (guardedMarkdown, status) = Self.guardUnverifiedCitations(
                 in: rawMarkdown,
                 type: type,
                 status: analysis.missing.isEmpty ? .complete : .needsReview
             )
+            let verification: DocumentSupportReport?
+            if scope != nil {
+                verification = try DocumentSupportVerifier.verify(
+                    answer: rawMarkdown,
+                    sources: prepared.map { supportSource(for: $0) },
+                    scopeFullyIndexed: scopeWasFullyIndexed
+                )
+            } else {
+                verification = nil
+            }
+            let finalStatus: StructuredOutputStatus = if verification?.requiresReview == true {
+                .needsReview
+            } else {
+                status
+            }
+            let markdown = (verification?.warningMarkdown ?? "") + guardedMarkdown
 
             let output = try store.structuredOutputs.createOutput(
                 matterID: matterID, title: contract.title, outputType: type,
-                chatID: chatID, researchSessionID: researchSessionID, status: status
+                chatID: chatID,
+                researchSessionID: researchSessionID,
+                status: scope == nil ? finalStatus : .draft
             )
-            let version = try store.structuredOutputs.createVersion(
+            let sourceSetID: String?
+            if let scope, !prepared.isEmpty {
+                sourceSetID = try prepareDocumentSourceSet(prepared, scope: scope, query: retrievalQuery)
+            } else {
+                sourceSetID = nil
+            }
+            _ = try store.structuredOutputs.createVersion(
                 structuredOutputID: output.id, contentMarkdown: markdown,
                 requiredSections: contract.requiredHeadings,
-                presentSections: analysis.present, missingSections: analysis.missing
+                presentSections: analysis.present, missingSections: analysis.missing,
+                verificationStatus: verification?.verificationStatus ?? .legacyUnverified,
+                verificationVersion: verification.map { _ in DocumentSupportVerifier.version },
+                verificationResults: verification?.results,
+                sourceSetID: sourceSetID,
+                outputStatus: scope == nil ? nil : finalStatus
             )
-            if let scope, !prepared.isEmpty {
-                try? attachDocumentSources(prepared, scope: scope, query: retrievalQuery, versionID: version.id)
-            }
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "structured_output_created", actor: "runtime",
                 summary: "Created \(contract.title)\(scope == nil ? "" : " grounded in \(prepared.count) document source(s)")",
@@ -316,19 +345,40 @@ public final class StructuredOutputController: ObservableObject {
     }
 
     /// Formats retrieved passages as a cited grounding block for the prompt.
-    private static func groundingBlock(_ prepared: [PreparedDocSource]) -> String {
-        var lines = ["SOURCE DOCUMENTS — ground your analysis in these and cite them inline as [S1], [S2], … wherever you rely on them:", ""]
-        for item in prepared {
-            lines.append("[\(item.label)] \(item.source.documentName) — \(item.source.locator.displayString)")
-            lines.append(item.source.text)
-            lines.append("")
-        }
-        return lines.joined(separator: "\n")
+    private func groundingBlock(_ prepared: [PreparedDocSource]) -> String {
+        let sources = prepared.map { groundingSource(for: $0) }
+        return "SOURCE DOCUMENTS — ground your analysis in these and cite them inline as [S1], [S2], … wherever you rely on them:\n\n"
+            + DocumentQAPromptBuilder.buildSourceDataBlock(sources: sources)
+    }
+
+    private func groundingSource(for item: PreparedDocSource) -> GroundingSource {
+        let lowConfidence = item.source.ocrConfidence.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false
+        return GroundingSource(
+            sourceID: "\(matterID)/\(item.source.chunkID)",
+            label: item.label,
+            documentName: item.source.documentName,
+            locatorDisplay: item.source.locator.displayString,
+            text: item.source.text,
+            excerpt: item.source.excerpt,
+            lowConfidence: lowConfidence,
+            metadata: item.source.metadata
+        )
+    }
+
+    private func supportSource(for item: PreparedDocSource) -> DocumentSupportSource {
+        let source = groundingSource(for: item)
+        return DocumentSupportSource(
+            sourceID: source.sourceID,
+            label: source.label,
+            locator: item.source.locator.encodedJSON(),
+            text: source.packedText,
+            lowConfidence: source.lowConfidence
+        )
     }
 
     /// Persists the grounding sources as a version-scoped source set (mirrors
     /// DocumentQAController.attachSources), so the output records what it cited.
-    private func attachDocumentSources(_ prepared: [PreparedDocSource], scope: RetrievalScope, query: String, versionID: String) throws {
+    private func prepareDocumentSourceSet(_ prepared: [PreparedDocSource], scope: RetrievalScope, query: String) throws -> String {
         let scopeJSON = (try? JSONEncoder().encode(scope)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let sourceSet = try store.documentSources.createSourceSet(
             matterID: matterID, mode: .autoSource, scopeJSON: scopeJSON, retrievalQuery: query
@@ -341,7 +391,7 @@ public final class StructuredOutputController: ObservableObject {
             )
         }
         try store.documentSources.addOutputSources(rows)
-        try store.documentSources.attachSourceSet(id: sourceSet.id, structuredOutputVersionID: versionID)
+        return sourceSet.id
     }
 
     /// Re-runs the structure-repair prompt for an output: preserves the prior
@@ -403,9 +453,15 @@ public final class StructuredOutputController: ObservableObject {
               let active = activeVersion(for: record),
               let contract = StructuredOutputContracts.contract(for: type) else { return nil }
         do {
-            let prompt = try StructuredOutputPromptBuilder.buildRepairPrompt(
+            let priorSourceSet = try store.documentSources.fetchSourceSet(structuredOutputVersionID: active.id)
+            let persistedPacket = try priorSourceSet.flatMap { try persistedDocumentPacket(sourceSet: $0) }
+            var prompt = try StructuredOutputPromptBuilder.buildRepairPrompt(
                 originalOutput: active.contentMarkdown, requiredHeadings: contract.requiredHeadings
             )
+            if let persistedPacket {
+                prompt += "\n\nPreserve factual grounding using only this authoritative source packet:\n\n"
+                    + DocumentQAPromptBuilder.buildSourceDataBlock(sources: persistedPacket.groundingSources)
+            }
             var resolvedRoute = route ?? ModelRouter().repairRoute(forStructuredOutput: type)
             if let current = resolvedRoute?.options.maxOutputTokens {
                 resolvedRoute?.options.maxOutputTokens = max(current, Self.structuredOutputMinOutputTokens)
@@ -426,18 +482,42 @@ public final class StructuredOutputController: ObservableObject {
             // Monotonic citation guard: if the prior version was flagged for ungrounded
             // citations, keep it flagged even if this pass's citation evades the regex.
             let priorWasCitationFlagged = active.contentMarkdown.contains("UNVERIFIED CITATIONS")
-            let (repaired, status) = Self.guardUnverifiedCitations(
+            let (guardedRepaired, status) = Self.guardUnverifiedCitations(
                 in: rawRepaired, type: type,
                 status: analysis.missing.isEmpty ? .complete : .needsReview,
                 forceFlag: priorWasCitationFlagged
             )
+            let verification: DocumentSupportReport?
+            if priorSourceSet != nil {
+                verification = try DocumentSupportVerifier.verify(
+                    answer: rawRepaired,
+                    sources: persistedPacket?.supportSources ?? [],
+                    scopeFullyIndexed: persistedPacket != nil
+                )
+            } else {
+                verification = nil
+            }
+            let finalStatus: StructuredOutputStatus = verification?.requiresReview == true
+                || (priorSourceSet != nil && active.verificationStatus != OutputVerificationStatus.allSupported.rawValue)
+                ? .needsReview
+                : status
+            let repaired = (verification?.warningMarkdown ?? "") + guardedRepaired
+            let sourceSetID = try persistedPacket.map(cloneDocumentSourceSet)
             _ = try store.structuredOutputs.createVersion(
                 structuredOutputID: outputID, contentMarkdown: repaired,
                 requiredSections: contract.requiredHeadings, presentSections: analysis.present,
                 missingSections: analysis.missing, parentVersionID: active.id,
-                repairReason: "missing_required_sections", makeActive: true
+                repairReason: "missing_required_sections",
+                verificationStatus: verification?.verificationStatus ?? .legacyUnverified,
+                verificationVersion: verification.map { _ in DocumentSupportVerifier.version },
+                verificationResults: verification?.results,
+                sourceSetID: sourceSetID,
+                outputStatus: priorSourceSet == nil ? nil : finalStatus,
+                makeActive: true
             )
-            try? store.structuredOutputs.updateStatus(outputID: outputID, status: status)
+            if priorSourceSet == nil {
+                try? store.structuredOutputs.updateStatus(outputID: outputID, status: finalStatus)
+            }
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "structured_output_repaired", actor: "runtime",
                 summary: "Repaired \(record.title)", relatedTable: "structured_outputs", relatedID: outputID
@@ -458,6 +538,77 @@ public final class StructuredOutputController: ObservableObject {
 
     private func outputRecord(_ outputID: String) -> StructuredOutputRecord? {
         (try? store.structuredOutputs.fetchOutputs(matterID: matterID))?.first { $0.id == outputID }
+    }
+
+    private struct PersistedDocumentPacket {
+        let sourceSet: DocumentSourceSetRecord
+        let rows: [DocumentOutputSourceRecord]
+        let groundingSources: [GroundingSource]
+        let supportSources: [DocumentSupportSource]
+    }
+
+    /// Reconstructs a conservative repair packet from the exact excerpts and
+    /// locators persisted with the prior version. Any matter mismatch fails the
+    /// packet, which makes repair provenance review-required.
+    private func persistedDocumentPacket(sourceSet: DocumentSourceSetRecord) throws -> PersistedDocumentPacket? {
+        guard sourceSet.matterID == matterID else { return nil }
+        let rows = try store.documentSources.fetchSources(sourceSetID: sourceSet.id)
+        guard !rows.isEmpty else { return nil }
+        let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
+        let documentIDs = Set(documents.map(\.id))
+        let names = Dictionary(documents.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+        guard rows.allSatisfy({ row in row.documentID.map(documentIDs.contains) ?? false }) else { return nil }
+
+        let grounding = rows.map { row in
+            GroundingSource(
+                sourceID: "\(matterID)/\(row.chunkID ?? row.id)",
+                label: row.citationLabel,
+                documentName: row.documentID.flatMap { names[$0] } ?? "Document",
+                locatorDisplay: (try? JSONDecoder().decode(DocumentSourceLocator.self, from: Data(row.locatorJSON.utf8)))?.displayString ?? row.locatorJSON,
+                text: row.excerpt,
+                excerpt: row.excerpt,
+                lowConfidence: row.warningsJSON?.localizedCaseInsensitiveContains("low OCR") == true
+            )
+        }
+        let support = zip(rows, grounding).map { row, source in
+            DocumentSupportSource(
+                sourceID: source.sourceID,
+                label: source.label,
+                locator: row.locatorJSON,
+                text: source.packedText,
+                lowConfidence: source.lowConfidence
+            )
+        }
+        return PersistedDocumentPacket(
+            sourceSet: sourceSet,
+            rows: rows,
+            groundingSources: grounding,
+            supportSources: support
+        )
+    }
+
+    private func cloneDocumentSourceSet(_ packet: PersistedDocumentPacket) throws -> String {
+        let mode = DocumentSourceSetMode(rawValue: packet.sourceSet.mode) ?? .autoSource
+        let clone = try store.documentSources.createSourceSet(
+            matterID: matterID,
+            mode: mode,
+            scopeJSON: packet.sourceSet.scopeJSON,
+            retrievalQuery: packet.sourceSet.retrievalQuery,
+            retrievalDepth: packet.sourceSet.retrievalDepth
+        )
+        try store.documentSources.addOutputSources(packet.rows.map { row in
+            DocumentOutputSourceRecord(
+                sourceSetID: clone.id,
+                documentID: row.documentID,
+                chunkID: row.chunkID,
+                citationLabel: row.citationLabel,
+                locatorJSON: row.locatorJSON,
+                excerpt: row.excerpt,
+                rank: row.rank,
+                warningsJSON: row.warningsJSON
+            )
+        })
+        return clone.id
     }
 
     private func activeVersion(for record: StructuredOutputRecord) -> StructuredOutputVersionRecord? {

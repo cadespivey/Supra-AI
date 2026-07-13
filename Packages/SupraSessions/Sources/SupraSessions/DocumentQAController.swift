@@ -115,20 +115,18 @@ public final class DocumentQAController: ObservableObject {
             let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: trimmed, sources: groundingSources, mode: mode)
             let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
 
-            let lowConfidence = Set(prepared.filter { $0.source.lowConfidence }.map(\.source.label))
-            let check = CitationCoverage.check(
+            let verification = try verify(
                 answer: answer,
-                availableLabels: groundingSources.map(\.label),
-                lowConfidenceLabels: lowConfidence,
+                prepared: prepared,
                 scopeFullyIndexed: readiness.isFullyReady
             )
             let appendix = makeAppendix(prepared)
-            let markdown = answer + "\n" + appendix.markdown()
-            let status: StructuredOutputStatus = check.requiresReview ? .needsReview : .complete
+            let markdown = verification.warningMarkdown + answer + "\n" + appendix.markdown()
+            let status: StructuredOutputStatus = verification.requiresReview ? .needsReview : .complete
 
             let result = try persist(
                 question: trimmed, scope: scope, mode: mode, markdown: markdown,
-                prepared: prepared, status: status, check: check,
+                prepared: prepared, status: status, verification: verification,
                 sourceMode: isGuided ? .guided : .autoSource, depth: effectiveDepth
             )
             lastResult = result
@@ -207,6 +205,7 @@ public final class DocumentQAController: ObservableObject {
             let low = (retrieved.ocrConfidence.map { $0 < lowConfidenceThreshold } ?? false)
             return PreparedSource(
                 source: GroundingSource(
+                    sourceID: "\(matterID)/\(retrieved.chunkID)",
                     label: "S\(index + 1)", documentName: retrieved.documentName,
                     locatorDisplay: retrieved.locator.displayString, text: retrieved.text,
                     excerpt: retrieved.excerpt, lowConfidence: low, metadata: retrieved.metadata
@@ -326,6 +325,7 @@ public final class DocumentQAController: ObservableObject {
                 let low = (chunk.ocrConfidence.map { $0 < lowConfidenceThreshold } ?? false)
                 return PreparedSource(
                     source: GroundingSource(
+                        sourceID: "\(matterID)/\(chunk.id)",
                         label: "S\(index + 1)", documentName: nameByID[chunk.documentID] ?? "Document",
                         locatorDisplay: locator.displayString, text: chunk.normalizedText,
                         excerpt: chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText), lowConfidence: low
@@ -348,23 +348,41 @@ public final class DocumentQAController: ObservableObject {
 
     private func persist(
         question: String, scope: RetrievalScope, mode: DocumentAnswerMode, markdown: String,
-        prepared: [PreparedSource], status: StructuredOutputStatus, check: CitationCheckResult,
+        prepared: [PreparedSource], status: StructuredOutputStatus, verification: DocumentSupportReport,
         sourceMode: DocumentSourceSetMode, depth: RetrievalDepth
     ) throws -> QAResult {
         let title = "Q&A: \(question.prefix(60))"
-        let output = try store.structuredOutputs.createOutput(matterID: matterID, title: String(title), outputType: mode.outputType, status: status)
+        let output = try store.structuredOutputs.createOutput(
+            matterID: matterID,
+            title: String(title),
+            outputType: mode.outputType,
+            status: .draft
+        )
+        let sourceSetID = try prepareSourceSet(
+            prepared: prepared,
+            scope: scope,
+            question: question,
+            mode: sourceMode,
+            depth: depth
+        )
         let version = try store.structuredOutputs.createVersion(
             structuredOutputID: output.id, contentMarkdown: markdown,
-            requiredSections: [], presentSections: [], missingSections: []
+            requiredSections: [], presentSections: [], missingSections: [],
+            verificationStatus: verification.verificationStatus,
+            verificationVersion: DocumentSupportVerifier.version,
+            verificationResults: verification.results,
+            sourceSetID: sourceSetID,
+            outputStatus: status
         )
-        try attachSources(prepared: prepared, scope: scope, question: question, mode: sourceMode, versionID: version.id, depth: depth)
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "qa_generated", actor: "runtime",
             summary: "Generated document Q&A", relatedTable: "structured_outputs", relatedID: output.id
         )
         return QAResult(
             outputID: output.id, versionID: version.id, markdown: markdown, status: status.rawValue,
-            warnings: check.warnings, citationLabels: check.usedLabels, unsupported: check.appearsUnsupported,
+            warnings: verification.warnings,
+            citationLabels: verification.usedLabels,
+            unsupported: verification.appearsUnsupported,
             depth: depth
         )
     }
@@ -402,25 +420,47 @@ public final class DocumentQAController: ObservableObject {
             guard !prepared.isEmpty else { message = "No matching sources were found."; return nil }
             let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: question, sources: prepared.map(\.source), mode: mode)
             let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
-            let lowConfidence = Set(prepared.filter { $0.source.lowConfidence }.map(\.source.label))
-            let check = CitationCoverage.check(answer: answer, availableLabels: prepared.map(\.source.label), lowConfidenceLabels: lowConfidence, scopeFullyIndexed: readiness.isFullyReady)
-            let markdown = answer + "\n" + makeAppendix(prepared).markdown()
-            let status: StructuredOutputStatus = check.requiresReview ? .needsReview : .complete
+            let verification = try verify(
+                answer: answer,
+                prepared: prepared,
+                scopeFullyIndexed: readiness.isFullyReady
+            )
+            let markdown = verification.warningMarkdown + answer + "\n" + makeAppendix(prepared).markdown()
+            let status: StructuredOutputStatus = verification.requiresReview ? .needsReview : .complete
 
             let existingVersions = (try? store.structuredOutputs.fetchVersions(structuredOutputID: outputID)) ?? []
             let parentVersionID = existingVersions.max(by: { $0.versionIndex < $1.versionIndex })?.id
+            let sourceSetID = try prepareSourceSet(
+                prepared: prepared,
+                scope: scope,
+                question: question,
+                mode: isGuided ? .guided : .autoSource,
+                depth: depth
+            )
             let version = try store.structuredOutputs.createVersion(
                 structuredOutputID: outputID, contentMarkdown: markdown,
                 requiredSections: [], presentSections: [], missingSections: [],
-                parentVersionID: parentVersionID
+                parentVersionID: parentVersionID,
+                verificationStatus: verification.verificationStatus,
+                verificationVersion: DocumentSupportVerifier.version,
+                verificationResults: verification.results,
+                sourceSetID: sourceSetID,
+                outputStatus: status
             )
-            try? store.structuredOutputs.updateStatus(outputID: outputID, status: status)
-            try attachSources(prepared: prepared, scope: scope, question: question, mode: isGuided ? .guided : .autoSource, versionID: version.id, depth: depth)
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "qa_generated", actor: "runtime",
                 summary: "Regenerated document Q&A", relatedTable: "structured_outputs", relatedID: outputID
             )
-            let result = QAResult(outputID: outputID, versionID: version.id, markdown: markdown, status: status.rawValue, warnings: check.warnings, citationLabels: check.usedLabels, unsupported: check.appearsUnsupported, depth: depth)
+            let result = QAResult(
+                outputID: outputID,
+                versionID: version.id,
+                markdown: markdown,
+                status: status.rawValue,
+                warnings: verification.warnings,
+                citationLabels: verification.usedLabels,
+                unsupported: verification.appearsUnsupported,
+                depth: depth
+            )
             lastResult = result
             return result
         } catch {
@@ -429,7 +469,30 @@ public final class DocumentQAController: ObservableObject {
         }
     }
 
-    private func attachSources(prepared: [PreparedSource], scope: RetrievalScope, question: String, mode: DocumentSourceSetMode, versionID: String, depth: RetrievalDepth) throws {
+    private func verify(
+        answer: String,
+        prepared: [PreparedSource],
+        scopeFullyIndexed: Bool
+    ) throws -> DocumentSupportReport {
+        try DocumentSupportVerifier.verify(
+            answer: answer,
+            sources: prepared.map { item in
+                DocumentSupportSource(
+                    sourceID: item.source.sourceID,
+                    label: item.source.label,
+                    locator: item.locatorJSON,
+                    text: item.source.packedText,
+                    lowConfidence: item.source.lowConfidence
+                )
+            },
+            scopeFullyIndexed: scopeFullyIndexed
+        )
+    }
+
+    /// Creates a pending, matter-scoped source set. `createVersion` attaches it
+    /// together with provenance, active version, and output status in one database
+    /// transaction.
+    private func prepareSourceSet(prepared: [PreparedSource], scope: RetrievalScope, question: String, mode: DocumentSourceSetMode, depth: RetrievalDepth) throws -> String {
         let scopeJSON = (try? JSONEncoder().encode(scope)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let sourceSet = try store.documentSources.createSourceSet(
             matterID: matterID, mode: mode, scopeJSON: scopeJSON, retrievalQuery: question,
@@ -444,7 +507,7 @@ public final class DocumentQAController: ObservableObject {
             )
         }
         try store.documentSources.addOutputSources(rows)
-        try store.documentSources.attachSourceSet(id: sourceSet.id, structuredOutputVersionID: versionID)
+        return sourceSet.id
     }
 
     private func collect(prompt: String, modelID: ModelID, route: ModelRoute?) async throws -> String {
