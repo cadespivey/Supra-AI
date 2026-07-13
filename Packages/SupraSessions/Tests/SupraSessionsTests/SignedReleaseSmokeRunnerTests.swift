@@ -6,38 +6,52 @@ import SupraRuntimeInterface
 import XCTest
 
 /// RED: these contracts intentionally do not compile until the repository owns a
-/// signed-release runner and a content-free, source/app/model-bound report.
+/// signed-release runner and a strict, content-free source/app/model attestation.
 final class SignedReleaseSmokeRunnerTests: XCTestCase {
-    private let expectedModelSHA256 = "9403244220818d3139ea6d154268eb9395647d8513617be7f403569a90999489"
-    private let tokenCanary = "PRIVATE-GENERATED-TOKEN-CANARY"
+    private static let fixedPrompt =
+        "Return one short sentence confirming that local model inference is operational."
+    private static let fixedSystemPrompt =
+        "This is a local release validation. Reply briefly and do not repeat sensitive data."
+    private static let generatedTokenCanary =
+        "PRIVATE-GENERATED-TOKEN-CANARY-DO-NOT-ATTEST"
+    private static let generatedTokenCount = 7
+    private static let loadTimeMs = 123
+    private static let firstTokenLatencyMs = 45
+    private static let tokensPerSecond = 12.5
 
-    func testRunUsesFixedRequestAndReturnsContentFreeBoundAttestation() async throws {
+    private let expectedModelSHA256 =
+        "9403244220818d3139ea6d154268eb9395647d8513617be7f403569a90999489"
+    private let sourceSha = String(repeating: "1", count: 40)
+    private let appTreeSHA256 = String(repeating: "2", count: 64)
+    private let nonce = String(repeating: "3", count: 64)
+
+    func testRunUsesExactProductionSequenceAndReturnsStrictContentFreeAttestation() async throws {
         let fixture = try makeFixture()
         let authorization = try authorize(fixture)
-        let generatedTokenCanary = tokenCanary
         let client = SignedSmokeRuntimeClientFake(
             stream: { request in
-                Self.stream(events: Self.validEvents(for: request, token: generatedTokenCanary))
+                Self.stream(events: Self.validEvents(for: request))
             }
         )
-        let runner = SignedReleaseSmokeRunner(runtimeClient: client)
-
-        let report: SignedReleaseSmokeReport = try await runner.run(
+        let runner = SignedReleaseSmokeRunner(
+            runtimeClient: client,
             authorization: authorization,
-            binding: binding
+            metadata: metadata
         )
+
+        let attestation: SignedReleaseSmokeAttestation = try await runner.run()
+
+        XCTAssertEqual(client.calls, ["connect", "load", "generate", "unload"])
+        XCTAssertEqual(client.connectCallCount, 1)
+        XCTAssertEqual(client.loadCallCount, 1)
+        XCTAssertEqual(client.generateCallCount, 1)
+        XCTAssertEqual(client.unloadCallCount, 1)
 
         let request = try XCTUnwrap(client.generateRequests.first)
         let loadRequest = try XCTUnwrap(client.loadRequests.first)
         XCTAssertEqual(request.modelID, loadRequest.modelID)
-        XCTAssertEqual(
-            request.prompt,
-            "Return one short sentence confirming that local model inference is operational."
-        )
-        XCTAssertEqual(
-            request.systemPrompt,
-            "This is a local release validation. Reply briefly and do not repeat sensitive data."
-        )
+        XCTAssertEqual(request.prompt, Self.fixedPrompt)
+        XCTAssertEqual(request.systemPrompt, Self.fixedSystemPrompt)
         XCTAssertEqual(request.history.count, 0)
         XCTAssertEqual(
             request.options,
@@ -53,54 +67,148 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(report.schemaVersion, 1)
-        XCTAssertEqual(report.status, "passed")
-        XCTAssertEqual(report.sourceSHA, binding.sourceSHA)
-        XCTAssertEqual(report.appTreeSHA256, binding.appTreeSHA256)
-        XCTAssertEqual(report.modelSHA256, expectedModelSHA256)
-        XCTAssertEqual(report.nonce, binding.nonce)
-        XCTAssertEqual(report.appBundleIdentifier, binding.appBundleIdentifier)
-        XCTAssertEqual(report.xpcBundleIdentifier, binding.xpcBundleIdentifier)
-        XCTAssertEqual(report.appVersion, binding.appVersion)
-        XCTAssertEqual(report.appBuild, binding.appBuild)
-        XCTAssertEqual(report.modelRepositoryID, "mlx-community/Release-Smoke-4bit")
-        XCTAssertEqual(report.modelRevision, String(repeating: "a", count: 40))
-        XCTAssertEqual(report.generationStartedEvents, 1)
-        XCTAssertEqual(report.tokenEvents, 1)
-        XCTAssertEqual(report.generationCompletedEvents, 1)
-        XCTAssertEqual(report.generationFailedEvents, 0)
-        XCTAssertEqual(report.generationCancelledEvents, 0)
-        XCTAssertEqual(report.generatedTokens, 1)
-        XCTAssertTrue(report.modelVerifiedBeforeLoad)
-        XCTAssertTrue(report.modelVerifiedAfterUnload)
-        XCTAssertTrue(report.unloaded)
-        XCTAssertGreaterThanOrEqual(report.durationMilliseconds, 0)
-        XCTAssertEqual(client.unloadCallCount, 1)
+        let encoded = try JSONEncoder().encode(attestation)
+        let object = try jsonObject(encoded)
+        XCTAssertEqual(
+            Set(object.keys),
+            Set([
+                "schemaVersion",
+                "status",
+                "nonce",
+                "sourceSha",
+                "appTreeSHA256",
+                "modelSHA256",
+                "appBundleIdentifier",
+                "xpcBundleIdentifier",
+                "appVersion",
+                "appBuild",
+                "modelRepositoryID",
+                "modelRevision",
+                "verification",
+                "eventCounts",
+                "generatedTokenCount",
+                "timings",
+            ])
+        )
+        XCTAssertEqual(object["schemaVersion"] as? Int, 1)
+        XCTAssertEqual(object["status"] as? String, "passed")
+        XCTAssertEqual(object["nonce"] as? String, nonce)
+        XCTAssertEqual(object["sourceSha"] as? String, sourceSha)
+        XCTAssertEqual(object["appTreeSHA256"] as? String, appTreeSHA256)
+        XCTAssertEqual(object["modelSHA256"] as? String, expectedModelSHA256)
+        XCTAssertEqual(object["appBundleIdentifier"] as? String, "ai.supra.SupraAI")
+        XCTAssertEqual(
+            object["xpcBundleIdentifier"] as? String,
+            "ai.supra.SupraAI.SupraRuntimeService"
+        )
+        XCTAssertEqual(object["appVersion"] as? String, "2.2.1")
+        XCTAssertEqual(object["appBuild"] as? String, "387")
+        XCTAssertEqual(
+            object["modelRepositoryID"] as? String,
+            "mlx-community/Release-Smoke-4bit"
+        )
+        XCTAssertEqual(object["modelRevision"] as? String, String(repeating: "a", count: 40))
+        XCTAssertEqual(object["generatedTokenCount"] as? Int, Self.generatedTokenCount)
 
-        let encoded = try JSONEncoder().encode(report)
+        let verification = try nestedObject(object, key: "verification")
+        XCTAssertEqual(
+            Set(verification.keys),
+            Set([
+                "xpcConnected",
+                "modelLoaded",
+                "generationStarted",
+                "generationCompleted",
+                "modelUnloaded",
+                "modelReverified",
+            ])
+        )
+        for key in verification.keys {
+            XCTAssertEqual(verification[key] as? Bool, true, "\(key) must be true")
+        }
+
+        let eventCounts = try nestedObject(object, key: "eventCounts")
+        XCTAssertEqual(
+            Set(eventCounts.keys),
+            Set([
+                "total",
+                "generationStarted",
+                "token",
+                "metrics",
+                "generationCompleted",
+                "generationFailed",
+                "generationCancelled",
+                "reserved",
+            ])
+        )
+        XCTAssertEqual(eventCounts["total"] as? Int, 4)
+        XCTAssertEqual(eventCounts["generationStarted"] as? Int, 1)
+        XCTAssertEqual(eventCounts["token"] as? Int, 1)
+        XCTAssertEqual(eventCounts["metrics"] as? Int, 1)
+        XCTAssertEqual(eventCounts["generationCompleted"] as? Int, 1)
+        XCTAssertEqual(eventCounts["generationFailed"] as? Int, 0)
+        XCTAssertEqual(eventCounts["generationCancelled"] as? Int, 0)
+        XCTAssertEqual(eventCounts["reserved"] as? Int, 0)
+
+        let timings = try nestedObject(object, key: "timings")
+        XCTAssertEqual(
+            Set(timings.keys),
+            Set(["loadTimeMs", "firstTokenLatencyMs", "tokensPerSecond"])
+        )
+        XCTAssertEqual(timings["loadTimeMs"] as? Int, Self.loadTimeMs)
+        XCTAssertEqual(timings["firstTokenLatencyMs"] as? Int, Self.firstTokenLatencyMs)
+        XCTAssertEqual(timings["tokensPerSecond"] as? Double, Self.tokensPerSecond)
+
         let json = try XCTUnwrap(String(data: encoded, encoding: .utf8))
-        XCTAssertNil(json.range(of: generatedTokenCanary))
-        XCTAssertNil(json.range(of: request.prompt))
-        XCTAssertNil(json.range(of: request.systemPrompt ?? "missing-system-prompt"))
+        for forbiddenKey in [
+            "modelPath",
+            "managedRootPath",
+            "modelBookmark",
+            "modelDirectoryIdentity",
+            "device",
+            "inode",
+            "prompt",
+            "systemPrompt",
+            "history",
+            "tokenText",
+            "message",
+            "error",
+            "technicalDetails",
+        ] {
+            XCTAssertNil(json.range(of: "\"\(forbiddenKey)\""))
+        }
+        XCTAssertNil(json.range(of: Self.generatedTokenCanary))
+        XCTAssertNil(json.range(of: Self.fixedPrompt))
+        XCTAssertNil(json.range(of: Self.fixedSystemPrompt))
+        XCTAssertNil(json.range(of: fixture.modelDirectory.path))
+        XCTAssertNil(json.range(of: "protected-release-weight-canary"))
+        if let bookmark = loadRequest.modelBookmark?.base64EncodedString() {
+            XCTAssertNil(json.range(of: bookmark))
+        }
     }
 
     func testMalformedEventSequencesAreRejectedAfterUnload() async throws {
         for malformed in MalformedSequence.allCases {
             let fixture = try makeFixture()
             let authorization = try authorize(fixture)
+            let smokeMetadata = metadata
             let client = SignedSmokeRuntimeClientFake(
                 stream: { request in
                     Self.stream(events: malformed.events(for: request))
                 }
             )
-            let runner = SignedReleaseSmokeRunner(runtimeClient: client)
+            let runner = SignedReleaseSmokeRunner(
+                runtimeClient: client,
+                authorization: authorization,
+                metadata: smokeMetadata
+            )
 
-            let error = await capturedError {
-                try await runner.run(authorization: authorization, binding: self.binding)
-            }
+            let error = await capturedError { try await runner.run() }
 
             XCTAssertNotNil(error, "\(malformed) must fail closed")
-            XCTAssertEqual(client.unloadCallCount, 1, "\(malformed) must unload")
+            XCTAssertEqual(client.connectCallCount, 1, "\(malformed) must connect once")
+            XCTAssertEqual(client.loadCallCount, 1, "\(malformed) must load once")
+            XCTAssertEqual(client.generateCallCount, 1, "\(malformed) must generate once")
+            XCTAssertEqual(client.unloadCallCount, 1, "\(malformed) must unload once")
         }
     }
 
@@ -110,18 +218,29 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
         let client = SignedSmokeRuntimeClientFake(
             stream: { request in
                 Self.stream(
-                    events: [Self.event(request, sequence: 1, type: .generationStarted)],
+                    events: [
+                        Self.event(request, sequence: 1, type: .generationStarted),
+                        Self.event(
+                            request,
+                            sequence: 2,
+                            type: .token,
+                            token: Self.generatedTokenCanary
+                        ),
+                    ],
                     terminalError: SignedSmokeFakeError.streamFailed
                 )
             }
         )
-        let runner = SignedReleaseSmokeRunner(runtimeClient: client)
+        let runner = SignedReleaseSmokeRunner(
+            runtimeClient: client,
+            authorization: authorization,
+            metadata: metadata
+        )
 
-        let error = await capturedError {
-            try await runner.run(authorization: authorization, binding: self.binding)
-        }
+        let error = await capturedError { try await runner.run() }
 
         XCTAssertNotNil(error)
+        XCTAssertEqual(client.calls, ["connect", "load", "generate", "unload"])
         XCTAssertEqual(client.unloadCallCount, 1)
     }
 
@@ -132,14 +251,13 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
             stream: { request in Self.stream(events: Self.validEvents(for: request)) },
             unload: { throw SignedSmokeFakeError.unloadFailed }
         )
-        let throwingRunner = SignedReleaseSmokeRunner(runtimeClient: throwingClient)
+        let throwingRunner = SignedReleaseSmokeRunner(
+            runtimeClient: throwingClient,
+            authorization: throwingAuthorization,
+            metadata: metadata
+        )
 
-        let throwingError = await capturedError {
-            try await throwingRunner.run(
-                authorization: throwingAuthorization,
-                binding: self.binding
-            )
-        }
+        let throwingError = await capturedError { try await throwingRunner.run() }
         XCTAssertNotNil(throwingError)
         XCTAssertEqual(throwingClient.unloadCallCount, 1)
 
@@ -150,20 +268,81 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
             unload: {
                 UnloadModelResponse(
                     status: .failed,
-                    error: RuntimeError(category: "test", message: "unload rejected")
+                    error: RuntimeError(category: "test", message: "unload-error-canary")
                 )
             }
         )
-        let failedRunner = SignedReleaseSmokeRunner(runtimeClient: failedClient)
+        let failedRunner = SignedReleaseSmokeRunner(
+            runtimeClient: failedClient,
+            authorization: failedAuthorization,
+            metadata: metadata
+        )
 
-        let failedError = await capturedError {
-            try await failedRunner.run(
-                authorization: failedAuthorization,
-                binding: self.binding
-            )
-        }
+        let failedError = await capturedError { try await failedRunner.run() }
         XCTAssertNotNil(failedError)
         XCTAssertEqual(failedClient.unloadCallCount, 1)
+    }
+
+    func testLoadThrowFailedResponseAndWrongIdentityNeverGenerateAndStillUnload() async throws {
+        let throwingFixture = try makeFixture()
+        let throwingAuthorization = try authorize(throwingFixture)
+        let throwingClient = SignedSmokeRuntimeClientFake(
+            load: { _ in throw SignedSmokeFakeError.loadFailed },
+            stream: { request in Self.stream(events: Self.validEvents(for: request)) }
+        )
+        let throwingRunner = SignedReleaseSmokeRunner(
+            runtimeClient: throwingClient,
+            authorization: throwingAuthorization,
+            metadata: metadata
+        )
+        let throwingError = await capturedError { try await throwingRunner.run() }
+        XCTAssertNotNil(throwingError)
+        XCTAssertEqual(throwingClient.generateCallCount, 0)
+        XCTAssertEqual(throwingClient.unloadCallCount, 1)
+
+        let failedFixture = try makeFixture()
+        let failedAuthorization = try authorize(failedFixture)
+        let failedClient = SignedSmokeRuntimeClientFake(
+            load: { request in
+                LoadModelResponse(
+                    status: .failed,
+                    modelID: request.modelID,
+                    error: RuntimeError(category: "test", message: "load-error-canary")
+                )
+            },
+            stream: { request in Self.stream(events: Self.validEvents(for: request)) }
+        )
+        let failedRunner = SignedReleaseSmokeRunner(
+            runtimeClient: failedClient,
+            authorization: failedAuthorization,
+            metadata: metadata
+        )
+        let failedError = await capturedError { try await failedRunner.run() }
+        XCTAssertNotNil(failedError)
+        XCTAssertEqual(failedClient.generateCallCount, 0)
+        XCTAssertEqual(failedClient.unloadCallCount, 1)
+
+        let wrongIdentityFixture = try makeFixture()
+        let wrongIdentityAuthorization = try authorize(wrongIdentityFixture)
+        let wrongIdentityClient = SignedSmokeRuntimeClientFake(
+            load: { _ in
+                LoadModelResponse(
+                    status: .loaded,
+                    modelID: ModelID(),
+                    metrics: RuntimeMetrics(loadTimeMs: Self.loadTimeMs)
+                )
+            },
+            stream: { request in Self.stream(events: Self.validEvents(for: request)) }
+        )
+        let wrongIdentityRunner = SignedReleaseSmokeRunner(
+            runtimeClient: wrongIdentityClient,
+            authorization: wrongIdentityAuthorization,
+            metadata: metadata
+        )
+        let wrongIdentityError = await capturedError { try await wrongIdentityRunner.run() }
+        XCTAssertNotNil(wrongIdentityError)
+        XCTAssertEqual(wrongIdentityClient.generateCallCount, 0)
+        XCTAssertEqual(wrongIdentityClient.unloadCallCount, 1)
     }
 
     func testPostflightArtifactMutationRejectsAttestation() async throws {
@@ -178,54 +357,32 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
                 return UnloadModelResponse(status: .unloaded)
             }
         )
-        let runner = SignedReleaseSmokeRunner(runtimeClient: client)
-
-        let error = await capturedError {
-            try await runner.run(authorization: authorization, binding: self.binding)
-        }
-
-        XCTAssertNotNil(error)
-        XCTAssertEqual(client.unloadCallCount, 1)
-    }
-
-    func testRejectedLoadNeverGeneratesAndStillCleansUp() async throws {
-        let fixture = try makeFixture()
-        let authorization = try authorize(fixture)
-        let client = SignedSmokeRuntimeClientFake(
-            load: { request in
-                LoadModelResponse(
-                    status: .failed,
-                    modelID: request.modelID,
-                    error: RuntimeError(category: "test", message: "load rejected")
-                )
-            },
-            stream: { request in Self.stream(events: Self.validEvents(for: request)) }
+        let runner = SignedReleaseSmokeRunner(
+            runtimeClient: client,
+            authorization: authorization,
+            metadata: metadata
         )
-        let runner = SignedReleaseSmokeRunner(runtimeClient: client)
 
-        let error = await capturedError {
-            try await runner.run(authorization: authorization, binding: self.binding)
-        }
+        let error = await capturedError { try await runner.run() }
 
         XCTAssertNotNil(error)
-        XCTAssertEqual(client.generateCallCount, 0)
         XCTAssertEqual(client.unloadCallCount, 1)
     }
 
-    private var binding: SignedReleaseSmokeBinding {
-        SignedReleaseSmokeBinding(
-            sourceSHA: String(repeating: "1", count: 40),
-            appTreeSHA256: String(repeating: "2", count: 64),
-            nonce: String(repeating: "3", count: 64),
+    private var metadata: SignedReleaseSmokeMetadata {
+        SignedReleaseSmokeMetadata(
+            sourceSha: sourceSha,
+            appTreeSHA256: appTreeSHA256,
+            nonce: nonce,
             appBundleIdentifier: "ai.supra.SupraAI",
             xpcBundleIdentifier: "ai.supra.SupraAI.SupraRuntimeService",
-            appVersion: "2.2.1",
-            appBuild: "387"
+            version: "2.2.1",
+            build: "387"
         )
     }
 
     private func capturedError(
-        _ operation: () async throws -> SignedReleaseSmokeReport
+        _ operation: () async throws -> SignedReleaseSmokeAttestation
     ) async -> Error? {
         do {
             _ = try await operation()
@@ -277,15 +434,48 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
         return Fixture(base: base, managedRoot: managedRoot, modelDirectory: modelDirectory)
     }
 
-    private static func validEvents(
-        for request: GenerateRequest,
-        token: String = "generated-token"
-    ) -> [GenerationEvent] {
-        [
+    private func jsonObject(_ data: Data) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func nestedObject(
+        _ object: [String: Any],
+        key: String
+    ) throws -> [String: Any] {
+        try XCTUnwrap(object[key] as? [String: Any])
+    }
+
+    private static func validEvents(for request: GenerateRequest) -> [GenerationEvent] {
+        let metrics = validGenerationMetrics()
+        return [
             event(request, sequence: 1, type: .generationStarted),
-            event(request, sequence: 2, type: .token, token: token),
-            event(request, sequence: 3, type: .generationCompleted),
+            event(
+                request,
+                sequence: 2,
+                type: .token,
+                token: generatedTokenCanary
+            ),
+            event(request, sequence: 3, type: .metrics, metrics: metrics),
+            event(request, sequence: 4, type: .generationCompleted, metrics: metrics),
         ]
+    }
+
+    private static func validGenerationMetrics(
+        generatedTokenCount: Int? = SignedReleaseSmokeRunnerTests.generatedTokenCount,
+        truncated: Bool? = false,
+        reasoningActive: Bool? = false,
+        contextTrimmed: Bool? = false,
+        contextOverflowed: Bool? = false
+    ) -> RuntimeMetrics {
+        RuntimeMetrics(
+            firstTokenLatencyMs: firstTokenLatencyMs,
+            tokensPerSecond: tokensPerSecond,
+            generatedTokenCount: generatedTokenCount,
+            truncated: truncated,
+            reasoningActive: reasoningActive,
+            contextTrimmed: contextTrimmed,
+            contextOverflowed: contextOverflowed
+        )
     }
 
     private static func event(
@@ -293,14 +483,16 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
         generationID: GenerationID? = nil,
         sequence: Int,
         type: GenerationEventType,
-        token: String? = nil
+        token: String? = nil,
+        metrics: RuntimeMetrics? = nil
     ) -> GenerationEvent {
         GenerationEvent(
             generationID: generationID ?? request.generationID,
             sequenceNumber: sequence,
             timestamp: Date(timeIntervalSince1970: TimeInterval(sequence)),
             type: type,
-            tokenText: token
+            tokenText: token,
+            metrics: metrics
         )
     }
 
@@ -327,105 +519,279 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
     }
 
     private enum MalformedSequence: CaseIterable, Sendable {
-        case missingStarted
-        case duplicateStarted
+        case sequenceStartsAtZero
         case sequenceGap
         case wrongGenerationID
-        case missingCompleted
+        case missingStarted
+        case duplicateStarted
+        case tokenBeforeStarted
+        case noToken
+        case missingMetrics
+        case duplicateMetrics
+        case metricsNotImmediatelyBeforeCompletion
+        case completionBeforeMetrics
+        case completionNonterminal
         case duplicateCompleted
+        case reservedEvent
         case generationFailed
         case generationCancelled
+        case missingCompleted
+        case missingGeneratedTokenCount
+        case mismatchedGeneratedTokenCount
+        case zeroGeneratedTokenCount
+        case truncated
+        case reasoningActive
+        case contextTrimmed
+        case contextOverflowed
+
+        private var generatedTokenCanary: String {
+            SignedReleaseSmokeRunnerTests.generatedTokenCanary
+        }
+
+        private var generatedTokenCount: Int {
+            SignedReleaseSmokeRunnerTests.generatedTokenCount
+        }
 
         func events(for request: GenerateRequest) -> [GenerationEvent] {
+            let metrics = SignedReleaseSmokeRunnerTests.validGenerationMetrics()
             switch self {
-            case .missingStarted:
-                [
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 1, type: .token, token: "token"),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 2, type: .generationCompleted),
-                ]
-            case .duplicateStarted:
-                [
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 1, type: .generationStarted),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 2, type: .generationStarted),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 3, type: .token, token: "token"),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 4, type: .generationCompleted),
+            case .sequenceStartsAtZero:
+                return [
+                    event(request, sequence: 0, type: .generationStarted),
+                    event(request, sequence: 1, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 2, type: .metrics, metrics: metrics),
+                    event(request, sequence: 3, type: .generationCompleted, metrics: metrics),
                 ]
             case .sequenceGap:
-                [
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 1, type: .generationStarted),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 3, type: .token, token: "token"),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 4, type: .generationCompleted),
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 3, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 4, type: .metrics, metrics: metrics),
+                    event(request, sequence: 5, type: .generationCompleted, metrics: metrics),
                 ]
             case .wrongGenerationID:
-                [
-                    SignedReleaseSmokeRunnerTests.event(
+                return [
+                    event(
                         request,
                         generationID: GenerationID(),
                         sequence: 1,
                         type: .generationStarted
                     ),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 2, type: .token, token: "token"),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 3, type: .generationCompleted),
+                    event(request, sequence: 2, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 3, type: .metrics, metrics: metrics),
+                    event(request, sequence: 4, type: .generationCompleted, metrics: metrics),
                 ]
-            case .missingCompleted:
-                [
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 1, type: .generationStarted),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 2, type: .token, token: "token"),
+            case .missingStarted:
+                return [
+                    event(request, sequence: 1, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 2, type: .metrics, metrics: metrics),
+                    event(request, sequence: 3, type: .generationCompleted, metrics: metrics),
+                ]
+            case .duplicateStarted:
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .generationStarted),
+                    event(request, sequence: 3, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 4, type: .metrics, metrics: metrics),
+                    event(request, sequence: 5, type: .generationCompleted, metrics: metrics),
+                ]
+            case .tokenBeforeStarted:
+                return [
+                    event(request, sequence: 1, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 2, type: .generationStarted),
+                    event(request, sequence: 3, type: .metrics, metrics: metrics),
+                    event(request, sequence: 4, type: .generationCompleted, metrics: metrics),
+                ]
+            case .noToken:
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .metrics, metrics: metrics),
+                    event(request, sequence: 3, type: .generationCompleted, metrics: metrics),
+                ]
+            case .missingMetrics:
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 3, type: .generationCompleted, metrics: metrics),
+                ]
+            case .duplicateMetrics:
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 3, type: .metrics, metrics: metrics),
+                    event(request, sequence: 4, type: .metrics, metrics: metrics),
+                    event(request, sequence: 5, type: .generationCompleted, metrics: metrics),
+                ]
+            case .metricsNotImmediatelyBeforeCompletion:
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .metrics, metrics: metrics),
+                    event(request, sequence: 3, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 4, type: .generationCompleted, metrics: metrics),
+                ]
+            case .completionBeforeMetrics:
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 3, type: .generationCompleted, metrics: metrics),
+                    event(request, sequence: 4, type: .metrics, metrics: metrics),
+                ]
+            case .completionNonterminal:
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 3, type: .metrics, metrics: metrics),
+                    event(request, sequence: 4, type: .generationCompleted, metrics: metrics),
+                    event(request, sequence: 5, type: .token, token: generatedTokenCanary),
                 ]
             case .duplicateCompleted:
-                [
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 1, type: .generationStarted),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 2, type: .token, token: "token"),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 3, type: .generationCompleted),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 4, type: .generationCompleted),
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 3, type: .metrics, metrics: metrics),
+                    event(request, sequence: 4, type: .generationCompleted, metrics: metrics),
+                    event(request, sequence: 5, type: .generationCompleted, metrics: metrics),
+                ]
+            case .reservedEvent:
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 3, type: .queued),
+                    event(request, sequence: 4, type: .metrics, metrics: metrics),
+                    event(request, sequence: 5, type: .generationCompleted, metrics: metrics),
                 ]
             case .generationFailed:
-                [
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 1, type: .generationStarted),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 2, type: .generationFailed),
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .generationFailed),
                 ]
             case .generationCancelled:
-                [
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 1, type: .generationStarted),
-                    SignedReleaseSmokeRunnerTests.event(request, sequence: 2, type: .generationCancelled),
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .generationCancelled),
                 ]
+            case .missingCompleted:
+                return [
+                    event(request, sequence: 1, type: .generationStarted),
+                    event(request, sequence: 2, type: .token, token: generatedTokenCanary),
+                    event(request, sequence: 3, type: .metrics, metrics: metrics),
+                ]
+            case .missingGeneratedTokenCount:
+                let incomplete = SignedReleaseSmokeRunnerTests.validGenerationMetrics(
+                    generatedTokenCount: nil
+                )
+                return validShape(request: request, metrics: incomplete, completion: incomplete)
+            case .mismatchedGeneratedTokenCount:
+                let completion = SignedReleaseSmokeRunnerTests.validGenerationMetrics(
+                    generatedTokenCount: generatedTokenCount + 1
+                )
+                return validShape(request: request, metrics: metrics, completion: completion)
+            case .zeroGeneratedTokenCount:
+                let zero = SignedReleaseSmokeRunnerTests.validGenerationMetrics(
+                    generatedTokenCount: 0
+                )
+                return validShape(request: request, metrics: zero, completion: zero)
+            case .truncated:
+                let unsafe = SignedReleaseSmokeRunnerTests.validGenerationMetrics(truncated: true)
+                return validShape(request: request, metrics: unsafe, completion: unsafe)
+            case .reasoningActive:
+                let unsafe = SignedReleaseSmokeRunnerTests.validGenerationMetrics(reasoningActive: true)
+                return validShape(request: request, metrics: unsafe, completion: unsafe)
+            case .contextTrimmed:
+                let unsafe = SignedReleaseSmokeRunnerTests.validGenerationMetrics(contextTrimmed: true)
+                return validShape(request: request, metrics: unsafe, completion: unsafe)
+            case .contextOverflowed:
+                let unsafe = SignedReleaseSmokeRunnerTests.validGenerationMetrics(contextOverflowed: true)
+                return validShape(request: request, metrics: unsafe, completion: unsafe)
             }
+        }
+
+        private func validShape(
+            request: GenerateRequest,
+            metrics: RuntimeMetrics,
+            completion: RuntimeMetrics
+        ) -> [GenerationEvent] {
+            [
+                event(request, sequence: 1, type: .generationStarted),
+                event(request, sequence: 2, type: .token, token: generatedTokenCanary),
+                event(request, sequence: 3, type: .metrics, metrics: metrics),
+                event(request, sequence: 4, type: .generationCompleted, metrics: completion),
+            ]
+        }
+
+        private func event(
+            _ request: GenerateRequest,
+            generationID: GenerationID? = nil,
+            sequence: Int,
+            type: GenerationEventType,
+            token: String? = nil,
+            metrics: RuntimeMetrics? = nil
+        ) -> GenerationEvent {
+            SignedReleaseSmokeRunnerTests.event(
+                request,
+                generationID: generationID,
+                sequence: sequence,
+                type: type,
+                token: token,
+                metrics: metrics
+            )
         }
     }
 }
 
 private enum SignedSmokeFakeError: Error {
+    case loadFailed
     case streamFailed
     case unloadFailed
 }
 
 private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchecked Sendable {
+    typealias Connect = @Sendable () throws -> Void
     typealias Load = @Sendable (LoadModelRequest) throws -> LoadModelResponse
     typealias Stream = @Sendable (GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error>
     typealias Unload = @Sendable () throws -> UnloadModelResponse
 
     private struct State {
+        var calls: [String] = []
         var loadRequests: [LoadModelRequest] = []
         var generateRequests: [GenerateRequest] = []
-        var unloadCallCount = 0
     }
 
     private let lock = NSLock()
     private var state = State()
+    private let connectHandler: Connect
     private let load: Load
     private let stream: Stream
     private let unload: Unload
 
     init(
+        connect: @escaping Connect = {},
         load: @escaping Load = { request in
-            LoadModelResponse(status: .loaded, modelID: request.modelID)
+            LoadModelResponse(
+                status: .loaded,
+                modelID: request.modelID,
+                metrics: RuntimeMetrics(loadTimeMs: 123)
+            )
         },
         stream: @escaping Stream,
         unload: @escaping Unload = { UnloadModelResponse(status: .unloaded) }
     ) {
+        self.connectHandler = connect
         self.load = load
         self.stream = stream
         self.unload = unload
+    }
+
+    var calls: [String] {
+        lock.withLock { state.calls }
+    }
+
+    var connectCallCount: Int {
+        lock.withLock { state.calls.filter { $0 == "connect" }.count }
+    }
+
+    var loadCallCount: Int {
+        lock.withLock { state.loadRequests.count }
     }
 
     var loadRequests: [LoadModelRequest] {
@@ -441,20 +807,29 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
     }
 
     var unloadCallCount: Int {
-        lock.withLock { state.unloadCallCount }
+        lock.withLock { state.calls.filter { $0 == "unload" }.count }
     }
 
-    func connect() async throws {}
+    func connect() async throws {
+        lock.withLock { state.calls.append("connect") }
+        try connectHandler()
+    }
 
     func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
-        lock.withLock { state.loadRequests.append(request) }
+        lock.withLock {
+            state.calls.append("load")
+            state.loadRequests.append(request)
+        }
         return try load(request)
     }
 
     func generate(
         _ request: GenerateRequest
     ) throws -> AsyncThrowingStream<GenerationEvent, Error> {
-        lock.withLock { state.generateRequests.append(request) }
+        lock.withLock {
+            state.calls.append("generate")
+            state.generateRequests.append(request)
+        }
         return try stream(request)
     }
 
@@ -470,7 +845,7 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
     }
 
     func unloadModel() async throws -> UnloadModelResponse {
-        lock.withLock { state.unloadCallCount += 1 }
+        lock.withLock { state.calls.append("unload") }
         return try unload()
     }
 
