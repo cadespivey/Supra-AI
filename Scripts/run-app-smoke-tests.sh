@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+xpc_test="${SUPRA_XPC_INTEGRATION_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/RuntimeXPCIntegrationTests.swift}"
+check_only=0
+if [[ "${1:-}" == "--check" ]]; then
+  check_only=1
+  shift
+fi
+if (( $# != 0 )); then
+  printf 'Usage: %s [--check]\n' "$0" >&2
+  exit 2
+fi
+if [[ ! -f "$xpc_test" ]] || ! grep -Eq 'class[[:space:]]+RuntimeXPCIntegrationTests' "$xpc_test"; then
+  printf '%s\n' 'ERROR: hosted XPC integration test is missing: SupraAIUITests/RuntimeXPCIntegrationTests' >&2
+  exit 1
+fi
+printf '%s\n' 'Hosted XPC integration hook passed.'
+(( check_only != 0 )) && exit 0
+
+xcodebuild \
+  -workspace "${repo_root}/SupraAI.xcworkspace" \
+  -scheme SupraAI \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY= \
+  -only-testing:SupraAIUITests/DraftingBlockedStateUITests \
+  -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \
+  test

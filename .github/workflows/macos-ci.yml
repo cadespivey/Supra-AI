@@ -1,0 +1,159 @@
+name: Protected macOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  inventory:
+    name: Repository inventory and gate tests
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Test CI failure gates
+        run: bash Tests/Scripts/test-macos-ci-gates.sh
+      - name: Verify repository facts
+        run: bash Scripts/verify-repo-facts.sh
+
+  swift-packages:
+    name: Swift package - ${{ matrix.package }}
+    needs: inventory
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - SupraCore
+          - SupraDesignSystem
+          - SupraDiagnostics
+          - SupraDocuments
+          - SupraDrafting
+          - SupraDraftingCore
+          - SupraExports
+          - SupraNetworking
+          - SupraResearch
+          - SupraRuntimeClient
+          - SupraRuntimeInterface
+          - SupraSessions
+          - SupraStore
+          - SupraTestKit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Test fixed package
+        run: bash Scripts/test-all-packages.sh "${{ matrix.package }}"
+
+  app-build:
+    name: Unsigned ${{ matrix.configuration }} app and XPC
+    needs: inventory
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Build app and embedded XPC with zero project warnings
+        run: bash Scripts/build-macos-app.sh "${{ matrix.configuration }}"
+
+  app-smoke:
+    name: App UI and hosted XPC smoke
+    needs: app-build
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Run hermetic UI smoke and real hosted XPC integration
+        run: bash Scripts/run-app-smoke-tests.sh
+
+  migration-fixtures:
+    name: Shipping migration fixtures
+    needs: inventory
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Upgrade every supported shipping fixture
+        run: bash Scripts/run-shipping-migration-fixtures.sh
+
+  website:
+    name: Website lint, build, audit, and asset guards
+    needs: inventory
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Run deterministic website gates
+        run: bash Scripts/test-website.sh
+
+  security:
+    name: Secrets, entitlements, artifacts, models, and public metadata
+    needs: inventory
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Scan secrets without printing matches
+        run: bash Scripts/verify-secrets.sh
+      - name: Verify entitlement expectations
+        run: bash Scripts/verify-entitlements.sh
+      - name: Reject prohibited repository artifacts
+        run: bash Scripts/verify-prohibited-artifacts.sh
+      - name: Verify public font invariant
+        run: bash Scripts/verify-public-font-license.sh
+      - name: Verify model catalog structure offline
+        run: bash Scripts/verify-model-ids.sh --offline
+      - name: Test metadata-only public-ref verifier
+        run: bash Tests/Scripts/test-verify-public-repository-assets.sh
+      - name: Verify dependency lock revisions
+        run: |
+          find . -name Package.resolved -not -path '*/.build/*' -print0 |
+            while IFS= read -r -d '' lock; do
+              jq -e '.pins | all(.[]; .state.revision | test("^[0-9a-f]{40}$"))' "$lock" >/dev/null
+            done
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    needs: inventory
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Reject vulnerable dependency changes
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: high

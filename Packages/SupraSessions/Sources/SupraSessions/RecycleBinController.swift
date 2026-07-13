@@ -74,17 +74,17 @@ public final class RecycleBinController: ObservableObject {
     // MARK: - Restore
 
     public func restoreMatter(id: String) {
-        try? store.matters.restoreMatter(id: id)
+        _ = try? store.matters.restoreMatter(id: id)
         reload()
     }
 
     public func restoreChat(id: String) {
-        try? store.chats.restoreChat(id: id)
+        _ = try? store.chats.restoreChat(id: id)
         reload()
     }
 
     public func restoreDocument(id: String) {
-        try? store.documentLibrary.restoreDocument(id: id)
+        _ = try? store.documentLibrary.restoreDocument(id: id)
         reload()
     }
 

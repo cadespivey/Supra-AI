@@ -28,6 +28,12 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Verify model catalog structure without provider dependency
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        run: bash Scripts/verify-model-ids.sh --offline
       - name: Verify catalog model IDs resolve on Hugging Face
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: bash Scripts/verify-model-ids.sh

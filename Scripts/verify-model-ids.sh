@@ -8,12 +8,27 @@
 # before release (release.sh runs it as a pre-flight) and in CI (.github/workflows/
 # verify-model-ids.yml runs it on catalog changes + weekly to catch upstream removals).
 #
-# Usage: Scripts/verify-model-ids.sh
-# Exit:  0 = all resolve (HTTP 200); 1 = one or more do not, or extraction failed.
+# Usage: Scripts/verify-model-ids.sh [--offline]
+# Exit:  0 = catalog structure is valid and, unless offline, every ID resolves (HTTP
+#        200); 1 = validation failed.
 #
 # Note: a gated repo can return 401 even though it exists; the curated set is all
 # public (mlx-community / lmstudio-community / BAAI / nomic-ai / mixedbread-ai).
 set -uo pipefail
+
+offline=0
+case "${1:-}" in
+  "") ;;
+  --offline) offline=1 ;;
+  *)
+    printf 'Usage: %s [--offline]\n' "$0" >&2
+    exit 2
+    ;;
+esac
+if (( $# > 1 )); then
+  printf 'Usage: %s [--offline]\n' "$0" >&2
+  exit 2
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FILES=(
@@ -30,12 +45,25 @@ if [[ -z "${ids}" ]]; then
   exit 1
 fi
 
+raw_count="$(grep -hoE 'repoID: "[^"]+"' "${FILES[@]}" | wc -l | tr -d ' ')"
+valid_count="$(printf '%s\n' "$ids" | grep -c .)"
+if [[ "$raw_count" != "$valid_count" ]]; then
+  printf '%s\n' '✗ Model repoIDs must be unique literals in owner/repository form.' >&2
+  exit 1
+fi
+if (( offline != 0 )); then
+  printf '✓ Model catalog structure passed offline for %s unique repo IDs.\n' "$valid_count"
+  exit 0
+fi
+
 fail=0
 count=0
 while IFS= read -r id; do
   [[ -z "${id}" ]] && continue
   count=$((count + 1))
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --retry 2 --max-time 30 "https://huggingface.co/api/models/${id}" 2>/dev/null || echo "000")"
+  if ! code="$(curl -sS -o /dev/null -w '%{http_code}' --retry 2 --max-time 30 "https://huggingface.co/api/models/${id}" 2>/dev/null)"; then
+    code="000"
+  fi
   if [[ "${code}" == "200" ]]; then
     printf '  ✓ %s\n' "${id}"
   else

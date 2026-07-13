@@ -1,6 +1,6 @@
 # Supra AI — agent notes
 
-Native macOS 15+ SwiftUI app (Apple Silicon / MLX) + 11 local Swift packages. Read
+Native macOS 15+ SwiftUI app (Apple Silicon / MLX) + 14 local Swift packages. Read
 [ARCHITECTURE.md](ARCHITECTURE.md) before cross-package changes;
 [CONTRIBUTING.md](CONTRIBUTING.md) covers build/test commands, branching, and conventions.
 
@@ -24,8 +24,10 @@ adds or modifies behavior:
 ## Environment facts
 
 - Building/testing requires macOS + Xcode (`xcodebuild -workspace SupraAI.xcworkspace
-  -scheme SupraAI`; per-package `swift test` from `Packages/<Name>/`). There is no CI that
-  compiles Swift — the package suites are the merge gate and must pass with zero failures.
+  -scheme SupraAI`; per-package `swift test` from `Packages/<Name>/`). Protected macOS CI
+  compiles the app/XPC in Debug and Release and tests the fixed 14-package matrix. Run
+  `bash Scripts/verify-repo-facts.sh` and `bash Scripts/test-all-packages.sh` before merge;
+  every deterministic check must pass with zero failures.
 - Fixtures are synthetic (`TestData/`); never introduce real client data. Secrets live in
   `.env` / Keychain, never in source.
 

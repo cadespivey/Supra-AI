@@ -1,0 +1,62 @@
+name: Scheduled security verification
+
+on:
+  schedule:
+    - cron: "23 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-invariants:
+    name: Repository security invariants
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Verify repository facts and security scans
+        run: |
+          bash Scripts/verify-repo-facts.sh
+          bash Scripts/verify-secrets.sh
+          bash Scripts/verify-prohibited-artifacts.sh
+
+  live-public-metadata:
+    name: Read-only public refs, releases, and model IDs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Test public metadata fixtures
+        run: bash Tests/Scripts/test-verify-public-repository-assets.sh
+      - name: Audit advertised refs and release metadata without fetching blobs
+        env:
+          PUBLIC_ASSET_GITHUB_TOKEN: ${{ github.token }}
+        run: bash Scripts/verify-public-repository-assets.sh "${GITHUB_REPOSITORY}"
+      - name: Resolve curated model IDs against the public catalog
+        run: bash Scripts/verify-model-ids.sh
+
+  website-audit:
+    name: Scheduled website dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install exactly locked dependencies
+        working-directory: website
+        run: npm ci
+      - name: Audit all website dependencies
+        working-directory: website
+        run: npm audit --audit-level=high

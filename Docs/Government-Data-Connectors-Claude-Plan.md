@@ -1,7 +1,7 @@
 # Government Data Connectors - Claude Execution Plan
 
 This plan is for Claude Code working in the existing Supra AI repository.
-It translates `/Users/cadespivey/Desktop/supra_ai_government_data_connectors.md`
+It translates the private source brief `supra_ai_government_data_connectors.md`
 into repo-specific implementation steps.
 
 Verified context:

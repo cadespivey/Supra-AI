@@ -48,6 +48,10 @@ xcodebuild -workspace SupraAI.xcworkspace -scheme SupraAI -destination 'platform
 
 # Test an individual package
 cd Packages/SupraSessions && swift test
+
+# Verify inventory/security facts and test the exact 14-package set
+bash Scripts/verify-repo-facts.sh
+bash Scripts/test-all-packages.sh
 ```
 
 If the command-line `swift`/`xcodebuild` toolchain can't compile MLX (Metal Toolchain), run
@@ -65,7 +69,7 @@ a change should not merge with a red suite.
 
 ```
 Apps/SupraAI/           SwiftUI app (SupraAI) + sandboxed runtime service + UI tests
-Packages/               11 local Swift packages (see ARCHITECTURE.md for the graph)
+Packages/               14 local Swift packages (see ARCHITECTURE.md for the graph)
 Docs/Milestones/        Per-milestone plans, work orders, acceptance criteria, progress logs
 Docs/Architecture/      Dependency pins, runtime file-access design
 Resources/              Prompt templates (chat, research, structured outputs)

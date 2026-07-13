@@ -364,6 +364,7 @@ struct FocusChainSwitch: NSViewRepresentable {
         Coordinator(isOn: $isOn, focusChain: focusChain)
     }
 
+    @MainActor
     final class Coordinator: NSObject {
         var isOn: Binding<Bool>
         var focusChain: SupraFocusChain?
