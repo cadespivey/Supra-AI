@@ -242,24 +242,30 @@ private final class WindowLiveResizeHeightView: NSView {
             object: window,
             queue: .main
         ) { [weak self] _ in
-            self?.isUserResizing = true
+            MainActor.assumeIsolated {
+                self?.isUserResizing = true
+            }
         }
         resizeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification,
             object: window,
             queue: .main
         ) { [weak self, weak window] _ in
-            guard let self, self.isUserResizing, let window else { return }
-            self.reportHeight(of: window, isInitialMeasurement: false)
+            MainActor.assumeIsolated {
+                guard let self, self.isUserResizing, let window else { return }
+                self.reportHeight(of: window, isInitialMeasurement: false)
+            }
         }
         liveResizeEndObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didEndLiveResizeNotification,
             object: window,
             queue: .main
         ) { [weak self, weak window] _ in
-            guard let self, let window else { return }
-            self.reportHeight(of: window, isInitialMeasurement: false)
-            self.isUserResizing = false
+            MainActor.assumeIsolated {
+                guard let self, let window else { return }
+                self.reportHeight(of: window, isInitialMeasurement: false)
+                self.isUserResizing = false
+            }
         }
     }
 
