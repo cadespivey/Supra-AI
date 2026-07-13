@@ -1,5 +1,5 @@
 import SupraCore
-import SupraNetworking
+@testable import SupraNetworking
 import SupraStore
 import XCTest
 
@@ -17,6 +17,22 @@ final class SupraNetworkingTests: XCTestCase {
         XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "http://www.courtlistener.com/api/rest/v4/search/"))))
         XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "https://example.com/api/rest/v4/search/"))))
         XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "https://user:pass@www.courtlistener.com/api/rest/v4/search/"))))
+        XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "https://www.courtlistener.com:8443/api/rest/v4/search/"))))
+
+        let explicitlyPorted = NetworkPolicyService(
+            allowedHosts: ["api.synthetic.test"],
+            allowedPortsByHost: ["api.synthetic.test": [8443]]
+        )
+        XCTAssertNoThrow(
+            try explicitlyPorted.validate(
+                try XCTUnwrap(URL(string: "https://api.synthetic.test:8443/data"))
+            )
+        )
+        XCTAssertThrowsError(
+            try explicitlyPorted.validate(
+                try XCTUnwrap(URL(string: "https://api.synthetic.test:9443/data"))
+            )
+        )
     }
 
     func testNetworkPolicyAllowsCourtListenerStorageCDNButNotOtherHosts() throws {
@@ -307,5 +323,3 @@ private extension Array {
         count == 1 ? first : nil
     }
 }
-
-
