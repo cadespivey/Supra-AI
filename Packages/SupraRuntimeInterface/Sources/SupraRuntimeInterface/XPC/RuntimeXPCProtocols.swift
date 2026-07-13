@@ -36,6 +36,17 @@ public protocol SupraRuntimeXPCServiceProtocol: NSObjectProtocol {
         withReply reply: @escaping (Data) -> Void
     )
 
+#if DEBUG
+    func runtimeLifecycleDebugStatus(
+        withReply reply: @escaping (Data) -> Void
+    )
+
+    func triggerReservationTerminationProbe(
+        _ generationIDData: Data,
+        withReply reply: @escaping (Data) -> Void
+    )
+#endif
+
     // MARK: - Milestone 3: embeddings
 
     func loadEmbeddingModel(
@@ -60,4 +71,3 @@ public protocol SupraGenerationEventXPCSinkProtocol: NSObjectProtocol {
         withReply reply: @escaping () -> Void
     )
 }
-

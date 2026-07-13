@@ -10,7 +10,8 @@ protocol ChatModelController: Sendable {
     func loadModel(
         bookmark: Data?,
         path: String,
-        managedRootPath: String?
+        managedRootPath: String?,
+        expectedIdentity: ModelDirectoryIdentity?
     ) async throws -> RuntimeMetrics
 
     func generate(
@@ -57,7 +58,8 @@ actor MLXModelController: ChatModelController {
     func loadModel(
         bookmark: Data?,
         path: String,
-        managedRootPath: String?
+        managedRootPath: String?,
+        expectedIdentity: ModelDirectoryIdentity?
     ) async throws -> RuntimeMetrics {
         let startedAt = Date()
 
@@ -66,7 +68,8 @@ actor MLXModelController: ChatModelController {
         let access = try RuntimeModelDirectoryAccess(
             bookmark: bookmark,
             requestedPath: path,
-            managedRootPath: managedRootPath
+            managedRootPath: managedRootPath,
+            expectedIdentity: expectedIdentity
         )
         defer { access.close() }
         let resolvedURL = access.url
@@ -78,23 +81,26 @@ actor MLXModelController: ChatModelController {
         let marker = resolvedURL.appendingPathComponent(Self.lifecycleTestMarker)
         if let contents = try? String(contentsOf: marker, encoding: .utf8),
            contents == Self.lifecycleTestMarkerContents {
+            await Task.yield()
+            try access.validateIdentity()
             container = nil
             loadedPath = resolvedURL.path
             cancellationRequested = false
             templateSupportsThinkingToggle = false
             isLifecycleTestModel = true
             cancelledInstallRaceTaskEntered = false
-            await Task.yield()
             return RuntimeMetrics(loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000))
         }
 #endif
 
         let loadedContainer = try await MLXLMTokenizers.loadModelContainer(from: resolvedURL)
+        let supportsThinkingToggle = Self.templateSupportsThinkingToggle(in: resolvedURL)
+        try access.validateIdentity()
 
         container = loadedContainer
         loadedPath = resolvedURL.path
         cancellationRequested = false
-        templateSupportsThinkingToggle = Self.templateSupportsThinkingToggle(in: resolvedURL)
+        templateSupportsThinkingToggle = supportsThinkingToggle
 #if DEBUG
         isLifecycleTestModel = false
 #endif
@@ -125,7 +131,8 @@ actor MLXModelController: ChatModelController {
                 throw CancellationError()
             }
             if prompt == "SUPRA-XPC-TEST-STALE-TERMINATION" {
-                try await Task.sleep(nanoseconds: 50_000_000)
+                // The coordinator's DEBUG gate releases this only after the old
+                // connection handler has captured the exact reservation epoch.
                 return RuntimeMetrics(generatedTokenCount: 0, truncated: false)
             }
             if cancelledInstallRaceTaskEntered {

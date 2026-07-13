@@ -247,7 +247,8 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             url: URL(fileURLWithPath: path, isDirectory: true)
         )
         defer { access.release() }
-        guard access.hasAccess, let bookmark = access.makeTransferableBookmark() else {
+        guard access.hasAccess,
+              let authorization = access.makeTransferableAuthorization() else {
             embeddingTestPassed = false
             message = "The embedding model folder could not be authorized for the runtime service."
             return
@@ -260,10 +261,11 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             // A non-positive stored dimension means "unknown" (e.g. a custom repo):
             // skip the post-load assertion and discover the real value from the probe.
             expectedDimension: model.dimension > 0 ? model.dimension : nil,
-            modelBookmark: bookmark,
+            modelBookmark: authorization.bookmark,
             managedRootPath: ManagedModelStorage.isManagedEmbedding(path: path)
                 ? ManagedModelStorage.embeddingModelsDirectory().path
-                : nil
+                : nil,
+            modelDirectoryIdentity: authorization.directoryIdentity
         )
         do {
             let response = try await runtimeClient.loadEmbeddingModel(request)
@@ -321,7 +323,8 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
         let access = SecurityScopedModelAccess(
             url: URL(fileURLWithPath: path, isDirectory: true)
         )
-        guard access.hasAccess, let bookmark = access.makeTransferableBookmark() else {
+        guard access.hasAccess,
+              let authorization = access.makeTransferableAuthorization() else {
             embeddingWarmInFlight = false
             warmedEmbeddingModelID = nil
             return
@@ -332,10 +335,11 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             displayName: model.displayName,
             revision: model.revision,
             expectedDimension: model.dimension > 0 ? model.dimension : nil,
-            modelBookmark: bookmark,
+            modelBookmark: authorization.bookmark,
             managedRootPath: ManagedModelStorage.isManagedEmbedding(path: path)
                 ? ManagedModelStorage.embeddingModelsDirectory().path
-                : nil
+                : nil,
+            modelDirectoryIdentity: authorization.directoryIdentity
         )
         Task {
             defer {

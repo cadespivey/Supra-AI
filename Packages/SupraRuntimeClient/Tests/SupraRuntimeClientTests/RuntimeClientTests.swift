@@ -239,6 +239,19 @@ private final class FakeRuntimeXPCService: NSObject, SupraRuntimeXPCServiceProto
         )
     }
 
+#if DEBUG
+    func runtimeLifecycleDebugStatus(withReply reply: @escaping (Data) -> Void) {
+        reply(encoded(RuntimeLifecycleDebugStatus()))
+    }
+
+    func triggerReservationTerminationProbe(
+        _ generationIDData: Data,
+        withReply reply: @escaping (Data) -> Void
+    ) {
+        reply(encoded(true))
+    }
+#endif
+
     private var loadedEmbeddingModelID: DocumentEmbeddingModelID?
     private let embeddingDimension = 8
 
@@ -287,4 +300,3 @@ private final class FakeRuntimeXPCService: NSObject, SupraRuntimeXPCServiceProto
         (try? RuntimeXPCCodec.encode(value)) ?? Data()
     }
 }
-

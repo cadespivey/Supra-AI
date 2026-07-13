@@ -15,10 +15,16 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     private lazy var generationCoordinator = RuntimeGenerationCoordinator(
         eventBuffer: eventBuffer,
         modelController: modelController,
-        onTerminal: { [weak self] generationID in
-            self?.finishGeneration(generationID)
+        onTerminal: { [weak self] generationID, epoch in
+            self?.finishGeneration(generationID, epoch: epoch)
         }
     )
+
+    private struct GenerationReservation {
+        let generationID: GenerationID
+        let epoch: RuntimeGenerationEpoch
+        let isConnectionOwned: Bool
+    }
 
     private var loadedModelID: ModelID?
     private var currentModelRequest: LoadModelRequest?
@@ -26,16 +32,10 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     /// request reserves its transition synchronously, before any actor hop, so
     /// load/unload can never slip underneath an accepted generation (or vice versa).
     private var pendingModelMutationCount = 0
-    private var activeGenerationReservationID: GenerationID?
+    private var activeGenerationReservation: GenerationReservation?
     /// The XPC connection that started the in-flight generation, so a dropped
     /// client can have its orphaned generation cancelled (guarded by stateLock).
     private weak var activeGenerationConnection: NSXPCConnection?
-    private var activeGenerationOwnerID: GenerationID?
-#if DEBUG
-    /// Hosted-XPC regression seam for a termination handler that has captured
-    /// an old reservation but has not yet reached the coordinator.
-    private var delayedTerminationGenerationID: GenerationID?
-#endif
     // Milestone 3 embedding state, guarded by stateLock.
     private var loadedEmbeddingModelID: DocumentEmbeddingModelID?
     private var embeddingDimension: Int?
@@ -73,7 +73,8 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
                 let metrics = try await modelController.loadModel(
                     bookmark: request.modelBookmark,
                     path: request.modelPath,
-                    managedRootPath: request.managedRootPath
+                    managedRootPath: request.managedRootPath,
+                    expectedIdentity: request.modelDirectoryIdentity
                 )
                 setLoadedModel(request)
                 reply(LoadModelResponse(status: .loaded, modelID: request.modelID, metrics: metrics))
@@ -125,7 +126,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             return
         }
 
-        guard pendingModelMutationCount == 0, activeGenerationReservationID == nil else {
+        guard pendingModelMutationCount == 0, activeGenerationReservation == nil else {
             stateLock.unlock()
             reply(
                 GenerateStartResponse(
@@ -139,65 +140,169 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
 
         // Reserve and attribute ownership before the coordinator publishes a
         // started reply. Rejected/busy requests never overwrite the real owner.
-        activeGenerationReservationID = request.generationID
+        let epoch = RuntimeGenerationEpoch()
+        activeGenerationReservation = GenerationReservation(
+            generationID: request.generationID,
+            epoch: epoch,
+            isConnectionOwned: ownerConnection != nil
+        )
         activeGenerationConnection = ownerConnection
-        activeGenerationOwnerID = ownerConnection == nil ? nil : request.generationID
 #if DEBUG
-        delayedTerminationGenerationID = request.prompt == "SUPRA-XPC-TEST-STALE-TERMINATION"
-            ? request.generationID
-            : nil
+        if request.prompt == RuntimeLifecycleTestHooks.staleTerminationPrompt {
+            RuntimeLifecycleTestHooks.shared.armStaleTermination(
+                generationID: request.generationID,
+                epoch: epoch
+            )
+        }
+        // Stay inside stateLock until the DEBUG control enters the production
+        // termination handler with this exact captured owner. The separate status
+        // endpoint coordinates the seam without contending on production stateLock.
+        if request.prompt == RuntimeLifecycleTestHooks.reservationRacePrompt,
+           let ownerConnection {
+            RuntimeLifecycleTestHooks.shared.pauseReservationBeforeAdmission(
+                generationID: request.generationID,
+                epoch: epoch,
+                ownerConnection: ownerConnection
+            )
+        }
 #endif
+
+        let response = generationCoordinator.startGeneration(
+            request,
+            epoch: epoch,
+            eventSink: eventSink
+        )
+#if DEBUG
+        if response.status == .started {
+            RuntimeLifecycleTestHooks.shared.noteGenerationAdmitted(
+                generationID: request.generationID,
+                epoch: epoch
+            )
+        }
+#endif
+        if response.status != .started,
+           activeGenerationReservation?.generationID == request.generationID,
+           activeGenerationReservation?.epoch == epoch {
+            activeGenerationReservation = nil
+            activeGenerationConnection = nil
+        }
         stateLock.unlock()
-
-#if DEBUG
-        // Hosted-XPC regression seam: widen the historical gap where service
-        // ownership existed but coordinator admission had not happened yet.
-        if request.prompt == "SUPRA-XPC-TEST-RESERVATION-RACE" {
-            Thread.sleep(forTimeInterval: 0.1)
-        }
-#endif
-
-        generationCoordinator.startGeneration(request, eventSink: eventSink) { [weak self] response in
-            if response.status != .started {
-                self?.finishGeneration(request.generationID)
-            }
-            reply(response)
-        }
+        reply(response)
     }
 
     /// Cancels the active generation if it was started by a connection that has
     /// just dropped, freeing the single generation slot for future clients.
     func handleConnectionTermination(_ connection: NSXPCConnection?) {
-        stateLock.lock()
-        let activeID = activeGenerationReservationID
-        let owner = activeGenerationConnection
-        let ownerID = activeGenerationOwnerID
 #if DEBUG
-        let delayAfterCapture = delayedTerminationGenerationID == activeID
+        RuntimeLifecycleTestHooks.shared.noteTerminationHandlerEntered(connection)
 #endif
+        stateLock.lock()
+        let reservation = activeGenerationReservation
+        let owner = activeGenerationConnection
         stateLock.unlock()
         // Only cancel on a POSITIVE ownership match. A generation that cannot be
         // positively attributed to the dropped connection is left alone — cancelling
         // on a "can't tell" (nil owner/connection) could kill a newer, live
         // generation owned by a different client when a stale handler runs late.
-        guard let activeID,
-              ownerID == activeID,
+        guard let reservation,
+              reservation.isConnectionOwned,
               let owner,
               let connection,
               owner === connection else { return }
 #if DEBUG
-        if delayAfterCapture {
-            Thread.sleep(forTimeInterval: 0.25)
+        let hooks = RuntimeLifecycleTestHooks.shared
+        switch hooks.captureStaleTerminationIfArmed(
+            generationID: reservation.generationID,
+            epoch: reservation.epoch
+        ) {
+        case .primary:
+            let coordinator = generationCoordinator
+            Task {
+                await hooks.waitForStaleSuccessorAdmission(
+                    generationID: reservation.generationID,
+                    oldEpoch: reservation.epoch
+                )
+                hooks.noteStaleCancellationAttempted(generationID: reservation.generationID)
+                coordinator.cancelGeneration(
+                    reservation.generationID,
+                    epoch: reservation.epoch
+                ) { response in
+                    hooks.noteStaleCancellationResponse(response)
+                }
+            }
+            return
+        case .duplicate:
+            // Interruption and invalidation can both fire. Once one handler owns
+            // the deterministic stale-epoch probe, duplicates must not cancel the
+            // old generation out from under it.
+            return
+        case .notArmed:
+            break
         }
+
+        let isReservationRace = hooks.isReservationRace(
+            generationID: reservation.generationID,
+            epoch: reservation.epoch
+        )
+        if isReservationRace {
+            hooks.noteReservationCancellationAttempted(generationID: reservation.generationID)
+        }
+        generationCoordinator.cancelGeneration(
+            reservation.generationID,
+            epoch: reservation.epoch
+        ) { response in
+            if isReservationRace {
+                hooks.noteReservationCancellationResponse(response)
+            }
+        }
+#else
+        generationCoordinator.cancelGeneration(
+            reservation.generationID,
+            epoch: reservation.epoch
+        ) { _ in }
 #endif
-        generationCoordinator.cancelGeneration(activeID) { _ in }
     }
 
     func cancelGeneration(
         _ generationID: GenerationID,
         reply: @escaping (CancelGenerationResponse) -> Void
     ) {
-        generationCoordinator.cancelGeneration(generationID, reply: reply)
+        cancelGeneration(generationID, requestingConnection: nil, reply: reply)
+    }
+
+    private func cancelGeneration(
+        _ generationID: GenerationID,
+        requestingConnection: NSXPCConnection?,
+        reply: @escaping (CancelGenerationResponse) -> Void
+    ) {
+        stateLock.lock()
+        guard let reservation = activeGenerationReservation,
+              reservation.generationID == generationID else {
+            stateLock.unlock()
+            reply(CancelGenerationResponse(status: .notFound, generationID: generationID))
+            return
+        }
+
+        if reservation.isConnectionOwned {
+            guard let requestingConnection,
+                  let owner = activeGenerationConnection,
+                  owner === requestingConnection else {
+                stateLock.unlock()
+                reply(CancelGenerationResponse(status: .notFound, generationID: generationID))
+                return
+            }
+        } else if requestingConnection != nil {
+            stateLock.unlock()
+            reply(CancelGenerationResponse(status: .notFound, generationID: generationID))
+            return
+        }
+        stateLock.unlock()
+
+        generationCoordinator.cancelGeneration(
+            generationID,
+            epoch: reservation.epoch,
+            reply: reply
+        )
     }
 
     func recentEvents(
@@ -266,7 +371,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     func runtimeStatus(reply: @escaping (RuntimeStatus) -> Void) {
         stateLock.lock()
         let loadedModelID = loadedModelID
-        let activeGenerationID = activeGenerationReservationID
+        let activeGenerationID = activeGenerationReservation?.generationID
         let hasPendingModelMutation = pendingModelMutationCount > 0
         let loadedEmbeddingModelID = loadedEmbeddingModelID
         stateLock.unlock()
@@ -320,6 +425,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
                     bookmark: request.modelBookmark,
                     path: request.modelPath,
                     managedRootPath: request.managedRootPath,
+                    expectedIdentity: request.modelDirectoryIdentity,
                     expectedDimension: request.expectedDimension
                 )
                 setLoadedEmbeddingModel(request.embeddingModelID, dimension: dimension)
@@ -430,7 +536,8 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             modelPath: request.modelPath,
             displayName: request.displayName,
             modelBookmark: nil,
-            managedRootPath: request.managedRootPath
+            managedRootPath: request.managedRootPath,
+            modelDirectoryIdentity: request.modelDirectoryIdentity
         )
         stateLock.unlock()
     }
@@ -445,7 +552,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     private func reserveModelMutation() -> Bool {
         stateLock.lock()
         defer { stateLock.unlock() }
-        guard activeGenerationReservationID == nil else { return false }
+        guard activeGenerationReservation == nil else { return false }
         pendingModelMutationCount += 1
         return true
     }
@@ -457,20 +564,16 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         stateLock.unlock()
     }
 
-    private func finishGeneration(_ generationID: GenerationID) {
+    private func finishGeneration(
+        _ generationID: GenerationID,
+        epoch: RuntimeGenerationEpoch
+    ) {
         stateLock.lock()
-        if activeGenerationReservationID == generationID {
-            activeGenerationReservationID = nil
-        }
-        if activeGenerationOwnerID == generationID {
-            activeGenerationOwnerID = nil
+        if activeGenerationReservation?.generationID == generationID,
+           activeGenerationReservation?.epoch == epoch {
+            activeGenerationReservation = nil
             activeGenerationConnection = nil
         }
-#if DEBUG
-        if delayedTerminationGenerationID == generationID {
-            delayedTerminationGenerationID = nil
-        }
-#endif
         stateLock.unlock()
     }
 
@@ -550,7 +653,20 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
     ) {
         do {
             let request = try RuntimeXPCCodec.decode(GenerateRequest.self, from: requestData)
-            let connection = NSXPCConnection.current()
+            guard let connection = NSXPCConnection.current() else {
+                reply(
+                    Self.encoded(
+                        GenerateStartResponse(
+                            status: .invalidRequest,
+                            generationID: request.generationID,
+                            error: RuntimeErrorMapper.invalidRequest(
+                                "The generation request has no authenticated XPC owner."
+                            )
+                        )
+                    )
+                )
+                return
+            }
             beginGeneration(
                 request,
                 eventSink: XPCGenerationEventSinkAdapter(eventSink: eventSink),
@@ -581,7 +697,21 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
     ) {
         do {
             let generationID = try RuntimeXPCCodec.decode(GenerationID.self, from: generationIDData)
-            cancelGeneration(generationID) { response in
+            guard let connection = NSXPCConnection.current() else {
+                reply(
+                    Self.encoded(
+                        CancelGenerationResponse(
+                            status: .notFound,
+                            generationID: generationID
+                        )
+                    )
+                )
+                return
+            }
+            cancelGeneration(
+                generationID,
+                requestingConnection: connection
+            ) { response in
                 reply(Self.encoded(response))
             }
         } catch {
@@ -633,6 +763,37 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
             reply(Self.encoded(status))
         })
     }
+
+#if DEBUG
+    func runtimeLifecycleDebugStatus(withReply reply: @escaping (Data) -> Void) {
+        reply(Self.encoded(RuntimeLifecycleTestHooks.shared.snapshot()))
+    }
+
+    func triggerReservationTerminationProbe(
+        _ generationIDData: Data,
+        withReply reply: @escaping (Data) -> Void
+    ) {
+        guard let generationID = try? RuntimeXPCCodec.decode(
+            GenerationID.self,
+            from: generationIDData
+        ),
+        let caller = NSXPCConnection.current(),
+        let capturedOwner = RuntimeLifecycleTestHooks.shared.reservationOwner(
+            for: generationID
+        ),
+        capturedOwner !== caller else {
+            reply(Self.encoded(false))
+            return
+        }
+
+        // Invoke the production termination path with the exact authenticated
+        // owner captured by beginGeneration. XPC defers a real invalidation
+        // callback until its outstanding generate invocation returns, so this
+        // DEBUG control is the only deterministic way to enter the former gap.
+        handleConnectionTermination(capturedOwner)
+        reply(Self.encoded(true))
+    }
+#endif
 
     func loadEmbeddingModel(_ requestData: Data, withReply reply: @escaping (Data) -> Void) {
         do {
@@ -693,6 +854,255 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
         (try? RuntimeXPCCodec.encode(value)) ?? Data()
     }
 }
+
+#if DEBUG
+/// Separate from production stateLock so the hosted app can prove that a
+/// connection handler reached a deliberately paused lifecycle boundary. Every
+/// phase is acknowledged by generation ID; no race probe depends on a sleep.
+final class RuntimeLifecycleTestHooks: @unchecked Sendable {
+    static let shared = RuntimeLifecycleTestHooks()
+    static let reservationRacePrompt = "SUPRA-XPC-TEST-RESERVATION-RACE"
+    static let staleTerminationPrompt = "SUPRA-XPC-TEST-STALE-TERMINATION"
+
+    enum StaleTerminationCaptureDisposition {
+        case notArmed
+        case primary
+        case duplicate
+    }
+
+    private typealias Waiter = CheckedContinuation<Void, Never>
+
+    private struct StaleSuccessorWaiter {
+        let generationID: GenerationID
+        let oldEpoch: RuntimeGenerationEpoch
+        let continuation: Waiter
+    }
+
+    private let condition = NSCondition()
+
+    private var reservationGenerationID: GenerationID?
+    private var reservationEpoch: RuntimeGenerationEpoch?
+    private var reservationOwnerIdentity: ObjectIdentifier?
+    private var reservationOwnerConnection: NSXPCConnection?
+    private var reservationPausedGenerationID: GenerationID?
+    private var reservationTerminationHandlerEnteredGenerationID: GenerationID?
+    private var reservationAdmissionReleasedGenerationID: GenerationID?
+    private var reservationCancellationAttemptedGenerationID: GenerationID?
+    private var reservationCancellationStatus: CancelGenerationStatus?
+
+    private var staleGenerationID: GenerationID?
+    private var staleEpoch: RuntimeGenerationEpoch?
+    private var stalePrimaryHandlerSelected = false
+    private var staleTerminationCapturedGenerationID: GenerationID?
+    private var staleSuccessorAdmittedGenerationID: GenerationID?
+    private var staleSuccessorEpoch: RuntimeGenerationEpoch?
+    private var staleCancellationAttemptedGenerationID: GenerationID?
+    private var staleCancellationStatus: CancelGenerationStatus?
+    private var staleCaptureWaiters: [GenerationID: [Waiter]] = [:]
+    private var staleSuccessorWaiters: [StaleSuccessorWaiter] = []
+
+    func pauseReservationBeforeAdmission(
+        generationID: GenerationID,
+        epoch: RuntimeGenerationEpoch,
+        ownerConnection: NSXPCConnection
+    ) {
+        condition.lock()
+        reservationGenerationID = generationID
+        reservationEpoch = epoch
+        reservationOwnerIdentity = ObjectIdentifier(ownerConnection)
+        reservationOwnerConnection = ownerConnection
+        reservationPausedGenerationID = generationID
+        reservationTerminationHandlerEnteredGenerationID = nil
+        reservationAdmissionReleasedGenerationID = nil
+        reservationCancellationAttemptedGenerationID = nil
+        reservationCancellationStatus = nil
+        condition.broadcast()
+
+        let deadline = Date().addingTimeInterval(5)
+        while reservationTerminationHandlerEnteredGenerationID != generationID,
+              condition.wait(until: deadline) {}
+        if reservationTerminationHandlerEnteredGenerationID == generationID {
+            reservationAdmissionReleasedGenerationID = generationID
+            condition.broadcast()
+        }
+        condition.unlock()
+    }
+
+    func noteTerminationHandlerEntered(_ connection: NSXPCConnection?) {
+        guard let connection else { return }
+        condition.lock()
+        if reservationOwnerIdentity == ObjectIdentifier(connection),
+           let reservationGenerationID {
+            reservationTerminationHandlerEnteredGenerationID = reservationGenerationID
+            condition.broadcast()
+        }
+        condition.unlock()
+    }
+
+    func isReservationRace(
+        generationID: GenerationID,
+        epoch: RuntimeGenerationEpoch
+    ) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return reservationGenerationID == generationID && reservationEpoch == epoch
+    }
+
+    func reservationOwner(for generationID: GenerationID) -> NSXPCConnection? {
+        condition.lock()
+        defer { condition.unlock() }
+        guard reservationGenerationID == generationID else { return nil }
+        return reservationOwnerConnection
+    }
+
+    func noteReservationCancellationAttempted(generationID: GenerationID) {
+        condition.lock()
+        if reservationGenerationID == generationID {
+            reservationCancellationAttemptedGenerationID = generationID
+        }
+        condition.unlock()
+    }
+
+    func noteReservationCancellationResponse(_ response: CancelGenerationResponse) {
+        condition.lock()
+        if reservationGenerationID == response.generationID,
+           reservationCancellationStatus == nil {
+            reservationCancellationStatus = response.status
+            reservationOwnerConnection = nil
+        }
+        condition.unlock()
+    }
+
+    func armStaleTermination(
+        generationID: GenerationID,
+        epoch: RuntimeGenerationEpoch
+    ) {
+        condition.lock()
+        staleGenerationID = generationID
+        staleEpoch = epoch
+        stalePrimaryHandlerSelected = false
+        staleTerminationCapturedGenerationID = nil
+        staleSuccessorAdmittedGenerationID = nil
+        staleSuccessorEpoch = nil
+        staleCancellationAttemptedGenerationID = nil
+        staleCancellationStatus = nil
+        condition.unlock()
+    }
+
+    func waitForStaleTerminationCapture(generationID: GenerationID) async {
+        await withCheckedContinuation { continuation in
+            condition.lock()
+            if staleTerminationCapturedGenerationID == generationID {
+                condition.unlock()
+                continuation.resume()
+            } else {
+                staleCaptureWaiters[generationID, default: []].append(continuation)
+                condition.unlock()
+            }
+        }
+    }
+
+    func captureStaleTerminationIfArmed(
+        generationID: GenerationID,
+        epoch: RuntimeGenerationEpoch
+    ) -> StaleTerminationCaptureDisposition {
+        condition.lock()
+        guard staleGenerationID == generationID, staleEpoch == epoch else {
+            condition.unlock()
+            return .notArmed
+        }
+        guard !stalePrimaryHandlerSelected else {
+            condition.unlock()
+            return .duplicate
+        }
+        stalePrimaryHandlerSelected = true
+        staleTerminationCapturedGenerationID = generationID
+        let waiters = staleCaptureWaiters.removeValue(forKey: generationID) ?? []
+        condition.unlock()
+        waiters.forEach { $0.resume() }
+        return .primary
+    }
+
+    func waitForStaleSuccessorAdmission(
+        generationID: GenerationID,
+        oldEpoch: RuntimeGenerationEpoch
+    ) async {
+        await withCheckedContinuation { continuation in
+            condition.lock()
+            if staleSuccessorAdmittedGenerationID == generationID,
+               let staleSuccessorEpoch,
+               staleSuccessorEpoch != oldEpoch {
+                condition.unlock()
+                continuation.resume()
+            } else {
+                staleSuccessorWaiters.append(
+                    StaleSuccessorWaiter(
+                        generationID: generationID,
+                        oldEpoch: oldEpoch,
+                        continuation: continuation
+                    )
+                )
+                condition.unlock()
+            }
+        }
+    }
+
+    func noteGenerationAdmitted(
+        generationID: GenerationID,
+        epoch: RuntimeGenerationEpoch
+    ) {
+        condition.lock()
+        guard staleGenerationID == generationID,
+              let staleEpoch,
+              staleEpoch != epoch else {
+            condition.unlock()
+            return
+        }
+        staleSuccessorAdmittedGenerationID = generationID
+        staleSuccessorEpoch = epoch
+        let ready = staleSuccessorWaiters.filter {
+            $0.generationID == generationID && $0.oldEpoch != epoch
+        }
+        staleSuccessorWaiters.removeAll {
+            $0.generationID == generationID && $0.oldEpoch != epoch
+        }
+        condition.unlock()
+        ready.forEach { $0.continuation.resume() }
+    }
+
+    func noteStaleCancellationAttempted(generationID: GenerationID) {
+        condition.lock()
+        if staleGenerationID == generationID {
+            staleCancellationAttemptedGenerationID = generationID
+        }
+        condition.unlock()
+    }
+
+    func noteStaleCancellationResponse(_ response: CancelGenerationResponse) {
+        condition.lock()
+        if staleGenerationID == response.generationID {
+            staleCancellationStatus = response.status
+        }
+        condition.unlock()
+    }
+
+    func snapshot() -> RuntimeLifecycleDebugStatus {
+        condition.lock()
+        defer { condition.unlock() }
+        return RuntimeLifecycleDebugStatus(
+            reservationPausedGenerationID: reservationPausedGenerationID,
+            reservationTerminationHandlerEnteredGenerationID: reservationTerminationHandlerEnteredGenerationID,
+            reservationAdmissionReleasedGenerationID: reservationAdmissionReleasedGenerationID,
+            reservationCancellationAttemptedGenerationID: reservationCancellationAttemptedGenerationID,
+            reservationCancellationStatus: reservationCancellationStatus,
+            staleTerminationCapturedGenerationID: staleTerminationCapturedGenerationID,
+            staleSuccessorAdmittedGenerationID: staleSuccessorAdmittedGenerationID,
+            staleCancellationAttemptedGenerationID: staleCancellationAttemptedGenerationID,
+            staleCancellationStatus: staleCancellationStatus
+        )
+    }
+}
+#endif
 
 private final class XPCGenerationEventSinkAdapter: GenerationEventSinkProtocol {
     private let eventSink: SupraGenerationEventXPCSinkProtocol

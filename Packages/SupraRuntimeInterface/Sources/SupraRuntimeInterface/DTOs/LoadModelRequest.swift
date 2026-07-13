@@ -18,17 +18,24 @@ public struct LoadModelRequest: Codable, Sendable {
     /// this nil and are authorized solely by their transferable bookmark.
     public let managedRootPath: String?
 
+    /// Device/inode captured while the app holds the bookmark authority. Managed
+    /// loads require this pin; the service verifies it even when the bookmark's
+    /// raw stale bit is false, preventing same-path directory replacement.
+    public let modelDirectoryIdentity: ModelDirectoryIdentity?
+
     public init(
         modelID: ModelID,
         modelPath: String,
         displayName: String,
         modelBookmark: Data? = nil,
-        managedRootPath: String? = nil
+        managedRootPath: String? = nil,
+        modelDirectoryIdentity: ModelDirectoryIdentity? = nil
     ) {
         self.modelID = modelID
         self.modelPath = modelPath
         self.displayName = displayName
         self.modelBookmark = modelBookmark
         self.managedRootPath = managedRootPath
+        self.modelDirectoryIdentity = modelDirectoryIdentity
     }
 }

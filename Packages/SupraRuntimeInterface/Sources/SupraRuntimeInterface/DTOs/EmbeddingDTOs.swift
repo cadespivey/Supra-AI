@@ -26,6 +26,9 @@ public struct LoadEmbeddingModelRequest: Codable, Sendable {
     /// Canonical managed root used to reject traversal and symlink escapes.
     /// Custom user-selected model folders leave this nil.
     public let managedRootPath: String?
+    /// Device/inode pin for the authorized directory. Required for managed-root
+    /// loads and verified whenever present, independent of the bookmark stale bit.
+    public let modelDirectoryIdentity: ModelDirectoryIdentity?
 
     public init(
         embeddingModelID: DocumentEmbeddingModelID,
@@ -34,7 +37,8 @@ public struct LoadEmbeddingModelRequest: Codable, Sendable {
         revision: String? = nil,
         expectedDimension: Int? = nil,
         modelBookmark: Data? = nil,
-        managedRootPath: String? = nil
+        managedRootPath: String? = nil,
+        modelDirectoryIdentity: ModelDirectoryIdentity? = nil
     ) {
         self.embeddingModelID = embeddingModelID
         self.modelPath = modelPath
@@ -43,6 +47,7 @@ public struct LoadEmbeddingModelRequest: Codable, Sendable {
         self.expectedDimension = expectedDimension
         self.modelBookmark = modelBookmark
         self.managedRootPath = managedRootPath
+        self.modelDirectoryIdentity = modelDirectoryIdentity
     }
 }
 

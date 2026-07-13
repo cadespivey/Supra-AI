@@ -34,21 +34,30 @@ The test app generates a content-free DEBUG-only lifecycle model directory at ru
 weights or user content are committed. Across 20 iterations it proves:
 
 1. status round-trips through the real embedded service;
-2. nil, invalid, stale/moved bookmarks, direct root escapes, and in-root symlinks to an
-   outside target are rejected;
+2. nil, invalid, stale/moved bookmarks, missing managed identities, same-path directory
+   replacements, direct root escapes, and in-root symlinks to an outside target are rejected;
 3. a valid transferable bookmark reaches the controlled load path;
 4. stream completion and cancellation are each delivered exactly once in both the live stream
    and the post-terminal event buffer;
 5. cancellation keeps the generation slot closed until the model actor and old task quiesce,
    and reports measured monotonic latency instead of a synthetic zero;
-6. a rejected busy client's disconnect cannot steal ownership or cancel the accepted client;
-7. dropping the owning XPC connection during generation cancels the orphan once;
-8. load/unload and generation reservations are atomic, concurrent model mutations serialize,
+6. cancellation is bound to the accepting XPC connection, so a busy/foreign client receives
+   `notFound` and cannot cancel the accepted owner;
+7. dropping the owning XPC connection during generation cancels the orphan once, while a stale
+   termination handler cannot cancel a successor that reuses the same public generation ID;
+8. service reservation/coordinator admission and coordinator task installation are atomic,
+   including deterministic cancellation probes at both former race windows. DEBUG-only
+   acknowledgements identify the paused reservation, matching handler entry, successor
+   epoch admission, coordinator cancellation attempt, and exact response; the probes do
+   not infer those phases from fixed sleeps;
+9. load/unload and generation reservations are atomic, concurrent model mutations serialize,
    and a failed replacement preserves the previously loaded model; and
-9. connection invalidation/reconnect reaches the same hosted service state.
+10. connection invalidation/reconnect reaches the same hosted service state.
 
 The DEBUG lifecycle model tests process/protocol/state ownership and intentionally does not
-claim MLX numerical correctness. “Reconnect” here means a new client connection to the same
+claim MLX numerical correctness or immutable model contents. Its directory device/inode checks
+catch delete/recreate before and during load, but not in-place shard mutation that preserves
+the directory inode. “Reconnect” here means a new client connection to the same
 launchd-managed service; it does not claim an externally forced service-process kill. Release
 qualification must separately exercise a real process kill/relaunch, load the protected small
 MLX fixture and supported large-model scenario, and use Developer-ID/Team-ID signatures. Weights
@@ -76,7 +85,7 @@ Toolchain: Xcode beta `27A5194q`, macOS arm64.
 
 - Exact `SupraAIUITests/RuntimeXPCIntegrationTests` selector: 2/2 passed, including 20/20
   hosted lifecycle iterations and switch binding/Tab/Shift-Tab traversal.
-- Runtime interface and client packages: 4/4 each; focused Sessions model-load tests: 5/5;
+- Runtime interface and client packages: 5/5 and 4/4; focused Sessions model-load tests: 5/5;
   focused document setup tests: 5/5.
 - Runtime client package under Thread Sanitizer and Address Sanitizer: 4/4 each.
 - Source and ad-hoc signed-product boundary/entitlement gates: passed.

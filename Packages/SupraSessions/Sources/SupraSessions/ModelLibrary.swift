@@ -447,6 +447,7 @@ public final class ModelLibrary: ObservableObject {
 
         let modelBookmark: Data?
         let managedRootPath: String?
+        let directoryIdentity: ModelDirectoryIdentity?
         if record.bookmarkData != nil {
             // User-selected folder: hold the app's own access while minting.
             let access = SecurityScopedModelAccess(bookmarkData: record.bookmarkData)
@@ -456,14 +457,19 @@ public final class ModelLibrary: ObservableObject {
                 loadState = .failed(message: "Could not access the model folder. Re-add it from the Models tab.")
                 return
             }
-            // Refresh a stale bookmark so access survives future launches.
-            if access.isStale, let refreshed = access.makePersistentBookmark() {
-                var updated = record
-                updated.bookmarkData = refreshed
-                try? store.models.upsertModel(updated)
-                refresh()
+            // Staleness reported to the original app signer is authoritative,
+            // unlike the signer-induced stale bit seen only in the XPC service.
+            // Never silently reauthorize a replacement at the same path.
+            guard !access.isStale else {
+                loadState = .failed(message: "The model folder moved or changed. Re-add it from the Models tab.")
+                return
             }
-            modelBookmark = access.makeTransferableBookmark()
+            guard let authorization = access.makeTransferableAuthorization() else {
+                loadState = .failed(message: "The model folder changed while it was being authorized. Re-add it.")
+                return
+            }
+            modelBookmark = authorization.bookmark
+            directoryIdentity = authorization.directoryIdentity
             managedRootPath = nil
         } else if let managedRoot = managedModelRoots.first(where: {
             ManagedModelStorage.isManaged(path: record.path, roots: [$0])
@@ -474,17 +480,20 @@ public final class ModelLibrary: ObservableObject {
                 url: URL(fileURLWithPath: record.path, isDirectory: true)
             )
             scopedAccess = access
-            guard access.hasAccess, let managedBookmark = access.makeTransferableBookmark() else {
+            guard access.hasAccess,
+                  let authorization = access.makeTransferableAuthorization() else {
                 loadState = .failed(message: "The downloaded model files could not be found. Re-download the model.")
                 return
             }
-            modelBookmark = managedBookmark
+            modelBookmark = authorization.bookmark
+            directoryIdentity = authorization.directoryIdentity
             managedRootPath = managedRoot.path
         } else {
             // Raw paths are never authority at the service boundary. Preserve the
             // explicit failure path so the user is told to re-add the folder.
             modelBookmark = nil
             managedRootPath = nil
+            directoryIdentity = nil
         }
 
         let request = LoadModelRequest(
@@ -492,7 +501,8 @@ public final class ModelLibrary: ObservableObject {
             modelPath: record.path,
             displayName: record.displayName,
             modelBookmark: modelBookmark,
-            managedRootPath: managedRootPath
+            managedRootPath: managedRootPath,
+            modelDirectoryIdentity: directoryIdentity
         )
 
         do {

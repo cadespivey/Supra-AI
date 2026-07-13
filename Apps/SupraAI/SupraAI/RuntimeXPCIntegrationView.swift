@@ -132,6 +132,7 @@ private struct RuntimeXPCIntegrationRunner {
         "statusRoundTrip",
         "nilBookmarkRejected",
         "invalidBookmarkRejected",
+        "nilManagedIdentityRejected",
         "staleBookmarkRejected",
         "samePathReplacementRejected",
         "managedRootEscapeRejected",
@@ -231,6 +232,17 @@ private struct RuntimeXPCIntegrationRunner {
         )
         try requireAccessRejected(invalidBookmark, name: "invalid bookmark")
 
+        let nilManagedIdentity = try await client.loadModel(
+            request(
+                id: ModelID(),
+                path: fixture.model.path,
+                bookmark: fixture.modelBookmark,
+                root: fixture.root.path,
+                includeCurrentIdentity: false
+            )
+        )
+        try requireAccessRejected(nilManagedIdentity, name: "nil managed identity")
+
         let staleBookmark = try await client.loadModel(
             request(
                 id: ModelID(),
@@ -246,7 +258,8 @@ private struct RuntimeXPCIntegrationRunner {
                 id: ModelID(),
                 path: fixture.recreatedModel.path,
                 bookmark: fixture.recreatedBookmark,
-                root: fixture.root.path
+                root: fixture.root.path,
+                identity: fixture.recreatedOriginalIdentity
             )
         )
         try requireAccessRejected(samePathReplacement, name: "same-path model replacement")
@@ -394,10 +407,10 @@ private struct RuntimeXPCIntegrationRunner {
         )
 
         if iteration == 1 {
-            // Force cancellation into the coordinator's vulnerable interval after
-            // publishing generationStarted but before installing the model task.
-            // A cancelled task must never reach the model actor after its slot is
-            // released; the following completion probe exposes that as a canary.
+            // Hold the coordinator after the Task is installed and
+            // generationStarted is published, but before its gate allows model-
+            // actor entry. Cancellation opens that exact gate only after marking
+            // the Task cancelled; the following completion is the actor canary.
             let installRaceID = GenerationID()
             let installRaceTask = try collectInTask(
                 client.generate(
@@ -416,10 +429,9 @@ private struct RuntimeXPCIntegrationRunner {
             let installRaceCancel = try await client.cancelGeneration(installRaceID)
             try require(
                 installRaceCancel.status == .cancelled,
-                "cancel-before-task-install was not acknowledged"
+                "cancel-before-model-entry was not acknowledged"
             )
             _ = try await installRaceTask.value
-            try await Task.sleep(nanoseconds: 300_000_000)
 
             let installRaceProbeEvents = try await collect(
                 client.generate(
@@ -435,12 +447,14 @@ private struct RuntimeXPCIntegrationRunner {
             try require(
                 installRaceProbeEvents.filter { $0.type == .token }.map(\.tokenText)
                     == ["xpc-boundary-canary"],
-                "a task entered the model actor after pre-install cancellation"
+                "a task entered the model actor after gated cancellation"
             )
 
-            // A connection can disappear after the service publishes ownership
-            // but before coordinator admission. The reservation and coordinator
-            // task must become visible atomically to the termination handler.
+            // A termination attempt can contend after ownership reservation but
+            // before coordinator admission. XPC defers a real invalidation callback
+            // until its outstanding generate invocation returns, so the DEBUG
+            // control invokes the production handler with the exact captured owner.
+            // The ordinary disconnect case below still proves real delivery.
             let reservationRaceID = GenerationID()
             let reservationRaceOwner = RuntimeClient()
             try await reservationRaceOwner.connect()
@@ -455,14 +469,32 @@ private struct RuntimeXPCIntegrationRunner {
                     )
                 )
             )
-            try await waitUntil("reservation-before-admission seam was not reached") {
-                try await client.runtimeStatus().activeGenerationID == reservationRaceID
+            try await waitUntil("reservation-before-admission seam was not acknowledged") {
+                try await client.runtimeLifecycleDebugStatus().reservationPausedGenerationID
+                    == reservationRaceID
             }
-            reservationRaceOwner.disconnect()
-            try await waitUntil("pre-admission owner drop leaked the generation slot") {
+            let terminationInvoked = try await client.triggerReservationTerminationProbe(
+                reservationRaceID
+            )
+            try require(
+                terminationInvoked,
+                "DEBUG control did not invoke termination for the captured owner"
+            )
+            try await waitUntil("termination handler never entered the paused admission seam") {
+                let status = try await client.runtimeLifecycleDebugStatus()
+                return status.reservationTerminationHandlerEnteredGenerationID == reservationRaceID
+                    && status.reservationAdmissionReleasedGenerationID == reservationRaceID
+            }
+            try await waitUntil("pre-admission termination never reached the coordinator") {
+                let status = try await client.runtimeLifecycleDebugStatus()
+                return status.reservationCancellationAttemptedGenerationID == reservationRaceID
+                    && status.reservationCancellationStatus == .cancelled
+            }
+            try await waitUntil("pre-admission termination leaked the generation slot") {
                 try await client.runtimeStatus().activeGenerationID == nil
             }
             _ = await reservationRaceTask.result
+            reservationRaceOwner.disconnect()
         }
 
         let terminatedID = GenerationID()
@@ -564,6 +596,10 @@ private struct RuntimeXPCIntegrationRunner {
                 try await client.runtimeStatus().activeGenerationID == reusedID
             }
             oldOwner.disconnect()
+            try await waitUntil("old termination handler never captured its reservation epoch") {
+                try await client.runtimeLifecycleDebugStatus().staleTerminationCapturedGenerationID
+                    == reusedID
+            }
             try await waitUntil("old reused-ID generation did not complete") {
                 try await client.runtimeStatus().activeGenerationID == nil
             }
@@ -583,7 +619,12 @@ private struct RuntimeXPCIntegrationRunner {
             try await waitUntil("reused-ID successor never started") {
                 try await client.runtimeStatus().activeGenerationID == reusedID
             }
-            try await Task.sleep(nanoseconds: 300_000_000)
+            try await waitUntil("stale termination handler did not target the admitted successor epoch") {
+                let status = try await client.runtimeLifecycleDebugStatus()
+                return status.staleSuccessorAdmittedGenerationID == reusedID
+                    && status.staleCancellationAttemptedGenerationID == reusedID
+                    && status.staleCancellationStatus == .notFound
+            }
             let reusedStatus = try await client.runtimeStatus()
             try require(
                 reusedStatus.activeGenerationID == reusedID,
@@ -637,6 +678,7 @@ private struct RuntimeXPCIntegrationRunner {
             "statusRoundTrip": true,
             "nilBookmarkRejected": true,
             "invalidBookmarkRejected": true,
+            "nilManagedIdentityRejected": true,
             "staleBookmarkRejected": true,
             "samePathReplacementRejected": true,
             "managedRootEscapeRejected": true,
@@ -658,14 +700,19 @@ private struct RuntimeXPCIntegrationRunner {
         id: ModelID,
         path: String,
         bookmark: Data?,
-        root: String?
+        root: String?,
+        identity: ModelDirectoryIdentity? = nil,
+        includeCurrentIdentity: Bool = true
     ) -> LoadModelRequest {
         LoadModelRequest(
             modelID: id,
             modelPath: path,
             displayName: "Generated XPC lifecycle model",
             modelBookmark: bookmark,
-            managedRootPath: root
+            managedRootPath: root,
+            modelDirectoryIdentity: identity ?? (includeCurrentIdentity
+                ? ModelDirectoryIdentity(url: URL(fileURLWithPath: path, isDirectory: true))
+                : nil)
         )
     }
 
@@ -729,6 +776,9 @@ private struct RuntimeXPCIntegrationRunner {
         let escapeAccess = try Self.transferableBookmark(for: escape)
         let staleAccess = try Self.transferableBookmark(for: staleOriginal)
         let recreatedAccess = try Self.transferableBookmark(for: recreatedModel)
+        guard let recreatedOriginalIdentity = ModelDirectoryIdentity(url: recreatedModel) else {
+            throw RuntimeXPCIntegrationError.assertion("recreated fixture identity could not be captured")
+        }
         try FileManager.default.moveItem(at: staleOriginal, to: staleMoved)
         try FileManager.default.removeItem(at: recreatedModel)
         try FileManager.default.createDirectory(at: recreatedModel, withIntermediateDirectories: true)
@@ -745,6 +795,7 @@ private struct RuntimeXPCIntegrationRunner {
             escapeBookmark: escapeAccess.bookmark,
             staleBookmark: staleAccess.bookmark,
             recreatedBookmark: recreatedAccess.bookmark,
+            recreatedOriginalIdentity: recreatedOriginalIdentity,
             staleOriginalPath: staleOriginal.path,
             scopedURLs: [
                 modelAccess.scopedURL,
@@ -790,6 +841,7 @@ private struct RuntimeXPCIntegrationRunner {
         let escapeBookmark: Data
         let staleBookmark: Data
         let recreatedBookmark: Data
+        let recreatedOriginalIdentity: ModelDirectoryIdentity
         let staleOriginalPath: String
         let scopedURLs: [URL]
 

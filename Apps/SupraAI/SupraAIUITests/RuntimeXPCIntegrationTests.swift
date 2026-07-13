@@ -28,6 +28,7 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
             "statusRoundTrip",
             "nilBookmarkRejected",
             "invalidBookmarkRejected",
+            "nilManagedIdentityRejected",
             "staleBookmarkRejected",
             "samePathReplacementRejected",
             "managedRootEscapeRejected",

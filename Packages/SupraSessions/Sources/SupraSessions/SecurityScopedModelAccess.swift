@@ -1,4 +1,5 @@
 import Foundation
+import SupraRuntimeInterface
 
 /// Holds the app's own security-scoped access to a model directory long enough
 /// to mint a plain, transferable bookmark to hand to the runtime service.
@@ -13,8 +14,8 @@ struct SecurityScopedModelAccess {
     private let accessedURL: URL?
     private let shouldStopAccessing: Bool
 
-    /// `true` when the persisted bookmark resolved as stale (folder moved/renamed).
-    /// The host should re-mint and re-persist a fresh `.withSecurityScope` bookmark.
+    /// `true` when the persisted bookmark resolved as stale (folder moved,
+    /// renamed, or replaced). The host must fail closed and require re-selection.
     let isStale: Bool
 
     /// Whether this host can mint a bookmark for the directory. In the sandboxed
@@ -88,18 +89,26 @@ struct SecurityScopedModelAccess {
         isStale = stale
     }
 
-    /// A plain bookmark for the model directory, valid only while this access is
-    /// held and both processes are running. Returns `nil` when no access is held.
-    func makeTransferableBookmark() -> Data? {
-        guard let accessedURL else { return nil }
-        return try? accessedURL.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
-    }
-
-    /// A fresh `.withSecurityScope` bookmark for re-persisting when the stored one
-    /// went stale. Returns `nil` when no access is held.
-    func makePersistentBookmark() -> Data? {
-        guard let accessedURL else { return nil }
-        return try? accessedURL.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+    /// Mints a plain bookmark and pins the exact directory object it authorized.
+    /// Identity is sampled on both sides of bookmark creation; replacement during
+    /// that window fails closed instead of pairing an old bookmark with a new inode.
+    func makeTransferableAuthorization() -> (
+        bookmark: Data,
+        directoryIdentity: ModelDirectoryIdentity
+    )? {
+        guard !isStale,
+              let accessedURL,
+              let identityBefore = ModelDirectoryIdentity(url: accessedURL),
+              let bookmark = try? accessedURL.bookmarkData(
+                  options: [],
+                  includingResourceValuesForKeys: nil,
+                  relativeTo: nil
+              ),
+              let identityAfter = ModelDirectoryIdentity(url: accessedURL),
+              identityAfter == identityBefore else {
+            return nil
+        }
+        return (bookmark, identityBefore)
     }
 
     func release() {

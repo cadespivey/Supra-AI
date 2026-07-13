@@ -16,6 +16,7 @@ protocol EmbeddingModelController: Sendable {
         bookmark: Data?,
         path: String,
         managedRootPath: String?,
+        expectedIdentity: ModelDirectoryIdentity?,
         expectedDimension: Int?
     ) async throws -> Int
     func embed(texts: [String], normalize: Bool) async throws -> [[Float]]
@@ -50,12 +51,14 @@ actor MLXEmbeddingModelController: EmbeddingModelController {
         bookmark: Data?,
         path: String,
         managedRootPath: String?,
+        expectedIdentity: ModelDirectoryIdentity?,
         expectedDimension: Int?
     ) async throws -> Int {
         let access = try RuntimeModelDirectoryAccess(
             bookmark: bookmark,
             requestedPath: path,
-            managedRootPath: managedRootPath
+            managedRootPath: managedRootPath,
+            expectedIdentity: expectedIdentity
         )
         defer { access.close() }
         let resolvedURL = access.url
@@ -77,8 +80,10 @@ actor MLXEmbeddingModelController: EmbeddingModelController {
         }
 
         // Commit only after access, factory load, probe, and dimension validation
-        // all succeed. A failed replacement therefore leaves the prior model live
-        // and consistent with the service's reported embedding state.
+        // all succeed, and after revalidating that the directory was not replaced
+        // during those async operations. A failed replacement therefore leaves the
+        // prior model live and consistent with the service's reported state.
+        try access.validateIdentity()
         container = loaded
         dimension = first.count
         return first.count

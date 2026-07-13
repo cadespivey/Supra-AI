@@ -172,6 +172,21 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
         }
     }
 
+#if DEBUG
+    public func runtimeLifecycleDebugStatus() async throws -> RuntimeLifecycleDebugStatus {
+        try await sendRequest(RuntimeLifecycleDebugStatus.self) { service, reply in
+            service.runtimeLifecycleDebugStatus(withReply: reply)
+        }
+    }
+
+    public func triggerReservationTerminationProbe(_ generationID: GenerationID) async throws -> Bool {
+        let generationIDData = try encode(generationID)
+        return try await sendRequest(Bool.self) { service, reply in
+            service.triggerReservationTerminationProbe(generationIDData, withReply: reply)
+        }
+    }
+#endif
+
     public func loadEmbeddingModel(_ request: LoadEmbeddingModelRequest) async throws -> LoadEmbeddingModelResponse {
         let requestData = try encode(request)
         return try await sendRequest(LoadEmbeddingModelResponse.self) { service, reply in
