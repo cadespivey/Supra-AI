@@ -260,6 +260,23 @@ final class RedirectPolicyTests: XCTestCase {
             XCTAssertEqual(redirected.url, destination)
         }
 
+        let protocolRelativeDestination = try XCTUnwrap(URL(string: "https://api.example.test/protocol-relative"))
+        let protocolRelativeResponse = try XCTUnwrap(
+            HTTPURLResponse(
+                url: initial,
+                statusCode: 302,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Location": "//api.example.test/protocol-relative"]
+            )
+        )
+        let resolved = try policy.requestForRedirect(
+            from: URLRequest(url: initial),
+            response: protocolRelativeResponse,
+            proposedRequest: URLRequest(url: protocolRelativeDestination),
+            hopCount: 1
+        )
+        XCTAssertEqual(resolved.url, protocolRelativeDestination)
+
         let sixth = try XCTUnwrap(URL(string: "https://api.example.test/hop-6"))
         XCTAssertThrowsError(
             try policy.requestForRedirect(
