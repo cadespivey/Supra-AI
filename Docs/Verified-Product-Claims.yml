@@ -208,7 +208,7 @@ claims:
     wording: "Imported originals are opened read-only and are not modified; managed copies are written inside the sandbox, while exports use destinations selected by the user."
     owner: "Document engineering"
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/DocumentImportService.swift"
-    verification: "Packages/SupraSessions/Tests/SupraSessionsTests/DocumentImportTests.swift"
+    verification: "Packages/SupraSessions/Tests/SupraSessionsTests/HostileDocumentImportTests.swift"
     ci_job: "macos-ci/swift-packages"
     applicable_version: "2.2.0 and later"
     last_reviewed: "2026-07-13"

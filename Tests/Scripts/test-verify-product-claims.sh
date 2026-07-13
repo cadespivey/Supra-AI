@@ -38,7 +38,8 @@ run_case \
   bash "$verifier"
 
 drifted_count="${temporary_dir}/drifted-count.yml"
-sed "0,/expected: '14'/s//expected: '13'/" "$claims" >"$drifted_count"
+awk '!changed && sub(/expected: "14"/, "expected: \"13\"") { changed = 1 } { print }' \
+  "$claims" >"$drifted_count"
 run_case \
   "package-count drift fails closed" \
   1 \
@@ -46,7 +47,7 @@ run_case \
   env SUPRA_CLAIMS_FILE="$drifted_count" bash "$verifier"
 
 drifted_wording="${temporary_dir}/drifted-wording.yml"
-sed "0,/The source tree contains 14 local Swift packages\./s//The source tree contains thirteen local Swift packages./" \
+awk '!changed && sub(/The repository contains exactly 14 local Swift packages/, "The repository contains exactly thirteen local Swift packages") { changed = 1 } { print }' \
   "$claims" >"$drifted_wording"
 run_case \
   "unpublished wording fails closed" \
