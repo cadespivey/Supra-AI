@@ -218,18 +218,105 @@ dmg="${artifact_root}/SupraAI-2.3.0.dmg"
 ditto -c -k --keepParent "$app" "$zip"
 printf '%s\n' synthetic-dmg >"$dmg"
 final_manifest="${artifact_root}/preflight-manifest.json"
+smoke_result="${temporary_dir}/signed-runtime-smoke.json"
+release_source_sha="$(jq -r '.source.sha' "$source_manifest")"
+app_tree_sha="$(
+  bash -c 'source "$1"; release_directory_digest "$2"' \
+    _ "${scripts}/lib/release-common.sh" "$app"
+)"
+model_sha='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+smoke_nonce='cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+jq -n \
+  --arg nonce "$smoke_nonce" \
+  --arg sourceSha "$release_source_sha" \
+  --arg appTreeSHA256 "$app_tree_sha" \
+  --arg modelSHA256 "$model_sha" \
+  '{
+    schemaVersion: 1,
+    status: "passed",
+    nonce: $nonce,
+    sourceSha: $sourceSha,
+    appTreeSHA256: $appTreeSHA256,
+    modelSHA256: $modelSHA256,
+    appBundleIdentifier: "ai.supra.SupraAI",
+    xpcBundleIdentifier: "ai.supra.SupraAI.SupraRuntimeService",
+    appVersion: "2.3.0",
+    appBuild: "387",
+    modelRepositoryID: "mlx-community/Release-Smoke-4bit",
+    modelRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    verification: {
+      xpcConnected: true,
+      modelLoaded: true,
+      generationStarted: true,
+      generationCompleted: true,
+      modelUnloaded: true,
+      modelReverified: true
+    },
+    eventCounts: {
+      total: 4,
+      generationStarted: 1,
+      token: 1,
+      metrics: 1,
+      generationCompleted: 1,
+      generationFailed: 0,
+      generationCancelled: 0,
+      reserved: 0
+    },
+    generatedTokenCount: 7,
+    timings: {
+      loadTimeMs: 123,
+      firstTokenLatencyMs: 45,
+      tokensPerSecond: 12.5
+    }
+  }' >"$smoke_result"
+smoke_result_sha="$(shasum -a 256 "$smoke_result" | awk '{print $1}')"
 
-run_case \
-  'artifact manifest binds source and exact bytes' \
-  0 \
-  'Preflight manifest created' \
+manifest_output="${temporary_dir}/strict-manifest.log"
+manifest_status=0
+bash "${scripts}/create-preflight-manifest.sh" \
+  --source-manifest "$source_manifest" --app "$app" --zip "$zip" --dmg "$dmg" \
+  --team-id 2DP657YB3K --smoke-result "$smoke_result" --output "$final_manifest" \
+  >"$manifest_output" 2>&1 || manifest_status=$?
+if [[ "$manifest_status" -ne 0 || ! -f "$final_manifest" ]]; then
+  fail 'artifact manifest rejected the strict signed runtime smoke attestation'
+  sed 's/^/  | /' "$manifest_output" >&2
+
+  # Keep the independent downstream fail-closed cases runnable during RED by
+  # deriving a structurally valid fixture from the current implementation.
+  legacy_smoke_result="${temporary_dir}/legacy-signed-runtime-smoke.json"
+  jq -n \
+    --arg sourceSha "$release_source_sha" \
+    --arg appTreeSHA256 "$app_tree_sha" \
+    --arg modelSHA256 "$model_sha" \
+    '{schemaVersion: 1, status: "passed", sourceSha: $sourceSha,
+      appTreeSHA256: $appTreeSHA256, modelSHA256: $modelSHA256,
+      xpcBundleIdentifier: "ai.supra.SupraAI.SupraRuntimeService", generatedTokens: 7}' \
+    >"$legacy_smoke_result"
   bash "${scripts}/create-preflight-manifest.sh" \
     --source-manifest "$source_manifest" --app "$app" --zip "$zip" --dmg "$dmg" \
-    --team-id 2DP657YB3K --output "$final_manifest"
+    --team-id 2DP657YB3K --smoke-result "$legacy_smoke_result" --output "$final_manifest"
+  jq --slurpfile smoke "$smoke_result" --arg resultSHA256 "$smoke_result_sha" \
+    '.signedRuntimeSmoke = ($smoke[0] + {resultSHA256: $resultSHA256})' \
+    "$final_manifest" >"${final_manifest}.strict"
+  mv "${final_manifest}.strict" "$final_manifest"
+elif ! jq -e \
+  --slurpfile smoke "$smoke_result" --arg resultSHA256 "$smoke_result_sha" \
+  '.signedRuntimeSmoke == ($smoke[0] + {resultSHA256: $resultSHA256})' \
+  "$final_manifest" >/dev/null; then
+  fail 'preflight manifest did not preserve the complete strict attestation plus resultSHA256'
+  jq --slurpfile smoke "$smoke_result" --arg resultSHA256 "$smoke_result_sha" \
+    '.signedRuntimeSmoke = ($smoke[0] + {resultSHA256: $resultSHA256})' \
+    "$final_manifest" >"${final_manifest}.strict"
+  mv "${final_manifest}.strict" "$final_manifest"
+else
+  printf '%s\n' 'PASS: artifact manifest binds exact bytes and preserves the complete strict smoke attestation'
+fi
 cp "$final_manifest" "${final_manifest}.cms" 2>/dev/null || true
 
 artifact_verify() {
   local requested_build="${1:-387}"
+  local requested_manifest="${2:-$final_manifest}"
+  local requested_signature="${requested_manifest}.cms"
   env \
     PATH="${mock_bin}:$PATH" \
     MOCK_RELEASE_LOG="$mock_log" \
@@ -240,7 +327,7 @@ artifact_verify() {
     SUPRA_RELEASE_TESTING=1 \
     bash "${scripts}/verify-release-artifacts.sh" \
       --app "$app" --zip "$zip" --dmg "$dmg" \
-      --manifest "$final_manifest" --manifest-signature "${final_manifest}.cms" \
+      --manifest "$requested_manifest" --manifest-signature "$requested_signature" \
       --version 2.3.0 --build "$requested_build" --source-sha "$(jq -r '.source.sha' "$source_manifest" 2>/dev/null || printf '%040d' 0)" \
       --team-id 2DP657YB3K
 }
@@ -256,6 +343,36 @@ run_case \
   1 \
   'preflight manifest metadata does not match requested release' \
   artifact_verify 386
+
+null_smoke_manifest="${temporary_dir}/preflight-null-smoke.json"
+malformed_smoke_manifest="${temporary_dir}/preflight-malformed-smoke.json"
+mismatched_smoke_manifest="${temporary_dir}/preflight-mismatched-smoke.json"
+jq '.signedRuntimeSmoke = null' "$final_manifest" >"$null_smoke_manifest"
+jq 'del(.signedRuntimeSmoke.verification.modelReverified)' \
+  "$final_manifest" >"$malformed_smoke_manifest"
+jq '.signedRuntimeSmoke.sourceSha = "dddddddddddddddddddddddddddddddddddddddd"' \
+  "$final_manifest" >"$mismatched_smoke_manifest"
+for altered_manifest in \
+  "$null_smoke_manifest" "$malformed_smoke_manifest" "$mismatched_smoke_manifest"; do
+  cp "$altered_manifest" "${altered_manifest}.cms"
+done
+
+assert_artifact_smoke_rejected() {
+  local name="$1"
+  local altered_manifest="$2"
+  local output="${temporary_dir}/${name}-artifact.log"
+  local status=0
+  artifact_verify 387 "$altered_manifest" >"$output" 2>&1 || status=$?
+  if [[ "$status" -ne 1 ]]; then
+    fail "verify-release-artifacts accepted ${name} signed runtime smoke evidence"
+  else
+    printf 'PASS: verify-release-artifacts rejects %s signed runtime smoke evidence\n' "$name"
+  fi
+}
+
+assert_artifact_smoke_rejected null "$null_smoke_manifest"
+assert_artifact_smoke_rejected malformed "$malformed_smoke_manifest"
+assert_artifact_smoke_rejected mismatched "$mismatched_smoke_manifest"
 
 cms_output="${temporary_dir}/cms-failure.log"
 cms_status=0
@@ -341,19 +458,14 @@ else
   printf '%s\n' 'PASS: bad Sparkle length blocks appcast preparation'
 fi
 
-smoke_result="${temporary_dir}/signed-runtime-smoke.json"
-app_tree_sha="$(jq -r '.artifacts[] | select(.kind == "app") | .sha256' "$final_manifest" 2>/dev/null || true)"
-model_sha='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-MOCK_SOURCE_SHA="$(jq -r '.source.sha' "$source_manifest" 2>/dev/null || true)" \
-MOCK_APP_TREE_SHA="$app_tree_sha" MOCK_MODEL_SHA="$model_sha" \
-  "${mock_bin}/signed-smoke" --output "$smoke_result"
 run_case \
   'signed runtime smoke attestation binds app/model/source' \
   0 \
   'Signed runtime smoke attestation verified' \
   bash "${scripts}/verify-signed-runtime-smoke-result.sh" \
-    --result "$smoke_result" --source-sha "$(jq -r '.source.sha' "$source_manifest" 2>/dev/null || true)" \
-    --app-sha "$app_tree_sha" --model-sha "$model_sha"
+    --result "$smoke_result" --source-sha "$release_source_sha" \
+    --app-sha "$app_tree_sha" --model-sha "$model_sha" \
+    --version 2.3.0 --build 387 --nonce "$smoke_nonce"
 
 publish_root="${temporary_dir}/publish-root"
 mkdir -p "${publish_root}/build/release" "${publish_root}/website/public" "${publish_root}/website/lib"
@@ -363,6 +475,8 @@ public_appcast="${temporary_dir}/public-appcast.xml"
 : >"$public_appcast"
 
 publish_transaction() {
+  local requested_manifest="${1:-$final_manifest}"
+  local requested_signature="${requested_manifest}.cms"
   env \
     PATH="${mock_bin}:$PATH" \
     SUPRA_RELEASE_TESTING=1 \
@@ -373,14 +487,14 @@ publish_transaction() {
     SUPRA_APPCAST_ROLLBACK_COMMAND="${mock_bin}/appcast-rollback" \
     MOCK_RELEASE_LOG="$mock_log" \
     MOCK_ZIP_SOURCE="$zip" MOCK_DMG_SOURCE="$dmg" \
-    MOCK_MANIFEST_SOURCE="$final_manifest" MOCK_SIGNATURE_SOURCE="${final_manifest}.cms" \
+    MOCK_MANIFEST_SOURCE="$requested_manifest" MOCK_SIGNATURE_SOURCE="$requested_signature" \
     MOCK_PUBLIC_APPCAST_DEST="$public_appcast" \
     MOCK_SOURCE_SHA="$(jq -r '.source.sha' "$source_manifest" 2>/dev/null || true)" \
     bash "${scripts}/publish-release-transaction.sh" \
       --repo-root "$publish_root" --repository example/supra \
       --source-sha "$(jq -r '.source.sha' "$source_manifest" 2>/dev/null || true)" \
       --version 2.3.0 --build 387 --zip "$zip" --dmg "$dmg" \
-      --manifest "$final_manifest" --manifest-signature "${final_manifest}.cms" \
+      --manifest "$requested_manifest" --manifest-signature "$requested_signature" \
       --appcast-in "$appcast_in" --constants-in "$constants_in" \
       --sign-update "${mock_bin}/sign_update"
 }
@@ -391,10 +505,32 @@ run_case \
   0 \
   'Release transaction completed for v2.3.0' \
   publish_transaction
+successful_publish_log="${temporary_dir}/successful-publish.log"
+cp "$mock_log" "$successful_publish_log"
 
-create_line="$(grep -n 'gh release create' "$mock_log" | head -1 | cut -d: -f1 || true)"
-publish_line="$(grep -n 'gh release edit.*--draft=false' "$mock_log" | head -1 | cut -d: -f1 || true)"
-appcast_line="$(grep -n '^appcast-publish ' "$mock_log" | head -1 | cut -d: -f1 || true)"
+assert_publish_smoke_rejected() {
+  local name="$1"
+  local altered_manifest="$2"
+  local output="${temporary_dir}/${name}-publish.log"
+  local status=0
+  : >"$mock_log"
+  publish_transaction "$altered_manifest" >"$output" 2>&1 || status=$?
+  if [[ "$status" -ne 1 ]]; then
+    fail "publish-release-transaction accepted ${name} signed runtime smoke evidence"
+  elif grep -Eq 'gh release create|gh release upload|gh release edit.*--draft=false' "$mock_log"; then
+    fail "publish-release-transaction created release state before rejecting ${name} smoke evidence"
+  else
+    printf 'PASS: publish-release-transaction independently rejects %s signed runtime smoke evidence\n' "$name"
+  fi
+}
+
+assert_publish_smoke_rejected null "$null_smoke_manifest"
+assert_publish_smoke_rejected malformed "$malformed_smoke_manifest"
+assert_publish_smoke_rejected mismatched "$mismatched_smoke_manifest"
+
+create_line="$(grep -n 'gh release create' "$successful_publish_log" | head -1 | cut -d: -f1 || true)"
+publish_line="$(grep -n 'gh release edit.*--draft=false' "$successful_publish_log" | head -1 | cut -d: -f1 || true)"
+appcast_line="$(grep -n '^appcast-publish ' "$successful_publish_log" | head -1 | cut -d: -f1 || true)"
 if [[ -z "$create_line" || -z "$publish_line" || -z "$appcast_line" \
   || "$create_line" -ge "$publish_line" || "$publish_line" -ge "$appcast_line" ]]; then
   fail 'release transaction order is not draft -> public release -> appcast commit'
@@ -466,6 +602,99 @@ if grep -Eq 'xcodeproj|proj\.save|MARKETING_VERSION.*project' "${scripts}/releas
   fail 'release.sh still edits the Xcode project before build'
 else
   printf '%s\n' 'PASS: release.sh does not mutate project version source'
+fi
+
+release_script="${scripts}/release.sh"
+if grep -Eq 'SUPRA_RELEASE_SMOKE_MODEL_DIRECTORY:\?[^}]+' "$release_script"; then
+  printf '%s\n' 'PASS: release.sh requires the reviewed smoke model directory'
+else
+  fail 'release.sh does not require SUPRA_RELEASE_SMOKE_MODEL_DIRECTORY'
+fi
+
+if grep -Eq 'SUPRA_SIGNED_SMOKE_DRIVER' \
+  "$release_script" "${scripts}/run-signed-release-smoke.sh" \
+  "${repo_root}/.github/workflows/release.yml" \
+  "${repo_root}/.github/workflows/release-rehearsal.yml"; then
+  fail 'release integration still delegates signed smoke execution through SUPRA_SIGNED_SMOKE_DRIVER'
+else
+  printf '%s\n' 'PASS: release integration has no external signed-smoke driver override'
+fi
+
+if grep -Eq 'openssl[[:space:]]+rand[[:space:]]+-hex[[:space:]]+32' "$release_script" \
+  && grep -Eq 'smoke_nonce.*\^\[0-9a-f\].*64' "$release_script"; then
+  printf '%s\n' 'PASS: release.sh creates and validates a fresh lowercase 64-hex nonce'
+else
+  fail 'release.sh does not create and validate a fresh lowercase 64-hex smoke nonce'
+fi
+
+smoke_driver_line="$(grep -n 'Scripts/run-signed-release-smoke.sh' "$release_script" | head -1 | cut -d: -f1 || true)"
+final_manifest_line="$(
+  awk -v smoke="$smoke_driver_line" \
+    'NR > smoke && /Scripts\/create-preflight-manifest.sh/ { print NR; exit }' \
+    "$release_script"
+)"
+if [[ -n "$smoke_driver_line" ]]; then
+  smoke_driver_block="$(sed -n "${smoke_driver_line},$((smoke_driver_line + 10))p" "$release_script")"
+else
+  smoke_driver_block=''
+fi
+if grep -Fq -- '--version "$version"' <<<"$smoke_driver_block" \
+  && grep -Fq -- '--build "$build_number"' <<<"$smoke_driver_block" \
+  && grep -Fq -- '--nonce "$smoke_nonce"' <<<"$smoke_driver_block"; then
+  printf '%s\n' 'PASS: repository smoke driver receives version, build, and fresh nonce'
+else
+  fail 'release.sh does not pass version, build, and fresh nonce to the repository smoke driver'
+fi
+
+if [[ -n "$smoke_driver_line" && -n "$final_manifest_line" ]]; then
+  post_smoke_block="$(sed -n "$((smoke_driver_line + 1)),$((final_manifest_line - 1))p" "$release_script")"
+else
+  post_smoke_block=''
+fi
+if grep -Eq 'release_directory_digest.*\$app|verify[^[:space:]]*app[^[:space:]]*digest' \
+    <<<"$post_smoke_block" \
+  && grep -Eq 'codesign.*--verify.*\$app|verify[^[:space:]]*app[^[:space:]]*signature' \
+    <<<"$post_smoke_block"; then
+  printf '%s\n' 'PASS: signed app digest and signature are rechecked after smoke and before final manifest creation'
+else
+  fail 'release.sh does not recheck the app digest and signature after smoke before final manifest creation'
+fi
+
+preflight_schema="${repo_root}/Docs/Schemas/release-preflight-manifest.schema.json"
+smoke_schema_ref="$(jq -r '.properties.signedRuntimeSmoke["$ref"] // empty' "$preflight_schema")"
+if [[ -z "$smoke_schema_ref" || "$smoke_schema_ref" == \#* ]]; then
+  fail 'preflight schema does not require signedRuntimeSmoke through a dedicated strict schema'
+  smoke_schema=''
+else
+  smoke_schema="$(dirname "$preflight_schema")/$(basename "$smoke_schema_ref")"
+fi
+if [[ -n "$smoke_schema" && -f "$smoke_schema" ]] \
+  && jq -e '
+    .type == "object" and .additionalProperties == false and
+    (.required | sort) == ([
+      "schemaVersion", "status", "nonce", "sourceSha", "appTreeSHA256",
+      "modelSHA256", "appBundleIdentifier", "xpcBundleIdentifier",
+      "appVersion", "appBuild", "modelRepositoryID", "modelRevision",
+      "verification", "eventCounts", "generatedTokenCount", "timings",
+      "resultSHA256"
+    ] | sort) and
+    (.properties.verification.required | sort) == ([
+      "xpcConnected", "modelLoaded", "generationStarted",
+      "generationCompleted", "modelUnloaded", "modelReverified"
+    ] | sort) and
+    (.properties.eventCounts.required | sort) == ([
+      "total", "generationStarted", "token", "metrics",
+      "generationCompleted", "generationFailed", "generationCancelled", "reserved"
+    ] | sort) and
+    (.properties.timings.required | sort) == ([
+      "loadTimeMs", "firstTokenLatencyMs", "tokensPerSecond"
+    ] | sort) and
+    ([.. | objects | select(.type? == "object" and has("properties")) |
+      .additionalProperties == false] | all)
+  ' "$smoke_schema" >/dev/null; then
+  printf '%s\n' 'PASS: preflight schema requires one non-null recursively strict signedRuntimeSmoke object'
+else
+  fail 'preflight schema does not require the complete non-null recursively strict signedRuntimeSmoke object'
 fi
 
 run_case \
