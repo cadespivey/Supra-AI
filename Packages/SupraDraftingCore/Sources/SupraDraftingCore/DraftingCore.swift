@@ -1,10 +1,14 @@
 import Foundation
+import SupraCore
 
 public enum DraftError: Error, Sendable, Equatable {
     case styleFloorViolation(String)     // < 12pt or < 1" margin (2.520(a)) — StyleSheetCompiler
     case renderFailure(String)
     case missingRequiredSlot(String)     // a blocking slot the user must supply
     case packagingFailure(String)        // Zip/OPC assembly
+    /// A deterministic verification or pre-file gate rejected the content. Summaries
+    /// are sanitized for display and never contain raw source/model text.
+    case verificationBlocked([String])
 }
 
 public enum DraftKindID: String, Codable, CaseIterable, Sendable, Equatable {
@@ -862,22 +866,41 @@ public struct GeneratedSection: Sendable, Equatable {
     }
 }
 
-public struct GeneratedLetter: Sendable, Equatable {
-    public var paragraphs: [String]
-    public var assertedFacts: [FactRef]
-    public var citesUsed: [CitationRef]
+/// One model-generated paragraph plus the exact source labels the model claims support it.
+/// Labels are claims only: `DraftVerifier` independently validates them against immutable
+/// `GroundedFact` values before any renderer can run.
+public struct GeneratedLetterParagraph: Sendable, Equatable {
+    public let text: String
+    public let factLabels: [String]
+    public let citationLabels: [String]
 
-    public init(paragraphs: [String], assertedFacts: [FactRef], citesUsed: [CitationRef]) {
-        self.paragraphs = paragraphs
-        self.assertedFacts = assertedFacts
-        self.citesUsed = citesUsed
+    public init(text: String, factLabels: [String], citationLabels: [String]) {
+        self.text = text
+        self.factLabels = factLabels
+        self.citationLabels = citationLabels
+    }
+}
+
+public struct GeneratedLetter: Sendable, Equatable {
+    public let paragraphProvenance: [GeneratedLetterParagraph]
+
+    public init(paragraphProvenance: [GeneratedLetterParagraph]) {
+        self.paragraphProvenance = paragraphProvenance
+    }
+
+    public var paragraphs: [String] { paragraphProvenance.map(\.text) }
+    public var assertedFacts: [FactRef] {
+        paragraphProvenance.flatMap(\.factLabels).map(FactRef.init(label:))
+    }
+    public var citesUsed: [CitationRef] {
+        paragraphProvenance.flatMap(\.citationLabels).map(CitationRef.init(raw:))
     }
 }
 
 public enum VerifyUnit: Sendable, Equatable {
     case wholeDocument(DocumentModel)
     case section(GeneratedSection, requirement: SectionRequirement, facts: [GroundedFact], authorities: [VerifiedAuthority])
-    case letter(GeneratedLetter, model: LetterModel)
+    case letter(GeneratedLetter, model: LetterModel, facts: [GroundedFact])
 }
 
 public protocol Verifier: Sendable {
@@ -913,10 +936,16 @@ public struct FollowUp: Sendable, Equatable {
 public struct VerificationResult: Sendable, Equatable {
     public var failures: [GateFailure]
     public var followUps: [FollowUp]
+    public var propositionSupport: [PropositionSupportResult]
 
-    public init(failures: [GateFailure], followUps: [FollowUp]) {
+    public init(
+        failures: [GateFailure],
+        followUps: [FollowUp],
+        propositionSupport: [PropositionSupportResult] = []
+    ) {
         self.failures = failures
         self.followUps = followUps
+        self.propositionSupport = propositionSupport
     }
 }
 
@@ -960,9 +989,15 @@ public struct GateResult: Sendable, Equatable {
 public struct DraftResult: Sendable, Equatable {
     public var docx: Data
     public var followUps: [FollowUp]
+    public var propositionSupport: [PropositionSupportResult]
 
-    public init(docx: Data, followUps: [FollowUp]) {
+    public init(
+        docx: Data,
+        followUps: [FollowUp],
+        propositionSupport: [PropositionSupportResult] = []
+    ) {
         self.docx = docx
         self.followUps = followUps
+        self.propositionSupport = propositionSupport
     }
 }

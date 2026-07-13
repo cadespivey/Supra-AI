@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "SupraDrafting", targets: ["SupraDrafting"])
     ],
     dependencies: [
+        .package(path: "../SupraCore"),
         .package(path: "../SupraDraftingCore"),
         .package(path: "../SupraExports")
     ],
@@ -18,6 +19,7 @@ let package = Package(
         .target(
             name: "SupraDrafting",
             dependencies: [
+                .product(name: "SupraCore", package: "SupraCore"),
                 .product(name: "SupraDraftingCore", package: "SupraDraftingCore")
             ]
         ),
@@ -25,6 +27,7 @@ let package = Package(
             name: "SupraDraftingTests",
             dependencies: [
                 "SupraDrafting",
+                .product(name: "SupraCore", package: "SupraCore"),
                 .product(name: "SupraDraftingCore", package: "SupraDraftingCore"),
                 .product(name: "SupraExports", package: "SupraExports")
             ]

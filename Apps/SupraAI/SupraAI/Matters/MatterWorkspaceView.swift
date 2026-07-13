@@ -102,6 +102,7 @@ struct MatterWorkspaceView: View {
                     showDraftSheet = true
                 } label: { Label("Draft", systemImage: "doc.badge.plus") }
                     .buttonStyle(.ghost)
+                    .accessibilityIdentifier("matter.draft")
             }
             Button { showEditor = true } label: { Label("Edit", systemImage: "pencil") }
                 .buttonStyle(.ghost)

@@ -192,6 +192,46 @@ final class ResearchAuthoritiesUITests: XCTestCase {
 
 }
 
+/// A blocked draft is an error-only state: VoiceOver receives the block announcement and
+/// there is no file artifact or Open/Reveal/Share affordance to act on.
+@MainActor
+final class DraftingBlockedStateUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testBlockedDraftIsAnnouncedWithoutFileActions() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-uiTestMode"]
+        app.launch()
+        app.activate()
+        if !app.windows.firstMatch.waitForExistence(timeout: 5) {
+            app.typeKey("n", modifierFlags: .command)
+            _ = app.windows.firstMatch.waitForExistence(timeout: 10)
+        }
+
+        let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
+        XCTAssertTrue(matter.waitForExistence(timeout: 20))
+        matter.click()
+
+        let draft = app.buttons["matter.draft"]
+        XCTAssertTrue(draft.waitForExistence(timeout: 10))
+        draft.click()
+
+        let generate = app.buttons["drafting.generate"]
+        XCTAssertTrue(generate.waitForExistence(timeout: 10))
+        XCTAssertTrue(generate.isEnabled)
+        generate.click()
+
+        let blocked = app.descendants(matching: .any)["drafting.blocked"]
+        XCTAssertTrue(blocked.waitForExistence(timeout: 10))
+        XCTAssertTrue(blocked.label.localizedCaseInsensitiveContains("blocked"))
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.open"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.reveal"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.share"].exists)
+    }
+}
+
 /// End-to-end UI test for the chat citation + export features, driven against the
 /// `-uiTestMode` "Citations Demo" global chat seeded with an assistant answer that
 /// carries clickable `[A1]` (authority) and `[S1]` (document) citations. Fully

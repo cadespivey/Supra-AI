@@ -167,7 +167,12 @@ final class FirmStyleExemplarParserTests: XCTestCase {
         let runtime = StubRuntimeClient(outcome: { request in
             XCTAssertFalse(request.prompt.contains(sentinel), "exemplar text leaked into a drafting prompt")
             return .events([
-                .event(request, 0, .token, token: "Demand is made for $42,000."),
+                .event(
+                    request,
+                    0,
+                    .token,
+                    token: #"{"paragraphs":[{"text":"The invoice is unpaid.","factLabels":["claim"],"citationLabels":[]}]}"#
+                ),
                 .event(request, 1, .generationCompleted)
             ])
         })

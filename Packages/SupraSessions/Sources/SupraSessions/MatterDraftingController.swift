@@ -50,6 +50,7 @@ public final class MatterDraftingController: ObservableObject {
         case unsupportedJurisdiction(String)
         case unsupportedKind(DraftKindID)
         case emptyDescription
+        case verificationBlocked([String])
         case renderFailed(String)
 
         public var errorDescription: String? {
@@ -68,6 +69,9 @@ public final class MatterDraftingController: ObservableObject {
                 return "Notice of Appearance drafting is currently wired for Florida filings only. This matter looks like \(jurisdiction)."
             case let .unsupportedKind(kind):
                 return "Drafting for \(kind.rawValue) isn't wired into chat yet."
+            case let .verificationBlocked(summaries):
+                let detail = summaries.isEmpty ? "The content was not fully supported." : summaries.joined(separator: " ")
+                return "Draft generation was blocked before a file was created. \(detail)"
             case let .renderFailed(detail):
                 return "The draft could not be rendered: \(detail)."
             }
@@ -178,7 +182,7 @@ public final class MatterDraftingController: ObservableObject {
         do {
             result = try await pipeline.runNotice(inputs, profile: firm, style: effectiveStyle())
         } catch let error as SupraDraftingCore.DraftError {
-            return .failure(.renderFailed(error.localizedDescription))
+            return .failure(Self.mapCoreDraftError(error))
         } catch {
             return .failure(.renderFailed(error.localizedDescription))
         }
@@ -314,18 +318,26 @@ public final class MatterDraftingController: ObservableObject {
         let generated: GeneratedLetter
         do {
             generated = try await generator.generateLetter(parts)
+        } catch let error as SupraDraftingCore.DraftError {
+            return .failure(Self.mapCoreDraftError(error))
         } catch {
             return .failure(.renderFailed(error.localizedDescription))
         }
         guard !generated.paragraphs.isEmpty else {
-            return .failure(.renderFailed("the model returned no letter body"))
+            return .failure(.verificationBlocked(["The drafting model returned no verified letter body."]))
         }
 
         let result: DraftResult
         do {
-            result = try await pipelineFactory().runLetter(inputs, generated: generated, profile: firm, style: effectiveStyle())
+            result = try await pipelineFactory().runLetter(
+                inputs,
+                generated: generated,
+                facts: facts,
+                profile: firm,
+                style: effectiveStyle()
+            )
         } catch let error as SupraDraftingCore.DraftError {
-            return .failure(.renderFailed(error.localizedDescription))
+            return .failure(Self.mapCoreDraftError(error))
         } catch {
             return .failure(.renderFailed(error.localizedDescription))
         }
@@ -334,7 +346,6 @@ public final class MatterDraftingController: ObservableObject {
             let title = "Demand Letter"
             let url = try persist(data: result.docx, matterID: matterID, title: title, fileExtension: "docx")
             let followUps = result.followUps.map { DraftFollowUp(isBlocking: $0.severity == .blocking, message: $0.message) }
-                + Self.letterBodyReviewNotes(generated.paragraphs)
             recordAudit(matterID: matterID, label: DraftKindID.letterDemand.rawValue, fileName: url.lastPathComponent)
             return .success(DraftArtifact(source: .kind(.letterDemand), format: .docx, title: title, fileURL: url, followUps: followUps))
         } catch {
@@ -346,36 +357,6 @@ public final class MatterDraftingController: ObservableObject {
     /// is only wired when a runtime is available; the notice path is always deterministic.
     private var wiredKinds: Set<DraftKindID> {
         runtimeClient == nil ? [.noticeAppearance] : [.noticeAppearance, .letterDemand]
-    }
-
-    /// Deterministic firewall scan of the model's letter body. `verifyLetter` only inspects a
-    /// `GeneratedLetter`'s `citesUsed` (empty here — a demand letter asserts no authority), so it
-    /// never sees the free-text prose. This scans that prose for citation-shaped references and
-    /// for the `[fact?]`/`[cite]` placeholders the prompt tells the model to emit, and surfaces
-    /// each as a review follow-up so the cue rides with the artifact rather than reaching the
-    /// `.docx` silently. Heuristic by design — it flags for the attorney, never auto-edits.
-    nonisolated private static func letterBodyReviewNotes(_ paragraphs: [String]) -> [DraftFollowUp] {
-        let body = paragraphs.joined(separator: "\n")
-        var notes: [DraftFollowUp] = []
-        let citationPatterns = [
-            #"\b[A-Z][\w.'&-]+ v\.? [A-Z][\w.'&-]+"#,                 // case name: Smith v. Jones
-            #"\b\d{1,4} [A-Z][\w.]*\.?( \d[a-z]{0,2})? \d{1,4}\b"#,   // reporter: 123 So. 2d 456
-            #"§\s?\d"#,                                                 // § 1983
-            #"\bU\.?S\.?C\.?\b"#, #"\bC\.?F\.?R\.?\b"#, #"\bStat\."#,  // U.S.C. / C.F.R. / Fla. Stat.
-        ]
-        if citationPatterns.contains(where: { body.range(of: $0, options: .regularExpression) != nil }) {
-            notes.append(DraftFollowUp(
-                isBlocking: true,
-                message: "The letter body appears to reference legal authority, but this draft has no verified citations — confirm or remove any case or statute reference before sending."
-            ))
-        }
-        if body.contains("[cite]") {
-            notes.append(DraftFollowUp(isBlocking: true, message: "The draft contains a [cite] placeholder — supply or remove the citation before sending."))
-        }
-        if body.contains("[fact?]") {
-            notes.append(DraftFollowUp(isBlocking: true, message: "The draft contains a [fact?] placeholder — supply the missing fact before sending."))
-        }
-        return notes
     }
 
     nonisolated private static func letterFacts(from input: LetterDraftInput, claim: String) -> [GroundedFact] {
@@ -396,6 +377,15 @@ public final class MatterDraftingController: ObservableObject {
         case "final": return "firm, final, and unequivocal — a last demand before suit"
         case "measured": return "professional and measured, leaving room to resolve"
         default: return "firm but professional"
+        }
+    }
+
+    nonisolated private static func mapCoreDraftError(_ error: SupraDraftingCore.DraftError) -> DraftError {
+        switch error {
+        case let .verificationBlocked(summaries):
+            return .verificationBlocked(summaries)
+        default:
+            return .renderFailed(String(describing: error))
         }
     }
 

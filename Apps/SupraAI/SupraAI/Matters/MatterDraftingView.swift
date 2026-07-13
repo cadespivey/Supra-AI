@@ -82,6 +82,39 @@ struct MatterDraftingView: View {
         var role = "Counsel for Plaintiff"
     }
 
+    init(
+        controller: MatterDraftingController,
+        library: ModelLibrary,
+        matterID: String,
+        matterName: String
+    ) {
+        _controller = ObservedObject(wrappedValue: controller)
+        _library = ObservedObject(wrappedValue: library)
+        self.matterID = matterID
+        self.matterName = matterName
+
+        // A complete fictional form lets the hermetic XCUITest exercise a real
+        // controller-side block without fragile typing and scrolling choreography.
+        if AppEnvironment.isUITestMode {
+            _parties = State(initialValue: [
+                PartyDraft(name: "MCKERNON MOTORS, INC.,", designation: "Plaintiff,"),
+                PartyDraft(name: "LIBERTY RAIL, LLC,", designation: "Defendant.")
+            ])
+            _partyRepresented = State(initialValue: "Defendant")
+            _representedPartyName = State(initialValue: "Liberty Rail, LLC")
+            var recipient = RecipientDraft()
+            recipient.name = "Daniel Hardman, Esq."
+            recipient.firm = "Hardman & Tanner, LLP"
+            recipient.street = "1 Independent Drive"
+            recipient.city = "Jacksonville"
+            recipient.state = "Florida"
+            recipient.zip = "32202"
+            recipient.emails = "dhardman@example.test"
+            recipient.role = "Counsel for Plaintiff"
+            _recipients = State(initialValue: [recipient])
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -94,6 +127,9 @@ struct MatterDraftingView: View {
                         Label(errorText, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .font(.supraCaption)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityIdentifier("drafting.blocked")
+                            .accessibilityLabel("Draft generation blocked. \(errorText)")
                     }
                 }
                 if let result {
@@ -358,18 +394,21 @@ struct MatterDraftingView: View {
                 Button {
                     NSWorkspace.shared.activateFileViewerSelecting([artifact.fileURL])
                 } label: { Label("Reveal in Finder", systemImage: "folder") }
+                    .accessibilityIdentifier("drafting.reveal")
                 Button {
                     NSWorkspace.shared.open(artifact.fileURL)
                 } label: { Label("Open", systemImage: "arrow.up.forward.app") }
+                    .accessibilityIdentifier("drafting.open")
                 Spacer()
                 ShareLink(item: artifact.fileURL) { Label("Save a copy…", systemImage: "square.and.arrow.up") }
+                    .accessibilityIdentifier("drafting.share")
             }
         } header: {
             Text("Download")
         } footer: {
             switch artifact.format {
             case .docx:
-                Text("Review every flagged item before filing. Unverified citations appear as visible [cite] placeholders.")
+                Text("Review the generated document before filing. Unsupported content is blocked before rendering.")
             case .markdown:
                 Text("A work-product description in your own words — a drafting brief, not a court-ready or model-generated filing.")
             }
@@ -388,6 +427,7 @@ struct MatterDraftingView: View {
             Button(generateLabel) { Task { await generate() } }
                 .keyboardShortcut(.defaultAction)
                 .disabled(controller.isGenerating || !isReady)
+                .accessibilityIdentifier("drafting.generate")
         }
         .padding()
     }

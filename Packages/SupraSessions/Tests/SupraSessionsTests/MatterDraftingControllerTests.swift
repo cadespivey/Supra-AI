@@ -225,10 +225,11 @@ final class MatterDraftingControllerTests: XCTestCase {
         let store = try makeStore()
         try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
-        let body = "This firm represents the claimant regarding the unpaid balance.\n\nDemand is made for $42,000 by July 15, 2026.\n\nGovern yourself accordingly."
+        let body = #"{"paragraphs":[{"text":"The defendant has not paid the $42,000 invoice due under the supply agreement.","factLabels":["claim"],"citationLabels":[]},{"text":"Demand is made for $42,000 by July 15, 2026.","factLabels":["demandAmount","responseDeadline"],"citationLabels":[]},{"text":"Govern yourself accordingly.","factLabels":[],"citationLabels":[]}]}"#
         let runtime = StubRuntimeClient(outcome: { request in
             // The drafting model is invoked with the fact-scoped prompt.
-            XCTAssertTrue(request.prompt.contains("Use ONLY these facts"))
+            XCTAssertTrue(request.prompt.contains("untrustedText"))
+            XCTAssertTrue(request.systemPrompt?.contains("SECURITY BOUNDARY") == true)
             return .events([
                 .event(request, 0, .token, token: body),
                 .event(request, 1, .generationCompleted)
@@ -295,8 +296,46 @@ final class MatterDraftingControllerTests: XCTestCase {
             route: ModelRouter().route(for: .drafting)
         )
 
-        guard case .failure = result else { return XCTFail("unsafe prose must be blocked, not written with review notes") }
+        guard case .failure(.verificationBlocked) = result else {
+            return XCTFail("unsafe prose must return a typed block, not a file with review notes")
+        }
         XCTAssertEqual(renderer.renderCount, 0, "unsafe prose reached the renderer")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: storage.exportsDirectory(forMatterID: matter.id).path))
+        XCTAssertFalse(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "draft_generated" })
+    }
+
+    @MainActor
+    func testStructuredUnsupportedLetterHasNoRenderFileOrAuditSideEffects() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
+        let response = #"{"paragraphs":[{"text":"The debtor committed fraud.","factLabels":["claim"],"citationLabels":[]}]}"#
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([.event(request, 0, .token, token: response), .event(request, 1, .generationCompleted)])
+        })
+        let storage = makeStorage()
+        let renderer = StyleSpyRenderer()
+        let controller = MatterDraftingController(
+            store: store,
+            runtimeClient: runtime,
+            storage: storage,
+            pipelineFactory: { DraftPipeline(verifier: DraftVerifier(), renderer: renderer) }
+        )
+
+        let result = await controller.draftLetterDemand(
+            matterID: matter.id,
+            input: LetterDraftInput(
+                recipientName: "X", recipientStreet: "1 Main", recipientCity: "Jax",
+                recipientState: "FL", recipientZip: "32202", claimSummary: "The invoice remains unpaid."
+            ),
+            modelID: ModelID(),
+            route: ModelRouter().route(for: .drafting)
+        )
+
+        guard case .failure(.verificationBlocked) = result else {
+            return XCTFail("unsupported structured output must return a typed block")
+        }
+        XCTAssertEqual(renderer.renderCount, 0)
         XCTAssertFalse(FileManager.default.fileExists(atPath: storage.exportsDirectory(forMatterID: matter.id).path))
         XCTAssertFalse(try store.auditEvents.fetchEvents(matterID: matter.id).contains { $0.eventType == "draft_generated" })
     }
@@ -571,7 +610,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         let store = try makeStore()
         try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
-        let body = "This firm represents the claimant regarding the unpaid balance.\n\nGovern yourself accordingly."
+        let body = #"{"paragraphs":[{"text":"The defendant has not paid the $42,000 invoice due under the supply agreement.","factLabels":["claim"],"citationLabels":[]}]}"#
         let runtime = StubRuntimeClient(outcome: { request in
             .events([.event(request, 0, .token, token: body), .event(request, 1, .generationCompleted)])
         })
@@ -630,7 +669,7 @@ final class MatterDraftingControllerTests: XCTestCase {
             XCTAssertTrue(request.prompt.contains("terse"),
                           "drafting prompt must carry the attorney's voiceNotes register cue")
             return .events([
-                .event(request, 0, .token, token: "Demand is made for $42,000."),
+                .event(request, 0, .token, token: #"{"paragraphs":[{"text":"The defendant has not paid the $42,000 invoice due under the supply agreement.","factLabels":["claim"],"citationLabels":[]}]}"#),
                 .event(request, 1, .generationCompleted)
             ])
         })
@@ -655,9 +694,9 @@ final class MatterDraftingControllerTests: XCTestCase {
         let voice = AssistantVoiceProfile(registerNotes: "x")
         XCTAssertEqual(Mirror(reflecting: voice).children.compactMap(\.label), ["registerNotes"])
 
-        let letter = GeneratedLetter(paragraphs: [], assertedFacts: [], citesUsed: [])
+        let letter = GeneratedLetter(paragraphProvenance: [])
         XCTAssertEqual(Mirror(reflecting: letter).children.compactMap(\.label),
-                       ["paragraphs", "assertedFacts", "citesUsed"])
+                       ["paragraphProvenance"])
     }
 }
 

@@ -10,8 +10,22 @@ let package = Package(
     products: [
         .library(name: "SupraDraftingCore", targets: ["SupraDraftingCore"])
     ],
+    dependencies: [
+        .package(path: "../SupraCore")
+    ],
     targets: [
-        .target(name: "SupraDraftingCore"),
-        .testTarget(name: "SupraDraftingCoreTests", dependencies: ["SupraDraftingCore"])
+        .target(
+            name: "SupraDraftingCore",
+            dependencies: [
+                .product(name: "SupraCore", package: "SupraCore")
+            ]
+        ),
+        .testTarget(
+            name: "SupraDraftingCoreTests",
+            dependencies: [
+                "SupraDraftingCore",
+                .product(name: "SupraCore", package: "SupraCore")
+            ]
+        )
     ]
 )
