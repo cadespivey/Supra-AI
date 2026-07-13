@@ -1,6 +1,7 @@
 import Foundation
 import SupraCore
 import SupraDocuments
+import SupraResearch
 @testable import SupraSessions
 import SupraStore
 import XCTest
@@ -366,6 +367,51 @@ final class DocumentQATests: XCTestCase {
         XCTAssertEqual(version.verificationVersion, DocumentSupportVerifier.version)
         XCTAssertNotNil(version.verificationJSON)
         XCTAssertNotNil(try store.documentSources.fetchSourceSet(structuredOutputVersionID: version.id))
+    }
+
+    func testDocumentScopedStructuredRepairReverifiesAndCannotCleanUnsupportedClaim() async throws {
+        // ACR-DOCSUP-INT-07 expected RED: structure repair previously reused section
+        // status, did not re-offer a bounded source packet, and could mark unsupported
+        // repaired prose complete without provenance.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Matter A")
+        try await indexDoc(store, matter.id, "agreement.txt", "Payment was due March 3, 2025.")
+        let contract = try XCTUnwrap(StructuredOutputContracts.contract(for: .draftingSkeleton))
+        let partial = contract.requiredHeadings.dropLast()
+            .map { "\($0)\n\nPayment was due March 3, 2025 [S1]." }
+            .joined(separator: "\n\n")
+        let repaired = contract.requiredHeadings.enumerated()
+            .map { index, heading in
+                index == contract.requiredHeadings.count - 1
+                    ? "\(heading)\n\nPayment was due March 9, 2025 [S1]."
+                    : "\(heading)\n\nPayment was due March 3, 2025 [S1]."
+            }
+            .joined(separator: "\n\n")
+        let answers = SequencedDocumentAnswers([partial, repaired])
+        let runtime = StubRuntimeClient(outcome: { request in
+            XCTAssertTrue(request.prompt.contains("BEGIN_UNTRUSTED_SOURCE_DATA"))
+            return .events([
+                .event(request, 0, .token, token: answers.next()),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let controller = StructuredOutputController(store: store, runtimeClient: runtime, matterID: matter.id)
+
+        let created = await controller.createOutput(
+            type: .draftingSkeleton,
+            context: "payment due date",
+            scope: .wholeMatter,
+            modelID: ModelID()
+        )
+        XCTAssertTrue(created)
+        let output = try XCTUnwrap(try store.structuredOutputs.fetchOutputs(matterID: matter.id).first)
+        XCTAssertEqual(output.status, StructuredOutputStatus.needsReview.rawValue)
+        let versions = try store.structuredOutputs.fetchVersions(structuredOutputID: output.id)
+        XCTAssertEqual(versions.count, 2)
+        let active = try XCTUnwrap(versions.first { $0.id == output.activeVersionID })
+        XCTAssertEqual(active.verificationStatus, OutputVerificationStatus.needsReview.rawValue)
+        XCTAssertTrue(active.contentMarkdown.contains("DOCUMENT SUPPORT NEEDS REVIEW"))
+        XCTAssertNotNil(try store.documentSources.fetchSourceSet(structuredOutputVersionID: active.id))
     }
 
     // MARK: - Helpers
