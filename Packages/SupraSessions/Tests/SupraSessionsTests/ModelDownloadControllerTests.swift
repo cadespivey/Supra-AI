@@ -44,13 +44,14 @@ final class ModelDownloadControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testResumeSkipsAlreadyDownloadedFiles() async throws {
+    func testLegacyFolderWithoutManifestRedownloadsNonzeroFiles() async throws {
         let store = try makeStore()
         let library = ModelLibrary(store: store, runtimeClient: StubRuntimeClient())
         let modelsDir = tempDir()
         let repo = "mlx-community/Test-4bit"
         let modelDir = modelsDir.appendingPathComponent(ManagedModelStorage.folderName(forRepoID: repo), isDirectory: true)
-        // Simulate a prior interrupted run that already fetched one file.
+        // A legacy folder has no trusted manifest, so even nonempty files must be
+        // redownloaded rather than inferred complete from size alone.
         try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
         try Data("done".utf8).write(to: modelDir.appendingPathComponent("config.json"))
 
@@ -61,8 +62,10 @@ final class ModelDownloadControllerTests: XCTestCase {
         await controller.performDownload(repoID: repo, displayName: "Test")
 
         guard case .finished = controller.state else { return XCTFail("expected finished, got \(controller.state)") }
-        // The already-present file is skipped; only the two missing files are fetched.
-        XCTAssertEqual(fetcher.downloadedFiles().sorted(), ["model.safetensors", "tokenizer.json"])
+        XCTAssertEqual(
+            fetcher.downloadedFiles().sorted(),
+            ["config.json", "model.safetensors", "tokenizer.json"]
+        )
         for file in ["config.json", "model.safetensors", "tokenizer.json"] {
             XCTAssertTrue(FileManager.default.fileExists(atPath: modelDir.appendingPathComponent(file).path), "missing \(file)")
         }
@@ -142,7 +145,7 @@ final class ModelDownloadControllerTests: XCTestCase {
         let controller = ModelDownloadController(
             store: store,
             modelLibrary: library,
-            fetcher: StubFetcher(files: ["config.json"]),
+            fetcher: StubFetcher(files: ["config.json", "model.safetensors"]),
             modelsDirectory: modelsDir
         )
 
@@ -191,7 +194,7 @@ final class ModelDownloadControllerTests: XCTestCase {
         let controller = ModelDownloadController(
             store: store,
             modelLibrary: library,
-            fetcher: StubFetcher(files: ["config.json"], configJSON: config),
+            fetcher: StubFetcher(files: ["config.json", "model.safetensors"], configJSON: config),
             modelsDirectory: tempDir()
         )
 
@@ -376,6 +379,7 @@ private final class StubFetcher: ModelRepositoryFetching, @unchecked Sendable {
     private let files: [String]
     private let listError: Error?
     private let configJSON: Data?
+    private let revision = String(repeating: "a", count: 40)
 
     init(files: [String], listError: Error? = nil, configJSON: Data? = nil) {
         self.files = files
@@ -383,21 +387,45 @@ private final class StubFetcher: ModelRepositoryFetching, @unchecked Sendable {
         self.configJSON = configJSON
     }
 
-    func listModelFiles(repoID: String) async throws -> [String] {
+    func fetchManifest(repoID: String) async throws -> ModelArtifactManifest {
         if let listError { throw listError }
-        return files
+        return ModelArtifactManifest(
+            repositoryID: repoID,
+            revision: revision,
+            files: files.map { file in
+                let payload = payload(for: file)
+                return ModelArtifactManifest.File(
+                    relativePath: file,
+                    size: Int64(payload.count),
+                    digestAlgorithm: .sha256,
+                    digest: ModelArtifactIntegrity.sha256Hex(payload)
+                )
+            }
+        )
     }
 
-    func downloadFile(repoID: String, file: String, to destination: URL) async throws {
+    func downloadFile(
+        repoID: String,
+        revision: String,
+        artifact: ModelArtifactManifest.File,
+        to destination: URL
+    ) async throws {
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try Data("stub-\(file)".utf8).write(to: destination)
+        try payload(for: artifact.relativePath).write(to: destination)
     }
 
-    func fetchConfigJSON(repoID: String) async throws -> Data? {
-        configJSON
+    func fetchConfigJSON(repoID: String, revision: String) async throws -> Data? {
+        payload(for: "config.json")
+    }
+
+    private func payload(for file: String) -> Data {
+        if file == "config.json" {
+            return configJSON ?? Data(#"{"model_type":"qwen2"}"#.utf8)
+        }
+        return Data("stub-\(file)".utf8)
     }
 }
 
@@ -407,22 +435,49 @@ private final class TrackingFetcher: ModelRepositoryFetching, @unchecked Sendabl
     private let files: [String]
     private let lock = NSLock()
     private var downloaded: [String] = []
+    private let revision = String(repeating: "a", count: 40)
 
     init(files: [String]) { self.files = files }
 
-    func listModelFiles(repoID: String) async throws -> [String] { files }
+    func fetchManifest(repoID: String) async throws -> ModelArtifactManifest {
+        ModelArtifactManifest(
+            repositoryID: repoID,
+            revision: revision,
+            files: files.map { file in
+                let payload = payload(for: file)
+                return ModelArtifactManifest.File(
+                    relativePath: file,
+                    size: Int64(payload.count),
+                    digestAlgorithm: .sha256,
+                    digest: ModelArtifactIntegrity.sha256Hex(payload)
+                )
+            }
+        )
+    }
 
-    func downloadFile(repoID: String, file: String, to destination: URL) async throws {
-        lock.withLock { downloaded.append(file) }
+    func downloadFile(
+        repoID: String,
+        revision: String,
+        artifact: ModelArtifactManifest.File,
+        to destination: URL
+    ) async throws {
+        lock.withLock { downloaded.append(artifact.relativePath) }
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
         )
-        try Data("stub-\(file)".utf8).write(to: destination)
+        try payload(for: artifact.relativePath).write(to: destination)
     }
 
-    func fetchConfigJSON(repoID: String) async throws -> Data? { nil }
+    func fetchConfigJSON(repoID: String, revision: String) async throws -> Data? {
+        payload(for: "config.json")
+    }
 
     func downloadedFiles() -> [String] {
         lock.withLock { downloaded }
+    }
+
+    private func payload(for file: String) -> Data {
+        if file == "config.json" { return Data(#"{"model_type":"qwen2"}"#.utf8) }
+        return Data("stub-\(file)".utf8)
     }
 }
