@@ -119,6 +119,27 @@ final class LegalPropositionSupportTests: XCTestCase {
         XCTAssertFalse(evidence.verifierVersion.isEmpty)
     }
 
+    func testReporterCitationNumbersAreNotTreatedAsPropositionValues() throws {
+        let proposition = "The buyer may revoke acceptance after latent defects are discovered."
+        let authority = LegalAuthority(
+            id: "reporter-number-regression",
+            authorityType: .case,
+            caseName: "Full Text v. Case",
+            citation: "321 Cal. App. 5th 654",
+            citations: ["321 Cal. App. 5th 654"],
+            text: "The court explained that the buyer may revoke acceptance after latent defects are discovered."
+        )
+
+        let report = LegalCitationVerifier.verify(
+            answer: "\(proposition) 321 Cal. App. 5th 654 [A1].",
+            authorities: [authority],
+            requiresSupportedAuthority: true
+        )
+
+        XCTAssertTrue(report.passed, LegalCitationVerifier.markdownReport(report))
+        XCTAssertEqual(report.supportResults.map(\.status), [.supported])
+    }
+
     private func loadCorpus() throws -> Corpus {
         let url = try XCTUnwrap(
             Bundle.module.url(

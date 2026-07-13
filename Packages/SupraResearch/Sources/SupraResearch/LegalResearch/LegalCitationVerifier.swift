@@ -1102,13 +1102,34 @@ public enum LegalCitationVerifier {
     }
 
     private static func orderedCriticalValues(in text: String) -> [String] {
+        // Reporter volumes/pages and statutory section numbers identify the
+        // authority; they are not facts asserted by the proposition. Remove
+        // recognized citation forms before enforcing value ordering so a cite
+        // such as `321 Cal. App. 5th 654` does not require those numbers to
+        // appear in the opinion excerpt. Currency, percentages, dates, and
+        // other proposition values remain in the text and stay fail-closed.
+        var valueBearingText = text
+        let authorityCitations = citationMatches(
+            in: text,
+            patterns: reporterCitationPatterns
+                + federalStatutoryCitationPatterns
+                + otherAuthorityCitationPatterns
+                + [statutoryCitationPattern]
+        )
+        for citation in authorityCitations.sorted(by: { $0.count > $1.count }) {
+            valueBearingText = valueBearingText.replacingOccurrences(
+                of: citation,
+                with: " ",
+                options: [.caseInsensitive]
+            )
+        }
         guard let regex = try? NSRegularExpression(
             pattern: #"(?i)(?:[$€£]\s*\d[\d,.]*|\b\d[\d,.]*(?:%|percent)?\b|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)"#
         ) else { return [] }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return regex.matches(in: text, range: range).compactMap { match in
-            Range(match.range, in: text).map {
-                text[$0].lowercased().replacingOccurrences(of: " ", with: "")
+        let range = NSRange(valueBearingText.startIndex..<valueBearingText.endIndex, in: valueBearingText)
+        return regex.matches(in: valueBearingText, range: range).compactMap { match in
+            Range(match.range, in: valueBearingText).map {
+                valueBearingText[$0].lowercased().replacingOccurrences(of: " ", with: "")
             }
         }
     }
