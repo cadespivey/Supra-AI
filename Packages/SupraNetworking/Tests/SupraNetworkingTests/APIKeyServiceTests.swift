@@ -1,8 +1,36 @@
 import Foundation
+import SupraStore
 @testable import SupraNetworking
 import XCTest
 
 final class APIKeyServiceTests: XCTestCase {
+
+    func testACRKEY001ProductionCompositionIgnoresEnvironmentSecrets() throws {
+        let variable = "SUPRA_OPENSTATES_API_KEY"
+        let original = ProcessInfo.processInfo.environment[variable]
+        setenv(variable, "must-not-be-loaded", 1)
+        defer {
+            if let original {
+                setenv(variable, original, 1)
+            } else {
+                unsetenv(variable)
+            }
+        }
+
+        let store = APIKeyStoreComposition.production(primary: MultiKeyStore())
+
+        XCTAssertNil(try store.loadAPIKey(for: .openStates))
+        XCTAssertFalse(try store.hasAPIKey(for: .openStates))
+    }
+
+    func testACRKEY002DebugCompositionRequiresExplicitEnvironmentInjection() throws {
+        let store = APIKeyStoreComposition.development(
+            primary: MultiKeyStore(),
+            environment: ["SUPRA_GOVINFO_API_KEY": "debug-only-key"]
+        )
+
+        XCTAssertEqual(try store.loadAPIKey(for: .govInfo), "debug-only-key")
+    }
 
     func testServicesHaveDistinctAccountsAndEnvVars() {
         XCTAssertNotEqual(APIKeyService.openStates.keychainAccount, APIKeyService.govInfo.keychainAccount)
@@ -50,6 +78,56 @@ final class APIKeyServiceTests: XCTestCase {
         XCTAssertEqual(try store.loadAPIKey(for: .openStates), "a")
         XCTAssertEqual(try store.loadAPIKey(for: .govInfo), "b")
         XCTAssertNil(try store.loadAPIKey(for: .regulationsGov))
+    }
+
+    func testACRKEY003MissingCourtListenerKeyIsTypedAndNeverReachesTransport() async throws {
+        let store = try SupraStore.inMemory()
+        let transport = TransportCallSpy()
+        let client = AuthorizedHTTPClient(
+            keyStore: MultiKeyStore(),
+            policy: NetworkPolicyService(),
+            logger: NetworkRequestLogger(repository: store.networkRequests),
+            transport: { request in
+                transport.recordCall()
+                return (
+                    Data(),
+                    HTTPURLResponse(
+                        url: try XCTUnwrap(request.url),
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: nil
+                    )!
+                )
+            }
+        )
+        let request = URLRequest(
+            url: try XCTUnwrap(URL(string: "https://www.courtlistener.com/api/rest/v4/search/"))
+        )
+
+        do {
+            _ = try await client.send(request)
+            XCTFail("Expected a typed setup error")
+        } catch {
+            XCTAssertEqual(error as? AuthorizedHTTPClientError, .missingToken)
+        }
+        XCTAssertFalse(transport.wasCalled)
+    }
+}
+
+private final class TransportCallSpy: @unchecked Sendable {
+    private let lock = NSLock()
+    private var called = false
+
+    var wasCalled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return called
+    }
+
+    func recordCall() {
+        lock.lock()
+        called = true
+        lock.unlock()
     }
 }
 
