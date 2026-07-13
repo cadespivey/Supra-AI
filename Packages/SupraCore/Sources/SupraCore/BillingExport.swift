@@ -201,7 +201,8 @@ public enum BillingExporter {
         for line in lines {
             let matter = [line.clientDisplay ?? line.clientID, line.matterDisplay ?? line.lawFirmMatterID]
                 .compactMap { $0 }.joined(separator: " / ")
-            let columns = [line.workDate, matter, hoursString(line.hours), line.formattedNarrative].map { tabSanitize(formulaHardened($0)) }
+            let columns = [line.workDate, matter, hoursString(line.hours), line.formattedNarrative]
+                .map { tabSanitize(CSVCellSanitizer.neutralize($0)) }
             rows.append(columns.joined(separator: "\t"))
         }
         return rows.joined(separator: "\n") + "\n"
@@ -296,21 +297,13 @@ public enum BillingExporter {
             .replacingOccurrences(of: "\r", with: " ")
     }
 
-    static func csvEscape(_ value: String) -> String {
-        if value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r") {
-            return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-        }
-        return value
-    }
-
     /// A CSV cell: formula-injection-hardened, then delimiter-escaped.
-    static func csvCell(_ value: String) -> String { csvEscape(formulaHardened(value)) }
+    static func csvCell(_ value: String) -> String { CSVCellSanitizer.encode(value) }
 
     /// Neutralizes spreadsheet formula injection: a cell beginning with `= + - @`
     /// (or a tab/CR control char) is prefixed with an apostrophe so spreadsheets
     /// import it as literal text rather than evaluating it as a formula.
     static func formulaHardened(_ value: String) -> String {
-        guard let first = value.first, "=+-@\t\r".contains(first) else { return value }
-        return "'" + value
+        CSVCellSanitizer.neutralize(value)
     }
 }

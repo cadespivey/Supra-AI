@@ -107,8 +107,8 @@ public enum DocumentExportBuilder {
     }
 
     private static func csvField(_ value: String) -> String {
-        let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
-        return "\"\(escaped)\""
+        let safe = CSVCellSanitizer.neutralize(value)
+        return "\"\(safe.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
 
     // MARK: - PDF (CoreText, paginated)
@@ -176,7 +176,8 @@ public enum DocumentExportBuilder {
         var rowsXML = ""
         func row(_ number: Int, _ values: [String]) -> String {
             let cells = values.enumerated().map { index, value in
-                "<c r=\"\(columnLetter(index))\(number)\" t=\"inlineStr\"><is><t xml:space=\"preserve\">\(xmlEscape(value))</t></is></c>"
+                let safe = CSVCellSanitizer.neutralize(value)
+                return "<c r=\"\(columnLetter(index))\(number)\" t=\"inlineStr\"><is><t xml:space=\"preserve\">\(xmlEscape(safe))</t></is></c>"
             }.joined()
             return "<row r=\"\(number)\">\(cells)</row>"
         }
