@@ -363,6 +363,15 @@ run_case \
   env SUPRA_NPM="$npm_stub" SUPRA_FONT_GUARD=/usr/bin/true \
     bash "${scripts}/test-website.sh" "$repo_root/website"
 
+# Expected RED before the runner-portability fix: the source guard invokes
+# Homebrew's `rg`, which is not installed on GitHub's stock macOS image.
+run_case \
+  "the Swift portability guard uses only stock runner tools" \
+  0 \
+  "SupraSessions Swift 6 portability tests passed." \
+  env PATH=/usr/bin:/bin \
+    bash "${repo_root}/Tests/Scripts/test-supra-sessions-swift6-portability.sh"
+
 if (( failures != 0 )); then
   printf 'macOS CI gate tests failed: %d\n' "$failures" >&2
   exit 1
