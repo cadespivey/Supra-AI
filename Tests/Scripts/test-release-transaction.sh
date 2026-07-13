@@ -620,6 +620,20 @@ else
   fail 'release.sh does not require SUPRA_RELEASE_SMOKE_MODEL_DIRECTORY'
 fi
 
+release_workflow="${repo_root}/.github/workflows/release.yml"
+rehearsal_workflow="${repo_root}/.github/workflows/release-rehearsal.yml"
+if grep -Fq 'runs-on: [self-hosted, macOS, ARM64, supra-release, supra-release-isolated]' \
+    "$release_workflow" \
+  && grep -Fq 'runs-on: [self-hosted, macOS, ARM64, supra-release, supra-release-isolated]' \
+    "$rehearsal_workflow" \
+  && grep -Fq 'SUPRA_RELEASE_ISOLATED_RUNNER: "1"' "$release_workflow" \
+  && grep -Fq 'SUPRA_RELEASE_ISOLATED_RUNNER: "1"' "$rehearsal_workflow" \
+  && grep -Fq 'SUPRA_RELEASE_ISOLATED_RUNNER' "$release_script"; then
+  printf '%s\n' 'PASS: signed model smoke requires the dedicated isolated release runner'
+else
+  fail 'signed model smoke is not fail-closed on the dedicated isolated release runner'
+fi
+
 if grep -Eq 'SUPRA_SIGNED_SMOKE_DRIVER' \
   "$release_script" "${scripts}/run-signed-release-smoke.sh" \
   "${repo_root}/.github/workflows/release.yml" \
@@ -729,9 +743,22 @@ cp "${repo_root}/.github/workflows/release.yml" "${protection_fixture}/.github/w
 cp "${repo_root}/.github/workflows/release-rehearsal.yml" "${protection_fixture}/.github/workflows/release-rehearsal.yml"
 cp "${repo_root}/.github/workflows/emergency-release-rollback.yml" "${protection_fixture}/.github/workflows/emergency-release-rollback.yml"
 cp "${repo_root}/Docs/Release-Protection.md" "${protection_fixture}/Docs/Release-Protection.md"
-for script in release.sh release-preflight.sh publish-release-transaction.sh publish-release-appcast.sh rollback-release-appcast.sh emergency-release-rollback.sh; do
+for script in release.sh release-preflight.sh publish-release-transaction.sh publish-release-appcast.sh rollback-release-appcast.sh emergency-release-rollback.sh verify-release-version-state.sh; do
   cp "${scripts}/${script}" "${protection_fixture}/Scripts/${script}"
 done
+isolation_fixture="${temporary_dir}/release-isolation-fixture"
+cp -R "$protection_fixture" "$isolation_fixture"
+sed 's/, supra-release-isolated//' \
+  "${isolation_fixture}/.github/workflows/release.yml" \
+  >"${isolation_fixture}/.github/workflows/release.yml.tmp"
+mv "${isolation_fixture}/.github/workflows/release.yml.tmp" \
+  "${isolation_fixture}/.github/workflows/release.yml"
+run_case \
+  'removing isolated release runner label fails closed' \
+  1 \
+  'release workflow is not bound to the isolated release runner' \
+  bash "${scripts}/verify-release-protection.sh" "$isolation_fixture"
+
 awk '$0 !~ /environment: production-release/' \
   "${protection_fixture}/.github/workflows/release.yml" \
   >"${protection_fixture}/.github/workflows/release.yml.tmp"
