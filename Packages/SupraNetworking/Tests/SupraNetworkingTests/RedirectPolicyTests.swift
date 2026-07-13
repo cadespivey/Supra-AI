@@ -1,6 +1,6 @@
 import Foundation
 import Network
-import SupraNetworking
+@testable import SupraNetworking
 import SupraStore
 import XCTest
 
@@ -57,6 +57,145 @@ final class RedirectPolicyTests: XCTestCase {
             records.contains { $0.approved && $0.statusCode == 200 },
             "a rejected redirect must not create a successful completion row"
         )
+    }
+
+    /// ACR-NET-02. Expected RED: `RedirectPolicy` does not exist yet.
+    func testRedirectPolicyRejectsDowngradeUserinfoAlternatePortAndUnnamedOrigin() throws {
+        let initial = try XCTUnwrap(URL(string: "https://api.example.test/start"))
+        let policy = try RedirectPolicy(initialURL: initial, service: "synthetic-service")
+
+        let rejectedDestinations = [
+            "http://api.example.test/downgrade",
+            "https://user:password@api.example.test/embedded",
+            "https://api.example.test:8443/alternate-port",
+            "https://other.example.test/cross-origin"
+        ]
+
+        for destination in rejectedDestinations {
+            let proposedURL = try XCTUnwrap(URL(string: destination))
+            XCTAssertThrowsError(
+                try policy.requestForRedirect(
+                    from: URLRequest(url: initial),
+                    response: redirectResponse(from: initial, to: proposedURL, statusCode: 302),
+                    proposedRequest: URLRequest(url: proposedURL),
+                    hopCount: 1
+                ),
+                "ACR-NET-02 must reject \(destination)"
+            ) { error in
+                XCTAssertTrue(error is NetworkPolicyError)
+                XCTAssertTrue(String(describing: error).contains("redirectRejected"))
+            }
+        }
+    }
+
+    /// ACR-NET-03. Expected RED: no redirect layer scopes credential headers.
+    func testCredentialHeadersRemainOnlyForExplicitSameOwnerRoute() throws {
+        let first = try XCTUnwrap(URL(string: "https://api.example.test/start"))
+        let sameOwner = try XCTUnwrap(URL(string: "https://api-alt.example.test/next"))
+        let tokenFree = try XCTUnwrap(URL(string: "https://cdn.example.test/file"))
+        let policy = try RedirectPolicy(
+            initialURL: first,
+            service: "synthetic-service",
+            credentialOwner: "synthetic-token",
+            additionalOrigins: [
+                .init(url: sameOwner, service: "synthetic-service", credentialOwner: "synthetic-token"),
+                .init(url: tokenFree, service: "synthetic-cdn", credentialOwner: nil)
+            ],
+            crossOriginRules: [
+                .init(from: first, to: sameOwner, service: "synthetic-service", preservesCredentials: true),
+                .init(from: first, to: tokenFree, service: "synthetic-cdn", preservesCredentials: false)
+            ]
+        )
+        var original = URLRequest(url: first)
+        original.setValue("Token secret-canary", forHTTPHeaderField: "Authorization")
+        original.setValue("key-canary", forHTTPHeaderField: "X-Api-Key")
+        original.setValue("session-canary", forHTTPHeaderField: "Cookie")
+
+        let credentialed = try policy.requestForRedirect(
+            from: original,
+            response: redirectResponse(from: first, to: sameOwner, statusCode: 307),
+            proposedRequest: URLRequest(url: sameOwner),
+            hopCount: 1
+        )
+        XCTAssertEqual(credentialed.value(forHTTPHeaderField: "Authorization"), "Token secret-canary")
+        XCTAssertEqual(credentialed.value(forHTTPHeaderField: "X-Api-Key"), "key-canary")
+        XCTAssertEqual(credentialed.value(forHTTPHeaderField: "Cookie"), "session-canary")
+
+        let stripped = try policy.requestForRedirect(
+            from: original,
+            response: redirectResponse(from: first, to: tokenFree, statusCode: 302),
+            proposedRequest: URLRequest(url: tokenFree),
+            hopCount: 1
+        )
+        XCTAssertNil(stripped.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(stripped.value(forHTTPHeaderField: "X-Api-Key"))
+        XCTAssertNil(stripped.value(forHTTPHeaderField: "Cookie"))
+    }
+
+    /// ACR-NET-04. Expected RED: no redirect layer imposes a five-hop ceiling.
+    func testRedirectPolicyAcceptsRedirectStatusVariantsButRejectsSixthHop() throws {
+        let initial = try XCTUnwrap(URL(string: "https://api.example.test/start"))
+        let policy = try RedirectPolicy(initialURL: initial, service: "synthetic-service", maximumHops: 5)
+        let statuses = [301, 302, 303, 307, 308]
+
+        for (index, status) in statuses.enumerated() {
+            let destination = try XCTUnwrap(URL(string: "https://api.example.test/hop-\(index + 1)"))
+            let redirected = try policy.requestForRedirect(
+                from: URLRequest(url: initial),
+                response: redirectResponse(from: initial, to: destination, statusCode: status),
+                proposedRequest: URLRequest(url: destination),
+                hopCount: index + 1
+            )
+            XCTAssertEqual(redirected.url, destination)
+        }
+
+        let sixth = try XCTUnwrap(URL(string: "https://api.example.test/hop-6"))
+        XCTAssertThrowsError(
+            try policy.requestForRedirect(
+                from: URLRequest(url: initial),
+                response: redirectResponse(from: initial, to: sixth, statusCode: 302),
+                proposedRequest: URLRequest(url: sixth),
+                hopCount: 6
+            )
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("hopLimitExceeded"))
+        }
+    }
+
+    /// ACR-NET-05 standing policy guard. Expected RED: Hugging Face has no explicit
+    /// shared redirect policy and follows whatever redirects its raw session accepts.
+    func testHuggingFacePolicyAllowsOnlyNamedTokenFreeDownloadOrigins() throws {
+        let hub = try XCTUnwrap(URL(string: "https://huggingface.co/org/model/resolve/main/model.safetensors"))
+        let allowedCDN = try XCTUnwrap(URL(string: "https://us.aws.cdn.hf.co/xet-bridge-us/object?signed=canary"))
+        let unknownCDN = try XCTUnwrap(URL(string: "https://unexpected.hf.co/object"))
+        let policy = try RedirectPolicy.huggingFace(initialURL: hub)
+
+        let allowed = try policy.requestForRedirect(
+            from: URLRequest(url: hub),
+            response: redirectResponse(from: hub, to: allowedCDN, statusCode: 302),
+            proposedRequest: URLRequest(url: allowedCDN),
+            hopCount: 1
+        )
+        XCTAssertEqual(allowed.url?.host, "us.aws.cdn.hf.co")
+        XCTAssertNil(allowed.value(forHTTPHeaderField: "Authorization"))
+
+        XCTAssertThrowsError(
+            try policy.requestForRedirect(
+                from: URLRequest(url: hub),
+                response: redirectResponse(from: hub, to: unknownCDN, statusCode: 302),
+                proposedRequest: URLRequest(url: unknownCDN),
+                hopCount: 1
+            )
+        )
+    }
+
+    private func redirectResponse(from source: URL, to destination: URL, statusCode: Int) -> HTTPURLResponse {
+        HTTPURLResponse(
+            url: source,
+            statusCode: statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Location": destination.absoluteString]
+        )!
     }
 
     private func makeStore() throws -> SupraStore {
