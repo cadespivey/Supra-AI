@@ -78,7 +78,7 @@ public final class SettingsController: ObservableObject {
         self.store = store
         self.appVersion = appVersion
         self.modelsDirectoryPath = ManagedModelStorage.modelsDirectory().path
-        self.tokenStore = tokenStore ?? EnvironmentBackedTokenStore(primary: KeychainTokenStore())
+        self.tokenStore = tokenStore ?? APIKeyStoreComposition.live()
 
         let stored = (try? store.appSettings.getSetting(Self.generationDefaultsKey, as: GenerationOptions.self))
             ?? GenerationOptions()
@@ -189,10 +189,14 @@ public final class SettingsController: ObservableObject {
     private func refreshAPIKeyState() {
         var configured: Set<APIKeyService> = []
         var fromEnvironment: Set<APIKeyService> = []
+        #if DEBUG
         let environmentStore = tokenStore as? EnvironmentBackedTokenStore
+        #endif
         for service in APIKeyService.allCases {
             if (try? tokenStore.hasAPIKey(for: service)) == true { configured.insert(service) }
+            #if DEBUG
             if environmentStore?.hasEnvironmentAPIKey(for: service) == true { fromEnvironment.insert(service) }
+            #endif
         }
         configuredAPIKeys = configured
         environmentAPIKeys = fromEnvironment
@@ -200,13 +204,13 @@ public final class SettingsController: ObservableObject {
 
     private func refreshCourtListenerTokenState() {
         hasCourtListenerToken = (try? tokenStore.hasCourtListenerToken()) ?? false
+        #if DEBUG
         if let environmentStore = tokenStore as? EnvironmentBackedTokenStore,
            environmentStore.hasEnvironmentCourtListenerToken {
             courtListenerTokenSource = .environment
-        } else if hasCourtListenerToken {
-            courtListenerTokenSource = .keychain
-        } else {
-            courtListenerTokenSource = .none
+            return
         }
+        #endif
+        courtListenerTokenSource = hasCourtListenerToken ? .keychain : .none
     }
 }

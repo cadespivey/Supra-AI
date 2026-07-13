@@ -41,7 +41,7 @@ need an explicit, documented justification.
 
 - Model **generation**, document **processing/OCR/embeddings**, **search**, and **source
   selection** run locally. No prompt, document, or query leaves the device for generation.
-- The **only** network egress is explicit and user-initiated:
+- Product-data network egress is explicit and user-initiated:
   - **Legal research / legal-data lookups** against a fixed allow-list — CourtListener,
     plus free government sources (eCFR, Federal Register, Open Legal Codes) and key'd APIs
     (GovInfo, OpenStates, Regulations.gov); see the allow-list below.
@@ -49,6 +49,10 @@ need an explicit, documented justification.
     (`storage.courtlistener.com`), only when you click Download PDF on an authority.
     The API token is **never** sent to the CDN.
   - **Model / embedding downloads** during setup (explicit user action; local thereafter).
+- Sparkle separately checks `https://supralegal.ai/appcast.xml` for signed app
+  updates once per day when automatic checks are enabled. It may download the
+  signed update asset named by that feed; this path carries no API credential,
+  prompt, document, legal query, or usage telemetry.
 - The document-intelligence pipeline performs **no** network I/O at all.
 - **No telemetry or analytics.**
 
@@ -77,11 +81,27 @@ need an explicit, documented justification.
 
 ### Secrets handling
 
-- The CourtListener API token is stored **only in the macOS Keychain**
-  (`com.supraai.courtlistener` / `api-token`), bound to the device.
-- The token is **never** written to SQLite, diagnostics, validation reports, crash logs,
-  exported files, or app settings, and is shown in the UI only masked.
-- Other configuration lives in `.env` / the process environment; `.env` is gitignored.
+- CourtListener, GovInfo, OpenStates, and Regulations.gov credentials are stored
+  **only in the macOS Keychain** under distinct accounts, bound to the device.
+- Release composition reads API credentials only from the Keychain. Environment
+  credential injection is compiled for DEBUG/test workflows and must be composed
+  explicitly; `.env.example` contains no API-key fields.
+- Credentials are not written to SQLite, diagnostics, validation reports, crash
+  logs, exported files, or app settings, and are shown in the UI only masked.
+- Nonsecret runtime configuration may live in `.env` / the process environment;
+  `.env` is gitignored.
+
+### Named egress policies
+
+- **Legal data:** `NetworkPolicyService` is HTTPS-only, default-deny, and names
+  each legal provider origin. Provider keys are scoped to their own origin;
+  CourtListener credentials may remain only on same-owner, same-origin hops.
+- **Hugging Face:** `RedirectPolicy.huggingFace` is token-free and permits only
+  the Hub origin plus explicitly tested CDN transitions. Model downloads are
+  initiated by the user.
+- **Sparkle:** the signed feed origin is fixed in `Info.plist`; Sparkle validates
+  the EdDSA signature before installation. No legal-data credential is supplied
+  to the updater.
 
 ### Privilege-aware logging
 
@@ -104,7 +124,13 @@ need an explicit, documented justification.
 
 - MLX model execution runs in a **sandboxed XPC service**, isolated from the UI process.
 - Imported documents are **copied** into app-managed storage; originals are read-only and
-  never modified. File access uses user-selected, security-scoped, read-only grants.
+  never modified. External file access uses security-scoped URLs chosen through the
+  system picker; import paths are treated as read-only.
+- The app retains `com.apple.security.files.user-selected.read-write` because
+  user-selected export destinations must be created or replaced and selected
+  imports may require coordinated reads. The entitlement grants no ambient path:
+  access is limited to URLs the user chooses through the system picker. App-managed
+  copies remain inside the sandbox container.
 
 ## Scope notes
 

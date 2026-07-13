@@ -44,15 +44,17 @@ See `.env.example` for the full list. The most important values are:
 - `SUPRA_DEFAULT_CONTEXT_TOKENS=32768`
 - `SUPRA_MAX_CONTEXT_TOKENS=65536`
 - `SUPRA_ENABLE_COURTLISTENER=true`
-- `SUPRA_COURTLISTENER_API_KEY`
 - `SUPRA_LEGAL_REQUIRE_CITATIONS=true`
 - `SUPRA_LEGAL_ALLOW_UNGROUNDED_LAW=false`
 - `SUPRA_LEGAL_VERIFY_CITATIONS=true`
 - `SUPRA_LEGAL_JURISDICTION_REQUIRED=true`
 - `SUPRA_LEGAL_LOG_QUERY_TERMS=false`
 
-CourtListener tokens can still be saved in Settings. If
-`SUPRA_COURTLISTENER_API_KEY` is set, it is used ahead of the Keychain token.
+Enter CourtListener, GovInfo, OpenStates, and Regulations.gov credentials in
+Settings. Release builds load them only from the device-bound macOS Keychain;
+they do not read API credentials from `.env` or process environment variables.
+DEBUG/test code can explicitly compose an environment-backed store for local
+live tests.
 Legal-route audit events redact raw query terms by default and store per-install
 HMAC pseudonyms instead; set `SUPRA_LEGAL_LOG_QUERY_TERMS=true` only when the audit
 store is approved for privileged query content.

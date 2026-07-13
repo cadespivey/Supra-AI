@@ -134,9 +134,14 @@ Configuration is read from `.env` / the process environment (defaults shown in
 | `SUPRA_MODEL_LEGAL_REASONING` / `…_HIGH_QUALITY` | Reasoning model(s) for legal routes |
 | `SUPRA_MODEL_DRAFTING`, `SUPRA_MODEL_CRITIQUE` | Drafting / critique models |
 | `SUPRA_DEFAULT_CONTEXT_TOKENS`, `SUPRA_MAX_CONTEXT_TOKENS` | Context-window budget |
-| `SUPRA_ENABLE_COURTLISTENER`, `SUPRA_COURTLISTENER_*` | CourtListener integration & token |
+| `SUPRA_ENABLE_COURTLISTENER`, `SUPRA_COURTLISTENER_BASE_URL` | CourtListener integration and API origin |
 | `SUPRA_LEGAL_REQUIRE_CITATIONS`, `…_ALLOW_UNGROUNDED_LAW`, `…_VERIFY_CITATIONS`, `…_JURISDICTION_REQUIRED` | Legal-safety gates |
 | `SUPRA_LEGAL_LOG_QUERY_TERMS` | Opt-in to store raw query terms (off by default; per-install keyed pseudonyms otherwise) |
+
+API credentials are entered in Settings and stored in the device-bound macOS
+Keychain. Release builds do not read API credentials from `.env` or process
+environment variables. DEBUG builds may opt into explicit environment injection
+for local and live-test workflows.
 
 ## Development
 

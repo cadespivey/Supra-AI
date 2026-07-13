@@ -128,7 +128,7 @@ public final class GlobalChatController: ObservableObject {
         }
         self.legalConfiguration = legalConfiguration
         self.router = ModelRouter(configuration: legalConfiguration)
-        let resolvedTokenStore = tokenStore ?? EnvironmentBackedTokenStore(primary: KeychainTokenStore())
+        let resolvedTokenStore = tokenStore ?? APIKeyStoreComposition.live()
         self.courtListenerClient = courtListenerClient ?? CourtListenerClient(
             httpClient: AuthorizedHTTPClient(
                 keyStore: resolvedTokenStore,

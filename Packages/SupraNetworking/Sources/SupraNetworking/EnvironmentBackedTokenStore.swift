@@ -1,5 +1,8 @@
 import Foundation
 
+#if DEBUG
+/// Explicit DEBUG/test credential adapter. Release builds do not compile this
+/// environment-reading implementation; shipping composition is Keychain-only.
 public final class EnvironmentBackedTokenStore: APIKeyStoreProtocol, @unchecked Sendable {
     private let primary: any APIKeyStoreProtocol
     private let environment: [String: String]
@@ -76,3 +79,4 @@ public final class EnvironmentBackedTokenStore: APIKeyStoreProtocol, @unchecked 
         return value
     }
 }
+#endif

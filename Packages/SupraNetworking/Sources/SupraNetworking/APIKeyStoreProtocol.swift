@@ -2,7 +2,7 @@ import Foundation
 
 /// Additional keyed API-credential services (beyond the CourtListener token, which keeps its own
 /// dedicated methods for backwards compatibility). Each maps to a distinct Keychain account and an
-/// optional environment-variable fallback, mirroring the CourtListener token.
+/// DEBUG-only environment-variable name used by explicit development/test composition.
 public enum APIKeyService: String, Sendable, CaseIterable, Codable {
     case openStates
     case regulationsGov
@@ -11,7 +11,7 @@ public enum APIKeyService: String, Sendable, CaseIterable, Codable {
     /// Keychain account this service's key is stored under (within the store's Keychain service).
     public var keychainAccount: String { "supra.apikey.\(rawValue)" }
 
-    /// Environment-variable fallback (CI / power users), like `SUPRA_COURTLISTENER_API_KEY`.
+    /// DEBUG/test injection name. Shipping composition never reads this value.
     public var environmentVariable: String {
         switch self {
         case .openStates: return "SUPRA_OPENSTATES_API_KEY"

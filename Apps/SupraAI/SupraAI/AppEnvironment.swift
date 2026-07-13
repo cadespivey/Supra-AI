@@ -70,6 +70,7 @@ final class AppEnvironment: ObservableObject {
         let systemPrompt = DefaultSystemPrompt.milestone1()
         let appVersion = AppEnvironment.currentAppVersion()
         let modelLibrary = ModelLibrary(store: store, runtimeClient: runtimeClient)
+        let tokenStore = APIKeyStoreComposition.live()
         self.store = store
         self.usingFallbackStore = storeResult.isFallback
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
@@ -77,14 +78,19 @@ final class AppEnvironment: ObservableObject {
         self.chatController = GlobalChatController(
             store: store,
             runtimeClient: runtimeClient,
-            defaultSystemPrompt: systemPrompt
+            defaultSystemPrompt: systemPrompt,
+            tokenStore: tokenStore
         )
         self.modelDownloadController = ModelDownloadController(
             store: store,
             modelLibrary: modelLibrary,
             fetcher: HuggingFaceClient()
         )
-        self.settingsController = SettingsController(store: store, appVersion: appVersion)
+        self.settingsController = SettingsController(
+            store: store,
+            appVersion: appVersion,
+            tokenStore: tokenStore
+        )
         self.backupController = BackupController(
             store: store,
             blobsDirectory: DocumentStorage.makeDefault().blobsDirectory,
@@ -113,7 +119,7 @@ final class AppEnvironment: ObservableObject {
         self.scratchPadController = ScratchPadController(store: store)
         self.publicRecordsController = PublicRecordsController(
             store: store,
-            keyStore: EnvironmentBackedTokenStore(primary: KeychainTokenStore())
+            keyStore: tokenStore
         )
         // Phase 7: the billing draft controller is seeded from the firm's persisted
         // ScratchPad billing settings (timekeeper, rounding, sensitivity, etc.).

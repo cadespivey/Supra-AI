@@ -156,7 +156,7 @@ public final class ResearchSessionController: ObservableObject {
         self.matterID = matterID
         self.defaultSystemPrompt = defaultSystemPrompt
         self.logPrivilegedQueryTerms = legalConfiguration.logPrivilegedQueryTerms
-        let resolvedTokenStore = tokenStore ?? EnvironmentBackedTokenStore(primary: KeychainTokenStore())
+        let resolvedTokenStore = tokenStore ?? APIKeyStoreComposition.live()
         self.tokenStore = resolvedTokenStore
         // Build the default CourtListener stack from the store; every request is
         // allowlisted, rate-limited, and logged to network_requests by the client.

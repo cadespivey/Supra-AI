@@ -52,7 +52,7 @@ public final class AuthoritiesController: ObservableObject {
         self.matterID = matterID
         self.runtimeClient = runtimeClient
         self.legalConfiguration = legalConfiguration
-        let resolvedTokenStore = tokenStore ?? EnvironmentBackedTokenStore(primary: KeychainTokenStore())
+        let resolvedTokenStore = tokenStore ?? APIKeyStoreComposition.live()
         self.tokenStore = resolvedTokenStore
         self.courtListenerClient = courtListenerClient ?? CourtListenerClient(
             httpClient: AuthorizedHTTPClient(
