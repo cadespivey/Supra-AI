@@ -89,7 +89,7 @@ run_case \
   bash "${scripts}/verify-migration-sequence.sh" "$migration_file"
 
 artifact_fixture="${temporary_dir}/artifacts"
-mkdir -p "${artifact_fixture}/Sources" "${artifact_fixture}/ClientData/Acme"
+mkdir -p "${artifact_fixture}/Sources"
 printf 'ordinary source\n' >"${artifact_fixture}/Sources/Feature.swift"
 run_case \
   "a clean artifact tree passes" \
@@ -97,6 +97,7 @@ run_case \
   "Prohibited artifact scan passed." \
   bash "${scripts}/verify-prohibited-artifacts.sh" "$artifact_fixture"
 
+mkdir -p "${artifact_fixture}/ClientData/Acme"
 printf 'synthetic fixture only\n' >"${artifact_fixture}/ClientData/Acme/private.txt"
 run_case \
   "a prohibited synthetic path fails" \
@@ -172,6 +173,39 @@ run_case \
   1 \
   "Project-source warning gate failed: 1 warning(s)." \
   env SUPRA_PROJECT_ROOT="$repo_root" bash "${scripts}/verify-xcode-warnings.sh" "$warning_log"
+
+missing_hook="${temporary_dir}/missing-hook.swift"
+run_case \
+  "a missing hosted XPC integration test fails closed" \
+  1 \
+  "hosted XPC integration test is missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$missing_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+xpc_hook="${temporary_dir}/RuntimeXPCIntegrationTests.swift"
+printf '%s\n' 'final class RuntimeXPCIntegrationTests: XCTestCase {}' >"$xpc_hook"
+run_case \
+  "the exact hosted XPC selector satisfies the hook" \
+  0 \
+  "Hosted XPC integration hook passed." \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+run_case \
+  "a missing shipping migration fixture matrix fails closed" \
+  1 \
+  "shipping migration fixture matrix is missing" \
+  env SUPRA_MIGRATION_FIXTURE_TEST_FILE="$missing_hook" \
+    bash "${scripts}/run-shipping-migration-fixtures.sh" --check
+
+migration_hook="${temporary_dir}/ShippingMigrationFixtureTests.swift"
+printf '%s\n' 'final class ShippingMigrationFixtureTests: XCTestCase {}' >"$migration_hook"
+run_case \
+  "the shipping migration selector satisfies the hook" \
+  0 \
+  "Shipping migration fixture hook passed." \
+  env SUPRA_MIGRATION_FIXTURE_TEST_FILE="$migration_hook" \
+    bash "${scripts}/run-shipping-migration-fixtures.sh" --check
 
 npm_stub="${temporary_dir}/npm-stub.sh"
 printf '%s\n' \
