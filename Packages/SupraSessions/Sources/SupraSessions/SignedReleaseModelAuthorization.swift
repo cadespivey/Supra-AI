@@ -7,10 +7,11 @@ import SupraRuntimeInterface
 /// postflight. Only an exclusive, revision-pinned tree inside the app-managed
 /// model root can be authorized.
 public final class SignedReleaseModelAuthorization: @unchecked Sendable {
-    public static let fingerprintAlgorithm = "supra-release-model-sha256-v1"
+    public static let fingerprintAlgorithm = RuntimeModelContentBinding.fingerprintAlgorithm
 
     public let manifest: ModelArtifactManifest
     public let modelSHA256: String
+    public let contentBinding: RuntimeModelContentBinding
 
     private let modelDirectory: URL
     private let managedRoot: URL
@@ -22,7 +23,7 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
         modelDirectory: URL,
         managedRoot: URL,
         manifest: ModelArtifactManifest,
-        modelSHA256: String,
+        contentBinding: RuntimeModelContentBinding,
         modelBookmark: Data,
         modelDirectoryIdentity: ModelDirectoryIdentity,
         scopedAccess: SecurityScopedModelAccess
@@ -30,7 +31,8 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
         self.modelDirectory = modelDirectory
         self.managedRoot = managedRoot
         self.manifest = manifest
-        self.modelSHA256 = modelSHA256
+        self.modelSHA256 = contentBinding.fingerprintSHA256
+        self.contentBinding = contentBinding
         self.modelBookmark = modelBookmark
         self.modelDirectoryIdentity = modelDirectoryIdentity
         self.scopedAccess = scopedAccess
@@ -51,7 +53,7 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
 
         let paths = try validatedPaths(modelDirectory: modelDirectory, managedRoot: managedRoot)
         let snapshot = try captureSnapshot(paths: paths)
-        guard constantTimeEqual(snapshot.fingerprint, expectedSHA256) else {
+        guard constantTimeEqual(snapshot.contentBinding.fingerprintSHA256, expectedSHA256) else {
             throw SignedReleaseModelAuthorizationError.fingerprintMismatch
         }
 
@@ -66,7 +68,7 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
             modelDirectory: paths.modelDirectory,
             managedRoot: paths.managedRoot,
             manifest: snapshot.manifest,
-            modelSHA256: snapshot.fingerprint,
+            contentBinding: snapshot.contentBinding,
             modelBookmark: authorization.bookmark,
             modelDirectoryIdentity: authorization.directoryIdentity,
             scopedAccess: access
@@ -83,7 +85,8 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
             displayName: displayName,
             modelBookmark: modelBookmark,
             managedRootPath: managedRoot.path,
-            modelDirectoryIdentity: modelDirectoryIdentity
+            modelDirectoryIdentity: modelDirectoryIdentity,
+            contentBinding: contentBinding
         )
     }
 
@@ -106,7 +109,11 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
         guard snapshot.manifest == manifest else {
             throw SignedReleaseModelAuthorizationError.manifestChanged
         }
-        guard Self.constantTimeEqual(snapshot.fingerprint, modelSHA256) else {
+        guard snapshot.contentBinding == contentBinding,
+              Self.constantTimeEqual(
+                  snapshot.contentBinding.fingerprintSHA256,
+                  modelSHA256
+              ) else {
             throw SignedReleaseModelAuthorizationError.fingerprintMismatch
         }
     }
@@ -114,7 +121,10 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
     private static func captureSnapshot(paths: ValidatedPaths) throws -> Snapshot {
         let manifest = try ManagedModelStorage.loadVerifiedManifest(at: paths.modelDirectory)
         try verifyExclusiveTree(in: paths.modelDirectory, manifest: manifest)
-        let fingerprint = try fingerprint(modelDirectory: paths.modelDirectory, manifest: manifest)
+        let contentBinding = try contentBinding(
+            modelDirectory: paths.modelDirectory,
+            manifest: manifest
+        )
 
         // Close the most useful mutation window: the declared hashes and exact
         // tree must still be valid after the independent SHA-256 pass finishes.
@@ -125,7 +135,7 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
             throw SignedReleaseModelAuthorizationError.manifestChanged
         }
         try verifyExclusiveTree(in: paths.modelDirectory, manifest: manifest)
-        return Snapshot(manifest: manifest, fingerprint: fingerprint)
+        return Snapshot(manifest: manifest, contentBinding: contentBinding)
     }
 
     private static func validatedPaths(
@@ -253,16 +263,16 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
         }
     }
 
-    private static func fingerprint(
+    private static func contentBinding(
         modelDirectory: URL,
         manifest: ModelArtifactManifest
-    ) throws -> String {
+    ) throws -> RuntimeModelContentBinding {
         let files = try manifest.files.sorted { $0.relativePath < $1.relativePath }.map { artifact in
             let url = try ManagedModelStorage.safeDestination(
                 for: artifact.relativePath,
                 in: modelDirectory
             )
-            return FingerprintDocument.File(
+            return RuntimeModelContentBinding.File(
                 path: artifact.relativePath,
                 size: artifact.size,
                 declaredDigestAlgorithm: artifact.digestAlgorithm.rawValue,
@@ -270,16 +280,21 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
                 actualSHA256: try sha256(of: url)
             )
         }
-        let document = FingerprintDocument(
+        let fingerprint = try RuntimeModelContentBinding.canonicalFingerprintSHA256(
             algorithm: fingerprintAlgorithm,
             schemaVersion: manifest.schemaVersion,
             repositoryID: manifest.repositoryID,
             revision: manifest.revision.lowercased(),
             files: files
         )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return sha256(try encoder.encode(document))
+        return try RuntimeModelContentBinding(
+            algorithm: fingerprintAlgorithm,
+            schemaVersion: manifest.schemaVersion,
+            repositoryID: manifest.repositoryID,
+            revision: manifest.revision.lowercased(),
+            files: files,
+            fingerprintSHA256: fingerprint
+        )
     }
 
     private static func sha256(of url: URL) throws -> String {
@@ -291,10 +306,6 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
             hasher.update(data: data)
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func sha256(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func isSymbolicLink(_ url: URL) -> Bool {
@@ -326,23 +337,7 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
 
     private struct Snapshot {
         let manifest: ModelArtifactManifest
-        let fingerprint: String
-    }
-
-    private struct FingerprintDocument: Encodable {
-        let algorithm: String
-        let schemaVersion: Int
-        let repositoryID: String
-        let revision: String
-        let files: [File]
-
-        struct File: Encodable {
-            let path: String
-            let size: Int64
-            let declaredDigestAlgorithm: String
-            let declaredDigest: String
-            let actualSHA256: String
-        }
+        let contentBinding: RuntimeModelContentBinding
     }
 }
 

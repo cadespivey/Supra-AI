@@ -89,6 +89,7 @@ public enum SignedReleaseSmokeRunnerError: Error, Sendable {
     case loadTransportFailed
     case loadRejected
     case loadedModelIdentityMismatch
+    case loadedModelContentMismatch
     case invalidLoadMetrics
     case generationTransportFailed
     case eventContractViolation
@@ -252,6 +253,13 @@ public struct SignedReleaseSmokeRunner: Sendable {
         guard loadResponse.modelID == modelID else {
             throw SignedReleaseSmokeRunnerError.loadedModelIdentityMismatch
         }
+        guard let verifiedModelSHA256 = loadResponse.verifiedModelSHA256,
+              Self.constantTimeEqualSHA256(
+                  verifiedModelSHA256,
+                  authorization.modelSHA256
+              ) else {
+            throw SignedReleaseSmokeRunnerError.loadedModelContentMismatch
+        }
         guard loadResponse.error == nil,
               let loadTimeMs = loadResponse.metrics?.loadTimeMs,
               loadTimeMs >= 0 else {
@@ -259,6 +267,17 @@ public struct SignedReleaseSmokeRunner: Sendable {
         }
 
         return loadTimeMs
+    }
+
+    private static func constantTimeEqualSHA256(_ lhs: String, _ rhs: String) -> Bool {
+        let left = Array(lhs.utf8)
+        let right = Array(rhs.utf8)
+        guard left.count == 64, right.count == 64 else { return false }
+        var difference: UInt8 = 0
+        for index in 0..<64 {
+            difference |= left[index] ^ right[index]
+        }
+        return difference == 0
     }
 
     private func generateAndValidate(

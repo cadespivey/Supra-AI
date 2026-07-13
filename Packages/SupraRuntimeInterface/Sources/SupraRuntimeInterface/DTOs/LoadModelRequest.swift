@@ -23,13 +23,19 @@ public struct LoadModelRequest: Codable, Sendable {
     /// raw stale bit is false, preventing same-path directory replacement.
     public let modelDirectoryIdentity: ModelDirectoryIdentity?
 
+    /// Complete canonical description of the model bytes the app authorized.
+    /// Nil remains decodable for older clients; privileged release validation
+    /// requires a binding and the runtime service must verify it before load.
+    public let contentBinding: RuntimeModelContentBinding?
+
     public init(
         modelID: ModelID,
         modelPath: String,
         displayName: String,
         modelBookmark: Data? = nil,
         managedRootPath: String? = nil,
-        modelDirectoryIdentity: ModelDirectoryIdentity? = nil
+        modelDirectoryIdentity: ModelDirectoryIdentity? = nil,
+        contentBinding: RuntimeModelContentBinding? = nil
     ) {
         self.modelID = modelID
         self.modelPath = modelPath
@@ -37,5 +43,6 @@ public struct LoadModelRequest: Codable, Sendable {
         self.modelBookmark = modelBookmark
         self.managedRootPath = managedRootPath
         self.modelDirectoryIdentity = modelDirectoryIdentity
+        self.contentBinding = contentBinding
     }
 }
