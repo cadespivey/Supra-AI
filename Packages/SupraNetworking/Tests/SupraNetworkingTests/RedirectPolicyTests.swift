@@ -59,8 +59,8 @@ final class RedirectPolicyTests: XCTestCase {
         )
     }
 
-    /// ACR-NET-01 status matrix. Expected RED at the test-only commit: Foundation follows
-    /// each cross-origin redirect and every second server receives a request.
+    /// ACR-NET-01 status matrix. Expected RED at the test-only commit: the new policy type is
+    /// absent; on the original runtime path, Foundation follows each redirect to server two.
     func testAllRedirectStatusVariantsRejectBeforeCrossOriginEgress() async throws {
         let statuses = [
             (301, "301 Moved Permanently"),
@@ -100,8 +100,8 @@ final class RedirectPolicyTests: XCTestCase {
         }
     }
 
-    /// ACR-NET-04 real-session hop proof. Expected RED at the test-only commit: the shared
-    /// session continues beyond five hops instead of returning the typed ceiling error.
+    /// ACR-NET-04 real-session hop proof. Expected RED at the test-only commit: the new policy
+    /// type is absent; on the original runtime path, Foundation continues beyond five hops.
     func testSixthSameOriginHopIsRejectedBeforeItsRequest() async throws {
         let address = LoopbackAddressBox()
         let server = try LoopbackHTTPServer { request in
@@ -167,21 +167,22 @@ final class RedirectPolicyTests: XCTestCase {
     }
 
     /// ACR-NET-03. Expected RED: no redirect layer scopes credential headers.
-    func testCredentialHeadersRemainOnlyForExplicitSameOwnerRoute() throws {
+    func testCredentialHeadersRemainOnlyOnSameOriginAndStripFromCrossOriginRoutes() throws {
         let first = try XCTUnwrap(URL(string: "https://api.example.test/start"))
-        let sameOwner = try XCTUnwrap(URL(string: "https://api-alt.example.test/next"))
+        let sameOrigin = try XCTUnwrap(URL(string: "https://api.example.test/next"))
         let tokenFree = try XCTUnwrap(URL(string: "https://cdn.example.test/file"))
+        let wrongOwner = try XCTUnwrap(URL(string: "https://other-api.example.test/next"))
         let policy = try RedirectPolicy(
             initialURL: first,
             service: "synthetic-service",
             credentialOwner: "synthetic-token",
             additionalOrigins: [
-                .init(url: sameOwner, service: "synthetic-service", credentialOwner: "synthetic-token"),
-                .init(url: tokenFree, service: "synthetic-cdn", credentialOwner: nil)
+                .init(url: tokenFree, service: "synthetic-cdn", credentialOwner: nil),
+                .init(url: wrongOwner, service: "other-service", credentialOwner: "other-token")
             ],
             crossOriginRules: [
-                .init(from: first, to: sameOwner, service: "synthetic-service", preservesCredentials: true),
-                .init(from: first, to: tokenFree, service: "synthetic-cdn", preservesCredentials: false)
+                .init(from: first, to: tokenFree, service: "synthetic-cdn"),
+                .init(from: first, to: wrongOwner, service: "other-service")
             ]
         )
         var original = URLRequest(url: first)
@@ -191,8 +192,8 @@ final class RedirectPolicyTests: XCTestCase {
 
         let credentialed = try policy.requestForRedirect(
             from: original,
-            response: redirectResponse(from: first, to: sameOwner, statusCode: 307),
-            proposedRequest: URLRequest(url: sameOwner),
+            response: redirectResponse(from: first, to: sameOrigin, statusCode: 307),
+            proposedRequest: URLRequest(url: sameOrigin),
             hopCount: 1
         )
         XCTAssertEqual(credentialed.value(forHTTPHeaderField: "Authorization"), "Token secret-canary")
@@ -208,6 +209,38 @@ final class RedirectPolicyTests: XCTestCase {
         XCTAssertNil(stripped.value(forHTTPHeaderField: "Authorization"))
         XCTAssertNil(stripped.value(forHTTPHeaderField: "X-Api-Key"))
         XCTAssertNil(stripped.value(forHTTPHeaderField: "Cookie"))
+
+        let wrongScope = try policy.requestForRedirect(
+            from: original,
+            response: redirectResponse(from: first, to: wrongOwner, statusCode: 302),
+            proposedRequest: URLRequest(url: wrongOwner),
+            hopCount: 1
+        )
+        XCTAssertNil(wrongScope.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(wrongScope.value(forHTTPHeaderField: "X-Api-Key"))
+        XCTAssertNil(wrongScope.value(forHTTPHeaderField: "Cookie"))
+    }
+
+    /// ACR-NET-03 contract guard: related CourtListener hostnames are still cross-origin.
+    /// The approved compatibility route must be token-free.
+    func testCourtListenerCrossOriginCompatibilityRouteStripsToken() throws {
+        let first = try XCTUnwrap(URL(string: "https://www.courtlistener.com/api/rest/v4/search/"))
+        let destination = try XCTUnwrap(URL(string: "https://courtlistener.com/api/rest/v4/search/"))
+        let policy = try NetworkPolicyService().redirectPolicy(
+            for: first,
+            credentialOwner: "courtlistener-api"
+        )
+        var current = URLRequest(url: first)
+        current.setValue("Token secret-canary", forHTTPHeaderField: "Authorization")
+
+        let redirected = try policy.requestForRedirect(
+            from: current,
+            response: redirectResponse(from: first, to: destination, statusCode: 308),
+            proposedRequest: URLRequest(url: destination),
+            hopCount: 1
+        )
+
+        XCTAssertNil(redirected.value(forHTTPHeaderField: "Authorization"))
     }
 
     /// ACR-NET-04. Expected RED: no redirect layer imposes a five-hop ceiling.
