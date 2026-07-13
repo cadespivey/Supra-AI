@@ -453,7 +453,7 @@ final class LegalResearchWorkflowTests: XCTestCase {
             citations: ["§ 913", "United States Code, Title 33 § 913"],
             jurisdiction: "Federal",
             snippet: "Time for filing claims under the Longshore and Harbor Workers' Compensation Act.",
-            text: "Time for filing claims under the Longshore and Harbor Workers' Compensation Act."
+            text: "The claim-filing provision is codified at 33 U.S.C. § 913. Time for filing claims under the Longshore and Harbor Workers' Compensation Act."
         )
         let answer = "The claim-filing provision is codified at 33 U.S.C. § 913 [A1]."
 

@@ -18,6 +18,12 @@ public enum LegalAuthorityType: String, Codable, Hashable, Sendable {
     case unknown
 }
 
+public enum LegalAuthorityTextKind: String, Codable, Hashable, Sendable {
+    case searchSnippet = "search_snippet"
+    case fullText = "full_text"
+    case statutoryText = "statutory_text"
+}
+
 public struct LegalAuthority: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var source: LegalAuthoritySource
@@ -33,6 +39,9 @@ public struct LegalAuthority: Codable, Hashable, Identifiable, Sendable {
     public var url: String?
     public var snippet: String?
     public var text: String?
+    /// Provenance of `text`. Optional for backward-compatible packet decoding;
+    /// newly retrieved/saved authorities set it explicitly.
+    public var textKind: LegalAuthorityTextKind?
     public var clusterId: String?
     public var opinionId: String?
     public var docketNumber: String?
@@ -52,6 +61,7 @@ public struct LegalAuthority: Codable, Hashable, Identifiable, Sendable {
         url: String? = nil,
         snippet: String? = nil,
         text: String? = nil,
+        textKind: LegalAuthorityTextKind? = nil,
         clusterId: String? = nil,
         opinionId: String? = nil,
         docketNumber: String? = nil
@@ -70,6 +80,7 @@ public struct LegalAuthority: Codable, Hashable, Identifiable, Sendable {
         self.url = url
         self.snippet = snippet
         self.text = text
+        self.textKind = textKind
         self.clusterId = clusterId
         self.opinionId = opinionId
         self.docketNumber = docketNumber
@@ -125,6 +136,7 @@ public enum LegalAuthorityNormalizer {
             url: CourtListenerMapper.displayURL(for: result)?.absoluteString,
             snippet: clean(opinion?.snippet),
             text: textParts.isEmpty ? nil : textParts.joined(separator: "\n\n"),
+            textKind: textParts.isEmpty ? nil : .searchSnippet,
             clusterId: clusterID,
             opinionId: opinionID,
             docketNumber: clean(result.docketNumber)

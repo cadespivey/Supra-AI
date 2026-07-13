@@ -32,6 +32,7 @@ private struct StubCourtListenerClient: CourtListenerClientProtocol, @unchecked 
 
 private final class CapturingCourtListenerClient: CourtListenerClientProtocol, @unchecked Sendable {
     private let response: CourtListenerSearchResponse
+    private let opinionBody: String?
     private let lock = NSLock()
     private var _requests: [CourtListenerSearchRequest] = []
     private var _relatedSessionIDs: [String?] = []
@@ -39,8 +40,9 @@ private final class CapturingCourtListenerClient: CourtListenerClientProtocol, @
     var requests: [CourtListenerSearchRequest] { lock.withLock { _requests } }
     var relatedSessionIDs: [String?] { lock.withLock { _relatedSessionIDs } }
 
-    init(response: CourtListenerSearchResponse) {
+    init(response: CourtListenerSearchResponse, opinionBody: String? = nil) {
         self.response = response
+        self.opinionBody = opinionBody
     }
 
     func searchOpinions(
@@ -52,6 +54,11 @@ private final class CapturingCourtListenerClient: CourtListenerClientProtocol, @
             _relatedSessionIDs.append(relatedResearchSessionID)
         }
         return response
+    }
+
+    func fetchOpinion(id: Int) async throws -> CourtListenerOpinionDetailDTO {
+        guard let opinionBody else { throw CourtListenerError.invalidResponse }
+        return CourtListenerOpinionDetailDTO(id: id, plainText: opinionBody)
     }
 }
 
@@ -449,7 +456,10 @@ final class SupraSessionsTests: XCTestCase {
     /// (so research proceeds instead of asking) and bound the query's court IDs.
     func testGlobalChatExplicitJurisdictionBoundsCourtListenerQuery() async throws {
         let store = try makeStore()
-        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let route = ModelRouter(configuration: LegalModelConfiguration(
+            requireCitations: false,
+            jurisdictionRequired: true
+        )).route(for: .legalResearch)
         let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
         let stub = StubRuntimeClient { request in
             .events([
@@ -481,7 +491,10 @@ final class SupraSessionsTests: XCTestCase {
     /// misses (Wyoming), so research is still bounded rather than asking.
     func testGlobalChatAutoDetectsJurisdictionFromPrompt() async throws {
         let store = try makeStore()
-        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let route = ModelRouter(configuration: LegalModelConfiguration(
+            requireCitations: false,
+            jurisdictionRequired: true
+        )).route(for: .legalResearch)
         let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
         let stub = StubRuntimeClient { request in
             .events([
@@ -511,7 +524,10 @@ final class SupraSessionsTests: XCTestCase {
     /// instead of asking for jurisdiction.
     func testGlobalChatAutoDetectsFederalJurisdictionFromCitation() async throws {
         let store = try makeStore()
-        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let route = ModelRouter(configuration: LegalModelConfiguration(
+            requireCitations: false,
+            jurisdictionRequired: true
+        )).route(for: .legalResearch)
         let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
         let stub = StubRuntimeClient { request in
             .events([
@@ -547,7 +563,10 @@ final class SupraSessionsTests: XCTestCase {
     /// jurisdiction established by an earlier turn's citation, rather than asking.
     func testGlobalChatInheritsFederalJurisdictionFromPriorTurn() async throws {
         let store = try makeStore()
-        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let route = ModelRouter(configuration: LegalModelConfiguration(
+            requireCitations: false,
+            jurisdictionRequired: true
+        )).route(for: .legalResearch)
         let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
         let stub = StubRuntimeClient { request in
             .events([
@@ -880,7 +899,7 @@ final class SupraSessionsTests: XCTestCase {
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
         let researchRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
         let verifyRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalVerify)
-        let court = StubCourtListenerClient(
+        let court = HydratingCourtListenerClient(
             response: CourtListenerSearchResponse(
                 count: 1,
                 results: [
@@ -896,6 +915,10 @@ final class SupraSessionsTests: XCTestCase {
                         status: "Published"
                     )
                 ]
+            ),
+            opinionBody: String(
+                repeating: "Foo v. Bar held that the contract term was unenforceable under California law. ",
+                count: 4
             )
         )
         let stub = StubRuntimeClient { request in
@@ -1030,7 +1053,7 @@ final class SupraSessionsTests: XCTestCase {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
         let researchRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
-        let court = StubCourtListenerClient(
+        let court = HydratingCourtListenerClient(
             response: CourtListenerSearchResponse(
                 count: 1,
                 results: [
@@ -1041,6 +1064,10 @@ final class SupraSessionsTests: XCTestCase {
                         opinions: [CourtListenerOpinionDTO(id: 99, snippet: "snippet")], status: "Published"
                     )
                 ]
+            ),
+            opinionBody: String(
+                repeating: "The indemnity clause is enforceable when the stated contractual conditions are satisfied. ",
+                count: 4
             )
         )
         final class HistoryBox: @unchecked Sendable { var histories: [[GenerateRequest.Turn]] = [] }
@@ -1082,7 +1109,7 @@ final class SupraSessionsTests: XCTestCase {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
         let researchRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
-        let court = StubCourtListenerClient(
+        let court = HydratingCourtListenerClient(
             response: CourtListenerSearchResponse(
                 count: 1,
                 results: [
@@ -1093,6 +1120,10 @@ final class SupraSessionsTests: XCTestCase {
                         opinions: [CourtListenerOpinionDTO(id: 99, snippet: "snippet")], status: "Published"
                     )
                 ]
+            ),
+            opinionBody: String(
+                repeating: "The governing contract rule applies when the stated conditions are satisfied. ",
+                count: 4
             )
         )
         final class CallBox: @unchecked Sendable { var n = 0 }
@@ -1103,7 +1134,7 @@ final class SupraSessionsTests: XCTestCase {
             // self-repair revision cites only the in-packet label [A1].
             let token = box.n == 1
                 ? "The rule applies, see Made Up v. Fake, 999 U.S. 1."
-                : "The rule applies [A1]."
+                : "The governing contract rule applies when the stated conditions are satisfied [A1]."
             return .events([.event(request, 1, .token, token: token), .event(request, 2, .generationCompleted)])
         }
         let controller = makeGlobalChatController(
@@ -1129,7 +1160,7 @@ final class SupraSessionsTests: XCTestCase {
         let router = ModelRouter(configuration: LegalModelConfiguration())
         let researchRoute = router.route(for: .legalResearch)
         let verifyRoute = router.route(for: .legalVerify)
-        let court = StubCourtListenerClient(
+        let court = CapturingCourtListenerClient(
             response: CourtListenerSearchResponse(
                 count: 1,
                 results: [
@@ -1302,7 +1333,7 @@ final class SupraSessionsTests: XCTestCase {
         let router = ModelRouter(configuration: LegalModelConfiguration())
         let researchRoute = router.route(for: .legalResearch)
         let verifyRoute = router.route(for: .legalVerify)
-        let court = StubCourtListenerClient(
+        let court = CapturingCourtListenerClient(
             response: CourtListenerSearchResponse(
                 count: 1,
                 results: [
@@ -1380,7 +1411,7 @@ final class SupraSessionsTests: XCTestCase {
         let rawResultJSON = """
         {"absolute_url":"/opinion/12/full-text-v-case/","caseName":"Full Text v. Case","citation":["321 Cal. App. 5th 654"],"cluster_id":12,"court":"California Court of Appeal","court_id":"calctapp","dateFiled":"2023-01-02","opinions":[{"id":44,"snippet":"short snippet"}],"syllabus":"The court explained that \(sourceQuote)."}
         """
-        let court = StubCourtListenerClient(
+        let court = CapturingCourtListenerClient(
             response: CourtListenerSearchResponse(
                 count: 1,
                 results: [
@@ -1394,11 +1425,12 @@ final class SupraSessionsTests: XCTestCase {
                         rawResultJSON: rawResultJSON
                     )
                 ]
-            )
+            ),
+            opinionBody: "The court explained that \(sourceQuote). The complete opinion applies that rule to the buyer's latent-defect claim."
         )
         let stub = StubRuntimeClient { request in
             .events([
-                .event(request, 1, .token, token: "Full Text v. Case, 321 Cal. App. 5th 654."),
+                .event(request, 1, .token, token: "Full Text v. Case held that \(sourceQuote) [A1]."),
                 .event(request, 2, .generationCompleted)
             ])
         }
@@ -2766,7 +2798,29 @@ final class SupraSessionsTests: XCTestCase {
         // not hard-refuse.
         let store = try makeStore()
         let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
-        let court = CapturingCourtListenerClient(response: Self.singleResultResponse)
+        let floridaResponse = CourtListenerSearchResponse(
+            count: 1,
+            results: [
+                CourtListenerSearchResultDTO(
+                    absoluteURL: "/opinion/1/foo-v-bar/",
+                    caseName: "Foo v. Bar",
+                    citation: ["1 So. 3d 1"],
+                    clusterID: 1,
+                    court: "Supreme Court of Florida",
+                    courtID: "fla",
+                    dateFiled: "2024-02-03",
+                    opinions: [CourtListenerOpinionDTO(id: 99, snippet: "Notice prerequisites were applied.")],
+                    status: "Published"
+                )
+            ]
+        )
+        let court = CapturingCourtListenerClient(
+            response: floridaResponse,
+            opinionBody: String(
+                repeating: "Foo v. Bar describes the notice prerequisites required before a garnishment action may proceed. ",
+                count: 4
+            )
+        )
         let runtime = StubRuntimeClient { request in
             .events([
                 .event(request, 1, .token, token: "Courts describe the notice prerequisites in Foo v. Bar [A1]."),
@@ -2865,7 +2919,7 @@ final class SupraSessionsTests: XCTestCase {
             caseName: "Rush v. Savchuk",
             citationJSON: #"["444 U.S. 320"]"#,
             court: "Supreme Court of the United States", courtID: "scotus",
-            opinionText: "Quasi in rem jurisdiction cannot rest on the presence of the defendant's insurer."
+            opinionText: "The Court rejected attributing the insurer's forum contacts to the defendant; quasi in rem jurisdiction cannot rest on the presence of the defendant's insurer."
         ))
         let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
         let runtime = StubRuntimeClient { request in
@@ -3105,7 +3159,7 @@ final class SupraSessionsTests: XCTestCase {
         let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
         let runtime = StubRuntimeClient { request in
             .events([
-                .event(request, 1, .token, token: "In SunTrust Bank v. Houghton Mifflin Co., the limitations discussion was dictum [A1]."),
+                .event(request, 1, .token, token: "SunTrust discussed the limitations period applicable to the copyright claim [A1]."),
                 .event(request, 2, .generationCompleted)
             ])
         }

@@ -1,4 +1,5 @@
 import Foundation
+import SupraCore
 
 public enum LegalVerificationIssueKind: String, Codable, Hashable, Sendable {
     case unsupportedCitation = "unsupported_citation"
@@ -8,6 +9,9 @@ public enum LegalVerificationIssueKind: String, Codable, Hashable, Sendable {
     /// text to search (e.g. a packet restored after an app restart, which is
     /// persisted without text). Soft: "unverified", never "fabricated".
     case unverifiableQuote = "unverifiable_quote"
+    /// A material legal proposition whose cited source could not be evaluated
+    /// because complete authority text was unavailable or ambiguous.
+    case unverifiableProposition = "unverifiable_proposition"
     case jurisdictionMismatch = "jurisdiction_mismatch"
     case noRetrievedAuthorities = "no_retrieved_authorities"
     /// A person/entity name, email, or phone number asserted in a document-grounded
@@ -27,25 +31,49 @@ public struct LegalVerificationReport: Codable, Hashable, Sendable {
     public var issues: [LegalVerificationIssue]
     public var retrievedAuthorityIDs: [String]
     public var citedStrings: [String]
+    public var propositions: [CitedProposition]
+    public var supportResults: [PropositionSupportResult]
 
     public init(
         passed: Bool,
         issues: [LegalVerificationIssue],
         retrievedAuthorityIDs: [String],
-        citedStrings: [String]
+        citedStrings: [String],
+        propositions: [CitedProposition] = [],
+        supportResults: [PropositionSupportResult] = []
     ) {
         self.passed = passed
         self.issues = issues
         self.retrievedAuthorityIDs = retrievedAuthorityIDs
         self.citedStrings = citedStrings
+        self.propositions = propositions
+        self.supportResults = supportResults
     }
 }
 
+/// Why a cited authority still lacks verifiable text after local/network
+/// hydration. Callers may pass this state into the verifier so its retained
+/// reason distinguishes an absent opinion identifier from a failed fetch.
+public enum LegalAuthorityTextFailure: String, Codable, Hashable, Sendable {
+    case missingText = "missing_text"
+    case insufficientText = "insufficient_text"
+    case truncatedText = "truncated_text"
+    case missingOpinionID = "missing_opinion_id"
+    case fetchFailed = "fetch_failed"
+    case emptyResponse = "empty_response"
+    case cancelled
+}
+
 public enum LegalCitationVerifier {
+    public static let propositionVerifierName = "SupraLegalPropositionVerifier"
+    public static let propositionVerifierVersion = "1.0.0"
+
     public static func verify(
         answer: String,
         authorities: [LegalAuthority],
-        expectedJurisdiction: String? = nil
+        expectedJurisdiction: String? = nil,
+        requiresSupportedAuthority: Bool = false,
+        sourceFailuresByAuthorityID: [String: LegalAuthorityTextFailure] = [:]
     ) -> LegalVerificationReport {
         var issues: [LegalVerificationIssue] = []
         if authorities.isEmpty {
@@ -98,7 +126,7 @@ public enum LegalCitationVerifier {
         // honest verdict is "unverifiable".
         let fullTextLabels = Set((0..<packetSize).compactMap { index -> Int? in
             let text = authorities[index].text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return text.isEmpty ? nil : index + 1   // 1-based label space
+            return text.isEmpty ? nil : index + 1
         })
         let packetFullyTexted = packetSize > 0 && fullTextLabels.count == packetSize
         let answerLines = answer.components(separatedBy: .newlines)
@@ -125,38 +153,47 @@ public enum LegalCitationVerifier {
             }
         }
 
-        for line in answer.components(separatedBy: .newlines) where looksLikeLegalProposition(line) {
-            // A proposition is cited if it carries an in-range packet label ([A#]) or
-            // a reporter/URL citation that maps to a retrieved authority.
-            let lineLabels = packetLabelIndices(in: line).filter { $0 >= 1 && $0 <= packetSize }
-            let lineHasReporterCite = authorities.contains { authority in
-                authority.allCitationStrings.contains { line.localizedCaseInsensitiveContains($0) }
-                    || (authority.url.map { line.localizedCaseInsensitiveContains($0) } ?? false)
+        let propositions = resolvedPropositions(in: answer, authorities: authorities)
+        let verifiedAt = Date()
+        let supportResults = propositions.map { proposition in
+            evaluate(
+                proposition: proposition,
+                authorities: authorities,
+                sourceFailuresByAuthorityID: sourceFailuresByAuthorityID,
+                timestamp: verifiedAt
+            )
+        }
+        for (proposition, result) in zip(propositions, supportResults) where result.status != .supported {
+            let kind: LegalVerificationIssueKind
+            let message: String
+            if proposition.citationLabels.isEmpty {
+                kind = .missingCitation
+                message = "Legal proposition does not contain a citation to a retrieved authority."
+            } else if result.status == .unsupported {
+                kind = .unsupportedCitation
+                message = result.reasons.first ?? "The cited source does not support this proposition."
+            } else {
+                kind = .unverifiableProposition
+                message = result.reasons.first ?? "The cited source could not be verified."
             }
-            if !lineLabels.isEmpty {
-                // A label points at a real packet authority, but the model could
-                // attach a valid label to a fabricated paraphrased holding. When the
-                // cited authority has substantial (full-opinion) text, require the
-                // proposition to actually overlap it; otherwise flag it as unsupported.
-                let grounded = lineLabels.contains { propositionGrounded(line, in: authorities[$0 - 1]) }
-                if !grounded {
-                    issues.append(
-                        LegalVerificationIssue(
-                            kind: .unsupportedCitation,
-                            message: "The cited source does not appear to support this proposition.",
-                            excerpt: line.trimmingCharacters(in: .whitespacesAndNewlines)
-                        )
-                    )
-                }
-            } else if !lineHasReporterCite {
-                issues.append(
-                    LegalVerificationIssue(
-                        kind: .missingCitation,
-                        message: "Legal proposition does not contain a citation to a retrieved authority.",
-                        excerpt: line.trimmingCharacters(in: .whitespacesAndNewlines)
-                    )
+            issues.append(
+                LegalVerificationIssue(
+                    kind: kind,
+                    message: message,
+                    excerpt: proposition.text
                 )
-            }
+            )
+        }
+        if requiresSupportedAuthority,
+           !supportResults.contains(where: { $0.status == .supported }),
+           !issues.contains(where: { $0.kind == .missingCitation }) {
+            issues.append(
+                LegalVerificationIssue(
+                    kind: .missingCitation,
+                    message: "This legal route requires at least one proposition supported by retained authority evidence.",
+                    excerpt: nil
+                )
+            )
         }
 
         if let expectedJurisdiction,
@@ -195,10 +232,12 @@ public enum LegalCitationVerifier {
             .map { "[A\($0)]" }
 
         return LegalVerificationReport(
-            passed: issues.isEmpty,
+            passed: issues.isEmpty && supportResults.allSatisfy { $0.status == .supported },
             issues: issues,
             retrievedAuthorityIDs: authorities.map(\.id),
-            citedStrings: extracted + labelStrings
+            citedStrings: extracted + labelStrings,
+            propositions: propositions,
+            supportResults: supportResults
         )
     }
 
@@ -332,6 +371,97 @@ public enum LegalCitationVerifier {
             // out-of-range guard flags it instead of silently dropping the match.
             return Int(text[range]) ?? Int.max
         }
+    }
+
+    /// Material legal propositions split on sentence boundaries. Ranges are
+    /// character offsets in the original output and remain stable for identical
+    /// output bytes. Only labels attached to the same sentence are retained.
+    public static func extractCitedPropositions(from answer: String) -> [CitedProposition] {
+        var propositions: [CitedProposition] = []
+        for range in sentenceRanges(in: answer) {
+            let substring = String(answer[range])
+            let trimmed = substring.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard looksLikeLegalProposition(trimmed) else { continue }
+
+            let leading = substring.prefix { $0.isWhitespace }.count
+            let trailing = substring.reversed().prefix { $0.isWhitespace }.count
+            let rawLower = answer.distance(from: answer.startIndex, to: range.lowerBound)
+            let rawUpper = answer.distance(from: answer.startIndex, to: range.upperBound)
+            let lower = rawLower + leading
+            let upper = max(lower, rawUpper - trailing)
+            let ordinal = propositions.count + 1
+            propositions.append(
+                CitedProposition(
+                    id: "legal-proposition-\(ordinal)-\(lower)",
+                    text: trimmed,
+                    citationLabels: orderedUniqueLabels(in: trimmed),
+                    outputRange: lower..<upper
+                )
+            )
+        }
+        return propositions
+    }
+
+    /// Zero-based packet indices referenced by in-range labels, reporter/case
+    /// citations, or an exact authority URL in the supplied answer.
+    public static func citedAuthorityIndices(
+        in answer: String,
+        authorities: [LegalAuthority]
+    ) -> [Int] {
+        let packetSize = min(authorities.count, LegalResearchPromptBuilder.maxPacketAuthorities)
+        var indices = Set(
+            packetLabelIndices(in: answer)
+                .filter { $0 >= 1 && $0 <= packetSize }
+                .map { $0 - 1 }
+        )
+        for citation in extractCitationLikeStrings(from: answer) {
+            if let authority = supportingAuthority(for: citation, among: Array(authorities.prefix(packetSize))),
+               let index = authorities[..<packetSize].firstIndex(where: { $0.id == authority.id }) {
+                indices.insert(index)
+            }
+        }
+        for index in 0..<packetSize {
+            if let url = authorities[index].url,
+               !url.isEmpty,
+               answer.localizedCaseInsensitiveContains(url) {
+                indices.insert(index)
+            }
+        }
+        return indices.sorted()
+    }
+
+    /// Complete-enough source text for a proposition decision. Case search
+    /// snippets and explicit context truncation are not full authority text.
+    public static func hasVerifiableSourceText(_ authority: LegalAuthority) -> Bool {
+        inferredTextFailure(for: authority) == nil
+    }
+
+    public static func inferredTextFailure(
+        for authority: LegalAuthority
+    ) -> LegalAuthorityTextFailure? {
+        guard let rawText = authority.text else { return .missingText }
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return .missingText }
+        if authority.textKind == .searchSnippet { return .insufficientText }
+        let lower = text.lowercased()
+        if lower.contains("[text truncated to fit the context window]")
+            || lower.contains("[truncated]")
+            || lower.contains("… [truncated") {
+            return .truncatedText
+        }
+
+        let minimumCharacters: Int
+        switch authority.authorityType {
+        case .case, .docket:
+            minimumCharacters = 80
+        case .statute:
+            minimumCharacters = 40
+        case .unknown:
+            minimumCharacters = 100
+        }
+        guard text.count >= minimumCharacters else { return .insufficientText }
+
+        return nil
     }
 
     /// Federal statutory/regulatory forms whose section sigil ("§") sits between
@@ -690,6 +820,15 @@ public enum LegalCitationVerifier {
     private static func looksLikeLegalProposition(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 30 else { return false }
+        // A sentence that affirmatively invokes an authority is itself a
+        // material legal proposition even when it uses a verb outside the
+        // marker vocabulary (for example, "the dissent would enforce ...").
+        // Treating those sentences as prose would let a well-formed [A#] label
+        // evade proposition-level support verification.
+        if !packetLabelIndices(in: trimmed).isEmpty
+            || !extractCitationLikeStrings(from: trimmed).isEmpty {
+            return true
+        }
         let lower = trimmed.lowercased()
         let markers = [
             "must", "shall", "requires", "required", "element", "standard",
@@ -707,25 +846,278 @@ public enum LegalCitationVerifier {
             .joined()
     }
 
-    // Content-grounding for a labeled proposition. A valid [A#] proves the model
-    // pointed at a real packet authority, but not that the authority supports the
-    // proposition. We only judge this when the cited authority carries substantial
-    // (full-opinion) text — a bare snippet is too sparse to tell a genuine paraphrase
-    // from a fabrication, so it is never over-flagged. A sufficiently specific
-    // proposition that shares almost none of its significant terms with the opinion
-    // text is the signature of a fabricated paraphrased holding under a valid label.
-    private static let groundingMinAuthorityChars = 1200
-    private static let groundingMinPropositionTerms = 5
-    private static let groundingMinOverlap = 0.2
+    private static func resolvedPropositions(
+        in answer: String,
+        authorities: [LegalAuthority]
+    ) -> [CitedProposition] {
+        extractCitedPropositions(from: answer).map { proposition in
+            guard proposition.citationLabels.isEmpty else { return proposition }
+            let indices = citedAuthorityIndices(in: proposition.text, authorities: authorities)
+            guard !indices.isEmpty else { return proposition }
+            return CitedProposition(
+                id: proposition.id,
+                text: proposition.text,
+                citationLabels: indices.map { "[A\($0 + 1)]" },
+                outputRange: proposition.outputRange
+            )
+        }
+    }
 
-    private static func propositionGrounded(_ line: String, in authority: LegalAuthority) -> Bool {
-        let haystack = [authority.text, authority.snippet, authority.caseName, authority.citation]
-            .compactMap { $0 }.joined(separator: " ").lowercased()
-        guard haystack.count >= groundingMinAuthorityChars else { return true }
-        let terms = significantContentTerms(line)
-        guard terms.count >= groundingMinPropositionTerms else { return true }
-        let matched = terms.filter { haystack.contains($0) }.count
-        return Double(matched) / Double(terms.count) >= groundingMinOverlap
+    private static func orderedUniqueLabels(in text: String) -> [String] {
+        var seen = Set<Int>()
+        return packetLabelIndices(in: text).compactMap { index in
+            guard seen.insert(index).inserted else { return nil }
+            return index == Int.max ? "[A…]" : "[A\(index)]"
+        }
+    }
+
+    private static func evaluate(
+        proposition: CitedProposition,
+        authorities: [LegalAuthority],
+        sourceFailuresByAuthorityID: [String: LegalAuthorityTextFailure],
+        timestamp: Date
+    ) -> PropositionSupportResult {
+        let packetSize = min(authorities.count, LegalResearchPromptBuilder.maxPacketAuthorities)
+        let rawIndices = proposition.citationLabels.compactMap { label -> Int? in
+            packetLabelIndices(in: label).first
+        }
+        if rawIndices.contains(where: { $0 < 1 || $0 > packetSize }) {
+            return makeSupportResult(
+                propositionID: proposition.id,
+                status: .unsupported,
+                reasons: ["A cited source label does not exist in the source packet."],
+                evidence: [],
+                timestamp: timestamp
+            )
+        }
+        let indices = Array(Set(rawIndices.map { $0 - 1 })).sorted()
+        guard !indices.isEmpty else {
+            return makeSupportResult(
+                propositionID: proposition.id,
+                status: .unverifiable,
+                reasons: ["The proposition has no resolvable cited authority."],
+                evidence: [],
+                timestamp: timestamp
+            )
+        }
+
+        let propositionTerms = significantContentTerms(proposition.text)
+        guard propositionTerms.count >= 2 else {
+            return makeSupportResult(
+                propositionID: proposition.id,
+                status: .unverifiable,
+                reasons: ["The proposition is too ambiguous for deterministic support verification."],
+                evidence: [],
+                timestamp: timestamp
+            )
+        }
+
+        var evidence: [SupportEvidence] = []
+        var unsupportedReasons: [String] = []
+        var unverifiableReasons: [String] = []
+        for index in indices {
+            let authority = authorities[index]
+            let label = "[A\(index + 1)]"
+            if let failure = sourceFailuresByAuthorityID[authority.id]
+                ?? inferredTextFailure(for: authority) {
+                unverifiableReasons.append("\(label) lacks verifiable authority text (\(failure.rawValue)).")
+                continue
+            }
+            let text = authority.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let match = bestEvidenceMatch(for: proposition.text, terms: propositionTerms, in: text)
+            let requiredMatches = min(3, propositionTerms.count)
+            guard match.matchedTerms >= requiredMatches, match.coverage >= 0.45 else {
+                unsupportedReasons.append("\(label) does not contain enough proposition-specific support.")
+                continue
+            }
+            guard negationPolarity(in: proposition.text) == negationPolarity(in: match.excerpt) else {
+                unsupportedReasons.append("\(label) contradicts the proposition's affirmative/negative meaning.")
+                continue
+            }
+            evidence.append(
+                SupportEvidence(
+                    sourceID: authority.id,
+                    sourceLabel: label,
+                    locator: evidenceLocator(for: authority),
+                    retainedExcerpt: String(match.excerpt.prefix(1_000)),
+                    verifierName: propositionVerifierName,
+                    verifierVersion: propositionVerifierVersion
+                )
+            )
+        }
+
+        if !unsupportedReasons.isEmpty {
+            return makeSupportResult(
+                propositionID: proposition.id,
+                status: .unsupported,
+                reasons: unsupportedReasons,
+                evidence: evidence,
+                timestamp: timestamp
+            )
+        }
+        if !unverifiableReasons.isEmpty {
+            return makeSupportResult(
+                propositionID: proposition.id,
+                status: .unverifiable,
+                reasons: unverifiableReasons,
+                evidence: evidence,
+                timestamp: timestamp
+            )
+        }
+        guard !evidence.isEmpty else {
+            return makeSupportResult(
+                propositionID: proposition.id,
+                status: .unverifiable,
+                reasons: ["No complete supporting evidence could be retained."],
+                evidence: [],
+                timestamp: timestamp
+            )
+        }
+        return makeSupportResult(
+            propositionID: proposition.id,
+            status: .supported,
+            reasons: ["Every cited authority supports the proposition."],
+            evidence: evidence,
+            timestamp: timestamp
+        )
+    }
+
+    private struct EvidenceMatch {
+        var excerpt: String
+        var matchedTerms: Int
+        var coverage: Double
+    }
+
+    private static func bestEvidenceMatch(
+        for proposition: String,
+        terms: Set<String>,
+        in sourceText: String
+    ) -> EvidenceMatch {
+        var candidates: [String] = []
+        for range in sentenceRanges(in: sourceText) {
+            let trimmed = sourceText[range].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { candidates.append(String(trimmed)) }
+        }
+        if candidates.isEmpty { candidates = [sourceText] }
+        return candidates.map { excerpt in
+            let sourceTerms = significantContentTerms(excerpt)
+            let matched = terms.intersection(sourceTerms).count
+            return EvidenceMatch(
+                excerpt: excerpt,
+                matchedTerms: matched,
+                coverage: terms.isEmpty ? 0 : Double(matched) / Double(terms.count)
+            )
+        }.max { lhs, rhs in
+            if lhs.coverage == rhs.coverage { return lhs.matchedTerms < rhs.matchedTerms }
+            return lhs.coverage < rhs.coverage
+        } ?? EvidenceMatch(excerpt: sourceText, matchedTerms: 0, coverage: 0)
+    }
+
+    private static func negationPolarity(in text: String) -> Bool {
+        let pattern = #"(?i)\b(?:does|do|did|is|are|was|were|must|shall|can|could|would|should)\s+not\b|\bcannot\b|\bno\s+(?!later\b)|\bneither\b|\bnor\b|\bnever\b|\bwithout\b|\bdeclin(?:e|es|ed|ing)\s+to\b|\breject(?:s|ed|ing)?\b"#
+        return text.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    /// Legal-aware deterministic sentence ranges. Foundation's generic sentence
+    /// tokenizer splits `Foo v. Bar` after `v.`, detaching `[A1]` from the very
+    /// proposition it cites. This scanner treats common reporter/caption
+    /// abbreviations and single-letter reporter components as non-boundaries.
+    private static func sentenceRanges(in text: String) -> [Range<String.Index>] {
+        guard !text.isEmpty else { return [] }
+        var ranges: [Range<String.Index>] = []
+        var start = text.startIndex
+        var index = text.startIndex
+
+        func appendRange(endingAt end: String.Index) {
+            if start < end { ranges.append(start..<end) }
+        }
+
+        while index < text.endIndex {
+            let character = text[index]
+            let after = text.index(after: index)
+            if character == "\n" {
+                appendRange(endingAt: index)
+                start = after
+                index = after
+                continue
+            }
+            guard character == "." || character == "?" || character == "!" else {
+                index = after
+                continue
+            }
+
+            var next = after
+            while next < text.endIndex, text[next].isWhitespace, text[next] != "\n" {
+                next = text.index(after: next)
+            }
+            let isEnd = next == text.endIndex
+            let nextStartsSentence = isEnd || text[next].isUppercase || text[next] == "#" || text[next] == "-"
+            let abbreviation = character == "." && isLegalAbbreviation(before: index, in: text)
+            if nextStartsSentence && !abbreviation {
+                appendRange(endingAt: after)
+                start = next
+                index = next
+            } else {
+                index = after
+            }
+        }
+        appendRange(endingAt: text.endIndex)
+        return ranges
+    }
+
+    private static func isLegalAbbreviation(
+        before period: String.Index,
+        in text: String
+    ) -> Bool {
+        var lower = period
+        while lower > text.startIndex {
+            let prior = text.index(before: lower)
+            guard text[prior].isLetter else { break }
+            lower = prior
+        }
+        let token = text[lower..<period].lowercased()
+        if token.count == 1 { return true }
+        return legalSentenceAbbreviations.contains(token)
+    }
+
+    private static let legalSentenceAbbreviations: Set<String> = [
+        "v", "vs", "inc", "corp", "co", "llc", "ltd", "no", "nos", "cir", "ct",
+        "app", "supp", "cal", "stat", "rev", "civ", "crim", "evid", "fed", "reg",
+        "prof", "dept", "assn", "bros", "ex", "rel", "et", "al"
+    ]
+
+    private static func evidenceLocator(for authority: LegalAuthority) -> String {
+        [authority.citation, authority.url, authority.caseName, authority.id]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? authority.id
+    }
+
+    private static func makeSupportResult(
+        propositionID: String,
+        status: PropositionSupportStatus,
+        reasons: [String],
+        evidence: [SupportEvidence],
+        timestamp: Date
+    ) -> PropositionSupportResult {
+        do {
+            return try PropositionSupportResult(
+                propositionID: propositionID,
+                status: status,
+                reasons: reasons,
+                evidence: evidence,
+                timestamp: timestamp
+            )
+        } catch {
+            // A construction failure can only make the result less trusted.
+            // The fallback shape is valid by the SupraCore contract.
+            return try! PropositionSupportResult(
+                propositionID: propositionID,
+                status: .unverifiable,
+                reasons: ["Verifier could not retain complete support evidence."],
+                evidence: [],
+                timestamp: timestamp
+            )
+        }
     }
 
     private static func significantContentTerms(_ text: String) -> Set<String> {
@@ -733,13 +1125,37 @@ public enum LegalCitationVerifier {
             text.lowercased()
                 .components(separatedBy: CharacterSet.alphanumerics.inverted)
                 .filter { $0.count >= 5 && !contentStopwords.contains($0) }
+                .map(canonicalContentTerm)
+                .filter { $0.count >= 4 && !contentStopwords.contains($0) }
         )
+    }
+
+    /// Small deterministic morphology normalizer for the lexical verifier.
+    /// This intentionally handles only common English suffixes; it is enough to
+    /// keep faithful variants such as "describe/describes" and
+    /// "reject/rejected" from becoming false negatives without introducing an
+    /// opaque language-model judgment into the fail-closed gate.
+    private static func canonicalContentTerm(_ token: String) -> String {
+        if token.count > 7, token.hasSuffix("ing") {
+            return String(token.dropLast(3))
+        }
+        if token.count > 6, token.hasSuffix("ed") {
+            return String(token.dropLast(2))
+        }
+        if token.count > 6, token.hasSuffix("es"), !token.hasSuffix("sses") {
+            return String(token.dropLast(1))
+        }
+        if token.count > 5, token.hasSuffix("s"), !token.hasSuffix("ss") {
+            return String(token.dropLast())
+        }
+        return token
     }
 
     private static let contentStopwords: Set<String> = [
         "court", "courts", "held", "holding", "rule", "rules", "legal", "case", "cases",
         "there", "their", "these", "those", "which", "shall", "would", "could", "should",
         "because", "therefore", "however", "where", "when", "whether", "under", "within",
-        "about", "above", "after", "before", "between", "during", "while", "being"
+        "about", "above", "after", "before", "between", "during", "while", "being",
+        "citing", "according", "source", "authority"
     ]
 }

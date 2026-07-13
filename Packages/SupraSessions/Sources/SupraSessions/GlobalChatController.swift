@@ -1103,11 +1103,17 @@ public final class GlobalChatController: ObservableObject {
             // app restart the quote check would have nothing to search. Refill text
             // from the matter's saved authorities, then a capped network fetch —
             // spent on the authorities the answer actually cites first.
-            let packet = await rehydratedForVerification(
+            let hydration = await rehydratedForVerification(
                 latestLegalSourcePacket(chatID: chatID),
                 answer: answerToVerify
             )
-            let report = LegalCitationVerifier.verify(answer: answerToVerify, authorities: packet.authorities)
+            let packet = hydration.packet
+            let report = LegalCitationVerifier.verify(
+                answer: answerToVerify,
+                authorities: packet.authorities,
+                requiresSupportedAuthority: route.requiresCitations,
+                sourceFailuresByAuthorityID: hydration.failuresByAuthorityID
+            )
             let preface = packet.authorities.isEmpty
                 ? "No source packet is available for this chat. Run `/research` in a matter chat first, or paste source-supported text with citations for a limited citation check.\n\n"
                 : "Verified against the latest source packet\(packet.researchSessionID.map { " (research session \($0))" } ?? "").\n\n"
@@ -1365,7 +1371,7 @@ public final class GlobalChatController: ObservableObject {
         // Packet construction is source-plan driven: primary law leads when present,
         // and statutory/legal-rule questions are blocked before this point if primary
         // law was required but unavailable.
-        let ranked = StatutoryPacketMerge.merge(
+        var ranked = StatutoryPacketMerge.merge(
             statutoryProvisions: citableStatutoryProvisions,
             rankedCases: rankedAll,
             jurisdictionLabel: classification.jurisdiction,
@@ -1373,7 +1379,7 @@ public final class GlobalChatController: ObservableObject {
             citation: sourcePlan.primaryLawCitationQuery ?? classification.citationLookup,
             queryTerms: sourcePlan.primaryLawQueryTerms
         )
-        let authorities = ranked.map(\.authority)
+        var authorities = ranked.map(\.authority)
         let queryTerms = Self.uniqued(
             ([sourcePlan.primaryLawQueryTerms].filter { sourcePlan.shouldRetrievePrimaryLaw && !$0.isEmpty })
             + retrieval.queryTerms
@@ -1425,6 +1431,14 @@ public final class GlobalChatController: ObservableObject {
             options: options
         )
         var output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
+        var verificationPacket = packet
+        var hydration = await rehydratedForVerification(verificationPacket, answer: output)
+        verificationPacket = hydration.packet
+        authorities = verificationPacket.authorities
+        for index in ranked.indices where index < authorities.count {
+            ranked[index].authority = authorities[index]
+        }
+        lastLegalPacketsByChatID[chatID] = verificationPacket
         // A question that NAMES its authority ("What is the holding of X?") is about
         // that case wherever it sits — the matter's forum must not veto quoting it.
         let verificationJurisdiction = classification.citationLookup == nil ? classification.jurisdiction : nil
@@ -1432,7 +1446,9 @@ public final class GlobalChatController: ObservableObject {
             ? LegalCitationVerifier.verify(
                 answer: output,
                 authorities: authorities,
-                expectedJurisdiction: verificationJurisdiction
+                expectedJurisdiction: verificationJurisdiction,
+                requiresSupportedAuthority: route.requiresCitations,
+                sourceFailuresByAuthorityID: hydration.failuresByAuthorityID
             )
             : nil
 
@@ -1454,8 +1470,19 @@ public final class GlobalChatController: ObservableObject {
             )
             if let revisedRaw = try? await runtimeClient.collectGeneratedText(revisionRequest) {
                 let revised = ReasoningContent.answer(from: revisedRaw)
+                hydration = await rehydratedForVerification(verificationPacket, answer: revised)
+                verificationPacket = hydration.packet
+                authorities = verificationPacket.authorities
+                for index in ranked.indices where index < authorities.count {
+                    ranked[index].authority = authorities[index]
+                }
+                lastLegalPacketsByChatID[chatID] = verificationPacket
                 let revisedVerification = LegalCitationVerifier.verify(
-                    answer: revised, authorities: authorities, expectedJurisdiction: verificationJurisdiction
+                    answer: revised,
+                    authorities: authorities,
+                    expectedJurisdiction: verificationJurisdiction,
+                    requiresSupportedAuthority: route.requiresCitations,
+                    sourceFailuresByAuthorityID: hydration.failuresByAuthorityID
                 )
                 // Keep the revision only if it is genuinely cleaner: never accept MORE
                 // hard failures (a soft-for-hard trade is a regression), and use the
@@ -1546,10 +1573,14 @@ public final class GlobalChatController: ObservableObject {
     """
 
     static func blockedLegalResearchMessage(report: LegalVerificationReport) -> String {
-        """
+        let issueSummary = report.issues.map { issue in
+            "- \(issue.kind.rawValue): \(issue.message)"
+        }.joined(separator: "\n")
+        return """
         I cannot provide a source-grounded legal answer from the retrieved packet because automated verification still found unsupported or mismatched authority after repair.
 
-        \(LegalCitationVerifier.markdownReport(report))
+        Verification warnings:
+        \(issueSummary)
         """
     }
 
@@ -1615,14 +1646,15 @@ public final class GlobalChatController: ObservableObject {
     static func hardVerificationFailureCount(_ report: LegalVerificationReport, route: ModelRoute) -> Int {
         report.issues.filter { issue in
             switch issue.kind {
-            case .unsupportedCitation, .unsupportedQuote:
+            case .unsupportedCitation, .unsupportedQuote,
+                 .unverifiableProposition, .unverifiableQuote,
+                 .missingCitation, .noRetrievedAuthorities:
                 return true
             case .jurisdictionMismatch:
                 return route.requiresJurisdiction
-            case .missingCitation, .noRetrievedAuthorities, .ungroundedEntity, .unverifiableQuote:
-                // .ungroundedEntity and .unverifiableQuote are soft "shown but
-                // unverified" warnings, never hard failures that would trigger
-                // self-repair or quarantine.
+            case .ungroundedEntity:
+                // Document-entity diagnostics are advisory and do not participate
+                // in the legal proposition firewall.
                 return false
             }
         }.count
@@ -1631,9 +1663,7 @@ public final class GlobalChatController: ObservableObject {
     /// True when at least one detected citation is actually supported by the
     /// retrieved authority packet (i.e. not flagged as unsupported).
     static func hasSupportedCitation(_ report: LegalVerificationReport) -> Bool {
-        guard !report.citedStrings.isEmpty else { return false }
-        let unsupported = Set(report.issues.filter { $0.kind == .unsupportedCitation }.compactMap { $0.excerpt })
-        return report.citedStrings.contains { !unsupported.contains($0) }
+        report.supportResults.contains { $0.status == .supported }
     }
 
     /// Most authorities to enrich with full opinion text. CourtListener search returns
@@ -1668,6 +1698,7 @@ public final class GlobalChatController: ObservableObject {
                 !body.isEmpty
             else { continue }
             result[index].authority.text = body
+            result[index].authority.textKind = .fullText
             // Already-fetched text is free to keep: persist it on a matching SAVED
             // authority (spec §4.3, §8.3 — saved only) so future local-first answers
             // and the offline reader don't re-fetch.
@@ -2038,6 +2069,7 @@ public final class GlobalChatController: ObservableObject {
             url: record.absoluteURL.flatMap(Self.courtListenerURL),
             snippet: record.opinionText.map { String($0.prefix(280)) },
             text: record.opinionText,
+            textKind: record.opinionText == nil ? nil : .fullText,
             clusterId: record.clusterID,
             opinionId: record.opinionID,
             docketNumber: record.docketNumber
@@ -2223,42 +2255,40 @@ public final class GlobalChatController: ObservableObject {
             ?? LegalSourcePacket(queryTerms: [], authorities: [], researchSessionID: nil)
     }
 
-    /// Refills opinion text on a packet restored without it (persisted packets are
-    /// audit-safe), so `/verify` can actually check quotes after an app restart.
-    /// Saved matter authorities first — offline and free — then a capped
-    /// CourtListener fetch for authorities the library doesn't hold.
+    private struct LegalVerificationHydration {
+        var packet: LegalSourcePacket
+        var failuresByAuthorityID: [String: LegalAuthorityTextFailure]
+    }
+
+    private struct LegalAuthorityHydrationAttempt: Sendable {
+        var index: Int
+        var body: String?
+        var failure: LegalAuthorityTextFailure?
+    }
+
+    /// Refills every authority cited by this exact answer. Saved matter text is
+    /// preferred; remaining CourtListener opinions are fetched in batches of four.
+    /// Failures are retained per authority and passed to the proposition verifier,
+    /// so a missing ID, empty response, cancellation, or network error cannot become
+    /// clean merely because the packet label exists.
     private func rehydratedForVerification(
         _ packet: LegalSourcePacket,
         answer: String = ""
-    ) async -> LegalSourcePacket {
+    ) async -> LegalVerificationHydration {
         var authorities = packet.authorities
-        guard authorities.contains(where: { ($0.text ?? "").isEmpty }) else { return packet }
+        let citedIndices = LegalCitationVerifier.citedAuthorityIndices(
+            in: answer,
+            authorities: authorities
+        )
+        guard !citedIndices.isEmpty else {
+            return LegalVerificationHydration(packet: packet, failuresByAuthorityID: [:])
+        }
         let saved: [AuthorityRecord] = scopedMatterID
             .flatMap { try? store.authorities.fetchAuthorities(matterID: $0) } ?? []
-        // The capped network budget goes to the authorities the answer actually
-        // CITES ([A#] labels are 1-based packet positions) before packet order.
-        let citedPositions: Set<Int> = {
-            guard let regex = try? NSRegularExpression(pattern: #"\[A(\d{1,3})\]"#) else { return [] }
-            let range = NSRange(answer.startIndex..<answer.endIndex, in: answer)
-            var positions = Set<Int>()
-            regex.enumerateMatches(in: answer, range: range) { match, _, _ in
-                guard let match, match.numberOfRanges >= 2,
-                      let labelRange = Range(match.range(at: 1), in: answer),
-                      let label = Int(answer[labelRange]) else { return }
-                positions.insert(label - 1)
-            }
-            return positions
-        }()
-        let orderedIndices = authorities.indices.filter { citedPositions.contains($0) }
-            + authorities.indices.filter { !citedPositions.contains($0) }
-        var networkFetchAttempts = 0
-        for index in orderedIndices where (authorities[index].text ?? "").isEmpty {
+        var failures: [String: LegalAuthorityTextFailure] = [:]
+
+        for index in citedIndices where !LegalCitationVerifier.hasVerifiableSourceText(authorities[index]) {
             let authority = authorities[index]
-            // Exact ID evidence first, across ALL records — a loose caption match
-            // on an earlier record must never outrank a clusterID match on a
-            // later one (same caption at two court levels is routine, and the
-            // wrong opinion's text would turn genuine quotes into confident
-            // "fabricated" flags).
             let exact = saved.first { record in
                 guard record.opinionText?.isEmpty == false else { return false }
                 if let clusterID = record.clusterID, clusterID == authority.clusterId { return true }
@@ -2278,24 +2308,98 @@ public final class GlobalChatController: ObservableObject {
             }
             if let record = caption {
                 authorities[index].text = record.opinionText
+                authorities[index].textKind = .fullText
+            }
+        }
+
+        var pending: [(index: Int, opinionID: Int)] = []
+        for index in citedIndices where !LegalCitationVerifier.hasVerifiableSourceText(authorities[index]) {
+            guard let opinionID = authorities[index].opinionId.flatMap(Int.init) else {
+                failures[authorities[index].id] = .missingOpinionID
                 continue
             }
-            // Cap ATTEMPTS, not successes: against a throttled/offline client,
-            // "keep trying until 4 succeed" is an unbounded hammer.
-            if networkFetchAttempts < Self.maxHydratedAuthorities,
-               let opinionID = authority.opinionId.flatMap(Int.init) {
-                networkFetchAttempts += 1
-                if let detail = try? await courtListenerClient.fetchOpinion(id: opinionID),
-                   let body = detail.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !body.isEmpty {
-                    authorities[index].text = body
+            pending.append((index, opinionID))
+        }
+
+        let client = courtListenerClient
+        let concurrencyLimit = 4
+        for batchStart in stride(from: 0, to: pending.count, by: concurrencyLimit) {
+            let batchEnd = min(batchStart + concurrencyLimit, pending.count)
+            let batch = Array(pending[batchStart..<batchEnd])
+            if Task.isCancelled {
+                for item in batch {
+                    failures[authorities[item.index].id] = .cancelled
+                }
+                continue
+            }
+            let attempts = await withTaskGroup(of: LegalAuthorityHydrationAttempt.self) { group in
+                for item in batch {
+                    let authority = authorities[item.index]
+                    group.addTask {
+                        do {
+                            try Task.checkCancellation()
+                            let detail = try await client.fetchOpinion(id: item.opinionID)
+                            guard let body = detail.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                  !body.isEmpty else {
+                                return LegalAuthorityHydrationAttempt(
+                                    index: item.index,
+                                    body: nil,
+                                    failure: .emptyResponse
+                                )
+                            }
+                            var hydrated = authority
+                            hydrated.text = body
+                            hydrated.textKind = .fullText
+                            return LegalAuthorityHydrationAttempt(
+                                index: item.index,
+                                body: body,
+                                failure: LegalCitationVerifier.inferredTextFailure(for: hydrated)
+                            )
+                        } catch is CancellationError {
+                            return LegalAuthorityHydrationAttempt(
+                                index: item.index,
+                                body: nil,
+                                failure: .cancelled
+                            )
+                        } catch {
+                            return LegalAuthorityHydrationAttempt(
+                                index: item.index,
+                                body: nil,
+                                failure: .fetchFailed
+                            )
+                        }
+                    }
+                }
+                var collected: [LegalAuthorityHydrationAttempt] = []
+                for await attempt in group { collected.append(attempt) }
+                return collected
+            }
+            for attempt in attempts {
+                let authorityID = authorities[attempt.index].id
+                if let body = attempt.body {
+                    authorities[attempt.index].text = body
+                    authorities[attempt.index].textKind = .fullText
+                }
+                if let failure = attempt.failure {
+                    failures[authorityID] = failure
+                } else {
+                    failures.removeValue(forKey: authorityID)
+                    persistHydratedTextIfSaved(
+                        opinionID: authorities[attempt.index].opinionId,
+                        body: authorities[attempt.index].text ?? ""
+                    )
                 }
             }
         }
-        return LegalSourcePacket(
+
+        let hydratedPacket = LegalSourcePacket(
             queryTerms: packet.queryTerms,
             authorities: authorities,
             researchSessionID: packet.researchSessionID
+        )
+        return LegalVerificationHydration(
+            packet: hydratedPacket,
+            failuresByAuthorityID: failures
         )
     }
 
