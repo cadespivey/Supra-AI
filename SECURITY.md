@@ -41,7 +41,8 @@ need an explicit, documented justification.
 
 - Model **generation**, document **processing/OCR/embeddings**, **search**, and **source
   selection** run locally. No prompt, document, or query leaves the device for generation.
-- Product-data network egress is explicit and user-initiated:
+- Network egress is limited to user-initiated legal-data searches, opinion downloads, and model metadata or artifact downloads, plus Sparkle update checks and signed update downloads when enabled.
+- User-initiated product-data paths are:
   - **Legal research / legal-data lookups** against a fixed allow-list — CourtListener,
     plus free government sources (eCFR, Federal Register, Open Legal Codes) and key'd APIs
     (GovInfo, OpenStates, Regulations.gov); see the allow-list below.
@@ -53,8 +54,11 @@ need an explicit, documented justification.
   updates once per day when automatic checks are enabled. It may download the
   signed update asset named by that feed; this path carries no API credential,
   prompt, document, legal query, or usage telemetry.
-- The document-intelligence pipeline performs **no** network I/O at all.
-- **No telemetry or analytics.**
+- The document-intelligence pipeline performs no network I/O; its imported bytes and extracted
+  content are not inputs to the separate research, model-download, or update clients.
+- Application network paths do not attach matter documents, prompts, generated work, or usage telemetry to outbound requests.
+- The application contains no analytics or telemetry client. Local runtime metrics and diagnostic
+  records remain on the Mac unless the user deliberately exports a file.
 
 ### Default-deny networking
 
@@ -102,13 +106,12 @@ need an explicit, documented justification.
 - **Sparkle:** the signed feed origin is fixed in `Info.plist`; Sparkle validates
   the EdDSA signature before installation. No legal-data credential is supplied
   to the updater.
+- Legal-data redirects remain HTTPS and provider-scoped; CourtListener credentials stay on same-owner API hops, and Hugging Face downloads remain token-free on named Hub or CDN origins.
 
 ### Privilege-aware logging
 
-- Privileged query terms are redacted to **per-install keyed pseudonyms** in request logs and
-  diagnostics by default. These markers support local grouping but are not anonymous or
-  portable across installations; Diagnostics can remove stored query markers. Storing raw
-  query terms is strictly opt-in (`SUPRA_LEGAL_LOG_QUERY_TERMS`, off by default).
+- Raw legal query terms are omitted from local request logs by default and replaced with per-install keyed pseudonyms; users may opt in to raw local logging and may delete stored markers.
+  The pseudonyms support local grouping but are not anonymous or portable across installations.
 - Exports, audit summaries, and diagnostics avoid raw absolute source paths; documents are
   referenced by safe display names / managed relative paths.
 
@@ -123,14 +126,23 @@ need an explicit, documented justification.
 ### Sandboxing & process isolation
 
 - MLX model execution runs in a **sandboxed XPC service**, isolated from the UI process.
-- Imported documents are **copied** into app-managed storage; originals are read-only and
-  never modified. External file access uses security-scoped URLs chosen through the
+- Imported originals are opened read-only and are not modified; managed copies are written inside the sandbox, while exports use destinations selected by the user.
+  External file access uses security-scoped URLs chosen through the
   system picker; import paths are treated as read-only.
 - The app retains `com.apple.security.files.user-selected.read-write` because
   user-selected export destinations must be created or replaced and selected
   imports may require coordinated reads. The entitlement grants no ambient path:
   access is limited to URLs the user chooses through the system picker. App-managed
   copies remain inside the sandbox container.
+- The app sandbox has network-client, app-scoped bookmark, user-selected read-write, and required MLX mach-lookup entitlements; the runtime service has only the app-sandbox entitlement.
+
+### Data at rest and supported upgrades
+
+- Supra AI does not add application-level encryption to the SQLite database, managed document copies, model files, or exports; protection at rest depends on macOS account controls, destination permissions, and FileVault when enabled.
+  Keychain protects provider credentials separately. Exported files inherit the controls of the
+  destination selected by the user.
+- Upgrade tests cover v1.4.1, v1.5.2, v1.8.0, v2.0.0, v2.1.0, v2.1.3, v2.2.0, and the latest-minus-one schema fixture.
+  A verified pre-migration snapshot is required before a supported upgrade mutates the database.
 
 ## Scope notes
 

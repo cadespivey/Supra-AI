@@ -8,15 +8,15 @@ const sections = [
   },
   {
     title: "Everything runs on your device",
-    body: "Generation, document extraction and indexing, embeddings, semantic search, drafting, and timekeeping all run locally on your machine. Nothing about your matters leaves your Mac for us or for a cloud model.",
+    body: "Generation, document extraction and indexing, embeddings, semantic search, drafting, and timekeeping run locally on your machine. The app does not send matter content to Supra AI or to a cloud-generation service.",
   },
   {
-    title: "Your work never trains a model",
-    body: "Because nothing you do leaves your Mac, your prompts, documents, and generated work are never used to train, fine-tune, or improve any model. The local models come already trained; new versions arrive only if and when you choose to download a provider update. Your inputs and outputs are never harvested as training data — by us or by anyone.",
+    title: "Your work is not sent for model training",
+    body: "Supra AI has no account or cloud-generation backend that receives prompts, documents, or generated work. Local models arrive pre-trained; model downloads request provider artifacts without attaching matter content.",
   },
   {
-    title: "The one exception: research you run",
-    body: "The only time information leaves your Mac is when you run a legal-research or public-records search — case law and dockets through CourtListener, statutes and regulations through official government sources, and public records through SEC EDGAR, the CFPB complaint database, and the NLRB. Those requests carry your search terms, never your documents or work product, and they go directly to the source you queried.",
+    title: "Research requests you run",
+    body: "Legal-research and public-records searches send the query fields required by the named provider: CourtListener, official statutes and regulations sources, SEC EDGAR, the CFPB complaint database, or the NLRB. Application tests require these request builders to omit matter documents, prompts, and generated work.",
   },
   {
     title: "Searches you can see and adjust",
@@ -24,7 +24,11 @@ const sections = [
   },
   {
     title: "Software downloads and updates",
-    body: "To run, the app downloads its local model weights the first time you use them and can check for new versions so it can tell you when an update is available. These requests fetch software and check versions only — they never include your matter content.",
+    body: "Model setup requests revision-bound metadata and model artifacts from named Hugging Face origins. When enabled, Sparkle checks the signed Supra AI update feed and may fetch its signed update. These clients do not attach matter content or legal-data credentials.",
+  },
+  {
+    title: "No application telemetry",
+    body: "The application contains no analytics or telemetry client and sends no prompt, document, legal query, or usage event to Supra AI.",
   },
   {
     title: "This website",
@@ -37,16 +41,16 @@ export default function PrivacyPage() {
     <PageShell
       eyebrow="Privacy"
       title="Privacy Policy"
-      intro="The short version: we don't see or control your data. Almost everything you do in Supra AI happens on your own Mac."
+      intro="The short version: we do not operate a cloud backend that receives your work. Processing is local, with named research and software-delivery requests described below."
     >
       <div className="mb-12 border-l-2 border-supra-gold/60 pl-5">
         <p className="font-caps text-xs uppercase text-supra-gold">
           In one sentence
         </p>
         <p className="measure-wide mt-2 text-lg leading-[1.5] text-supra-white">
-          Everything you do runs on your device, except the legal-research and
-          public-records searches you choose to run — and those send only the
-          query terms you can see and adjust, never your documents.
+          Matter processing and generation run on your device. Named legal-data
+          providers receive the searches you run; model and update providers receive
+          software metadata requests, without matter documents or generated work.
         </p>
       </div>
 

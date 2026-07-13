@@ -11,15 +11,15 @@ const panels = [
       "Local embeddings",
       "Saved authorities & opinion text",
       "Generated work product",
-      "Never used to train a model",
+      "Not sent to Supra AI for model training",
     ],
   },
   {
     title: "External research boundary",
     items: [
-      "Case-law and public-records lookups only when you ask",
+      "Case-law and public-records lookups initiated by you",
       "Default-deny host allow-list (courts, statutes, registers, public records)",
-      "Search terms only — documents never leave",
+      "Provider-specific query fields; no attached matter documents",
       "Query terms you can see and adjust",
       "Query terms redacted in the local network log",
       "API keys stored in the macOS Keychain",

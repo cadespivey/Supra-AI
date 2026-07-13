@@ -56,7 +56,7 @@ const groups: Group[] = [
       },
       {
         title: "Local processing; no training on your data",
-        body: "Supra AI runs on your device. We do not receive your prompts, documents, or generated work, and none of it is used to train, fine-tune, or improve any model. The local models are pre-trained and change only through updates published by their providers — never derived from your use of the app.",
+        body: "Supra AI runs on your device and has no cloud-generation or training backend that receives prompts, documents, or generated work. Local models arrive pre-trained and change when you install a provider version.",
       },
       {
         title: "Software availability and changes",

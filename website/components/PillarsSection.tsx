@@ -3,11 +3,11 @@ import { Section } from "./Section";
 const pillars = [
   {
     label: "Privacy",
-    title: "Your file never leaves your device.",
+    title: "Your file stays local for processing.",
     points: [
-      "Generation, indexing, embeddings, and drafting all run locally on Apple Silicon — prompts, documents, and work product are never sent to a cloud model.",
-      "Your work is never training data. The models arrive already trained and change only when you install a provider update — because nothing you type or generate leaves your Mac, it can never be folded into anyone's training set.",
-      "The only network traffic is what you can point to: model downloads, the research lookups below, and the update check — each carrying search terms, never your documents.",
+      "Generation, indexing, embeddings, and drafting run locally on Apple Silicon; the app does not attach prompts, documents, or work product to cloud-generation requests.",
+      "Supra AI has no cloud-generation or training backend. Local models arrive pre-trained and change when you install a provider version.",
+      "Outbound paths are named and tested: provider-specific research requests, model metadata/artifact downloads, opinion downloads, and signed update checks/downloads.",
       "Research queries are privileged work product, so even the app's own network log redacts query terms by default.",
     ],
   },
@@ -16,8 +16,8 @@ const pillars = [
     title: "Built like it holds a client file — because it does.",
     points: [
       "Sandboxed, hardened-runtime, and notarized by Apple. The model runtime runs in a separate isolated process.",
-      "Networking is default-deny: only a short allow-list of official legal-data hosts. No analytics, no telemetry, nothing phoning home.",
-      "Your optional API keys live in the macOS Keychain — never in files, never bundled, never transmitted anywhere but the provider they belong to.",
+      "Application research networking is default-deny and provider-scoped. The application contains no analytics or telemetry client.",
+      "Release builds read optional provider credentials from the device-bound macOS Keychain and scope them to the matching provider.",
     ],
   },
   {
@@ -26,7 +26,7 @@ const pillars = [
     points: [
       "Download the app and use it. There is nothing to sign up for, no monthly bill, and no per-token charge — the models run on hardware you already own.",
       "Research is built on free public legal data. A free CourtListener account unlocks case-law search; other sources need no key at all or offer free keys you control.",
-      "Your data never becomes the product: there's no account to profile and no usage to mine.",
+      "There is no Supra AI account, cloud work store, or usage-metering backend.",
     ],
   },
 ];

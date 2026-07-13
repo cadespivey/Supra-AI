@@ -18,6 +18,9 @@ Protected CI gates:
 - `verify-repo-facts.sh` checks the three Xcode targets, package/workflow inventories,
   dynamic contiguous migration sequence, version metadata, full-SHA Action pins,
   entitlements, and the public-font invariant.
+- `verify-product-claims.sh` validates `Docs/Verified-Product-Claims.yml`, its publication,
+  code, test, workflow, release-version, migration/support, entitlement, and package anchors.
+  It is called by repository facts, protected CI, and release preflight.
 - `verify-secrets.sh`, `verify-prohibited-artifacts.sh`, and `verify-entitlements.sh` are
   path-only fail-closed security scans. Findings never print matched secret values.
 - `build-macos-app.sh`, `run-app-smoke-tests.sh`, and
@@ -26,7 +29,8 @@ Protected CI gates:
 - `test-website.sh` runs locked installation, lint, typecheck, static build, dependency
   audit, and the font guard before and after the website build.
 
-Run `Tests/Scripts/test-macos-ci-gates.sh` to exercise deliberate failure fixtures.
+Run `Tests/Scripts/test-macos-ci-gates.sh` and
+`Tests/Scripts/test-verify-product-claims.sh` to exercise deliberate failure fixtures.
 See `Docs/Protected-CI.md` for branch-protection names and reviewed Action licenses/pins.
 
 Protected release controls:

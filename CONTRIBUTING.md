@@ -31,11 +31,13 @@ milestone.
 ```bash
 git clone git@github.com:cadespivey/Supra-AI.git
 cd Supra-AI
-cp .env.example .env          # fill in model names / CourtListener token; .env is gitignored
+cp .env.example .env          # optional nonsecret development configuration; .env is gitignored
 open SupraAI.xcworkspace       # build & run the "SupraAI" scheme
 ```
 
-Configuration is read from `.env` / the process environment. `.env` is never committed.
+Nonsecret development configuration may be read from `.env` / the process environment.
+Provider credentials are entered in Settings and stored in Keychain for Release composition;
+explicit DEBUG and test composition may inject environment credentials. `.env` is not committed.
 
 ## Building and testing
 
@@ -51,6 +53,7 @@ cd Packages/SupraSessions && swift test
 
 # Verify inventory/security facts and test the exact 14-package set
 bash Scripts/verify-repo-facts.sh
+bash Scripts/verify-product-claims.sh
 bash Scripts/test-all-packages.sh
 ```
 
@@ -64,6 +67,11 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift test   # fro
 
 The package test suite runs **with zero failures across all packages.** Keep it that way:
 a change should not merge with a red suite.
+
+Product, security, support, and privacy wording is an executable interface. Update
+[`Docs/Verified-Product-Claims.yml`](Docs/Verified-Product-Claims.yml) with its code anchor,
+test/job, owner, version, and review date whenever covered behavior changes; the claims verifier
+requires the approved sentence to remain present at its publication anchor.
 
 ## Repository layout
 
@@ -112,6 +120,10 @@ that adds or modifies behavior.
 - **Tests must pass** and new behavior should be covered. Pipeline/domain logic gets
   deterministic package tests; model-dependent behavior is exercised by the Diagnostics
   validation suites.
+
+Release artifacts are built from a clean, recorded commit SHA and become publishable only after deterministic preflight, signature, notarization, appcast, and rollback checks complete.
+Use the release rehearsal/dry-run path before a real release; a rehearsal must not create a tag,
+GitHub release, appcast publication, or upload.
 
 The git history is a good reference for scope and message style.
 

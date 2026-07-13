@@ -127,7 +127,7 @@ export function ProvidersSection() {
       </dl>
 
       <p className="mt-12 max-w-3xl text-sm leading-[1.55] text-supra-muted">
-        Every network request the app makes is limited to these hosts, logged
+        Legal-data requests are limited to these named hosts and logged
         locally for your audit trail, and rate-limited to stay a good citizen of
         the services that keep the law open.
       </p>

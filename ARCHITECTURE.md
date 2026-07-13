@@ -8,11 +8,10 @@ orders, see [`Docs/Milestones/`](Docs/Milestones/).
 
 ## Goals that shaped the design
 
-- **Local-first.** Model generation, document processing, OCR, embeddings, search, and
-  source selection all run on the user's Mac. The only network egress is explicit,
-  user-initiated: legal research / legal-data lookups against a fixed allow-list
-  (CourtListener plus a few official government legal-data sources), token-free opinion
-  PDF downloads from CourtListener's storage CDN, and model/embedding downloads.
+- **Local-first.** Model generation, document processing, OCR, embeddings, retrieval, and
+  source selection run on the user's Mac. Outbound traffic is separately inventoried: legal
+  research and legal-data lookups, opinion downloads, model metadata/artifact downloads, and
+  Sparkle update checks/downloads. See [SECURITY.md](SECURITY.md) for initiators and payload limits.
 - **Source-grounded, verifiable output.** Legal answers are constrained to retrieved
   authority; document answers and chronologies are constrained to selected sources. A
   citation verifier flags unsupported or unresolved claims rather than presenting them as
@@ -50,6 +49,7 @@ orders, see [`Docs/Milestones/`](Docs/Milestones/).
 ## Package graph
 
 The packages form a layered, one-way dependency graph rooted at `SupraCore`.
+The fixed list below contains the 14 packages checked by `Scripts/list-local-packages.sh` and CI.
 
 ```
 Apps/SupraAI
@@ -96,15 +96,17 @@ The app talks to it through `SupraRuntimeClient`, using DTOs/protocols defined i
   rather than overloading chat generation. Embedding requests are serialized inside the
   service so one batch can't race another.
 
-Model weights live outside the app sandbox. The app mints a transferable security-scoped
+Model weights may live outside the app sandbox. The app mints a transferable security-scoped
 bookmark while holding its own scope; the sandboxed service resolves it and holds the scope
-across the full load (with a raw-path fallback). The design and on-device verification steps
+across the full load. The design and on-device verification steps
 are recorded in [`Docs/Architecture/RuntimeFileAccess.md`](Docs/Architecture/RuntimeFileAccess.md).
+
+Managed model downloads are bound to a repository revision and verified manifest, expected size, and SHA-256 digest before registration or load.
 
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list (`v001` … `v049`). Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v057. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -157,11 +159,11 @@ existing convention where a repository owns several related tables.
 - **On-device generation**; default-deny network with a fixed legal-data allow-list
   (CourtListener API token-authenticated; its `storage.courtlistener.com` CDN and a few
   official government legal-data sources used token-free). See [SECURITY.md](SECURITY.md).
-- **Secrets in the Keychain** (CourtListener token), never in SQLite, logs, diagnostics, or
-  exports.
-- **Privilege-aware logging** — query terms are stored as stable fingerprints unless the user
-  opts in.
-- **No telemetry.** See [SECURITY.md](SECURITY.md) for the complete model and reporting
+- **Release credentials in Keychain**; explicit DEBUG/test composition may inject environment
+  credentials. Credential values are excluded from SQLite and application logs.
+- **Privilege-aware logging** — query terms use per-install keyed pseudonyms unless the user
+  opts in to raw local query logging.
+- **No application telemetry client.** See [SECURITY.md](SECURITY.md) for the complete model and reporting
   process.
 
 ## Where to go next

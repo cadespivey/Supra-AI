@@ -2,11 +2,14 @@
 
 **A local, MLX-powered macOS research and drafting assistant for legal work.**
 
-Supra AI runs large language models entirely on-device with Apple's [MLX](https://github.com/ml-explore/mlx),
-keeping your matters, documents, and queries on your Mac. It pairs local generation with
+Supra AI runs large language models on-device with Apple's [MLX](https://github.com/ml-explore/mlx).
+Matter content stays local for generation; user-approved research terms can be sent to named
+legal-data providers, and separate clients handle model downloads and signed software updates. It pairs local generation with
 **source-grounded** legal research (via [CourtListener](https://www.courtlistener.com/)) and a
-document-intelligence pipeline, with citation verification built in so the model never presents
-unverified authority as settled law.
+document-intelligence pipeline whose support checks block or flag output that lacks required
+source support.
+
+The current release metadata identifies Supra AI 2.2.0.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%2015%2B-blue)
 ![Apple Silicon](https://img.shields.io/badge/silicon-Apple%20Silicon-black)
@@ -21,12 +24,12 @@ unverified authority as settled law.
 
 ## Highlights
 
-- **Fully local generation.** Models load and run in a sandboxed XPC service via MLX — no prompt,
-  document, or query leaves the device for generation.
+- **Local generation and document processing.** Model generation, document extraction and OCR, embeddings, retrieval, drafting, and billing generation execute on the Mac.
+  Research and software egress are described separately in [SECURITY.md](SECURITY.md).
 - **Source-grounded legal research.** `/research` and `/legal` retrieve authority from CourtListener,
   rank it (jurisdiction, court level, recency, precedential status), and constrain the model to the
-  retrieved packet. Answers are **citation-verified**: fabricated or unsupported cites are flagged
-  and quarantined behind a "do not rely" banner rather than shown as good law.
+  retrieved packet. Fabricated, unresolved, or unsupported citations and propositions are flagged
+  or blocked; the checks do not determine subsequent history or whether authority remains good law.
 - **Document intelligence.** Import files and folders (PDF, DOCX, XLSX, RTF, EML, images), with OCR,
   chunking, on-device embeddings, hybrid retrieval, source-cited Q&A, fact chronologies, and
   exportable structured outputs — all scoped per matter and organized into nested folders (new
@@ -35,21 +38,20 @@ unverified authority as settled law.
   per-matter billing rules by matter, with an audit trail. Sort the matter sidebar by client
   (grouped under the client's name), practice area, name, or date — or pin matters to the top and
   drag your own order — and the matter form suggests known clients and practice areas as you type,
-  so the same client is never entered two different ways.
+  helping users avoid duplicate client identities.
 - **In-matter drafting.** A **Draft** button in a matter's chat opens a guided input sheet and
   generates a downloadable `.docx` — a Notice of Appearance (currently Florida-only) or a demand
   letter. Required slots are validated before rendering, and the signature block prints the bar
   admission whose jurisdiction matches the filing's court — configured as a multi-jurisdiction
   bar-admissions list in **Settings**. A per-firm **style profile** (also in Settings) applies your
-  letterhead, caption, and signature-block conventions to every draft, and can be captured by
+  letterhead, caption, and signature-block conventions to supported drafts, and can be captured by
   parsing an uploaded exemplar document for review.
+  Draft rendering stops before a file is created when required facts, authority support, or verification provenance are missing, unsupported, or unverifiable.
 - **Timekeeping → defensible billing (ScratchPad).** Keep one running daily note — `@matter` /
   `#issue` tags, with work product, emails, and filings attached inline to the note they support.
-  Tag an entry `#Note` to keep it out of billing entirely (the text and its attachments never reach
-  the billing model). On demand, a local model turns the day into a reviewable, editable table of
+  Tag an entry `#Note` to exclude that entry and its attachments before billing-model input. On demand, a local model turns the day into a reviewable, editable table of
   billing entries (Client · Matter · Narrative · Time, with UTBMS codes) and a day reconciliation,
-  exportable to **LEDES 1998B**, CSV, or the clipboard. Every suggested time cites its evidence;
-  **nothing is ever billed automatically**.
+  exportable to **LEDES 1998B**, CSV, or the clipboard. ScratchPad entries tagged #Note and their attachments are excluded before billing-model input; suggested lines require evidence-reachable matter assignment and remain drafts until user review and export.
 - **Global chat management.** Global Chat opens to a fresh set of legal prompt starters and keeps a
   chat history in an interior sidebar, searchable by title and message content — a leading `#`
   matches a tag exactly and surfaces a cross-matter "Tag matches" section spanning chats and
@@ -86,6 +88,9 @@ Packages/
 ├─ SupraCore               Domain types, model routing, generation options, reasoning split
 ├─ SupraStore              GRDB persistence (migrations, repositories, records)
 ├─ SupraSessions           App-facing controllers (chat, research, documents, outputs, models)
+├─ SupraDraftingCore       Shared drafting contracts, slots, and pre-file gates
+├─ SupraDrafting           Drafting generation and authority firewall
+├─ SupraExports            Local DOCX and tabular export renderers
 ├─ SupraResearch           CourtListener client + legal citation verification & ranking
 ├─ SupraDocuments          Extraction, OCR, chunking, grounding, export
 ├─ SupraNetworking         Authorized HTTP client, network policy, rate limiting, Keychain
@@ -111,7 +116,7 @@ See [`Docs/Architecture/`](Docs/Architecture/) for dependency and runtime-file-a
 ```bash
 git clone git@github.com:cadespivey/Supra-AI.git
 cd Supra-AI
-cp .env.example .env        # then fill in model names / CourtListener token
+cp .env.example .env        # optional nonsecret development configuration
 open SupraAI.xcworkspace     # build & run the "SupraAI" scheme in Xcode
 ```
 
@@ -119,14 +124,14 @@ open SupraAI.xcworkspace     # build & run the "SupraAI" scheme in Xcode
    drafting, and embedding model in the background. You can also follow
    [`Docs/local-legal-model-setup.md`](Docs/local-legal-model-setup.md) to fetch the MLX weights
    manually, then register and assign them in the app's **Models** tab.
-2. **Configure** `.env` (see below) — `.env` is gitignored and never committed.
+2. **Configure** nonsecret development defaults in `.env` if needed — `.env` is gitignored.
 3. **Legal research (optional):** add your CourtListener token in **Settings**.
 4. **Document intelligence (optional):** complete the one-time embedding-model setup in the
    **Models** tab, then import documents per matter.
 
 ## Configuration
 
-Configuration is read from `.env` / the process environment (defaults shown in
+Nonsecret DEBUG/development configuration can be read from `.env` / the process environment (defaults shown in
 [`.env.example`](.env.example)):
 
 | Variable | Purpose |
@@ -157,12 +162,10 @@ cd Packages/SupraSessions && swift test
 
 ## Privacy & legal-safety design
 
-- Generation is **on-device**; the only network calls are CourtListener research (through an
-  allow-listed, rate-limited, Keychain-authenticated client) and user-initiated, token-free
-  opinion PDF downloads from CourtListener's storage CDN.
-- Legal answers are constrained to retrieved authority; the citation verifier flags unsupported
-  citations/quotes and jurisdiction mismatches, and structured outputs that assert authority always
-  carry a verification banner.
+- Generation is on-device. Network egress consists of user-initiated named-provider research,
+  opinion downloads, model metadata/artifact downloads, and Sparkle update checks/downloads when
+  enabled; [SECURITY.md](SECURITY.md) records their credential and payload limits.
+- Citation coverage means a citation label resolves to retained source material; proposition verification separately requires each material claim to be supported, and neither check is a citator or good-law opinion.
 - Privileged query terms are represented by per-install HMAC pseudonyms in request logs and diagnostics by default. They are not anonymous; Diagnostics can remove all stored query markers.
 
 ## License

@@ -28,9 +28,9 @@ export function Hero() {
         </h1>
         <p className="measure mt-6 text-lg leading-[1.5] text-supra-muted">
           Supra AI runs locally on your Mac. Your matter files, prompts, and
-          generated work stay on your machine — the only network calls are
-          downloading models, the legal-research and public-records searches you
-          run, and the update checks you opt into.
+          generated work stay on your machine for processing. Outbound traffic is
+          limited to model and opinion downloads, the legal-research and
+          public-records searches you run, and enabled software-update checks.
         </p>
         <Link href="/download" className="link mt-10 inline-block text-lg">
           Download for macOS →

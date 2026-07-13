@@ -59,7 +59,7 @@ struct SettingsView: View {
             }
 
             Section {
-                Text("Connectors that ground research in primary law and track legislative & regulatory developments. Expand a source to add and verify a key — keys are free and stored only in your Keychain. Sources marked “Free · no key required” are public APIs with no key; use Verify to confirm they’re reachable.")
+                Text("Connectors ground research in primary law and track legislative or regulatory developments. In Release builds, credentials entered here are stored in the device-bound Keychain and scoped to their provider. Sources marked “Free · no key required” use public endpoints; provider availability and terms can change.")
                     .font(.callout).foregroundStyle(.secondary)
                 // Case law
                 APIKeyDisclosure(
@@ -117,7 +117,7 @@ struct SettingsView: View {
             }
 
             Section {
-                Text("Supra AI updates itself: new versions download in the background and install with a single restart — no browser, no drag-to-Applications. Update checks fetch only a signed version feed from supralegal.ai; no usage data is sent.")
+                Text("When automatic checks are enabled, Sparkle checks the signed feed at supralegal.ai and may download the signed update it names. The updater receives no legal-data credential or matter content. You can disable automatic checks and check manually.")
                     .font(.callout).foregroundStyle(.secondary)
                 Toggle("Check for updates automatically", isOn: $update.automaticallyChecksForUpdates)
                 HStack {

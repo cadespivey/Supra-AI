@@ -33,7 +33,7 @@ export function SourceGroundingStack() {
           <p className="measure mt-4 text-lg leading-[1.5] text-supra-muted">
             In legal writing, <span className="italic">supra</span> points to
             authority already on the page. Supra AI works the same way: an answer
-            never stands apart from the source behind it.
+            remains linked to the source behind it.
           </p>
         </div>
 

@@ -25,7 +25,7 @@ const steps = [
   {
     id: "research",
     title: "Research case law and public records",
-    body: "Run research as an auditable session: approve real search queries, then make an explicit keep-or-skip decision on every result before it enters your matter's authority library. Case law and federal dockets come from CourtListener; public records come from SEC EDGAR filings, the CFPB complaint database, and NLRB labor-case records. Public records are shown as sourced filings and allegations as filed — never findings, and never passed to the model as fact.",
+    body: "Run research as an auditable session: approve search queries, then record a keep-or-skip decision before a result enters your matter's authority library. Case law and federal dockets come from CourtListener; public records come from SEC EDGAR filings, the CFPB complaint database, and NLRB labor-case records. Public-record results are labeled as filings or allegations, not adjudicated findings.",
   },
   {
     id: "answers",
@@ -35,7 +35,7 @@ const steps = [
   {
     id: "scratchpad",
     title: "Capture your time in ScratchPad",
-    body: "Jot the day's work as it happens in a running note, tagging each entry with @matter and #activity. When you're ready, ScratchPad turns those notes into polished, UTBMS-coded billing narratives grouped by matter — each line citing the note and work product behind it. Tag an entry #Note to keep it out of billing entirely, review everything before it counts, and export to LEDES 1998B, CSV, or the clipboard.",
+    body: "Jot the day's work as it happens in a running note, tagging each entry with @matter and #activity. ScratchPad proposes UTBMS-coded billing narratives grouped by evidence-reachable matter assignment. #Note entries and their attachments are excluded before model input; suggestions remain drafts until review and export.",
   },
   {
     id: "draft",

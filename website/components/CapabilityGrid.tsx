@@ -3,7 +3,7 @@ import { Section } from "./Section";
 const capabilities = [
   {
     title: "Case-law research",
-    body: "Answers cite retrieved authority, never model memory. A matter answers from its saved authorities first; a wider CourtListener search is one click away. Party and docket questions hit real PACER/RECAP filings.",
+    body: "Legal answers are constrained to retained authority packets. A matter uses its saved authorities first; a wider CourtListener search is one click away. Party and docket questions can retrieve PACER/RECAP filing data.",
   },
   {
     title: "Public records search",
@@ -11,11 +11,11 @@ const capabilities = [
   },
   {
     title: "Citation verification",
-    body: "Every generated cite is checked against the retrieved source packet, and /verify resolves citations against CourtListener's live corpus — unsupported or fabricated authority is flagged or blocked before you rely on it.",
+    body: "Citation labels are resolved against retained sources and material propositions receive a separate support check. Unsupported, unresolved, or fabricated authority is flagged or blocked; this is not a citator or good-law opinion.",
   },
   {
     title: "Document intelligence",
-    body: "Import matter documents and ask questions answered only from their text — a fast preliminary answer with a full-file pass one click away, and every [S#] cite opening the source at the supporting passage.",
+    body: "Import matter documents and ask source-scoped questions — a fast preliminary answer with a full-file pass one click away, and [S#] labels that resolve to retained source locators or force review.",
   },
   {
     title: "Primary law from official text",
@@ -35,7 +35,7 @@ const capabilities = [
   },
   {
     title: "Document drafting",
-    body: "Draft inside a matter's chat: a Draft button collects the required details, then renders a downloadable Word document — a Florida Notice of Appearance or a demand letter — with the signature block matched to the filing's court and your firm's letterhead, caption, and signature styling applied. Every recited fact traces to the matter, and unverified citations appear as visible placeholders to review before filing.",
+    body: "Draft inside a matter's chat: a Draft button collects required details for a Florida Notice of Appearance or demand letter. The pre-file gate blocks rendering when required facts, authority support, or verification provenance are missing, unsupported, or unverifiable.",
   },
 ];
 
