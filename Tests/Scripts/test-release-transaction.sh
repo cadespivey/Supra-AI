@@ -347,13 +347,18 @@ run_case \
 null_smoke_manifest="${temporary_dir}/preflight-null-smoke.json"
 malformed_smoke_manifest="${temporary_dir}/preflight-malformed-smoke.json"
 mismatched_smoke_manifest="${temporary_dir}/preflight-mismatched-smoke.json"
+forged_digest_smoke_manifest="${temporary_dir}/preflight-forged-digest-smoke.json"
 jq '.signedRuntimeSmoke = null' "$final_manifest" >"$null_smoke_manifest"
 jq 'del(.signedRuntimeSmoke.verification.modelReverified)' \
   "$final_manifest" >"$malformed_smoke_manifest"
 jq '.signedRuntimeSmoke.sourceSha = "dddddddddddddddddddddddddddddddddddddddd"' \
   "$final_manifest" >"$mismatched_smoke_manifest"
+jq '.signedRuntimeSmoke.resultSHA256 =
+  "0000000000000000000000000000000000000000000000000000000000000000"' \
+  "$final_manifest" >"$forged_digest_smoke_manifest"
 for altered_manifest in \
-  "$null_smoke_manifest" "$malformed_smoke_manifest" "$mismatched_smoke_manifest"; do
+  "$null_smoke_manifest" "$malformed_smoke_manifest" "$mismatched_smoke_manifest" \
+  "$forged_digest_smoke_manifest"; do
   cp "$altered_manifest" "${altered_manifest}.cms"
 done
 
@@ -373,6 +378,7 @@ assert_artifact_smoke_rejected() {
 assert_artifact_smoke_rejected null "$null_smoke_manifest"
 assert_artifact_smoke_rejected malformed "$malformed_smoke_manifest"
 assert_artifact_smoke_rejected mismatched "$mismatched_smoke_manifest"
+assert_artifact_smoke_rejected forged-digest "$forged_digest_smoke_manifest"
 
 cms_output="${temporary_dir}/cms-failure.log"
 cms_status=0
@@ -527,6 +533,7 @@ assert_publish_smoke_rejected() {
 assert_publish_smoke_rejected null "$null_smoke_manifest"
 assert_publish_smoke_rejected malformed "$malformed_smoke_manifest"
 assert_publish_smoke_rejected mismatched "$mismatched_smoke_manifest"
+assert_publish_smoke_rejected forged-digest "$forged_digest_smoke_manifest"
 
 create_line="$(grep -n 'gh release create' "$successful_publish_log" | head -1 | cut -d: -f1 || true)"
 publish_line="$(grep -n 'gh release edit.*--draft=false' "$successful_publish_log" | head -1 | cut -d: -f1 || true)"
