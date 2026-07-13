@@ -24,6 +24,8 @@ jobs:
           persist-credentials: false
       - name: Test CI failure gates
         run: bash Tests/Scripts/test-macos-ci-gates.sh
+      - name: Test SupraSessions Swift 6 portability guards
+        run: bash Tests/Scripts/test-supra-sessions-swift6-portability.sh
       - name: Verify repository facts
         run: bash Scripts/verify-repo-facts.sh
 
