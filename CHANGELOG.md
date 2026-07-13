@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.2.1] - 2026-07-13
+
+Security, legal-output integrity, persistence, release, and runtime hardening.
+
+### Fixed
+
+- **Legal output fails closed** — drafting and document workflows now block unsupported
+  propositions, missing verification provenance, and unsafe file actions instead of presenting
+  incomplete output as ready to use.
+- **Network and credential isolation** — redirects are checked on every hop, and provider
+  credentials remain limited to their approved origin and request scope.
+- **Matter and export integrity** — billing evidence remains matter-scoped, CSV cells are safely
+  encoded, and import/export, database, blob, and model writes use atomic integrity checks.
+- **Upgrade and runtime recovery** — shipping migrations have fixed historical fixtures and
+  recovery queues, while the sandboxed runtime has stricter ownership, cancellation, reconnect,
+  and race handling.
+- **Release safeguards** — protected CI now verifies product claims, public assets, repository
+  facts, release-version state, and the separation between a reviewed candidate and the latest
+  published appcast.
+
 ## [2.2.0] - 2026-07-10
 
 Off-site backup: protect your matters, notes, and documents by backing up to a

@@ -6,6 +6,13 @@ source SHA must match a successful `Protected macOS CI` run. A reviewed commit m
 the app and runtime-service marketing/build metadata to the intended release. Those same
 values are passed as build settings; release automation does not rewrite reviewed source.
 
+Xcode metadata therefore identifies the reviewed release candidate. Until the protected
+transaction publishes its signed artifact, the newest appcast item and website fallback
+constants continue to identify the latest published release. Repository gates accept only two
+coherent states: candidate version/build exactly equal published version/build, or candidate
+semantic version and build both strictly newer. Appcast publication updates the appcast and
+fallback constants together only after the signed candidate has passed release qualification.
+
 ## Required repository settings
 
 Configure a `main` ruleset in GitHub with all of these controls. The ruleset, protected

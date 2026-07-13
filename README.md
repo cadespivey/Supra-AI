@@ -9,7 +9,7 @@ legal-data providers, and separate clients handle model downloads and signed sof
 document-intelligence pipeline whose support checks block or flag output that lacks required
 source support.
 
-The current release metadata identifies Supra AI 2.2.0.
+The current published Supra AI release is identified by the newest appcast entry.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%2015%2B-blue)
 ![Apple Silicon](https://img.shields.io/badge/silicon-Apple%20Silicon-black)

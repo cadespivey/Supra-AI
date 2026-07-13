@@ -63,16 +63,7 @@ xpc_release_build="$(project_setting 5A0000000000000000000D06 CURRENT_PROJECT_VE
 [[ "$xpc_debug_build" =~ ^[0-9]+$ && "$xpc_debug_build" == "$xpc_release_build" ]] \
   || fail 'Debug/Release XPC build numbers must agree and be numeric'
 
-appcast="${repo_root}/website/public/appcast.xml"
-website_constants="${repo_root}/website/lib/constants.ts"
-appcast_version="$(sed -nE 's|.*<sparkle:shortVersionString>([^<]+)</sparkle:shortVersionString>.*|\1|p' "$appcast" | head -1)"
-appcast_build="$(sed -nE 's|.*<sparkle:version>([^<]+)</sparkle:version>.*|\1|p' "$appcast" | head -1)"
-[[ "$appcast_version" == "$app_debug_version" && "$appcast_build" == "$app_debug_build" ]] \
-  || fail 'the newest appcast item must match the app marketing version and build number'
-grep -Fq "FALLBACK_RELEASE_TAG = \"v${app_debug_version}\"" "$website_constants" \
-  || fail 'website fallback release tag does not match the app version'
-grep -Fq "FALLBACK_RELEASE_VERSION = \"${app_debug_version}\"" "$website_constants" \
-  || fail 'website fallback release version does not match the app version'
+bash "${repo_root}/Scripts/verify-release-version-state.sh" || status=1
 
 required_workflows=(
   .github/workflows/deploy-website.yml

@@ -15,11 +15,16 @@ Protected CI gates:
 
 - `list-local-packages.sh --verify` owns the fixed 14-package inventory;
   `test-all-packages.sh` tests either that whole set or one matrix entry.
+- `verify-release-version-state.sh` treats Xcode metadata as the reviewed candidate and the
+  well-formed newest appcast item plus website fallback constants as the published release. It
+  accepts only an exact published state or a strictly newer semantic version with a strictly
+  newer build.
 - `verify-repo-facts.sh` checks the three Xcode targets, package/workflow inventories,
-  dynamic contiguous migration sequence, version metadata, full-SHA Action pins,
-  entitlements, and the public-font invariant.
+  dynamic contiguous migration sequence, candidate/published release state, full-SHA Action
+  pins, entitlements, and the public-font invariant.
 - `verify-product-claims.sh` validates `Docs/Verified-Product-Claims.yml`, its publication,
-  code, test, workflow, release-version, migration/support, entitlement, and package anchors.
+  code, test, workflow, appcast-authoritative release, supported release line,
+  migration/support, entitlement, and package anchors.
   It is called by repository facts, protected CI, and release preflight.
 - `verify-secrets.sh`, `verify-prohibited-artifacts.sh`, and `verify-entitlements.sh` are
   path-only fail-closed security scans. Findings never print matched secret values.

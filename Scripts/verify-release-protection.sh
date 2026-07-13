@@ -24,6 +24,7 @@ required_files=(
   Docs/Release-Protection.md
   Scripts/release.sh
   Scripts/release-preflight.sh
+  Scripts/verify-release-version-state.sh
   Scripts/publish-release-transaction.sh
   Scripts/emergency-release-rollback.sh
 )

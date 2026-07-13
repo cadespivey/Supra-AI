@@ -92,6 +92,7 @@ duplicate_ids="$(cut -f1 "$parsed_claims" | LC_ALL=C sort | uniq -d)"
 
 required_topics=(
   package-count migration-count supported-releases product-version
+  security-support-line
   on-device-processing egress-paths egress-payloads credential-sources
   redirect-behavior entitlements data-at-rest citation-semantics
   drafting-gates billing-exclusions model-downloads telemetry
@@ -174,8 +175,27 @@ supported_actual="$(jq -r '.supportedVersions | join(",")' "$migration_manifest"
 
 version_expected="$(claim_expected RELEASE-CURRENT-VERSION)"
 version_actual="$(sed -nE 's|.*<sparkle:shortVersionString>([^<]+)</sparkle:shortVersionString>.*|\1|p' "${repo_root}/website/public/appcast.xml" | head -1)"
-[[ "$version_expected" == "$version_actual" ]] \
-  || fail "release-version claim expected ${version_expected}, appcast is ${version_actual}"
+[[ "$version_expected" == 'appcast-latest' ]] \
+  || fail 'release-version claim must use appcast-latest'
+[[ "$version_actual" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+  || fail "newest appcast release version is not semantic: ${version_actual}"
+
+project_metadata="${repo_root}/Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
+project_versions="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION = ([^;]+);/\1/p' "$project_metadata" | LC_ALL=C sort -u)"
+project_version_count="$(printf '%s\n' "$project_versions" | sed '/^$/d' | wc -l | tr -d ' ')"
+project_semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+if [[ "$project_version_count" != 1 \
+    || ! "$project_versions" =~ $project_semver_pattern ]]; then
+  fail 'project marketing versions must resolve to one semantic release line'
+  supported_actual='invalid'
+else
+  IFS=. read -r project_major project_minor project_patch <<<"$project_versions"
+  supported_actual="${project_major}.${project_minor}.x"
+fi
+supported_expected="$(claim_expected SECURITY-SUPPORTED-RELEASE-LINE)"
+[[ -n "$supported_expected" ]] || fail 'security support claim has no expected value'
+[[ "$supported_expected" == "$supported_actual" ]] \
+  || fail "security support claim expected ${supported_expected}, project marketing version resolves to ${supported_actual}"
 
 bash "${repo_root}/Scripts/verify-entitlements.sh" >/dev/null || status=1
 
