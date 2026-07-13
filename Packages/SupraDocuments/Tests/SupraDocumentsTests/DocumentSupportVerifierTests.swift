@@ -84,6 +84,18 @@ final class DocumentSupportVerifierTests: XCTestCase {
         XCTAssertTrue([modal, conditional, passiveAgent].allSatisfy(\.requiresReview))
     }
 
+    func testCriticalValuesCannotBeReassignedWithinAnOtherwiseMatchingSentence() throws {
+        // ACR-DOCSUP-12 expected RED: critical-value sets ignore the order that
+        // binds each amount to its recipient.
+        let report = try verify(
+            "Alpha paid Beta $900 and Gamma $500 [S1].",
+            sources: [source(text: "Alpha paid Beta $500 and Gamma $900.")]
+        )
+
+        XCTAssertEqual(report.results.map(\.status), [.unsupported])
+        XCTAssertTrue(report.requiresReview)
+    }
+
     func testMixedAnswerFailsWhenOnePropositionIsUnsupported() throws {
         // ACR-DOCSUP-04 expected RED: coverage aggregates labels, not propositions.
         let report = try verify(
