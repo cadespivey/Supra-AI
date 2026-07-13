@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "reviewStatus": "pending_attorney_review",
+  "cases": [
+    {
+      "id": "direct-quote",
+      "category": "direct_quote",
+      "claim": "The court requires meaningful notice before entering default judgment",
+      "source": "The court requires meaningful notice before entering default judgment. The affected party must receive an opportunity to respond.",
+      "expectedOutcome": "supported",
+      "sourceCondition": "full"
+    },
+    {
+      "id": "faithful-paraphrase",
+      "category": "faithful_paraphrase",
+      "claim": "The securities fraud claim must be filed two years after discovery",
+      "source": "We hold that the securities fraud claim must be filed no later than two years after discovery of the violation.",
+      "expectedOutcome": "supported",
+      "sourceCondition": "full"
+    },
+    {
+      "id": "short-snippet",
+      "category": "short_snippet",
+      "claim": "The deadline requires filing thirty days after notice",
+      "source": "Thirty days.",
+      "expectedOutcome": "blocked",
+      "sourceCondition": "short"
+    }
+  ]
+}
