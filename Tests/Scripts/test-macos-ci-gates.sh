@@ -101,7 +101,7 @@ printf '%s\n' \
   'MARKETING_VERSION = 2.2.1;' \
   'CURRENT_PROJECT_VERSION = 387;' >"$release_project"
 printf '%s\n' \
-  '<rss><channel><item>' \
+  '<rss xmlns:sparkle="https://sparkle-project.org/xml-namespaces/sparkle"><channel><item>' \
   '<sparkle:version>386</sparkle:version>' \
   '<sparkle:shortVersionString>2.2.0</sparkle:shortVersionString>' \
   '</item></channel></rss>' >"$release_appcast"
@@ -179,7 +179,7 @@ run_case \
 
 split_release_appcast="${temporary_dir}/split-release-appcast.xml"
 printf '%s\n' \
-  '<rss><channel><item>' \
+  '<rss xmlns:sparkle="https://sparkle-project.org/xml-namespaces/sparkle"><channel><item>' \
   '<sparkle:shortVersionString>2.2.0</sparkle:shortVersionString>' \
   '</item><item>' \
   '<sparkle:version>386</sparkle:version>' \
@@ -190,6 +190,19 @@ run_case \
   "newest appcast item must contain exactly one marketing version and build" \
   bash "${scripts}/verify-release-version-state.sh" \
     --project "$release_project" --appcast "$split_release_appcast" --constants "$release_constants"
+
+malformed_release_appcast="${temporary_dir}/malformed-release-appcast.xml"
+printf '%s\n' \
+  '<rss xmlns:sparkle="https://sparkle-project.org/xml-namespaces/sparkle"><channel><item>' \
+  '<sparkle:version>386</sparkle:version>' \
+  '<sparkle:shortVersionString>2.2.0</sparkle:shortVersionString>' \
+  '</item>' >"$malformed_release_appcast"
+run_case \
+  "malformed appcast XML fails closed" \
+  1 \
+  "appcast is not well-formed XML" \
+  bash "${scripts}/verify-release-version-state.sh" \
+    --project "$release_project" --appcast "$malformed_release_appcast" --constants "$release_constants"
 
 duplicate_release_constants="${temporary_dir}/duplicate-release-constants.ts"
 cp "$release_constants" "$duplicate_release_constants"
