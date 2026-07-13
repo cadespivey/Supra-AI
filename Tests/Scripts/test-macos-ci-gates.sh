@@ -385,6 +385,30 @@ run_case \
   env PATH=/usr/bin:/bin \
     bash "${repo_root}/Tests/Scripts/test-supra-sessions-swift6-portability.sh"
 
+# Expected RED after the window-resize feedback fix: Xcode 16.4 imports block-
+# based NotificationCenter callbacks as Sendable/nonisolated even when the
+# delivery queue is .main. Each callback must synchronously assert the documented
+# main-queue contract before touching the NSView's main-actor-isolated state.
+main_shell_source="${repo_root}/Apps/SupraAI/SupraAI/MainShellView.swift"
+window_resize_reader_source="${temporary_dir}/WindowLiveResizeHeightView.swift"
+sed -n \
+  '/^private final class WindowLiveResizeHeightView: NSView {/,/^}/p' \
+  "$main_shell_source" >"$window_resize_reader_source"
+window_resize_observers="$(
+  { grep -F 'NotificationCenter.default.addObserver(' "$window_resize_reader_source" || true; } |
+    wc -l | tr -d ' '
+)"
+main_actor_observer_hops="$(
+  { grep -F 'MainActor.assumeIsolated {' "$window_resize_reader_source" || true; } |
+    wc -l | tr -d ' '
+)"
+if [[ "$window_resize_observers" != '3' || "$main_actor_observer_hops" != '3' ]]; then
+  record_failure \
+    "window resize observers are not synchronously main-actor isolated (observers=${window_resize_observers}, isolated=${main_actor_observer_hops})"
+else
+  printf '%s\n' 'PASS: window resize observers synchronously assert main-actor isolation'
+fi
+
 if (( failures != 0 )); then
   printf 'macOS CI gate tests failed: %d\n' "$failures" >&2
   exit 1
