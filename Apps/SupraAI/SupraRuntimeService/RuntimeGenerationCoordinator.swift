@@ -53,6 +53,14 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         lock.unlock()
 
         deliver(type: .generationStarted, generationID: request.generationID, eventSink: eventSink)
+#if DEBUG
+        // Hosted-XPC regression seam: widen the exact historical window between
+        // publishing acceptance and installing the model task. Production builds
+        // never contain this delay.
+        if request.prompt == "SUPRA-XPC-TEST-INSTALL-RACE" {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+#endif
         startModelGenerationTask(for: request)
         // Publish acceptance only after the task is installed. A client can issue
         // cancel as soon as this reply arrives; replying first left a window where

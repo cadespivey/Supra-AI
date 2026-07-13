@@ -133,10 +133,15 @@ private struct RuntimeXPCIntegrationRunner {
         "nilBookmarkRejected",
         "invalidBookmarkRejected",
         "staleBookmarkRejected",
+        "samePathReplacementRejected",
         "managedRootEscapeRejected",
         "controlledModelLoaded",
         "streamCompletedOnce",
         "cancelExactlyOnce",
+        "cancelBeforeTaskInstall",
+        "reservationBeforeAdmission",
+        "foreignCancelRejected",
+        "reusedGenerationID",
         "clientTermination",
         "concurrentLoadUnload",
         "reconnect",
@@ -147,6 +152,9 @@ private struct RuntimeXPCIntegrationRunner {
     private static let markerData = Data("SUPRA-XPC-LIFECYCLE-V1\n".utf8)
     private static let completionPrompt = "SUPRA-XPC-TEST-COMPLETE"
     private static let holdPrompt = "SUPRA-XPC-TEST-HOLD"
+    private static let installRacePrompt = "SUPRA-XPC-TEST-INSTALL-RACE"
+    private static let reservationRacePrompt = "SUPRA-XPC-TEST-RESERVATION-RACE"
+    private static let staleTerminationPrompt = "SUPRA-XPC-TEST-STALE-TERMINATION"
 
     func run(
         iterations: Int,
@@ -232,6 +240,16 @@ private struct RuntimeXPCIntegrationRunner {
             )
         )
         try requireAccessRejected(staleBookmark, name: "stale/moved bookmark")
+
+        let samePathReplacement = try await client.loadModel(
+            request(
+                id: ModelID(),
+                path: fixture.recreatedModel.path,
+                bookmark: fixture.recreatedBookmark,
+                root: fixture.root.path
+            )
+        )
+        try requireAccessRejected(samePathReplacement, name: "same-path model replacement")
 
         let escaped = try await client.loadModel(
             request(
@@ -375,6 +393,78 @@ private struct RuntimeXPCIntegrationRunner {
             "event buffer recorded a duplicate cancellation after the stream closed"
         )
 
+        if iteration == 1 {
+            // Force cancellation into the coordinator's vulnerable interval after
+            // publishing generationStarted but before installing the model task.
+            // A cancelled task must never reach the model actor after its slot is
+            // released; the following completion probe exposes that as a canary.
+            let installRaceID = GenerationID()
+            let installRaceTask = try collectInTask(
+                client.generate(
+                    GenerateRequest(
+                        generationID: installRaceID,
+                        modelID: modelID,
+                        prompt: Self.installRacePrompt,
+                        systemPrompt: nil,
+                        options: GenerationOptions(maxOutputTokens: 8)
+                    )
+                )
+            )
+            try await waitUntil("install-race generation never reserved its slot") {
+                try await client.runtimeStatus().activeGenerationID == installRaceID
+            }
+            let installRaceCancel = try await client.cancelGeneration(installRaceID)
+            try require(
+                installRaceCancel.status == .cancelled,
+                "cancel-before-task-install was not acknowledged"
+            )
+            _ = try await installRaceTask.value
+            try await Task.sleep(nanoseconds: 300_000_000)
+
+            let installRaceProbeEvents = try await collect(
+                client.generate(
+                    GenerateRequest(
+                        generationID: GenerationID(),
+                        modelID: modelID,
+                        prompt: Self.completionPrompt,
+                        systemPrompt: nil,
+                        options: GenerationOptions(maxOutputTokens: 8)
+                    )
+                )
+            )
+            try require(
+                installRaceProbeEvents.filter { $0.type == .token }.map(\.tokenText)
+                    == ["xpc-boundary-canary"],
+                "a task entered the model actor after pre-install cancellation"
+            )
+
+            // A connection can disappear after the service publishes ownership
+            // but before coordinator admission. The reservation and coordinator
+            // task must become visible atomically to the termination handler.
+            let reservationRaceID = GenerationID()
+            let reservationRaceOwner = RuntimeClient()
+            try await reservationRaceOwner.connect()
+            let reservationRaceTask = try collectInTask(
+                reservationRaceOwner.generate(
+                    GenerateRequest(
+                        generationID: reservationRaceID,
+                        modelID: modelID,
+                        prompt: Self.reservationRacePrompt,
+                        systemPrompt: nil,
+                        options: GenerationOptions(maxOutputTokens: 8)
+                    )
+                )
+            )
+            try await waitUntil("reservation-before-admission seam was not reached") {
+                try await client.runtimeStatus().activeGenerationID == reservationRaceID
+            }
+            reservationRaceOwner.disconnect()
+            try await waitUntil("pre-admission owner drop leaked the generation slot") {
+                try await client.runtimeStatus().activeGenerationID == nil
+            }
+            _ = await reservationRaceTask.result
+        }
+
         let terminatedID = GenerationID()
         let terminatingClient = RuntimeClient()
         let terminationTask = try collectInTask(
@@ -410,11 +500,29 @@ private struct RuntimeXPCIntegrationRunner {
                 )
             )
             throw RuntimeXPCIntegrationError.assertion("second client generation was not rejected as busy")
+        } catch let RuntimeClientError.generationRejected(response) {
+            try require(
+                response.status == .busy && response.generationID == busyID,
+                "second client was rejected for a reason other than busy"
+            )
         } catch let error as RuntimeXPCIntegrationError {
             throw error
         } catch {
-            // Expected RuntimeClientError.generationRejected(.busy).
+            throw RuntimeXPCIntegrationError.assertion(
+                "second client returned unexpected busy error: \(error.localizedDescription)"
+            )
         }
+
+        let foreignCancel = try await busyClient.cancelGeneration(terminatedID)
+        try require(
+            foreignCancel.status == .notFound,
+            "a foreign connection cancelled the accepted owner's generation"
+        )
+        let rejectedGenerationCancel = try await busyClient.cancelGeneration(busyID)
+        try require(
+            rejectedGenerationCancel.status == .notFound,
+            "a busy/rejected generation ID was accepted for cancellation"
+        )
         busyClient.disconnect()
         await Task.yield()
         let statusAfterRejectedDisconnect = try await client.runtimeStatus()
@@ -433,6 +541,58 @@ private struct RuntimeXPCIntegrationRunner {
             terminationEvents.filter { $0.type == .generationCancelled }.count == 1,
             "client termination did not cancel exactly once"
         )
+
+        if iteration == 1 {
+            // The old owner's model call completes while its invalidation handler
+            // is paused after capturing ownership. Reusing the public ID during
+            // that pause proves the handler also needs a private reservation epoch.
+            let reusedID = GenerationID()
+            let oldOwner = RuntimeClient()
+            try await oldOwner.connect()
+            let oldOwnerTask = try collectInTask(
+                oldOwner.generate(
+                    GenerateRequest(
+                        generationID: reusedID,
+                        modelID: modelID,
+                        prompt: Self.staleTerminationPrompt,
+                        systemPrompt: nil,
+                        options: GenerationOptions(maxOutputTokens: 8)
+                    )
+                )
+            )
+            try await waitUntil("old reused-ID owner never started") {
+                try await client.runtimeStatus().activeGenerationID == reusedID
+            }
+            oldOwner.disconnect()
+            try await waitUntil("old reused-ID generation did not complete") {
+                try await client.runtimeStatus().activeGenerationID == nil
+            }
+            _ = await oldOwnerTask.result
+
+            let successorTask = try collectInTask(
+                client.generate(
+                    GenerateRequest(
+                        generationID: reusedID,
+                        modelID: modelID,
+                        prompt: Self.holdPrompt,
+                        systemPrompt: nil,
+                        options: GenerationOptions(maxOutputTokens: 8)
+                    )
+                )
+            )
+            try await waitUntil("reused-ID successor never started") {
+                try await client.runtimeStatus().activeGenerationID == reusedID
+            }
+            try await Task.sleep(nanoseconds: 300_000_000)
+            let reusedStatus = try await client.runtimeStatus()
+            try require(
+                reusedStatus.activeGenerationID == reusedID,
+                "stale owner termination cancelled the reused-ID successor"
+            )
+            let successorCancel = try await client.cancelGeneration(reusedID)
+            try require(successorCancel.status == .cancelled, "reused-ID successor was not live")
+            _ = try await successorTask.value
+        }
 
         async let concurrentLoad = client.loadModel(
             request(
@@ -478,10 +638,15 @@ private struct RuntimeXPCIntegrationRunner {
             "nilBookmarkRejected": true,
             "invalidBookmarkRejected": true,
             "staleBookmarkRejected": true,
+            "samePathReplacementRejected": true,
             "managedRootEscapeRejected": true,
             "controlledModelLoaded": true,
             "streamCompletedOnce": true,
             "cancelExactlyOnce": true,
+            "cancelBeforeTaskInstall": true,
+            "reservationBeforeAdmission": true,
+            "foreignCancelRejected": true,
+            "reusedGenerationID": true,
             "clientTermination": true,
             "concurrentLoadUnload": true,
             "reconnect": true,
@@ -548,19 +713,26 @@ private struct RuntimeXPCIntegrationRunner {
         let symlinkEscape = root.appendingPathComponent("inside-root-link", isDirectory: true)
         let staleOriginal = root.appendingPathComponent("stale-model", isDirectory: true)
         let staleMoved = root.appendingPathComponent("stale-model-moved", isDirectory: true)
+        let recreatedModel = root.appendingPathComponent("recreated-model", isDirectory: true)
 
         try FileManager.default.createDirectory(at: model, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: escape, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: staleOriginal, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: recreatedModel, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: symlinkEscape, withDestinationURL: escape)
         try Self.markerData.write(to: model.appendingPathComponent(Self.markerName), options: .atomic)
         try Self.markerData.write(to: escape.appendingPathComponent(Self.markerName), options: .atomic)
         try Self.markerData.write(to: staleOriginal.appendingPathComponent(Self.markerName), options: .atomic)
+        try Self.markerData.write(to: recreatedModel.appendingPathComponent(Self.markerName), options: .atomic)
 
         let modelAccess = try Self.transferableBookmark(for: model)
         let escapeAccess = try Self.transferableBookmark(for: escape)
         let staleAccess = try Self.transferableBookmark(for: staleOriginal)
+        let recreatedAccess = try Self.transferableBookmark(for: recreatedModel)
         try FileManager.default.moveItem(at: staleOriginal, to: staleMoved)
+        try FileManager.default.removeItem(at: recreatedModel)
+        try FileManager.default.createDirectory(at: recreatedModel, withIntermediateDirectories: true)
+        try Self.markerData.write(to: recreatedModel.appendingPathComponent(Self.markerName), options: .atomic)
 
         return Fixture(
             base: base,
@@ -568,14 +740,17 @@ private struct RuntimeXPCIntegrationRunner {
             model: model,
             escape: escape,
             symlinkEscape: symlinkEscape,
+            recreatedModel: recreatedModel,
             modelBookmark: modelAccess.bookmark,
             escapeBookmark: escapeAccess.bookmark,
             staleBookmark: staleAccess.bookmark,
+            recreatedBookmark: recreatedAccess.bookmark,
             staleOriginalPath: staleOriginal.path,
             scopedURLs: [
                 modelAccess.scopedURL,
                 escapeAccess.scopedURL,
                 staleAccess.scopedURL,
+                recreatedAccess.scopedURL,
             ]
         )
     }
@@ -610,9 +785,11 @@ private struct RuntimeXPCIntegrationRunner {
         let model: URL
         let escape: URL
         let symlinkEscape: URL
+        let recreatedModel: URL
         let modelBookmark: Data
         let escapeBookmark: Data
         let staleBookmark: Data
+        let recreatedBookmark: Data
         let staleOriginalPath: String
         let scopedURLs: [URL]
 

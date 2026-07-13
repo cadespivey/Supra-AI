@@ -51,6 +51,7 @@ actor MLXModelController: ChatModelController {
     private static let lifecycleTestMarker = ".supra-xpc-lifecycle-test-model"
     private static let lifecycleTestMarkerContents = "SUPRA-XPC-LIFECYCLE-V1\n"
     private var isLifecycleTestModel = false
+    private var cancelledInstallRaceTaskEntered = false
 #endif
 
     func loadModel(
@@ -82,6 +83,7 @@ actor MLXModelController: ChatModelController {
             cancellationRequested = false
             templateSupportsThinkingToggle = false
             isLifecycleTestModel = true
+            cancelledInstallRaceTaskEntered = false
             await Task.yield()
             return RuntimeMetrics(loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000))
         }
@@ -110,11 +112,25 @@ actor MLXModelController: ChatModelController {
 #if DEBUG
         if isLifecycleTestModel {
             cancellationRequested = false
-            if prompt == "SUPRA-XPC-TEST-HOLD" {
+            if prompt == "SUPRA-XPC-TEST-INSTALL-RACE" {
+                // The coordinator test seam cancels this Task before installation.
+                // Reaching the actor proves an untracked cancelled Task escaped.
+                cancelledInstallRaceTaskEntered = true
+                return RuntimeMetrics(generatedTokenCount: 0, truncated: false)
+            }
+            if prompt == "SUPRA-XPC-TEST-HOLD" || prompt == "SUPRA-XPC-TEST-RESERVATION-RACE" {
                 while !Task.isCancelled, !cancellationRequested {
                     await Task.yield()
                 }
                 throw CancellationError()
+            }
+            if prompt == "SUPRA-XPC-TEST-STALE-TERMINATION" {
+                try await Task.sleep(nanoseconds: 50_000_000)
+                return RuntimeMetrics(generatedTokenCount: 0, truncated: false)
+            }
+            if cancelledInstallRaceTaskEntered {
+                await onToken("cancelled-install-race-task-entered")
+                cancelledInstallRaceTaskEntered = false
             }
             await onToken("xpc-boundary-canary")
             return RuntimeMetrics(generatedTokenCount: 1, truncated: false)

@@ -31,6 +31,11 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     /// client can have its orphaned generation cancelled (guarded by stateLock).
     private weak var activeGenerationConnection: NSXPCConnection?
     private var activeGenerationOwnerID: GenerationID?
+#if DEBUG
+    /// Hosted-XPC regression seam for a termination handler that has captured
+    /// an old reservation but has not yet reached the coordinator.
+    private var delayedTerminationGenerationID: GenerationID?
+#endif
     // Milestone 3 embedding state, guarded by stateLock.
     private var loadedEmbeddingModelID: DocumentEmbeddingModelID?
     private var embeddingDimension: Int?
@@ -137,7 +142,20 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         activeGenerationReservationID = request.generationID
         activeGenerationConnection = ownerConnection
         activeGenerationOwnerID = ownerConnection == nil ? nil : request.generationID
+#if DEBUG
+        delayedTerminationGenerationID = request.prompt == "SUPRA-XPC-TEST-STALE-TERMINATION"
+            ? request.generationID
+            : nil
+#endif
         stateLock.unlock()
+
+#if DEBUG
+        // Hosted-XPC regression seam: widen the historical gap where service
+        // ownership existed but coordinator admission had not happened yet.
+        if request.prompt == "SUPRA-XPC-TEST-RESERVATION-RACE" {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+#endif
 
         generationCoordinator.startGeneration(request, eventSink: eventSink) { [weak self] response in
             if response.status != .started {
@@ -154,6 +172,9 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         let activeID = activeGenerationReservationID
         let owner = activeGenerationConnection
         let ownerID = activeGenerationOwnerID
+#if DEBUG
+        let delayAfterCapture = delayedTerminationGenerationID == activeID
+#endif
         stateLock.unlock()
         // Only cancel on a POSITIVE ownership match. A generation that cannot be
         // positively attributed to the dropped connection is left alone — cancelling
@@ -164,6 +185,11 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
               let owner,
               let connection,
               owner === connection else { return }
+#if DEBUG
+        if delayAfterCapture {
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+#endif
         generationCoordinator.cancelGeneration(activeID) { _ in }
     }
 
@@ -440,6 +466,11 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             activeGenerationOwnerID = nil
             activeGenerationConnection = nil
         }
+#if DEBUG
+        if delayedTerminationGenerationID == generationID {
+            delayedTerminationGenerationID = nil
+        }
+#endif
         stateLock.unlock()
     }
 
