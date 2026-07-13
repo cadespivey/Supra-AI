@@ -37,31 +37,32 @@ weights or user content are committed. Across 20 iterations it proves:
 2. nil, invalid, stale/moved bookmarks, missing managed identities, same-path directory
    replacements, direct root escapes, and in-root symlinks to an outside target are rejected;
 3. a valid transferable bookmark reaches the controlled load path;
-4. stream completion and cancellation are each delivered exactly once in both the live stream
+4. a canonical content binding is copied into a private non-aliasing snapshot, reverified
+   after load, and attested by exact fingerprint through the hosted XPC boundary;
+5. stream completion and cancellation are each delivered exactly once in both the live stream
    and the post-terminal event buffer;
-5. cancellation keeps the generation slot closed until the model actor and old task quiesce,
+6. cancellation keeps the generation slot closed until the model actor and old task quiesce,
    and reports measured monotonic latency instead of a synthetic zero;
-6. cancellation is bound to the accepting XPC connection, so a busy/foreign client receives
+7. cancellation is bound to the accepting XPC connection, so a busy/foreign client receives
    `notFound` and cannot cancel the accepted owner;
-7. dropping the owning XPC connection during generation cancels the orphan once, while a stale
+8. dropping the owning XPC connection during generation cancels the orphan once, while a stale
    termination handler cannot cancel a successor that reuses the same public generation ID;
-8. service reservation/coordinator admission and coordinator task installation are atomic,
+9. service reservation/coordinator admission and coordinator task installation are atomic,
    including deterministic cancellation probes at both former race windows. DEBUG-only
    acknowledgements identify the paused reservation, matching handler entry, successor
    epoch admission, coordinator cancellation attempt, and exact response; the probes do
    not infer those phases from fixed sleeps;
-9. load/unload and generation reservations are atomic, concurrent model mutations serialize,
+10. load/unload and generation reservations are atomic, concurrent model mutations serialize,
    and a failed replacement preserves the previously loaded model; and
-10. connection invalidation/reconnect reaches the same hosted service state.
+11. connection invalidation/reconnect reaches the same hosted service state.
 
-The DEBUG lifecycle model tests process/protocol/state ownership and intentionally does not
-claim MLX numerical correctness or immutable model contents. Its directory device/inode checks
-catch delete/recreate before and during load, but not in-place shard mutation that preserves
-the directory inode. “Reconnect” here means a new client connection to the same
+The DEBUG lifecycle model tests process/protocol/state ownership and the content-bound snapshot
+contract, but intentionally do not execute the real MLX tokenizer/weight loader or claim MLX
+numerical correctness. “Reconnect” here means a new client connection to the same
 launchd-managed service; it does not claim an externally forced service-process kill. Release
-qualification must separately exercise a real process kill/relaunch, load the protected small
-MLX fixture and supported large-model scenario, and use Developer-ID/Team-ID signatures. Weights
-and signing credentials remain outside the repo.
+qualification must separately exercise a real process kill/relaunch, load the protected real
+smoke model and supported large-model scenario on the isolated release runner, and use
+Developer-ID/Team-ID signatures. Weights and signing credentials remain outside the repo.
 
 ## Sanitizer and resource matrix
 

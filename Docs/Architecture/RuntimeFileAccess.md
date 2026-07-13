@@ -21,6 +21,13 @@ Mechanism:
 3. While holding access it mints a **plain** bookmark: `url.bookmarkData(options: [])`. A plain bookmark created by a sandboxed process embeds a transferable, kernel-issued sandbox extension carrying the app's current read access.
 4. While that authority is active, the app captures the directory's device and inode immediately before and after minting the plain bookmark. The two samples must match; the request carries the pre-mint identity. Managed-root requests never omit it.
 5. The service resolves the bookmark with `options: []`, calls `startAccessingSecurityScopedResource()`, canonicalizes the target, and verifies the current device/inode before reading. It rechecks that identity immediately before committing the asynchronously loaded chat or embedding container. The granted scope covers the directory **recursively**, so every shard is readable, and `stopAccessing` is deferred until the entire model-load await returns.
+6. Signed release smoke additionally sends a canonical `RuntimeModelContentBinding` for the
+   exact revision-pinned manifest and file tree. The service independently copies only those
+   regular, single-link files into a private temporary tree, rejects aliases or topology drift,
+   hashes every copy, loads from that snapshot, re-verifies it after the loader returns, and
+   returns the verified fingerprint over XPC. The snapshot remains retained until replacement
+   or unload; failed cleanup remains owned and blocks another snapshot allocation until retry
+   succeeds.
 
 Only ~1 KB of bookmark bytes cross the wire — MLX still `mmap`s the files itself
 in-process, exactly as before. The service stays sandboxed and needs **no**
@@ -45,13 +52,25 @@ an older authorization. The service repeats that check after the loader returns
 and before publishing loaded state, so a delete/recreate during an async load also
 fails without replacing the previously committed container.
 
-The device/inode pin identifies the directory entry; it is not a hash or immutable
-snapshot of every file below it. In-place writes, or replacement of a shard within
-the same directory while retaining the directory inode, are outside this check.
-Accordingly this control does not claim content integrity against a hostile local
-filesystem. Protected real-weight qualification must still exercise the loader's
-multi-file behavior, and downloaded-model integrity needs a separate signed-manifest
-or content-digest control if that becomes part of the threat model.
+For ordinary interactive model loads, the device/inode pin identifies the directory
+entry; it is not a hash or immutable snapshot of every file below it. In-place writes,
+or replacement of a shard within the same directory while retaining the directory
+inode, remain outside that check. Managed-model installation separately verifies its
+revision-bound manifest, while signed release smoke uses the stronger content-bound
+private snapshot above.
+
+Even that private snapshot does not by itself claim integrity against a hostile
+same-UID process: MLX accepts a pathname rather than retained file descriptors, so a
+mutate/load/restore race cannot be ruled out by pre/post hashing alone. Signed release
+qualification therefore also requires the dedicated, ephemeral, single-tenant runner
+defined in `Docs/Release-Protection.md`. Protected real-weight qualification must still
+exercise the loader's multi-file and memory-pressure behavior.
+
+Snapshot teardown is descriptor-anchored so it never recursively deletes through a replaced
+published pathname. POSIX unlink is not inode-conditional, however, and a hostile same-UID
+process could still race an entry replacement or move the retained root outside its recorded
+temporary parent. The same isolated-runner boundary therefore applies to cleanup; a persistent
+cleanup failure is retained, fault-logged, and blocks another snapshot allocation.
 
 Foundation can report an otherwise valid plain transferable bookmark as stale when
 the differently signed service resolves it. Staleness is therefore fail-closed at
@@ -75,6 +94,13 @@ Do not remove the service sandbox or add broad file entitlements as a workaround
 The hosted integration gate exercises bookmark transfer through the embedded,
 ad-hoc-signed service with no service file-access entitlement. Release qualification
 still must:
-1. Run `Scripts/run-hosted-xpc-lifecycle.sh` on the protected macOS runner and retain its signed-boundary evidence.
-2. Load a real ~20 GB multi-shard model end-to-end and confirm the recursive scope covers every shard through the full `mmap` load without being reclaimed under memory pressure.
-3. After a Developer ID + notarized archive, inspect the embedded service: `codesign -d --entitlements - SupraAI.app/Contents/XPCServices/SupraRuntimeService.xpc` — `com.apple.security.app-sandbox` must still be `true` with no file-access entitlement added.
+
+1. Run `Scripts/run-hosted-xpc-lifecycle.sh` and retain its signed-boundary evidence.
+2. On the protected isolated release runner, load the reviewed real multi-shard smoke model
+   through `Scripts/run-signed-release-smoke.sh` and retain its exact content-binding
+   attestation.
+3. Load the supported large-model scenario end-to-end and confirm the recursive scope covers
+   every shard through the full `mmap` load without being reclaimed under memory pressure.
+4. After a Developer ID + notarized archive, inspect the embedded service with
+   `codesign -d --entitlements - SupraAI.app/Contents/XPCServices/SupraRuntimeService.xpc`.
+   `com.apple.security.app-sandbox` must still be `true`, with no file-access entitlement added.

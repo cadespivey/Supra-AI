@@ -68,6 +68,7 @@
 		A42B02010000000000000001 /* RuntimeXPCIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02010000000000000101 /* RuntimeXPCIntegrationTests.swift */; };
 		A42B02020000000000000002 /* RuntimeXPCIntegrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02020000000000000102 /* RuntimeXPCIntegrationView.swift */; };
 		A42B02030000000000000003 /* RuntimeModelDirectoryAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02030000000000000103 /* RuntimeModelDirectoryAccess.swift */; };
+		A42B02050000000000000005 /* SupraRuntimeModelSecurity in Frameworks */ = {isa = PBXBuildFile; productRef = A42B02050000000000000422 /* SupraRuntimeModelSecurity */; };
 		92040226CB4C642EDABCE796 /* BillingDraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D443FEB23479EC80411A4759 /* BillingDraftView.swift */; };
 		C8914D48FD9E94ED7FA33488 /* ScratchPadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8792ADFD107281343AFEEA5C /* ScratchPadView.swift */; };
 		D43B113C5FCE7B2343E29B6A /* PublicRecordsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEBC0EB0D3FD3BAFBA6FE8C8 /* PublicRecordsView.swift */; };
@@ -193,6 +194,7 @@
 			files = (
 				5A0000000000000000000012 /* SupraCore in Frameworks */,
 				5A0000000000000000000013 /* SupraRuntimeInterface in Frameworks */,
+				A42B02050000000000000005 /* SupraRuntimeModelSecurity in Frameworks */,
 				5A0000000000000000000014 /* SupraDiagnostics in Frameworks */,
 				5A0000000000000000000016 /* MLX in Frameworks */,
 				5A0000000000000000000017 /* MLXLLM in Frameworks */,
@@ -427,6 +429,7 @@
 			packageProductDependencies = (
 				5A0000000000000000000407 /* SupraCore */,
 				5A0000000000000000000408 /* SupraRuntimeInterface */,
+				A42B02050000000000000422 /* SupraRuntimeModelSecurity */,
 				5A0000000000000000000409 /* SupraDiagnostics */,
 				5A000000000000000000040B /* MLX */,
 				5A000000000000000000040C /* MLXLLM */,
@@ -1078,6 +1081,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5A0000000000000000000304 /* XCLocalSwiftPackageReference "SupraRuntimeInterface" */;
 			productName = SupraRuntimeInterface;
+		};
+		A42B02050000000000000422 /* SupraRuntimeModelSecurity */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A0000000000000000000304 /* XCLocalSwiftPackageReference "SupraRuntimeInterface" */;
+			productName = SupraRuntimeModelSecurity;
 		};
 		5A0000000000000000000409 /* SupraDiagnostics */ = {
 			isa = XCSwiftPackageProductDependency;

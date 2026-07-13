@@ -70,14 +70,22 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         modelOperations.enqueue { [self, modelController, reply] in
             defer { finishModelMutation() }
             do {
-                let metrics = try await modelController.loadModel(
+                let result = try await modelController.loadModel(
                     bookmark: request.modelBookmark,
                     path: request.modelPath,
                     managedRootPath: request.managedRootPath,
-                    expectedIdentity: request.modelDirectoryIdentity
+                    expectedIdentity: request.modelDirectoryIdentity,
+                    contentBinding: request.contentBinding
                 )
                 setLoadedModel(request)
-                reply(LoadModelResponse(status: .loaded, modelID: request.modelID, metrics: metrics))
+                reply(
+                    LoadModelResponse(
+                        status: .loaded,
+                        modelID: request.modelID,
+                        metrics: result.metrics,
+                        verifiedModelSHA256: result.verifiedModelSHA256
+                    )
+                )
             } catch let error as RuntimeModelDirectoryAccessError {
                 reply(
                     LoadModelResponse(
@@ -332,6 +340,10 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
                 clearLoadedModel()
                 reply(UnloadModelResponse(status: .unloaded))
             } catch {
+                // The controller drops the MLX container before deleting its
+                // private snapshot. Even if deletion reports an error, the
+                // service must not claim that a usable model remains loaded.
+                clearLoadedModel()
                 reply(
                     UnloadModelResponse(
                         status: .failed,
@@ -537,7 +549,8 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             displayName: request.displayName,
             modelBookmark: nil,
             managedRootPath: request.managedRootPath,
-            modelDirectoryIdentity: request.modelDirectoryIdentity
+            modelDirectoryIdentity: request.modelDirectoryIdentity,
+            contentBinding: request.contentBinding
         )
         stateLock.unlock()
     }

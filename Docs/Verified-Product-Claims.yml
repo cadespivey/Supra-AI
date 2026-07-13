@@ -195,12 +195,12 @@ claims:
 
   - id: "RELEASE-PROVENANCE"
     topic: "release-provenance"
-    wording: "Release artifacts are built from a clean, recorded commit SHA and become publishable only after deterministic preflight, signature, notarization, appcast, and rollback checks complete."
+    wording: "Release artifacts are built from a clean, recorded commit SHA and become publishable only after deterministic preflight, signature, notarization, isolated signed app/XPC model smoke, appcast, and rollback checks complete."
     owner: "Release engineering"
     code_anchor: "Scripts/release.sh"
     verification: "Tests/Scripts/test-release-transaction.sh"
     ci_job: "macos-ci/inventory"
-    applicable_version: "2.2.0 and later"
+    applicable_version: "2.2.1 and later"
     last_reviewed: "2026-07-13"
     publication_anchor: "CONTRIBUTING.md"
 

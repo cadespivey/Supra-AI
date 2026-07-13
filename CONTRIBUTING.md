@@ -121,7 +121,7 @@ that adds or modifies behavior.
   deterministic package tests; model-dependent behavior is exercised by the Diagnostics
   validation suites.
 
-Release artifacts are built from a clean, recorded commit SHA and become publishable only after deterministic preflight, signature, notarization, appcast, and rollback checks complete.
+Release artifacts are built from a clean, recorded commit SHA and become publishable only after deterministic preflight, signature, notarization, isolated signed app/XPC model smoke, appcast, and rollback checks complete.
 Use the release rehearsal/dry-run path before a real release; a rehearsal must not create a tag,
 GitHub release, appcast publication, or upload.
 

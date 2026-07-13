@@ -3,16 +3,24 @@ import MLX
 import MLXLLM
 import MLXLMCommon
 import MLXLMTokenizers
+import OSLog
 import SupraCore
 import SupraRuntimeInterface
+import SupraRuntimeModelSecurity
+
+struct ChatModelLoadResult: Sendable {
+    let metrics: RuntimeMetrics
+    let verifiedModelSHA256: String?
+}
 
 protocol ChatModelController: Sendable {
     func loadModel(
         bookmark: Data?,
         path: String,
         managedRootPath: String?,
-        expectedIdentity: ModelDirectoryIdentity?
-    ) async throws -> RuntimeMetrics
+        expectedIdentity: ModelDirectoryIdentity?,
+        contentBinding: RuntimeModelContentBinding?
+    ) async throws -> ChatModelLoadResult
 
     func generate(
         prompt: String,
@@ -41,7 +49,18 @@ enum MLXModelControllerError: LocalizedError {
 }
 
 actor MLXModelController: ChatModelController {
+    private static let logger = Logger(
+        subsystem: "ai.supra.SupraAI.SupraRuntimeService",
+        category: "model-snapshot"
+    )
     private var container: ModelContainer?
+    /// The independently copied, verified tree remains owned for the complete
+    /// lifetime of a content-bound model load. MLX never reads release-smoke
+    /// bytes from the mutable app-managed source directory.
+    private var modelSnapshot: RuntimeModelSnapshot?
+    /// A failed cleanup retains ownership so a multi-gigabyte snapshot is not
+    /// orphaned silently. A later load fails closed until these retries pass.
+    private var snapshotsPendingRemoval: [RuntimeModelSnapshot] = []
     private var loadedPath: String?
     private var cancellationRequested = false
     /// True when the loaded model's chat template honors an `enable_thinking`
@@ -59,9 +78,11 @@ actor MLXModelController: ChatModelController {
         bookmark: Data?,
         path: String,
         managedRootPath: String?,
-        expectedIdentity: ModelDirectoryIdentity?
-    ) async throws -> RuntimeMetrics {
+        expectedIdentity: ModelDirectoryIdentity?,
+        contentBinding: RuntimeModelContentBinding?
+    ) async throws -> ChatModelLoadResult {
         let startedAt = Date()
+        try cleanupRetiredSnapshots()
 
         // Hold the validated transferable bookmark's scope across the complete
         // model load. A raw path is never treated as authority.
@@ -73,39 +94,67 @@ actor MLXModelController: ChatModelController {
         )
         defer { access.close() }
         let resolvedURL = access.url
-
-#if DEBUG
-        // A deterministic, generated-at-runtime lifecycle model lets the signed
-        // hosted-XPC test exercise load/generate/cancel/reconnect without checking
-        // model weights into source control. This branch is absent from Release.
-        let marker = resolvedURL.appendingPathComponent(Self.lifecycleTestMarker)
-        if let contents = try? String(contentsOf: marker, encoding: .utf8),
-           contents == Self.lifecycleTestMarkerContents {
-            await Task.yield()
-            try access.validateIdentity()
-            container = nil
-            loadedPath = resolvedURL.path
-            cancellationRequested = false
-            templateSupportsThinkingToggle = false
-            isLifecycleTestModel = true
-            cancelledInstallRaceTaskEntered = false
-            return RuntimeMetrics(loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000))
+        let pendingSnapshot = try contentBinding.map {
+            try RuntimeModelSnapshot(sourceURL: resolvedURL, contentBinding: $0)
         }
-#endif
+        let loadURL = pendingSnapshot?.snapshotURL ?? resolvedURL
 
-        let loadedContainer = try await MLXLMTokenizers.loadModelContainer(from: resolvedURL)
-        let supportsThinkingToggle = Self.templateSupportsThinkingToggle(in: resolvedURL)
-        try access.validateIdentity()
+        do {
 
-        container = loadedContainer
-        loadedPath = resolvedURL.path
-        cancellationRequested = false
-        templateSupportsThinkingToggle = supportsThinkingToggle
 #if DEBUG
-        isLifecycleTestModel = false
+            // A deterministic, generated-at-runtime lifecycle model lets the signed
+            // hosted-XPC test exercise load/generate/cancel/reconnect without checking
+            // model weights into source control. This branch is absent from Release.
+            let marker = loadURL.appendingPathComponent(Self.lifecycleTestMarker)
+            if let contents = try? String(contentsOf: marker, encoding: .utf8),
+               contents == Self.lifecycleTestMarkerContents {
+                await Task.yield()
+                try pendingSnapshot?.reverify()
+                try access.validateIdentity()
+                let previousSnapshot = modelSnapshot
+                container = nil
+                modelSnapshot = pendingSnapshot
+                loadedPath = loadURL.path
+                cancellationRequested = false
+                templateSupportsThinkingToggle = false
+                isLifecycleTestModel = true
+                cancelledInstallRaceTaskEntered = false
+                retireSnapshot(previousSnapshot)
+                return ChatModelLoadResult(
+                    metrics: RuntimeMetrics(
+                        loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000)
+                    ),
+                    verifiedModelSHA256: pendingSnapshot?.verifiedModelSHA256
+                )
+            }
 #endif
 
-        return RuntimeMetrics(loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000))
+            let loadedContainer = try await MLXLMTokenizers.loadModelContainer(from: loadURL)
+            let supportsThinkingToggle = Self.templateSupportsThinkingToggle(in: loadURL)
+            try pendingSnapshot?.reverify()
+            try access.validateIdentity()
+
+            let previousSnapshot = modelSnapshot
+            container = loadedContainer
+            modelSnapshot = pendingSnapshot
+            loadedPath = loadURL.path
+            cancellationRequested = false
+            templateSupportsThinkingToggle = supportsThinkingToggle
+#if DEBUG
+            isLifecycleTestModel = false
+#endif
+            retireSnapshot(previousSnapshot)
+
+            return ChatModelLoadResult(
+                metrics: RuntimeMetrics(
+                    loadTimeMs: Int(Date().timeIntervalSince(startedAt) * 1000)
+                ),
+                verifiedModelSHA256: pendingSnapshot?.verifiedModelSHA256
+            )
+        } catch {
+            retireSnapshot(pendingSnapshot)
+            throw error
+        }
     }
 
     func generate(
@@ -216,9 +265,49 @@ actor MLXModelController: ChatModelController {
         cancellationRequested = true
         container = nil
         loadedPath = nil
+        let snapshot = modelSnapshot
+        modelSnapshot = nil
 #if DEBUG
         isLifecycleTestModel = false
 #endif
+        retireSnapshot(snapshot)
+        try cleanupRetiredSnapshots()
+    }
+
+    /// Deletes snapshots synchronously when possible. On failure, retain the
+    /// cleanup authority so the process can retry instead of leaking an
+    /// unowned private tree.
+    private func retireSnapshot(_ snapshot: RuntimeModelSnapshot?) {
+        guard let snapshot else { return }
+        do {
+            try snapshot.remove()
+        } catch {
+            snapshotsPendingRemoval.append(snapshot)
+            Self.logger.fault("Retaining a model snapshot after cleanup failed.")
+        }
+    }
+
+    /// A persistent cleanup failure blocks another model snapshot from being
+    /// created, bounding disk growth to the already retained cleanup set.
+    private func cleanupRetiredSnapshots() throws {
+        guard !snapshotsPendingRemoval.isEmpty else { return }
+
+        var stillPending: [RuntimeModelSnapshot] = []
+        var firstError: Error?
+        for snapshot in snapshotsPendingRemoval {
+            do {
+                try snapshot.remove()
+            } catch {
+                stillPending.append(snapshot)
+                if firstError == nil {
+                    firstError = error
+                }
+            }
+        }
+        snapshotsPendingRemoval = stillPending
+        if let firstError {
+            throw firstError
+        }
     }
 
     /// Detects whether the model's chat template references `enable_thinking`,
