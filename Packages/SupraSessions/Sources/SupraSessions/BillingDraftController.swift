@@ -55,6 +55,7 @@ public final class BillingDraftController: ObservableObject {
     @Published public private(set) var lines: [BillingLineItemRecord] = []
     @Published public private(set) var reconciliation: BillingReconciliation?
     @Published public private(set) var draftVersion: Int?
+    @Published public private(set) var requiresLegacyReview = false
     @Published public private(set) var isGenerating = false
     @Published public var statusMessage: String?
 
@@ -97,6 +98,7 @@ public final class BillingDraftController: ObservableObject {
     }
 
     public var hasDraft: Bool { draftID != nil }
+    public var canExport: Bool { hasDraft && !requiresLegacyReview }
 
     /// Points the controller at a day and loads that day's latest draft (if any).
     public func bind(dayID: String?) {
@@ -108,12 +110,17 @@ public final class BillingDraftController: ObservableObject {
         defer { onDraftMutated?() }
         guard let dayID, let draft = try? store.billing.latestDraft(dayID: dayID) else {
             draftID = nil; draftVersion = nil; lines = []; reconciliation = nil
+            requiresLegacyReview = false
             return
         }
         draftID = draft.id
         draftVersion = draft.version
         lines = (try? store.billing.lineItems(draftID: draft.id)) ?? []
         reconciliation = Self.decodeReconciliation(draft.reconciliationJSON)
+        requiresLegacyReview = (try? store.remediationRecovery.pendingItem(
+            kind: .multiMatterBillingDraft,
+            relatedID: draft.id
+        )) != nil
     }
 
     /// Generates a new draft version for the day, carrying over any manual edits
@@ -138,6 +145,16 @@ public final class BillingDraftController: ObservableObject {
             )
             if let previousDraftID {
                 preserveUserEdits(from: previousDraftID, into: result.draftID)
+                if let recovery = try? store.remediationRecovery.pendingItem(
+                    kind: .multiMatterBillingDraft,
+                    relatedID: previousDraftID
+                ) {
+                    try? store.remediationRecovery.resolve(
+                        id: recovery.id,
+                        resolution: .regenerated,
+                        actor: "user"
+                    )
+                }
             }
             draftID = result.draftID
             loadLatest()
@@ -208,9 +225,35 @@ public final class BillingDraftController: ObservableObject {
     /// Marks the current draft exported and records the audit trail. Call after a
     /// successful LEDES/CSV write or clipboard copy (spec §11).
     public func markExported(format: BillingExportFormat) {
-        guard let draftID else { return }
+        guard let draftID, canExport else {
+            statusMessage = "Review and confirm this legacy multi-matter draft before export."
+            return
+        }
         try? store.billing.setDraftStatus(id: draftID, status: .exported)
         recordDraftAudit(eventType: "export_completed", summary: "Exported billing draft (\(format.label))")
+    }
+
+    /// Records the attorney's explicit review of a migrated multi-matter draft.
+    /// Editing alone does not clear the warning; the confirmation is intentional
+    /// and receives its own content-free audit event.
+    public func confirmLegacyReview() {
+        guard let draftID,
+              let item = try? store.remediationRecovery.pendingItem(
+                kind: .multiMatterBillingDraft,
+                relatedID: draftID
+              )
+        else { return }
+        do {
+            try store.remediationRecovery.resolve(
+                id: item.id,
+                resolution: .userReviewed,
+                actor: "user"
+            )
+            requiresLegacyReview = false
+            statusMessage = "Legacy multi-matter assignment review recorded."
+        } catch {
+            statusMessage = "Could not record the review: \(error.localizedDescription)"
+        }
     }
 
     /// Records a billing audit event against each matter the draft touches (so it

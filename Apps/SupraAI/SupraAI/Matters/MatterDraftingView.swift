@@ -120,6 +120,9 @@ struct MatterDraftingView: View {
             header
             Divider()
             Form {
+                if controller.legacyDraftsNeedReviewCount > 0 {
+                    legacyDraftReviewSection
+                }
                 workProductSection
                 selectedForm
                 if let errorText {
@@ -143,6 +146,7 @@ struct MatterDraftingView: View {
         .frame(minWidth: 520, idealWidth: 640, maxWidth: .infinity, minHeight: 560, idealHeight: 700, maxHeight: .infinity)
         .onAppear {
             library.refresh()
+            controller.refreshLegacyDraftReviewState(matterID: matterID)
             if availableKinds.isEmpty { availableKinds = controller.availableDraftKinds() }
         }
         // The result/error banner belongs to one work product — clear it when the
@@ -152,6 +156,28 @@ struct MatterDraftingView: View {
             result = nil
             errorText = nil
             routingMessage = nil
+        }
+    }
+
+    private var legacyDraftReviewSection: some View {
+        Section {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Previous draft artifacts need review").font(.supraHeadline)
+                    Text("\(controller.legacyDraftsNeedReviewCount) artifact(s) were generated before the current pre-render verification gate. Review the matter Audit and exports, and regenerate anything you plan to use.")
+                        .font(.supraCaption)
+                }
+                Spacer()
+                Button("I Reviewed Them") {
+                    controller.confirmLegacyDraftArtifactsReviewed(matterID: matterID)
+                }
+                .accessibilityHint("Records review without deleting the prior files")
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("drafting.legacyReviewWarning")
         }
     }
 

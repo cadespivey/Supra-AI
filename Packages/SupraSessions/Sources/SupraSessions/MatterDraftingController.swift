@@ -82,6 +82,7 @@ public final class MatterDraftingController: ObservableObject {
 
     @Published public private(set) var isGenerating = false
     @Published public var message: String?
+    @Published public private(set) var legacyDraftsNeedReviewCount = 0
 
     private let store: SupraStore
     private let storage: DocumentStorage
@@ -118,6 +119,37 @@ public final class MatterDraftingController: ObservableObject {
         self.firmStyleProfile = firmStyleProfile
         // Default: deterministic verifier + the court/letter renderers. Injectable for tests.
         self.pipelineFactory = pipelineFactory ?? { DraftPipeline.makeDefault() }
+    }
+
+    public func refreshLegacyDraftReviewState(matterID: String) {
+        legacyDraftsNeedReviewCount = ((try? store.remediationRecovery.pendingItems()) ?? [])
+            .filter {
+                $0.kind == RemediationRecoveryKind.legacyDraftArtifact.rawValue
+                    && $0.matterID == matterID
+            }
+            .count
+    }
+
+    /// Explicitly acknowledges review of legacy file-only artifacts. The files
+    /// remain untouched; each content-free recovery item receives an audit event.
+    public func confirmLegacyDraftArtifactsReviewed(matterID: String) {
+        let items = ((try? store.remediationRecovery.pendingItems()) ?? []).filter {
+            $0.kind == RemediationRecoveryKind.legacyDraftArtifact.rawValue
+                && $0.matterID == matterID
+        }
+        do {
+            for item in items {
+                try store.remediationRecovery.resolve(
+                    id: item.id,
+                    resolution: .userReviewed,
+                    actor: "user"
+                )
+            }
+            refreshLegacyDraftReviewState(matterID: matterID)
+            message = "Legacy draft review recorded. Regenerate any artifact you plan to use."
+        } catch {
+            message = "Could not record the legacy draft review: \(error.localizedDescription)"
+        }
     }
 
     /// The effective house style sheet for this matter's drafts: the firm's overrides resolved

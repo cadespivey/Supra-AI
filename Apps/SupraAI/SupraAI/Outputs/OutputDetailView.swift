@@ -50,6 +50,7 @@ struct OutputDetailView: View {
                     .padding(.top, 6)
             }
             if let selected {
+                verificationBar(selected)
                 ScrollView {
                     Group {
                         if showRaw {
@@ -119,6 +120,10 @@ struct OutputDetailView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .disabled(selected?.verificationStatus != OutputVerificationStatus.allSupported.rawValue)
+            .help(selected?.verificationStatus == OutputVerificationStatus.allSupported.rawValue
+                ? "Export verified output"
+                : "Reverify or regenerate before export")
             let activeMissing = versions.first { $0.isActive }?.missingSections ?? []
             if !activeMissing.isEmpty {
                 VStack(alignment: .trailing, spacing: 2) {
@@ -130,6 +135,38 @@ struct OutputDetailView: View {
             }
         }
         .padding()
+    }
+
+    @ViewBuilder
+    private func verificationBar(_ version: StructuredOutputController.VersionItem) -> some View {
+        if version.verificationStatus != OutputVerificationStatus.allSupported.rawValue {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
+                        ? "Previous output needs revalidation"
+                        : "Output support needs review")
+                        .font(.supraHeadline)
+                    Text(version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
+                        ? "This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
+                        : "One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active.")
+                        .font(.supraCaption)
+                }
+                Spacer()
+                if version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue {
+                    Button("Reverify Sources") {
+                        _ = controller.reverifyOutput(outputID)
+                    }
+                    .accessibilityHint("Checks this version against its retained source packet without deleting the original")
+                }
+            }
+            .padding(10)
+            .background(Color.orange.opacity(0.12))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("output.verificationWarning")
+        }
     }
 
     @ViewBuilder

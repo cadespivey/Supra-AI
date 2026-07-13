@@ -24,6 +24,8 @@ final class BlobIntegrityServiceTests: XCTestCase {
         XCTAssertEqual(batch.nextCursor, corrupt.id)
         XCTAssertEqual(try fixture.store.documentLibrary.fetchBlob(id: missing.id)?.integrityStatus, DocumentBlobIntegrityStatus.missing.rawValue)
         XCTAssertEqual(try fixture.store.documentLibrary.fetchBlob(id: corrupt.id)?.integrityStatus, DocumentBlobIntegrityStatus.corrupt.rawValue)
+        XCTAssertNotNil(try fixture.store.remediationRecovery.pendingItem(kind: .blobRepair, relatedID: missing.id))
+        XCTAssertNotNil(try fixture.store.remediationRecovery.pendingItem(kind: .blobRepair, relatedID: corrupt.id))
         XCTAssertEqual(deferred.id, "c-verified")
         XCTAssertNil(try fixture.store.documentLibrary.fetchBlob(id: deferred.id)?.verifiedAt, "limit must bound verification work")
     }
@@ -36,6 +38,8 @@ final class BlobIntegrityServiceTests: XCTestCase {
         let reimport = fixture.base.appendingPathComponent("reimport.txt")
         try bytes.write(to: reimport)
         let service = BlobIntegrityService(store: fixture.store, storage: fixture.storage)
+        _ = try service.verifyBatch(limit: 1)
+        XCTAssertNotNil(try fixture.store.remediationRecovery.pendingItem(kind: .blobRepair, relatedID: blob.id))
 
         let repaired = try service.repair(blobID: blob.id, reimportFrom: reimport)
 
@@ -45,6 +49,7 @@ final class BlobIntegrityServiceTests: XCTestCase {
         XCTAssertEqual(persisted.integrityStatus, DocumentBlobIntegrityStatus.verified.rawValue)
         XCTAssertNotNil(persisted.verifiedAt)
         XCTAssertNil(persisted.integrityError)
+        XCTAssertNil(try fixture.store.remediationRecovery.pendingItem(kind: .blobRepair, relatedID: blob.id))
     }
 
     func testACRBLOB008RepairRejectsDifferentContentAndPreservesCorruptDestination() throws {

@@ -121,6 +121,16 @@ public final class BlobIntegrityService: @unchecked Sendable {
                 verifiedAt: verifiedAt,
                 error: nil
             )
+            if let recovery = try store.remediationRecovery.pendingItem(
+                kind: .blobRepair,
+                relatedID: blob.id
+            ) {
+                try store.remediationRecovery.resolve(
+                    id: recovery.id,
+                    resolution: .repaired,
+                    actor: "system"
+                )
+            }
             return Result(blobID: blob.id, state: .verified, verifiedAt: verifiedAt, reason: nil)
         } catch let error as DocumentStorage.IntegrityError {
             let state: State
@@ -149,6 +159,12 @@ public final class BlobIntegrityService: @unchecked Sendable {
                 status: status,
                 verifiedAt: nil,
                 error: reason
+            )
+            _ = try store.remediationRecovery.requireReview(
+                kind: .blobRepair,
+                matterID: nil,
+                relatedTable: DocumentBlobRecord.databaseTableName,
+                relatedID: blob.id
             )
             return Result(blobID: blob.id, state: state, verifiedAt: nil, reason: reason)
         }

@@ -16,6 +16,7 @@ public final class SupraStore: @unchecked Sendable {
     public let authorities: AuthorityRepository
     public let structuredOutputs: StructuredOutputRepository
     public let auditEvents: AuditEventRepository
+    public let remediationRecovery: RemediationRecoveryRepository
     // Milestone 3: document intelligence repositories.
     public let documentSettings: DocumentSettingsRepository
     public let documentLibrary: DocumentLibraryRepository
@@ -41,6 +42,7 @@ public final class SupraStore: @unchecked Sendable {
         self.authorities = AuthorityRepository(writer: database.writer)
         self.structuredOutputs = StructuredOutputRepository(writer: database.writer)
         self.auditEvents = AuditEventRepository(writer: database.writer)
+        self.remediationRecovery = RemediationRecoveryRepository(writer: database.writer)
         self.documentSettings = DocumentSettingsRepository(writer: database.writer)
         self.documentLibrary = DocumentLibraryRepository(writer: database.writer)
         self.documentIndex = DocumentIndexRepository(writer: database.writer)

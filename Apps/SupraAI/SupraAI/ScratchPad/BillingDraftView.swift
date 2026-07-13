@@ -26,6 +26,10 @@ struct BillingDraftView: View {
             if let status = billing.statusMessage {
                 statusRow(status)
             }
+            if billing.requiresLegacyReview {
+                legacyReviewBanner
+                Divider()
+            }
             if let reconciliation = billing.reconciliation {
                 reconciliationBanner(reconciliation)
                 Divider()
@@ -94,9 +98,31 @@ struct BillingDraftView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                .disabled(!billing.canExport)
+                .help(billing.canExport ? "Export billing draft" : "Review this migrated multi-matter draft before export")
             }
         }
         .padding(12)
+    }
+
+    private var legacyReviewBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Legacy multi-matter draft needs review").font(.supraHeadline)
+                Text("Confirm every matter assignment and source entry. This draft was created before evidence-reachable matter isolation was enforced.")
+                    .font(.supraCaption)
+            }
+            Spacer()
+            Button("I Reviewed Assignments") { billing.confirmLegacyReview() }
+                .accessibilityHint("Records explicit review and enables export")
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("billing.legacyReviewWarning")
     }
 
     private func statusRow(_ message: String) -> some View {
@@ -272,6 +298,10 @@ struct BillingDraftView: View {
     // MARK: - Export
 
     private func export(_ format: BillingExportFormat) {
+        guard billing.canExport else {
+            billing.statusMessage = "Review and confirm this legacy multi-matter draft before export."
+            return
+        }
         // LEDES is machine-ingested and strict — block it on missing required fields
         // (spec §8). CSV/clipboard are review aids and export as-is.
         if format == .ledes {

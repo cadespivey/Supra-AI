@@ -978,12 +978,87 @@ public enum SupraMigrator {
             }
         }
 
+        migrator.registerMigration("v057_add_remediation_recovery_queue") { db in
+            try db.create(table: "remediation_recovery_items", ifNotExists: true) { table in
+                table.column("id", .text).primaryKey()
+                table.column("kind", .text).notNull()
+                table.column("matter_id", .text).references("matters", onDelete: .setNull)
+                table.column("related_table", .text).notNull()
+                table.column("related_id", .text).notNull()
+                table.column("status", .text).notNull().defaults(to: RemediationRecoveryStatus.pending.rawValue)
+                table.column("resolution", .text)
+                table.column("created_at", .datetime).notNull()
+                table.column("resolved_at", .datetime)
+            }
+            try db.create(
+                index: "idx_remediation_recovery_identity",
+                on: "remediation_recovery_items",
+                columns: ["kind", "related_table", "related_id"],
+                unique: true,
+                ifNotExists: true
+            )
+            try db.create(
+                index: "idx_remediation_recovery_status",
+                on: "remediation_recovery_items",
+                columns: ["status", "created_at"],
+                ifNotExists: true
+            )
+
+            // Existing active output versions predate proposition verification.
+            // The v055 status remains the enforcement boundary; this queue makes
+            // every affected object discoverable and recoverable in product UI.
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO remediation_recovery_items
+                    (id, kind, matter_id, related_table, related_id, status, created_at)
+                SELECT lower(hex(randomblob(16))), ?, o.matter_id, 'structured_outputs', o.id, ?, ?
+                FROM structured_outputs o
+                JOIN structured_output_versions v ON v.id = o.active_version_id
+                WHERE o.deleted_at IS NULL AND v.verification_status = ?
+                """, arguments: [
+                    RemediationRecoveryKind.legacyStructuredOutput.rawValue,
+                    RemediationRecoveryStatus.pending.rawValue,
+                    Date(),
+                    OutputVerificationStatus.legacyUnverified.rawValue,
+                ])
+
+            // Draft artifacts were file-only on the supported legacy lines. The
+            // immutable audit event is the only durable, non-content identifier.
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO remediation_recovery_items
+                    (id, kind, matter_id, related_table, related_id, status, created_at)
+                SELECT lower(hex(randomblob(16))), ?, matter_id, 'audit_events', id, ?, ?
+                FROM audit_events
+                WHERE event_type = 'draft_generated'
+                """, arguments: [
+                    RemediationRecoveryKind.legacyDraftArtifact.rawValue,
+                    RemediationRecoveryStatus.pending.rawValue,
+                    Date(),
+                ])
+
+            // Only a draft whose own line graph spans multiple matters is flagged;
+            // unrelated matters in the database cannot create a recovery item.
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO remediation_recovery_items
+                    (id, kind, matter_id, related_table, related_id, status, created_at)
+                SELECT lower(hex(randomblob(16))), ?, NULL, 'billing_drafts', bd.id, ?, ?
+                FROM billing_drafts bd
+                JOIN billing_line_items li ON li.draft_id = bd.id
+                GROUP BY bd.id
+                HAVING COUNT(DISTINCT li.matter_id) > 1
+                """, arguments: [
+                    RemediationRecoveryKind.multiMatterBillingDraft.rawValue,
+                    RemediationRecoveryStatus.pending.rawValue,
+                    Date(),
+                ])
+        }
+
         return migrator
     }
 
     #if DEBUG
     public static func deleteAllTables(_ db: Database) throws {
         for table in [
+            "remediation_recovery_items",
             // Milestone 4 ScratchPad / billing tables: drop children before parents.
             "billing_line_items",
             "billing_drafts",

@@ -32,6 +32,9 @@ public final class StructuredOutputController: ObservableObject {
         public let markdown: String
         public let missingSections: [String]
         public let repairReason: String?
+        public let verificationStatus: String
+        public let verificationVersion: String?
+        public let verifiedAt: Date?
     }
 
     @Published public private(set) var outputs: [OutputItem] = []
@@ -113,6 +116,13 @@ public final class StructuredOutputController: ObservableObject {
     /// written file URL (plan §10.2). Applies to document Q&A/chronology outputs
     /// and any structured output.
     public func exportOutput(outputID: String, format: DocumentExportFormat) -> URL? {
+        guard let record = outputRecord(outputID),
+              let active = activeVersion(for: record),
+              active.verificationStatus == OutputVerificationStatus.allSupported.rawValue
+        else {
+            message = "Reverify this output from retained sources or regenerate it from fresh sources before export."
+            return nil
+        }
         do {
             return try DocumentExportService(store: store).export(matterID: matterID, structuredOutputID: outputID, format: format)
         } catch {
@@ -148,9 +158,104 @@ public final class StructuredOutputController: ObservableObject {
                     isActive: version.id == record.activeVersionID,
                     markdown: version.contentMarkdown,
                     missingSections: (try? JSONDecoder().decode([String].self, from: Data(version.missingSectionsJSON.utf8))) ?? [],
-                    repairReason: version.repairReason
+                    repairReason: version.repairReason,
+                    verificationStatus: version.verificationStatus,
+                    verificationVersion: version.verificationVersion,
+                    verifiedAt: version.verifiedAt
                 )
             }
+    }
+
+    /// True when the active version predates the proposition-support contract.
+    /// The durable recovery queue is consulted too, so a partially restored row
+    /// cannot lose its visible review state.
+    public func activeOutputNeedsRevalidation(_ outputID: String) -> Bool {
+        guard let record = outputRecord(outputID), let active = activeVersion(for: record) else {
+            return false
+        }
+        if active.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue {
+            return true
+        }
+        return (try? store.remediationRecovery.pendingItem(
+            kind: .legacyStructuredOutput,
+            relatedID: outputID
+        )) != nil
+    }
+
+    /// Re-runs deterministic support verification against the exact retained
+    /// source packet. The legacy version is preserved; a new provenance-bearing
+    /// version becomes active only after its cloned source set is attached in the
+    /// repository transaction.
+    @discardableResult
+    public func reverifyOutput(_ outputID: String) -> Bool {
+        message = nil
+        guard let record = outputRecord(outputID),
+              let active = activeVersion(for: record)
+        else {
+            message = "Could not find the output to reverify."
+            return false
+        }
+        do {
+            guard let sourceSet = try store.documentSources.fetchSourceSet(
+                structuredOutputVersionID: active.id
+            ), let packet = try persistedDocumentPacket(sourceSet: sourceSet) else {
+                message = "This legacy output has no complete retained packet. Regenerate it from fresh sources."
+                return false
+            }
+            let verification = try DocumentSupportVerifier.verify(
+                answer: active.contentMarkdown,
+                sources: packet.supportSources,
+                scopeFullyIndexed: true
+            )
+            let missing = (try? JSONDecoder().decode(
+                [String].self,
+                from: Data(active.missingSectionsJSON.utf8)
+            )) ?? []
+            let required = (try? JSONDecoder().decode(
+                [String].self,
+                from: Data(active.requiredSectionsJSON.utf8)
+            )) ?? []
+            let present = (try? JSONDecoder().decode(
+                [String].self,
+                from: Data(active.presentSectionsJSON.utf8)
+            )) ?? []
+            let content = verification.requiresReview
+                ? verification.warningMarkdown + active.contentMarkdown
+                : active.contentMarkdown
+            let sourceSetID = try cloneDocumentSourceSet(packet)
+            _ = try store.structuredOutputs.createVersion(
+                structuredOutputID: outputID,
+                contentMarkdown: content,
+                requiredSections: required,
+                presentSections: present,
+                missingSections: missing,
+                parentVersionID: active.id,
+                repairReason: "legacy_reverification",
+                verificationStatus: verification.verificationStatus,
+                verificationVersion: DocumentSupportVerifier.version,
+                verificationResults: verification.results,
+                sourceSetID: sourceSetID,
+                outputStatus: verification.requiresReview || !missing.isEmpty ? .needsReview : .complete
+            )
+            if let recovery = try store.remediationRecovery.pendingItem(
+                kind: .legacyStructuredOutput,
+                relatedID: outputID
+            ) {
+                try store.remediationRecovery.resolve(
+                    id: recovery.id,
+                    resolution: .reverified,
+                    actor: "user"
+                )
+            }
+            loadOutputs()
+            message = verification.requiresReview
+                ? "Reverification completed; unsupported or unverifiable propositions still need review."
+                : "Reverification completed from the retained source packet."
+            return true
+        } catch {
+            message = "Reverification failed without changing the legacy version: \(error.localizedDescription)"
+            return false
+        }
     }
 
     /// Generates an output: prompt → local model → section detection → persist.

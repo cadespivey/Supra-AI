@@ -4,6 +4,8 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var environment: AppEnvironment
+    @AppStorage("supra.remediationNoticeV057Acknowledged") private var remediationNoticeAcknowledged = false
+    @State private var showingRemediationNotice = false
 
     var body: some View {
         ZStack {
@@ -45,6 +47,26 @@ struct RootView: View {
         }
         .background(environment.isShowingSplash ? BrandColors.navy : Color.clear)
         .task { await environment.bootstrap() }
+        .onChange(of: environment.isShowingSplash) { _, showingSplash in
+            if !showingSplash,
+               environment.remediationRecoverySummary.pendingCount > 0,
+               !remediationNoticeAcknowledged {
+                showingRemediationNotice = true
+            }
+        }
+        .alert("Review previous generated work", isPresented: $showingRemediationNotice) {
+            Button("Continue") { remediationNoticeAcknowledged = true }
+        } message: {
+            Text(remediationNoticeMessage)
+        }
+    }
+
+    private var remediationNoticeMessage: String {
+        let summary = environment.remediationRecoverySummary
+        let outputs = summary.pendingByKind[.legacyStructuredOutput, default: 0]
+        let drafts = summary.pendingByKind[.legacyDraftArtifact, default: 0]
+        let billing = summary.pendingByKind[.multiMatterBillingDraft, default: 0]
+        return "A security update changed how generated work is verified. \(outputs) saved output(s), \(drafts) draft artifact(s), and \(billing) multi-matter billing draft(s) need review. Nothing was deleted. Affected screens identify the item and provide reverify, regenerate, or confirmation actions."
     }
 }
 

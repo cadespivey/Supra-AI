@@ -30,6 +30,13 @@ final class AppEnvironment: ObservableObject {
     /// to the shell instead of replaying the splash. Only a true cold launch (a new
     /// process, hence a new AppEnvironment) shows it again.
     @Published var isShowingSplash = true
+    /// Content-free counts created by v057. Individual controllers own the
+    /// corresponding recovery actions; RootView uses this only for the one-time
+    /// post-upgrade notice.
+    @Published private(set) var remediationRecoverySummary = RemediationRecoverySummary(
+        pendingCount: 0,
+        pendingByKind: [:]
+    )
 
     /// App-settings key recording when first-run onboarding was completed/skipped.
     private static let onboardingCompletedKey = "onboarding.completedAt"
@@ -198,6 +205,8 @@ final class AppEnvironment: ObservableObject {
         // Reconcile any validation run abandoned by a previous quit/crash so it
         // surfaces as cancelled rather than lingering as in-progress.
         try? store.validation.markUnfinishedRunsCancelled()
+        remediationRecoverySummary = (try? store.remediationRecovery.summary())
+            ?? RemediationRecoverySummary(pendingCount: 0, pendingByKind: [:])
         modelLibrary.refresh()
         // First-run onboarding: a truly fresh launch (no models yet, never completed)
         // shows the guided model-download flow. UI tests skip it entirely.
