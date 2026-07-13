@@ -8,7 +8,11 @@ let package = Package(
         .macOS(.v15)
     ],
     products: [
-        .library(name: "SupraRuntimeInterface", targets: ["SupraRuntimeInterface"])
+        .library(name: "SupraRuntimeInterface", targets: ["SupraRuntimeInterface"]),
+        .library(
+            name: "SupraRuntimeModelSecurity",
+            targets: ["SupraRuntimeModelSecurity"]
+        )
     ],
     dependencies: [
         .package(path: "../SupraCore")
@@ -20,11 +24,22 @@ let package = Package(
                 .product(name: "SupraCore", package: "SupraCore")
             ]
         ),
+        .target(
+            name: "SupraRuntimeModelSecurity",
+            dependencies: ["SupraRuntimeInterface"]
+        ),
         .testTarget(
             name: "SupraRuntimeInterfaceTests",
             dependencies: [
                 "SupraRuntimeInterface",
                 .product(name: "SupraCore", package: "SupraCore")
+            ]
+        ),
+        .testTarget(
+            name: "SupraRuntimeModelSecurityTests",
+            dependencies: [
+                "SupraRuntimeModelSecurity",
+                "SupraRuntimeInterface"
             ]
         )
     ]
