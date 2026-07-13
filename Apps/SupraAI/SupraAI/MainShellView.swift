@@ -132,6 +132,10 @@ struct MainShellView: View {
             if pieces.count > 1 {
                 NotificationCenter.default.post(name: .supraDebugSelectMatterTab, object: pieces[1])
             }
+        case "output":
+            if pieces.count > 1 {
+                NotificationCenter.default.post(name: .supraDebugOpenOutput, object: pieces[1])
+            }
         default:
             break
         }

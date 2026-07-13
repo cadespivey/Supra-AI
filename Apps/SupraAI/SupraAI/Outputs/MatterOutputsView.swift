@@ -10,9 +10,10 @@ struct MatterOutputsView: View {
     let matter: MatterSummary
 
     @State private var showNew = false
+    @State private var navigationPath: [String] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             MatterTabScaffold("Structured Outputs") {
                 Button { showNew = true } label: { Label("New Output", systemImage: "plus") }
             } content: {
@@ -26,6 +27,14 @@ struct MatterOutputsView: View {
             NewOutputSheet(controller: controller, library: library, matter: matter)
         }
         .onAppear { controller.loadOutputs() }
+        #if DEBUG
+        .onReceive(NotificationCenter.default.publisher(for: .supraDebugOpenOutput)) { note in
+            guard AppEnvironment.isUITestMode,
+                  let title = note.object as? String,
+                  let output = controller.outputs.first(where: { $0.title == title }) else { return }
+            navigationPath = [output.id]
+        }
+        #endif
     }
 
     @ViewBuilder

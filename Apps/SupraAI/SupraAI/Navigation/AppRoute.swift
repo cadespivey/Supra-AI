@@ -6,6 +6,9 @@ extension Notification.Name {
     /// DEBUG automation channel: selects a matter-workspace tab by raw value
     /// (optionally "+planner" to auto-open the research planner).
     static let supraDebugSelectMatterTab = Notification.Name("SupraDebugSelectMatterTab")
+    /// DEBUG automation channel: opens a named structured output through the
+    /// same explicit NavigationStack path used by production NavigationLinks.
+    static let supraDebugOpenOutput = Notification.Name("SupraDebugOpenOutput")
 }
 
 enum AppRoute: String, CaseIterable, Identifiable {
