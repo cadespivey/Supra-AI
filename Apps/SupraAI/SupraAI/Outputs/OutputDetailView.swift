@@ -23,6 +23,10 @@ struct OutputDetailView: View {
             .flatMap { StructuredOutputType(rawValue: $0.outputType) }
     }
 
+    private var outputTitle: String {
+        controller.outputs.first { $0.id == outputID }?.title ?? "Output"
+    }
+
     private var repairRoute: ModelRoute? {
         outputType.flatMap { router.repairRoute(forStructuredOutput: $0) }
     }
@@ -79,7 +83,9 @@ struct OutputDetailView: View {
                 ContentUnavailableView("No content yet", systemImage: "doc")
             }
         }
-        .navigationTitle(controller.outputs.first { $0.id == outputID }?.title ?? "Output")
+        .navigationTitle(outputTitle)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("output.detail.\(outputTitle)")
         .onAppear { controller.loadOutputs() }
     }
 
@@ -169,18 +175,6 @@ struct OutputDetailView: View {
                         .font(.supraCaption)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .accessibilityElement(children: .ignore)
-                .accessibilityIdentifier("output.verificationWarning")
-                .accessibilityLabel(
-                    version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
-                        ? "Output verification status. Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
-                        : "Output verification status. Output support needs review. One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active."
-                )
-                .accessibilityValue(
-                    version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
-                        ? "Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
-                        : "Output support needs review. One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active."
-                )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer()
                 if version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue {
@@ -194,6 +188,18 @@ struct OutputDetailView: View {
             }
             .padding(10)
             .background(Color.orange.opacity(0.12))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("output.verificationWarning")
+            .accessibilityLabel(
+                version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
+                    ? "Output verification status. Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
+                    : "Output verification status. Output support needs review. One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active."
+            )
+            .accessibilityValue(
+                version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
+                    ? "Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
+                    : "Output support needs review. One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active."
+            )
         }
     }
 

@@ -143,7 +143,7 @@ struct MatterDraftingView: View {
             Divider()
             footer
         }
-        .frame(minWidth: 520, idealWidth: 640, maxWidth: .infinity, minHeight: 560, idealHeight: 700, maxHeight: .infinity)
+        .frame(minWidth: 520, idealWidth: 640, maxWidth: .infinity, minHeight: 560, idealHeight: 700, maxHeight: 700)
         .onAppear {
             library.refresh()
             controller.refreshLegacyDraftReviewState(matterID: matterID)
