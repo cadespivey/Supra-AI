@@ -1,0 +1,28 @@
+name: Verify public repository assets
+
+on:
+  schedule:
+    - cron: "41 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Metadata-only public asset audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run synthetic metadata tests
+        run: bash Tests/Scripts/test-verify-public-repository-assets.sh
+
+      - name: Preserve local and artifact font guard
+        run: bash Scripts/verify-public-font-license.sh
+
+      - name: Audit advertised public refs and release metadata
+        env:
+          PUBLIC_ASSET_GITHUB_TOKEN: ${{ github.token }}
+        run: bash Scripts/verify-public-repository-assets.sh "${GITHUB_REPOSITORY}"

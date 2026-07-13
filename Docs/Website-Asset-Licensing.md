@@ -36,6 +36,18 @@ remains in Git history.
 The guard is defense in depth, not permission to add modified copies. Do not bypass, weaken,
 or remove it to make a build pass.
 
+`Scripts/verify-public-repository-assets.sh` independently audits the public GitHub surface
+without fetching blob contents or release assets. It enumerates advertised branches, tags,
+and `refs/pull/*/head` refs, then checks GitHub tree metadata for prohibited paths and the six
+known object IDs. It also checks release asset names. Run it without a token for the required
+public-view verification, or set `PUBLIC_ASSET_GITHUB_TOKEN` when rate-limited automation is
+appropriate. An incomplete or truncated metadata response fails closed.
+
+The metadata audit runs on a schedule and on manual dispatch through
+`.github/workflows/verify-public-repository-assets.yml`. Website deployments and desktop
+releases run it as a blocking preflight. Its synthetic regression fixtures contain only ref,
+tree, and release metadata—never font bytes.
+
 ## If an exposure is suspected
 
 1. Stop deployments and pushes that could propagate the affected history.
@@ -44,3 +56,6 @@ or remove it to make a build pass.
 4. Ask GitHub Support to delete affected pull-request refs and cached views and to run
    server-side garbage collection.
 5. Coordinate with fork and clone owners so old history cannot be pushed back.
+
+After cleanup, obtain two clean unauthenticated metadata-audit results at least 24 hours apart
+before lifting the release freeze. Keep the scheduled audit enabled to detect recurrence.

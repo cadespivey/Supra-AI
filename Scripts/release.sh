@@ -49,6 +49,10 @@ PBXPROJ="${ROOT}/Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
 APPCAST="${ROOT}/website/public/appcast.xml"
 CONSTANTS="${ROOT}/website/lib/constants.ts"
 
+echo "▶︎ Verifying local and public repository assets…"
+"${ROOT}/Scripts/verify-public-font-license.sh"
+"${ROOT}/Scripts/verify-public-repository-assets.sh"
+
 echo "▶︎ Verifying catalog model IDs resolve on Hugging Face…"
 "${ROOT}/Scripts/verify-model-ids.sh"
 
@@ -115,6 +119,9 @@ xcrun stapler validate "${DMG}"
 
 echo "▶︎ Packaging app zip…"
 ditto -c -k --keepParent "${APP}" "${ZIP}"
+
+echo "▶︎ Re-checking local release artifacts for prohibited font binaries…"
+"${ROOT}/Scripts/verify-public-font-license.sh"
 
 echo "▶︎ Publishing release ${TAG}…"
 if ! gh release view "${TAG}" >/dev/null 2>&1; then

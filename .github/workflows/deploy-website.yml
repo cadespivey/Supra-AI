@@ -7,6 +7,9 @@ on:
     paths:
       - "website/**"
       - "Scripts/verify-public-font-license.sh"
+      - "Scripts/verify-public-repository-assets.sh"
+      - "Tests/Scripts/Fixtures/PublicRepositoryAssets/**"
+      - "Tests/Scripts/test-verify-public-repository-assets.sh"
       - "Docs/Website-Asset-Licensing.md"
       - ".github/workflows/deploy-website.yml"
   workflow_dispatch:
@@ -34,6 +37,14 @@ jobs:
 
       - name: Reject prohibited font assets
         run: bash ../Scripts/verify-public-font-license.sh
+
+      - name: Test public repository metadata guard
+        run: bash ../Tests/Scripts/test-verify-public-repository-assets.sh
+
+      - name: Audit advertised public refs and release metadata
+        env:
+          PUBLIC_ASSET_GITHUB_TOKEN: ${{ github.token }}
+        run: bash ../Scripts/verify-public-repository-assets.sh "${GITHUB_REPOSITORY}"
 
       - name: Setup Node
         uses: actions/setup-node@v4
