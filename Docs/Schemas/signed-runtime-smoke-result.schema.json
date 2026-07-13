@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://supralegal.ai/schemas/signed-runtime-smoke-result-v1.json",
+  "title": "Supra AI signed runtime smoke result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "nonce",
+    "sourceSha",
+    "appTreeSHA256",
+    "modelSHA256",
+    "appBundleIdentifier",
+    "xpcBundleIdentifier",
+    "appVersion",
+    "appBuild",
+    "modelRepositoryID",
+    "modelRevision",
+    "verification",
+    "eventCounts",
+    "generatedTokenCount",
+    "timings"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "const": "passed" },
+    "nonce": { "$ref": "#/$defs/sha256" },
+    "sourceSha": { "$ref": "#/$defs/gitSHA" },
+    "appTreeSHA256": { "$ref": "#/$defs/sha256" },
+    "modelSHA256": { "$ref": "#/$defs/sha256" },
+    "appBundleIdentifier": { "const": "ai.supra.SupraAI" },
+    "xpcBundleIdentifier": { "const": "ai.supra.SupraAI.SupraRuntimeService" },
+    "appVersion": { "$ref": "#/$defs/version" },
+    "appBuild": { "$ref": "#/$defs/build" },
+    "modelRepositoryID": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "modelRevision": { "$ref": "#/$defs/gitSHA" },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "xpcConnected",
+        "modelLoaded",
+        "generationStarted",
+        "generationCompleted",
+        "modelUnloaded",
+        "modelReverified"
+      ],
+      "properties": {
+        "xpcConnected": { "const": true },
+        "modelLoaded": { "const": true },
+        "generationStarted": { "const": true },
+        "generationCompleted": { "const": true },
+        "modelUnloaded": { "const": true },
+        "modelReverified": { "const": true }
+      }
+    },
+    "eventCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "generationStarted",
+        "token",
+        "metrics",
+        "generationCompleted",
+        "generationFailed",
+        "generationCancelled",
+        "reserved"
+      ],
+      "properties": {
+        "total": { "type": "integer", "minimum": 4 },
+        "generationStarted": { "const": 1 },
+        "token": { "type": "integer", "minimum": 1 },
+        "metrics": { "const": 1 },
+        "generationCompleted": { "const": 1 },
+        "generationFailed": { "const": 0 },
+        "generationCancelled": { "const": 0 },
+        "reserved": { "const": 0 }
+      }
+    },
+    "generatedTokenCount": { "type": "integer", "minimum": 1 },
+    "timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "loadTimeMs",
+        "firstTokenLatencyMs",
+        "tokensPerSecond"
+      ],
+      "properties": {
+        "loadTimeMs": { "type": "integer", "minimum": 0 },
+        "firstTokenLatencyMs": { "type": "integer", "minimum": 0 },
+        "tokensPerSecond": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "gitSHA": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)([-+][0-9A-Za-z.-]+)?$"
+    },
+    "build": { "type": "string", "pattern": "^[1-9][0-9]*$" }
+  }
+}
