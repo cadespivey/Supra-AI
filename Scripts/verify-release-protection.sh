@@ -35,6 +35,7 @@ done
 codeowners="${repo_root}/.github/CODEOWNERS"
 if [[ -f "$codeowners" ]]; then
   for protected_path in '/.github/workflows/' '/Scripts/release.sh' '/Scripts/*release*.sh' \
+    '/Scripts/verify-public-repository-assets.sh' '/Scripts/public-ref-audit-exceptions.tsv' \
     '/Docs/Verified-Product-Claims.yml' '/SECURITY.md'; do
     grep -Fq "$protected_path" "$codeowners" \
       || fail "CODEOWNERS omits protected path: ${protected_path}"

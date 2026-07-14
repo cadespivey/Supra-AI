@@ -181,8 +181,12 @@ Owner decision (2026-07-13): releases may proceed while GitHub Support completes
 the twelve ticketed pull-request refs (`refs/pull/39/head` through `refs/pull/50/head`) that
 still advertise the six known font blobs. `Scripts/public-ref-audit-exceptions.tsv` pins each
 ticketed violation by exact (ref, object, path); the audit reports pinned matches as KNOWN and
-fails on anything else. Only immutable `refs/pull/N/head` entries are honored — branches,
-tags, releases, new blobs, and new refs cannot be excepted, so the local, artifact, and
-recurrence-prevention gates are unchanged. Rationale: release artifacts are independently
+fails on anything else. Only `refs/pull/N/head` entries are honored — branches, tags,
+releases, new blobs, and new refs cannot be excepted, so the local, artifact, and
+recurrence-prevention gates are unchanged. Pull head refs are not immutable (they move when
+the PR's source branch is pushed); the guarantee is the exact object/path pin per ref, so any
+content change to a pinned ref yields unpinned triples that fail closed. Inside the protected
+release environment the audit additionally rejects every `PUBLIC_ASSET_*` data-source
+override, so only the reviewed exception file at the pinned SHA can apply during a release. Rationale: release artifacts are independently
 verified font-free, and publishing does not extend the pre-existing exposure, which only
 Support can remove. The exception file must be deleted as soon as Support confirms removal.

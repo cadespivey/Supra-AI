@@ -11,3 +11,5 @@
 /Docs/Schemas/ @cadespivey
 /SECURITY.md @cadespivey
 /website/app/privacy/ @cadespivey
+/Scripts/verify-public-repository-assets.sh @cadespivey
+/Scripts/public-ref-audit-exceptions.tsv @cadespivey

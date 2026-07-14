@@ -126,6 +126,16 @@ repository="${repository%.git}"
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
   || die "repository must use owner/repository format"
 
+# Inside the protected release environment, only the reviewed repository state
+# at the pinned SHA may define what the audit inspects and excepts. Reject any
+# data-source override loudly rather than honoring a contaminated environment.
+if [[ "${SUPRA_PROTECTED_RELEASE_ENVIRONMENT:-0}" == '1' ]]; then
+  for override_variable in PUBLIC_ASSET_EXCEPTIONS_FILE PUBLIC_ASSET_FIXTURE_DIR PUBLIC_ASSET_REMOTE_URL; do
+    [[ -z "${!override_variable:-}" ]] \
+      || die "${override_variable} overrides are not permitted in the protected release environment"
+  done
+fi
+
 fixture_dir="${PUBLIC_ASSET_FIXTURE_DIR:-}"
 if [[ -n "$fixture_dir" && ! -d "$fixture_dir" ]]; then
   die "fixture directory does not exist: $fixture_dir"
@@ -142,9 +152,11 @@ mkdir -p "${temporary_dir}/trees"
 
 # Owner-approved exceptions for ticketed, pre-existing violations awaiting
 # GitHub Support removal. Each line pins one exact (ref, object, path) triple;
-# only immutable refs/pull/N/head refs may be pinned, so no branch, tag, or
-# release content can ever be excepted. Matches are reported as KNOWN and do
-# not fail the audit; anything else still fails closed.
+# only refs/pull/N/head refs may be pinned, so no branch, tag, or release
+# content can ever be excepted. Pull head refs can move when a PR branch is
+# pushed — the guarantee comes from the exact object/path pin, not from ref
+# immutability: any content change produces unpinned triples that fail closed.
+# Matches are reported as KNOWN and do not fail the audit.
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 exceptions_file="${PUBLIC_ASSET_EXCEPTIONS_FILE:-${script_dir}/public-ref-audit-exceptions.tsv}"
 exceptions_list="${temporary_dir}/exceptions.tsv"
