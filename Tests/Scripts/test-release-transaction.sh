@@ -113,6 +113,41 @@ else
   fail 'source preflight did not create its manifest'
 fi
 
+# The production default for the gh command is the bare name "gh", resolved via
+# PATH at execution time. The availability gate must accept it when a gh exists
+# on PATH even though no ./gh file exists in the working directory.
+# Expected RED reason: the gate tests the bare name with [[ -x gh ]], which
+# checks for a file named "gh" relative to the current directory, so preflight
+# dies with "release preflight command is unavailable: gh" before any check runs.
+preflight_default_gh() {
+  local source_repo="$1"
+  local expected_sha="$2"
+  local output="$3"
+  env \
+    PATH="${mock_bin}:$PATH" \
+    MOCK_RELEASE_LOG="$mock_log" \
+    MOCK_CI_HEAD_SHA="$expected_sha" \
+    SUPRA_PROTECTED_RELEASE_ENVIRONMENT=1 \
+    SUPRA_RELEASE_TESTING=1 \
+    SUPRA_CREDENTIAL_GATE_COMMAND="${mock_bin}/credential-gate" \
+    SUPRA_FONT_GUARD_COMMAND="${mock_bin}/font-gate" \
+    SUPRA_RELEASE_GATE_COMMAND="${mock_bin}/release-gate" \
+    bash "${scripts}/release-preflight.sh" \
+      --repo-root "$source_repo" \
+      --repository example/supra \
+      --version 2.3.0 \
+      --build 387 \
+      --expected-sha "$expected_sha" \
+      --ci-run-id 42 \
+      --output "$output"
+}
+make_source_repo default-gh
+run_case \
+  'default bare gh command resolves through PATH' \
+  0 \
+  'Release source preflight passed for v2.3.0' \
+  preflight_default_gh "$SOURCE_REPO" "$SOURCE_SHA" "${temporary_dir}/default-gh-preflight.json"
+
 make_source_repo dirty
 printf '%s\n' dirty >"${SOURCE_REPO}/untracked.txt"
 run_case \
