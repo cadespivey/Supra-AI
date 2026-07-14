@@ -15,15 +15,24 @@ fallback constants together only after the signed candidate has passed release q
 
 ## Required repository settings
 
-Configure a `main` ruleset in GitHub with all of these controls. The ruleset, protected
-environment, and repository roles are administrative controls; their live configuration
-must be captured in the release evidence because repository files cannot activate them.
+Configure these controls in GitHub. The ruleset, protected environment, and repository
+roles are administrative controls; their live configuration must be captured in the
+release evidence because repository files cannot activate them.
 
-- Require a pull request, one approving review, Code Owner approval, resolved
-  conversations, and approval after the most recent reviewable push.
-- Block branch deletion and force pushes. Do not configure an administrator or automation
-  bypass for release, workflow, security-claim, or appcast changes.
-- Require these deterministic checks from `Protected macOS CI`:
+As of 2026-07-13 the repository is operated by a single maintainer, and the settings
+below are the single-maintainer adaptation of the original two-person design: GitHub
+cannot require a second reviewer who does not exist (an author cannot approve their own
+pull request), and a mandatory-review ruleset would deadlock both daily work and the
+release transaction's automated appcast merge.
+
+- A `main` branch ruleset with required status checks (listed below) and blocked force
+  pushes and branch deletion. Do not configure an administrator or automation bypass for
+  release, workflow, security-claim, or appcast changes. Pull requests are not formally
+  required, but because the required checks only run via `pull_request` events, pushes to
+  `main`, or manual dispatch, a commit must already have green checks on its exact SHA
+  before `main` can move to it — in practice changes land through a pull request or
+  through a branch whose `Protected macOS CI` run was dispatched and passed.
+- Required checks from `Protected macOS CI`:
   - `Repository inventory and gate tests`
   - all 14 `Swift package - <name>` matrix checks
   - both `Unsigned Debug app and XPC` and `Unsigned Release app and XPC`
@@ -31,12 +40,18 @@ must be captured in the release evidence because repository files cannot activat
   - `Shipping migration fixtures`
   - `Website lint, build, audit, and asset guards`
   - `Secrets, entitlements, artifacts, models, and public metadata`
-  - `Dependency review` on pull requests
-- Require signed commits where supported by every contributor identity used on `main`.
-- Apply a tag ruleset to `v*`: prevent update/deletion and permit creation only from the
-  `production-release` environment's narrowly scoped GitHub identity.
-- Limit repository release creation/editing to that same identity. Human release owners
-  approve the environment; they do not publish manually with a personal token.
+  `Dependency review` continues to run on every pull request but is not marked required,
+  so that a branch-verified SHA can fast-forward `main` without a pull request.
+- A tag ruleset on `v*` that blocks tag updates and deletions. Tags are created by the
+  release transaction using the release token; on a single-maintainer personal repository
+  GitHub cannot restrict tag creation to a separate identity, so published-tag
+  immutability is the enforced property.
+- Approving reviews, Code Owner approval, and required signed commits are not enforced by
+  ruleset (single maintainer). `.github/CODEOWNERS` remains the authoritative statement
+  of ownership, release and appcast commits are still cryptographically signed
+  (`git commit -S`), and the release preflight independently re-verifies the source/CI
+  binding regardless of ruleset state. Human release owners approve the environment; they
+  do not publish manually outside the release workflows.
 
 `.github/CODEOWNERS` assigns workflows, release scripts, product-claims inventory,
 `SECURITY.md`, and public privacy copy to the release/security owner. Branch protection must
@@ -44,38 +59,57 @@ require the resulting Code Owner review.
 
 ## Protected environments
 
-`production-release` must require a reviewer who did not author the source change. It is the
-only environment with access to the Developer ID identity, notarization Keychain profile,
-Sparkle signing key, manifest-signing identity, protected release-model location, and an
-identity that can create tags/releases and appcast PRs. The signed model/XPC smoke driver is
-repository-owned reviewed code, not a secret or an operator-supplied override. PR CI and
+`production-release` requires a designated reviewer's approval before the job starts. With a
+single maintainer that reviewer is the repository owner, so the approval is a deliberate
+release decision recorded by GitHub, not an independent second-person review. The environment
+is the only one with access to the Developer ID identity, notarization Keychain profile,
+Sparkle signing key, manifest-signing identity, protected release-model location, and the
+release token that can create tags/releases and appcast PRs. The signed model/XPC smoke driver
+is repository-owned reviewed code, not a secret or an operator-supplied override. PR CI and
 scheduled security jobs receive none of the release credentials or private model resources.
-`SUPRA_RELEASE_GITHUB_TOKEN` belongs to the dedicated release identity, is scoped to this
-repository, and is stored only in this environment. Do not substitute the workflow's automatic
-`GITHUB_TOKEN`: GitHub suppresses recursive workflow runs for changes it creates, which would
-prevent the appcast PR from receiving its required checks.
+`SUPRA_RELEASE_GITHUB_TOKEN` is a fine-grained personal access token restricted to this single
+repository (contents and pull-request read/write, actions read), is used for nothing except
+the release workflows, and is stored only in this environment. Do not substitute the
+workflow's automatic `GITHUB_TOKEN`: GitHub suppresses recursive workflow runs for changes it
+creates, which would prevent the appcast PR from receiving its required checks.
 
-## Mandatory isolated release runner
+## Release runner isolation
 
-Signed release qualification and signed rehearsal must run only on a dedicated, ephemeral
-Apple Silicon runner carrying both the `supra-release` and `supra-release-isolated` labels.
-The runner must be freshly provisioned, or securely wiped to an equivalent baseline, for one
-approved release job and destroyed or wiped immediately afterward. It must use a unique,
-noninteractive release UID with no interactive login, concurrent job, background service, or
-untrusted same-UID process. Never reuse this runner for pull requests, ordinary CI, developer
-work, or multiple concurrent release jobs. Mount the protected model directory only for the
-approved job and remove access during teardown. Restrict the runner group to this repository
-and to the two protected release workflows; repository labels alone are not an access-control
-boundary.
+Signed release qualification and signed rehearsal must run only on the runner carrying both
+the `supra-release` and `supra-release-isolated` labels. The original design specified
+dedicated, ephemeral Apple Silicon hardware; as of 2026-07-13 the repository owner instead
+operates that runner as a dedicated, noninteractive local macOS user account
+(`suprarelease`) on owner-controlled Apple Silicon hardware. The boundary that the labels
+and `SUPRA_RELEASE_ISOLATED_RUNNER=1` attest is:
 
-This isolation is part of the signed-smoke security boundary, not merely an operations
-preference. The runtime service copies the authorized model into a private, verified snapshot,
-but MLX still opens model files by pathname. Snapshot verification alone cannot defeat a
-hostile same-UID process that mutates and restores those bytes during the load interval. The
-workflow label selects the controlled runner; `SUPRA_RELEASE_ISOLATED_RUNNER=1` makes the
-release entrypoint fail closed if that boundary is not explicitly attested. The flag is only
-an assertion and does not replace runner provisioning, single-tenancy, teardown, or protected
-environment review.
+- The runner process, its workspace, the protected smoke-model tree, and every release
+  credential (Developer ID identity, notarization Keychain profile, Sparkle EdDSA private
+  key, Git signing key) belong exclusively to the `suprarelease` UID. No interactive login,
+  developer tooling, background service, or third-party process runs as that UID, and no
+  other UID can read or write its files.
+- This UID separation is the operative mitigation for the signed-smoke threat: the runtime
+  service copies the authorized model into a private, verified snapshot, but MLX still opens
+  model files by pathname, and snapshot verification alone cannot defeat a hostile same-UID
+  process that mutates and restores those bytes during the load interval. Because release
+  jobs are the only processes under the release UID, that same-UID race has no seat.
+- The runner is offline except during an approved run: it is started manually from a
+  `suprarelease` login session for one approved job and stopped afterward. Never reuse it
+  for pull requests, ordinary CI, developer work, or concurrent release jobs.
+- After every run, `Scripts/reset-release-runner.sh` archives the release evidence and
+  clears the workspace, restoring an ephemeral-equivalent baseline between releases.
+
+Accepted residual risk (repository owner, 2026-07-13): the release UID shares the physical
+machine, kernel, and `/Applications` toolchain with the owner's interactive account, so
+root-level or physical compromise of that machine compromises releases. This is accepted
+because every release credential already resides on this machine and separate hardware would
+not change that exposure for a single operator. Dedicated ephemeral hardware remains the
+documented upgrade path if the threat model changes (additional maintainers, shared
+hardware, or credentials moving off this machine).
+
+`SUPRA_RELEASE_ISOLATED_RUNNER=1` makes the release entrypoint fail closed if this boundary
+is not explicitly attested. The flag is only an assertion and does not replace the release
+UID's single-tenancy, the offline-except-approved-runs discipline, evidence archival, or
+protected environment review.
 
 The environment executes one of three manual workflows:
 
@@ -108,6 +142,14 @@ the temporary appcast and website, and only then makes the release public. Appca
 failure returns it to draft. A final unauthenticated download/appcast digest check must pass.
 Machine-readable results and content-free incident records are written beneath
 `build/release/` and must be attached to protected release evidence.
+
+Because the runner workspace is cleared between runs, evidence archival is mandatory before
+any cleanup: `Scripts/reset-release-runner.sh` copies `build/release/` — including
+`release-result-v<version>.json`, whose recorded appcast merge commit is a required input to
+the emergency rollback workflow — into a timestamped directory under the release user's home
+before clearing the workspace. Never clear the runner workspace without this archival; losing
+the release result would make a post-cleanup emergency rollback impossible to parameterize.
+The operational procedure is documented step by step in [Release-Runbook.md](Release-Runbook.md).
 
 ## Safe rehearsal
 
