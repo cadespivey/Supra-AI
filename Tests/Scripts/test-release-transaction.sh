@@ -611,6 +611,40 @@ run_case \
 successful_publish_log="${temporary_dir}/successful-publish.log"
 cp "$mock_log" "$successful_publish_log"
 
+# The production defaults for the transaction's gh and curl commands are bare
+# names resolved via PATH at execution time, exactly like the preflight's.
+# Expected RED reason: the availability gate tests bare names with [[ -x ]],
+# a working-directory file test, so the transaction dies with "release
+# transaction command is unavailable: gh" on any real runner. Observed live in
+# production run 29305819825 after the signed build and smoke had passed.
+publish_transaction_default_commands() {
+  env \
+    PATH="${mock_bin}:$PATH" \
+    SUPRA_RELEASE_TESTING=1 \
+    SUPRA_WEBSITE_GATE_COMMAND="${mock_bin}/website-gate" \
+    SUPRA_APPCAST_PUBLISH_COMMAND="${mock_bin}/appcast-publish" \
+    SUPRA_APPCAST_ROLLBACK_COMMAND="${mock_bin}/appcast-rollback" \
+    MOCK_RELEASE_LOG="$mock_log" \
+    MOCK_ZIP_SOURCE="$zip" MOCK_DMG_SOURCE="$dmg" \
+    MOCK_MANIFEST_SOURCE="$final_manifest" MOCK_SIGNATURE_SOURCE="${final_manifest}.cms" \
+    MOCK_PUBLIC_APPCAST_DEST="$public_appcast" \
+    MOCK_SOURCE_SHA="$(jq -r '.source.sha' "$source_manifest" 2>/dev/null || true)" \
+    bash "${scripts}/publish-release-transaction.sh" \
+      --repo-root "$publish_root" --repository example/supra \
+      --source-sha "$(jq -r '.source.sha' "$source_manifest" 2>/dev/null || true)" \
+      --version 2.3.0 --build 387 --zip "$zip" --dmg "$dmg" \
+      --manifest "$final_manifest" --manifest-signature "${final_manifest}.cms" \
+      --appcast-in "$appcast_in" --constants-in "$constants_in" \
+      --sign-update "${mock_bin}/sign_update"
+}
+: >"$mock_log"
+run_case \
+  'default bare gh and curl transaction commands resolve through PATH' \
+  0 \
+  'Release transaction completed for v2.3.0' \
+  publish_transaction_default_commands
+: >"$mock_log"
+
 assert_publish_smoke_rejected() {
   local name="$1"
   local altered_manifest="$2"
