@@ -202,10 +202,8 @@ appcast_commit_file="${temporary_dir}/appcast-commit.txt"
 appcast_commit="$(tr -d '[:space:]' <"$appcast_commit_file")"
 release_validate_sha "$appcast_commit"
 
-deploy_json="$("$gh_command" run list --repo "$repository" --workflow deploy-website.yml \
-  --commit "$appcast_commit" --json databaseId,headSha,conclusion,status --limit 10)"
-deploy_run_id="$(jq -r --arg sha "$appcast_commit" '[.[] | select(.headSha == $sha)][0].databaseId // empty' <<<"$deploy_json")"
-[[ "$deploy_run_id" =~ ^[1-9][0-9]*$ ]] || release_die 'website deployment run was not created for appcast commit'
+deploy_run_id="$(release_wait_for_deploy_run "$gh_command" "$repository" deploy-website.yml "$appcast_commit")" \
+  || release_die 'website deployment run was not created for appcast commit'
 "$gh_command" run watch "$deploy_run_id" --repo "$repository" --exit-status
 
 public_release_json="$("$gh_command" release view "$tag" --repo "$repository" \
