@@ -79,8 +79,19 @@ git -C "$worktree" -c credential.https://github.com.helper='!gh auth git-credent
 pr_url="$(gh pr create --repo "$repository" --base main --head "$branch" \
   --title "Publish appcast for v${version}" \
   --body "Protected release transaction for source \`${source_sha}\`. Review is required; this PR contains only the validated appcast and fallback constants.")"
-gh pr checks "$pr_url" --repo "$repository" --required --watch --interval 10
-gh pr merge "$pr_url" --repo "$repository" --merge --delete-branch
+abandon_pull_request() {
+  gh pr close "$pr_url" --repo "$repository" --delete-branch \
+    --comment 'Protected release transaction failed before merge; this pull request is superseded.' \
+    >/dev/null 2>&1 || true
+}
+if ! release_wait_for_required_checks "$pr_url" "$repository"; then
+  abandon_pull_request
+  release_die 'required checks did not pass for the appcast pull request'
+fi
+if ! gh pr merge "$pr_url" --repo "$repository" --merge --delete-branch; then
+  abandon_pull_request
+  release_die 'appcast pull request merge failed'
+fi
 merge_commit="$(gh pr view "$pr_url" --repo "$repository" --json state,mergeCommit \
   --jq 'select(.state == "MERGED") | .mergeCommit.oid')"
 release_validate_sha "$merge_commit"

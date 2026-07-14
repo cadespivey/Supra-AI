@@ -16,6 +16,36 @@ release_require_command() {
   command -v "$1" >/dev/null 2>&1 || release_die "required command is unavailable: $1"
 }
 
+# GitHub takes several seconds to spawn a new pull request's check runs, and
+# `gh pr checks` errors with "no checks reported" instead of waiting when
+# queried inside that window. Poll until checks exist, then defer to --watch.
+# Returns 0 when all required checks pass, the watch status when they exist
+# but fail, and 2 when no checks ever appear within the bounded wait.
+release_wait_for_required_checks() {
+  local pr_url="$1"
+  local repository="$2"
+  local poll_seconds=15
+  if [[ "${SUPRA_RELEASE_TESTING:-0}" == '1' && -n "${SUPRA_RELEASE_CHECK_POLL_SECONDS:-}" ]]; then
+    poll_seconds="$SUPRA_RELEASE_CHECK_POLL_SECONDS"
+  fi
+  local attempt output status
+  for (( attempt = 0; attempt < 40; attempt++ )); do
+    status=0
+    output="$(gh pr checks "$pr_url" --repo "$repository" --required 2>&1)" || status=$?
+    if (( status == 0 )); then
+      printf '%s\n' "$output"
+      return 0
+    fi
+    if [[ "$output" != *'no checks reported'* ]]; then
+      gh pr checks "$pr_url" --repo "$repository" --required --watch --interval 10
+      return $?
+    fi
+    sleep "$poll_seconds"
+  done
+  printf 'ERROR: required checks never appeared for %s\n' "$pr_url" >&2
+  return 2
+}
+
 # Validate a configured command exactly as it will later be executed: bare
 # names resolve through PATH, path-qualified commands must be executable files.
 release_require_resolvable_command() {
