@@ -46,6 +46,37 @@ release_wait_for_required_checks() {
   return 2
 }
 
+# GitHub spawns push-triggered workflow runs asynchronously too: listing runs
+# immediately after a merge can miss the deployment run entirely (observed
+# live: v2.2.1's transaction died at the deploy lookup and rolled the release
+# back to draft). Poll until the workflow run for the exact commit exists and
+# print its id. Returns 0 with the run id on stdout, 2 when no run ever
+# appears within the bounded wait.
+release_wait_for_deploy_run() {
+  local gh_command="$1"
+  local repository="$2"
+  local workflow="$3"
+  local commit="$4"
+  local poll_seconds=15
+  if [[ "${SUPRA_RELEASE_TESTING:-0}" == '1' && -n "${SUPRA_RELEASE_CHECK_POLL_SECONDS:-}" ]]; then
+    poll_seconds="$SUPRA_RELEASE_CHECK_POLL_SECONDS"
+  fi
+  local attempt run_json run_id
+  for (( attempt = 0; attempt < 40; attempt++ )); do
+    run_json="$("$gh_command" run list --repo "$repository" --workflow "$workflow" \
+      --commit "$commit" --json databaseId,headSha,conclusion,status --limit 10 2>/dev/null)" \
+      || run_json='[]'
+    run_id="$(jq -r --arg sha "$commit" '[.[] | select(.headSha == $sha)][0].databaseId // empty' <<<"$run_json")"
+    if [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
+      printf '%s\n' "$run_id"
+      return 0
+    fi
+    sleep "$poll_seconds"
+  done
+  printf 'ERROR: %s run never appeared for commit %s\n' "$workflow" "$commit" >&2
+  return 2
+}
+
 # Validate a configured command exactly as it will later be executed: bare
 # names resolve through PATH, path-qualified commands must be executable files.
 release_require_resolvable_command() {
