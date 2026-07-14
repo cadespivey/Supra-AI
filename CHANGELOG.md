@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.2.2] - 2026-07-14
+
+Model downloads restored, plus a release-pipeline reliability fix.
+
+### Fixed
+
+- **Model downloads work again** — Hugging Face moved model file serving to a new
+  download host; the app's network security policy now recognizes that host, restoring
+  catalog and custom-repo model downloads (including the first-launch download). All
+  other destinations remain blocked.
+- **Release publication reliability** — the release transaction now waits for GitHub to
+  register the website deployment run instead of failing on an immediate lookup.
+
 ## [2.2.1] - 2026-07-13
 
 Security, legal-output integrity, persistence, release, and runtime hardening.
