@@ -306,7 +306,11 @@ plutil -create xml1 "${xpc}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add :CFBundleVersion string 387' "${xpc}/Contents/Info.plist"
 app_entitlements="${temporary_dir}/app.entitlements"
 service_entitlements="${temporary_dir}/service.entitlements"
-cp "${repo_root}/Apps/SupraAI/SupraAI/SupraAI.entitlements" "$app_entitlements"
+# Mirror what codesign extracts from a real signed app: Xcode substitutes
+# $(PRODUCT_BUNDLE_IDENTIFIER) at build time, so the fixture must carry the
+# resolved values matching the fixture Info.plist's CFBundleIdentifier.
+sed 's/$(PRODUCT_BUNDLE_IDENTIFIER)/ai.supra.SupraAI/g' \
+  "${repo_root}/Apps/SupraAI/SupraAI/SupraAI.entitlements" >"$app_entitlements"
 cp "${repo_root}/Apps/SupraAI/SupraRuntimeService/SupraRuntimeService.entitlements" "$service_entitlements"
 zip="${artifact_root}/SupraAI-2.3.0.zip"
 dmg="${artifact_root}/SupraAI-2.3.0.dmg"
