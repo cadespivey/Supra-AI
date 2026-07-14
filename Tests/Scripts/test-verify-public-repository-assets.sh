@@ -12,11 +12,14 @@ run_case() {
   local expected_status="$3"
   local expected_text="$4"
   local unexpected_text="${5:-}"
+  local exceptions_file="${6:-/dev/null}"
   local output_file
   local status
 
   output_file="$(mktemp)"
-  if PUBLIC_ASSET_FIXTURE_DIR="${fixtures}/${fixture}" \
+  if env \
+      PUBLIC_ASSET_FIXTURE_DIR="${fixtures}/${fixture}" \
+      PUBLIC_ASSET_EXCEPTIONS_FILE="$exceptions_file" \
       bash "$verifier" example/synthetic >"$output_file" 2>&1; then
     status=0
   else
@@ -73,6 +76,48 @@ run_case \
   prohibited-release \
   1 \
   "release v9.9.9 asset Equity-A-synthetic.woff2"
+
+# Owner-approved exceptions: a ticketed, pre-existing pull-ref violation pinned by
+# exact (ref, object, path) is reported as KNOWN and does not fail the audit.
+# Expected RED reason: the verifier has no exception mechanism, so the fixture's
+# pull-ref violation exits 1 with ERROR output instead of 0 with a KNOWN notice.
+known_exceptions="$(mktemp)"
+printf 'refs/pull/51/head\tffffffffffffffffffffffffffffffffffffffff\twebsite/public/fonts/pull-ref-guard.woff2\n' \
+  >"$known_exceptions"
+run_case \
+  "ticketed pull-ref violation is excepted as KNOWN" \
+  prohibited-pull-ref \
+  0 \
+  "KNOWN" \
+  "ERROR:" \
+  "$known_exceptions"
+
+# The exception must pin the exact object: a different blob at the same path in
+# the same ref still fails.
+wrong_object_exceptions="$(mktemp)"
+printf 'refs/pull/51/head\teeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\twebsite/public/fonts/pull-ref-guard.woff2\n' \
+  >"$wrong_object_exceptions"
+run_case \
+  "exception with a different object id does not except" \
+  prohibited-pull-ref \
+  1 \
+  "prohibited path in refs/pull/51/head:website/public/fonts/pull-ref-guard.woff2" \
+  "" \
+  "$wrong_object_exceptions"
+
+# Exceptions are structurally limited to pull-request head refs: a file naming a
+# branch ref is rejected as an incomplete audit rather than honored.
+branch_exceptions="$(mktemp)"
+printf 'refs/heads/asset-regression\tffffffffffffffffffffffffffffffffffffffff\twebsite/public/fonts/synthetic-guard.woff2\n' \
+  >"$branch_exceptions"
+run_case \
+  "branch refs cannot be excepted" \
+  prohibited-path \
+  2 \
+  "only refs/pull" \
+  "" \
+  "$branch_exceptions"
+rm -f "$known_exceptions" "$wrong_object_exceptions" "$branch_exceptions"
 
 if (( failures != 0 )); then
   printf 'Public repository asset verifier tests failed: %d\n' "$failures" >&2
