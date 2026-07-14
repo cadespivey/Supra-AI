@@ -141,7 +141,8 @@ codesign -d --entitlements :- "$app" >"$app_entitlements" 2>/dev/null \
   || release_die 'unable to read app entitlements'
 codesign -d --entitlements :- "$xpc" >"$xpc_entitlements" 2>/dev/null \
   || release_die 'unable to read runtime-service entitlements'
-bash "${root}/Scripts/verify-entitlements.sh" --app "$app_entitlements" --service "$xpc_entitlements" >/dev/null \
+bash "${root}/Scripts/verify-entitlements.sh" --app "$app_entitlements" --service "$xpc_entitlements" \
+  --bundle-id "$app_bundle_id" >/dev/null \
   || release_die 'signed entitlement verification failed'
 
 xcrun stapler validate "$app" >/dev/null 2>&1 || release_die 'staple validation failed for app'

@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 app="${repo_root}/Apps/SupraAI/SupraAI/SupraAI.entitlements"
 service="${repo_root}/Apps/SupraAI/SupraRuntimeService/SupraRuntimeService.entitlements"
 
+bundle_id=''
 while (( $# > 0 )); do
   case "$1" in
     --app)
@@ -15,8 +16,14 @@ while (( $# > 0 )); do
       service="${2:-}"
       shift 2
       ;;
+    --bundle-id)
+      # Signed artifacts carry the build-time-resolved bundle identifier in the
+      # Sparkle mach-lookup exception; source files carry the template.
+      bundle_id="${2:-}"
+      shift 2
+      ;;
     *)
-      printf 'Usage: %s [--app path] [--service path]\n' "$0" >&2
+      printf 'Usage: %s [--app path] [--service path] [--bundle-id id]\n' "$0" >&2
       exit 2
       ;;
   esac
@@ -43,9 +50,10 @@ check_app_boolean 'com.apple.security.files.bookmarks.app-scope'
 check_app_boolean 'com.apple.security.files.user-selected.read-write'
 check_app_boolean 'com.apple.security.network.client'
 
-if ! jq -e '
+mach_lookup_prefix="${bundle_id:-\$(PRODUCT_BUNDLE_IDENTIFIER)}"
+if ! jq -e --arg prefix "$mach_lookup_prefix" '
   .["com.apple.security.temporary-exception.mach-lookup.global-name"] ==
-    ["$(PRODUCT_BUNDLE_IDENTIFIER)-spks", "$(PRODUCT_BUNDLE_IDENTIFIER)-spki"]
+    ["\($prefix)-spks", "\($prefix)-spki"]
 ' >/dev/null <<<"$app_json"; then
   printf '%s\n' 'ERROR: app entitlement drift: com.apple.security.temporary-exception.mach-lookup.global-name' >&2
   status=1
