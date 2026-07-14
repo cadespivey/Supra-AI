@@ -48,7 +48,12 @@ credential_gate="$(release_resolve_command_override SUPRA_CREDENTIAL_GATE_COMMAN
 font_gate="$(release_resolve_command_override SUPRA_FONT_GUARD_COMMAND "${script_root}/Scripts/verify-public-font-license.sh")"
 release_gate="$(release_resolve_command_override SUPRA_RELEASE_GATE_COMMAND "${script_root}/Scripts/run-release-gates.sh")"
 for command_path in "$gh_command" "$credential_gate" "$font_gate" "$release_gate"; do
-  [[ -x "$command_path" ]] || release_die "release preflight command is unavailable: $command_path"
+  if [[ "$command_path" == */* ]]; then
+    [[ -x "$command_path" ]] || release_die "release preflight command is unavailable: $command_path"
+  else
+    command -v -- "$command_path" >/dev/null 2>&1 \
+      || release_die "release preflight command is unavailable: $command_path"
+  fi
 done
 
 [[ -z "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" ]] \
