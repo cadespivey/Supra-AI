@@ -51,6 +51,15 @@ case "$name" in
           '{headSha: $headSha, conclusion: $conclusion, workflowName: "Protected macOS CI", url: "https://example.invalid/actions/runs/42"}'
         ;;
       "run list")
+        if [[ -n "${MOCK_DEPLOY_LIST_COUNT_FILE:-}" ]]; then
+          count="$(cat "$MOCK_DEPLOY_LIST_COUNT_FILE" 2>/dev/null || printf 0)"
+          count=$((count + 1))
+          printf '%s' "$count" >"$MOCK_DEPLOY_LIST_COUNT_FILE"
+          if (( count <= ${MOCK_DEPLOY_LIST_ABSENT_CALLS:-0} )); then
+            printf '[]\n'
+            exit 0
+          fi
+        fi
         printf '%s\n' '[{"databaseId":9001,"headSha":"'"${MOCK_APPCAST_COMMIT:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"'","conclusion":"success","status":"completed"}]'
         ;;
       "run watch")

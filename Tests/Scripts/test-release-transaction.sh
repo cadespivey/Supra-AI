@@ -237,6 +237,54 @@ run_case \
   'never appeared' \
   wait_for_checks_probe 999
 
+# GitHub spawns push-triggered workflow runs asynchronously as well: v2.2.1
+# production run 29343058641 merged the appcast PR and immediately queried
+# `gh run list` for the deploy-website.yml run, which had not been created
+# yet, so the fully-verified release was rolled back to draft. The deploy-run
+# lookup must poll until the run for the exact merge commit exists, hand its
+# id to `gh run watch`, and fail closed when it never appears.
+# Expected RED reason: release_wait_for_deploy_run does not exist in
+# Scripts/lib/release-common.sh, so the probe exits 127.
+deploy_mock_bin="${temporary_dir}/deploy-bin"
+mkdir -p "$deploy_mock_bin"
+cat >"${deploy_mock_bin}/gh" <<'MOCK'
+#!/usr/bin/env bash
+count_file="${MOCK_DEPLOY_COUNT_FILE:?}"
+count="$(cat "$count_file" 2>/dev/null || printf 0)"
+count=$((count + 1))
+printf '%s' "$count" >"$count_file"
+if (( count <= ${MOCK_DEPLOY_ABSENT_CALLS:-0} )); then
+  printf '[]\n'
+  exit 0
+fi
+printf '[{"databaseId":4242,"headSha":"%s","conclusion":null,"status":"in_progress"}]\n' \
+  "$MOCK_DEPLOY_HEAD_SHA"
+MOCK
+chmod +x "${deploy_mock_bin}/gh"
+
+wait_for_deploy_probe() {
+  local absent_calls="$1"
+  env \
+    PATH="${deploy_mock_bin}:$PATH" \
+    MOCK_DEPLOY_COUNT_FILE="${temporary_dir}/deploy-count-${RANDOM}" \
+    MOCK_DEPLOY_ABSENT_CALLS="$absent_calls" \
+    MOCK_DEPLOY_HEAD_SHA='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+    SUPRA_RELEASE_TESTING=1 \
+    SUPRA_RELEASE_CHECK_POLL_SECONDS=0 \
+    bash -c 'source "$1/Scripts/lib/release-common.sh" && release_wait_for_deploy_run gh example/supra deploy-website.yml bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+    _ "$repo_root"
+}
+run_case \
+  'deploy-run wait survives late workflow-run registration' \
+  0 \
+  '4242' \
+  wait_for_deploy_probe 2
+run_case \
+  'deploy-run wait fails closed when the deployment run never appears' \
+  2 \
+  'never appeared' \
+  wait_for_deploy_probe 999
+
 # The manifest CMS signer must select its identity deterministically and fail
 # closed when the requested identity does not exist, instead of silently
 # signing with an arbitrary default the way `security cms -S -N` does.
@@ -692,6 +740,30 @@ run_case \
   0 \
   'Release transaction completed for v2.3.0' \
   publish_transaction_default_commands
+: >"$mock_log"
+
+# Wire-proof for the deploy-run wait: the shared gh mock returns an empty run
+# listing twice before the deployment run registers (non-default; the mock
+# answers immediately unless MOCK_DEPLOY_LIST_COUNT_FILE is set). The
+# transaction must poll through that window rather than treating one empty
+# listing as failure — exactly the v2.2.1 production rollback.
+# Expected RED reason: the transaction queries gh run list exactly once, so it
+# dies with 'website deployment run was not created for appcast commit'.
+publish_transaction_late_deploy_run() {
+  export MOCK_DEPLOY_LIST_ABSENT_CALLS=2
+  export MOCK_DEPLOY_LIST_COUNT_FILE="${temporary_dir}/deploy-list-count-${RANDOM}"
+  export SUPRA_RELEASE_CHECK_POLL_SECONDS=0
+  local result=0
+  publish_transaction || result=$?
+  unset MOCK_DEPLOY_LIST_ABSENT_CALLS MOCK_DEPLOY_LIST_COUNT_FILE SUPRA_RELEASE_CHECK_POLL_SECONDS
+  return "$result"
+}
+: >"$mock_log"
+run_case \
+  'publication polls through late website deployment run registration' \
+  0 \
+  'Release transaction completed for v2.3.0' \
+  publish_transaction_late_deploy_run
 : >"$mock_log"
 
 assert_publish_smoke_rejected() {
