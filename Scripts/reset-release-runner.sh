@@ -40,12 +40,6 @@ else
   printf 'no workspace to clear at %s\n' "$work_dir"
 fi
 
-derived="${HOME}/Library/Developer/Xcode/DerivedData"
-if [[ -d "$derived" ]]; then
-  rm -rf "$derived"
-  printf 'cleared %s\n' "$derived"
-fi
-
 if [[ -d "$archive_dir" ]]; then
   printf 'evidence archived under %s — retain per Docs/Release-Protection.md\n' "$archive_dir"
 fi

@@ -7,22 +7,22 @@ stop and fix the cause — never weaken a gate to proceed.
 
 ## One-time infrastructure (already configured when this runbook applies)
 
-- Local macOS user `suprarelease` (noninteractive; used only for releases) holding, in
-  its own login Keychain: the Developer ID Application identity, the `supra-notary`
-  notarytool profile, and the Sparkle EdDSA private key matching the app's
+- The owner's login Keychain holds the Developer ID Application identity, the
+  `supra-notary` notarytool profile, and the Sparkle EdDSA private key matching the app's
   `SUPublicEDKey`.
-- GitHub Actions runner installed at `~suprarelease/actions-runner` with labels
+- GitHub Actions runner installed at `~/actions-runner` (owner account) with labels
   `supra-release` and `supra-release-isolated` (plus the automatic `self-hosted`,
   `macOS`, `ARM64`), provisioned by `Scripts/provision-release-runner.sh`.
 - The `production-release` environment with the repository owner as required reviewer,
   the eleven release variables, and the `SUPRA_RELEASE_GITHUB_TOKEN` secret (fine-grained
   PAT restricted to this repository).
 - The `main` required-checks ruleset and the `v*` tag ruleset.
-- The verified smoke model installed under the release user's app container
-  (`~suprarelease/Library/Containers/ai.supra.SupraAI/Data/Library/Application Support/`
+- The verified smoke model installed under the owner's app container
+  (`~/Library/Containers/ai.supra.SupraAI/Data/Library/Application Support/`
   `ai.supra.SupraAI/Models/<org>__<name>`) with its `.supra-model-manifest.json`, and
   `SUPRA_RELEASE_SMOKE_MODEL_SHA256` set to the canonical fingerprint reported by
-  `Scripts/smoke-model-tool.swift`.
+  `Scripts/smoke-model-tool.swift`. Do not manage or modify that model through the app
+  UI; content changes invalidate the pinned fingerprint.
 
 ## Per-release procedure
 
@@ -40,13 +40,12 @@ stop and fix the cause — never weaken a gate to proceed.
 4. No release or tag exists yet for the version:
    `gh release view vX.Y.Z` must fail; `git ls-remote --tags origin vX.Y.Z` must be empty.
 
-### 2. Start the runner (release account)
+### 2. Start the runner
 
-1. Fast-user-switch (or `su`) into `suprarelease` and open a login session — the login
-   Keychain must be unlocked for signing and notarization.
-2. Start the runner in the foreground for this run only:
+1. From a logged-in owner session (login Keychain unlocked, as it is during normal use),
+   start the runner in the foreground for this run only:
    `cd ~/actions-runner && ./run.sh`
-3. Confirm the runner shows **Idle** under repository Settings → Actions → Runners.
+2. Confirm the runner shows **Idle** under repository Settings → Actions → Runners.
 
 ### 3. Rehearse first (developer account)
 
@@ -84,19 +83,19 @@ On success, verify as a user would: the GitHub release page shows the notarized
 `SupraAI-X.Y.Z.dmg`/`.zip`, https://supralegal.ai serves the new version, and
 https://supralegal.ai/appcast.xml lists the new item.
 
-### 5. Evidence and reset (release account)
+### 5. Evidence and reset
 
-Immediately after every rehearsal or release run, from the `suprarelease` session:
+Immediately after every rehearsal or release run:
 
 ```sh
-bash <repo-workspace>/Scripts/reset-release-runner.sh
+bash Scripts/reset-release-runner.sh
 ```
 
 This archives `build/release/` (manifests, signed-smoke result, and
 `release-result-vX.Y.Z.json` — the emergency rollback workflow requires its recorded
 appcast merge commit) into `~/ReleaseEvidence/<timestamp>/`, then clears the runner
-workspace. Then stop the runner (Ctrl-C on `run.sh`) and log the release session out.
-The runner stays offline until the next approved run.
+workspace. Then stop the runner (Ctrl-C on `run.sh`). The runner stays offline until the
+next approved run.
 
 ## Emergency withdrawal
 

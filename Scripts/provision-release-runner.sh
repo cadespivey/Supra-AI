@@ -1,33 +1,35 @@
 #!/usr/bin/env bash
-# Provision the dedicated release-runner user account defined in
-# Docs/Release-Protection.md. Run this AS the release user (default: suprarelease)
-# from a login session. Idempotent: safe to re-run until every check passes.
+# Provision the release runner for the account defined in Docs/Release-Protection.md
+# (default: the repository owner's account, cadespivey). Idempotent: safe to re-run
+# until every check passes.
 #
-# Expects a staging directory (default /Users/Shared/supra-release-staging) prepared
-# by the developer account, containing:
+# Optional staging directory (default /Users/Shared/supra-release-staging) supplies
+# anything not already installed:
 #   actions-runner-osx-arm64.tar.gz   GitHub Actions runner release tarball
 #   Sparkle/bin/sign_update           reviewed Sparkle tools (from the SPM artifact)
 #   Models/<org>__<name>/             smoke model tree incl. .supra-model-manifest.json
-#   smoke-model-tool.swift            copy of Scripts/smoke-model-tool.swift
 #
 # Usage:
 #   bash provision-release-runner.sh [--staging DIR] [--registration-token TOKEN] \
-#        [--repository OWNER/REPO]
+#        [--repository OWNER/REPO] [--release-user NAME]
 set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
 
 staging='/Users/Shared/supra-release-staging'
 registration_token=''
 repository='cadespivey/Supra-AI'
+expected_user='cadespivey'
 while (( $# > 0 )); do
   case "$1" in
     --staging) staging="${2:?}"; shift 2 ;;
     --registration-token) registration_token="${2:?}"; shift 2 ;;
     --repository) repository="${2:?}"; shift 2 ;;
+    --release-user) expected_user="${2:?}"; shift 2 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
 
-expected_user='suprarelease'
 failures=0
 note() { printf '%s\n' "$*"; }
 ok()   { printf 'OK   %s\n' "$*"; }
@@ -36,7 +38,7 @@ todo() { printf 'TODO %s\n' "$*"; failures=$((failures + 1)); }
 [[ "$(whoami)" == "$expected_user" ]] \
   || { printf 'run this script as the %s user (currently %s)\n' "$expected_user" "$(whoami)" >&2; exit 2; }
 [[ "$(uname -m)" == 'arm64' ]] || { printf 'release runner requires Apple Silicon\n' >&2; exit 2; }
-[[ -d "$staging" ]] || { printf 'staging directory missing: %s\n' "$staging" >&2; exit 2; }
+[[ -d "$staging" ]] || note "staging directory not present (${staging}); verifying installed state only"
 
 developer_dir="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
 runner_home="${HOME}/actions-runner"
@@ -101,26 +103,28 @@ else
 fi
 
 # --- smoke model -----------------------------------------------------------------
-staged_model="$(find "${staging}/Models" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n1 || true)"
-if [[ -n "$staged_model" ]]; then
-  model_name="$(basename "$staged_model")"
-  target="${container_models}/${model_name}"
-  if [[ ! -d "$target" ]]; then
+target="$(find "$container_models" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n1 || true)"
+if [[ -z "$target" ]]; then
+  staged_model="$(find "${staging}/Models" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n1 || true)"
+  if [[ -n "$staged_model" ]]; then
+    target="${container_models}/$(basename "$staged_model")"
     mkdir -p "$container_models"
     cp -R "$staged_model" "$target"
     ok "smoke model copied to ${target}"
-  else
-    ok "smoke model present at ${target}"
   fi
-  if [[ -f "${staging}/smoke-model-tool.swift" && -d "$developer_dir" ]]; then
-    fingerprint="$(DEVELOPER_DIR="$developer_dir" swift "${staging}/smoke-model-tool.swift" fingerprint --model-dir "$target")"
+fi
+if [[ -n "$target" ]]; then
+  model_tool="${root}/Scripts/smoke-model-tool.swift"
+  [[ -f "$model_tool" ]] || model_tool="${staging}/smoke-model-tool.swift"
+  if [[ -f "$model_tool" && -d "$developer_dir" ]]; then
+    fingerprint="$(DEVELOPER_DIR="$developer_dir" swift "$model_tool" fingerprint --model-dir "$target")"
     ok "smoke model verified; SUPRA_RELEASE_SMOKE_MODEL_SHA256=${fingerprint}"
     ok "SUPRA_RELEASE_SMOKE_MODEL_DIRECTORY=${target}"
   else
-    todo 'cannot verify model fingerprint (need smoke-model-tool.swift in staging and Xcode)'
+    todo 'cannot verify model fingerprint (need smoke-model-tool.swift and Xcode)'
   fi
 else
-  todo "stage the smoke model under ${staging}/Models/<org>__<name>"
+  todo "install the smoke model under ${container_models}/<org>__<name> (or stage it under ${staging}/Models)"
 fi
 
 # --- git signing key ---------------------------------------------------------------

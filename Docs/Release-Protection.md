@@ -77,38 +77,36 @@ creates, which would prevent the appcast PR from receiving its required checks.
 
 Signed release qualification and signed rehearsal must run only on the runner carrying both
 the `supra-release` and `supra-release-isolated` labels. The original design specified
-dedicated, ephemeral Apple Silicon hardware; as of 2026-07-13 the repository owner instead
-operates that runner as a dedicated, noninteractive local macOS user account
-(`suprarelease`) on owner-controlled Apple Silicon hardware. The boundary that the labels
-and `SUPRA_RELEASE_ISOLATED_RUNNER=1` attest is:
+dedicated, ephemeral Apple Silicon hardware with a dedicated release UID; as of 2026-07-13
+the repository owner operates that runner under the owner's own account on owner-controlled
+Apple Silicon hardware. The boundary that the labels and `SUPRA_RELEASE_ISOLATED_RUNNER=1`
+attest is:
 
-- The runner process, its workspace, the protected smoke-model tree, and every release
-  credential (Developer ID identity, notarization Keychain profile, Sparkle EdDSA private
-  key, Git signing key) belong exclusively to the `suprarelease` UID. No interactive login,
-  developer tooling, background service, or third-party process runs as that UID, and no
-  other UID can read or write its files.
-- This UID separation is the operative mitigation for the signed-smoke threat: the runtime
-  service copies the authorized model into a private, verified snapshot, but MLX still opens
-  model files by pathname, and snapshot verification alone cannot defeat a hostile same-UID
-  process that mutates and restores those bytes during the load interval. Because release
-  jobs are the only processes under the release UID, that same-UID race has no seat.
-- The runner is offline except during an approved run: it is started manually from a
-  `suprarelease` login session for one approved job and stopped afterward. Never reuse it
-  for pull requests, ordinary CI, developer work, or concurrent release jobs.
+- The runner is registered only to this repository and is offline except while a single
+  approved release or rehearsal job runs: it is started manually for one approved job and
+  stopped afterward. It is never used for pull requests, ordinary CI, or concurrent jobs.
+- Every release credential (Developer ID identity, notarization Keychain profile, Sparkle
+  EdDSA private key, Git signing key) lives in the owner's login Keychain — the same place
+  it lived for manual releases — and the release token is scoped to this repository and
+  stored only in the `production-release` environment.
 - After every run, `Scripts/reset-release-runner.sh` archives the release evidence and
   clears the workspace, restoring an ephemeral-equivalent baseline between releases.
 
-Accepted residual risk (repository owner, 2026-07-13): the release UID shares the physical
-machine, kernel, and `/Applications` toolchain with the owner's interactive account, so
-root-level or physical compromise of that machine compromises releases. This is accepted
-because every release credential already resides on this machine and separate hardware would
-not change that exposure for a single operator. Dedicated ephemeral hardware remains the
-documented upgrade path if the threat model changes (additional maintainers, shared
-hardware, or credentials moving off this machine).
+Accepted residual risk (repository owner, 2026-07-13): the same-UID mutate/restore race
+against model files during the load interval — MLX opens model files by pathname, so
+snapshot verification alone cannot defeat a hostile process under the same UID — is NOT
+mitigated by UID separation in this configuration. Any process running as the owner during
+a release job could in principle tamper with the smoke model or the build inputs. The owner
+accepts this because every release credential already resides in the owner's account, so
+same-UID malware defeats the release pipeline regardless of where the smoke runs; content
+hashing before and after generation still forces tampering to win a narrow race rather than
+simply substituting files. A dedicated release UID or dedicated ephemeral hardware remains
+the documented upgrade path if maintainers are added, hardware is shared, or credentials
+move off this machine.
 
 `SUPRA_RELEASE_ISOLATED_RUNNER=1` makes the release entrypoint fail closed if this boundary
-is not explicitly attested. The flag is only an assertion and does not replace the release
-UID's single-tenancy, the offline-except-approved-runs discipline, evidence archival, or
+is not explicitly attested. The flag is only an assertion and does not replace the runner's
+single-job discipline, the offline-except-approved-runs rule, evidence archival, or
 protected environment review.
 
 The environment executes one of three manual workflows:
