@@ -140,6 +140,35 @@ raw_refs="${temporary_dir}/ls-remote.txt"
 normalized_refs="${temporary_dir}/normalized-refs.txt"
 mkdir -p "${temporary_dir}/trees"
 
+# Owner-approved exceptions for ticketed, pre-existing violations awaiting
+# GitHub Support removal. Each line pins one exact (ref, object, path) triple;
+# only immutable refs/pull/N/head refs may be pinned, so no branch, tag, or
+# release content can ever be excepted. Matches are reported as KNOWN and do
+# not fail the audit; anything else still fails closed.
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+exceptions_file="${PUBLIC_ASSET_EXCEPTIONS_FILE:-${script_dir}/public-ref-audit-exceptions.tsv}"
+exceptions_list="${temporary_dir}/exceptions.tsv"
+: >"$exceptions_list"
+known_count=0
+if [[ -f "$exceptions_file" ]]; then
+  while IFS= read -r exception_line || [[ -n "$exception_line" ]]; do
+    [[ -z "$exception_line" || "$exception_line" == \#* ]] && continue
+    IFS=$'\t' read -r exception_ref exception_object exception_path <<<"$exception_line"
+    [[ "$exception_ref" =~ ^refs/pull/[0-9]+/head$ ]] \
+      || die "exception entries may pin only refs/pull/N/head refs: ${exception_ref}"
+    [[ "$exception_object" =~ ^[0-9a-f]{40}$ ]] \
+      || die "exception entry has an invalid object id: ${exception_object}"
+    [[ -n "$exception_path" ]] \
+      || die "exception entry has an empty path for ${exception_ref}"
+    printf '%s\t%s\t%s\n' "$exception_ref" "$exception_object" "$exception_path" \
+      >>"$exceptions_list"
+  done <"$exceptions_file"
+fi
+
+is_known_exception() {
+  grep -Fqx -- "$1"$'\t'"$2"$'\t'"$3" "$exceptions_list"
+}
+
 if [[ -n "$fixture_dir" ]]; then
   [[ -f "${fixture_dir}/ls-remote.txt" ]] || die "fixture is missing ls-remote.txt"
   cp "${fixture_dir}/ls-remote.txt" "$raw_refs"
@@ -205,6 +234,13 @@ while IFS=$'\t' read -r sha ref; do
   fi
 
   while IFS=$'\t' read -r object_id path; do
+    if { is_prohibited_path "$path" || is_prohibited_object "$object_id"; } \
+        && is_known_exception "$ref" "$object_id" "$path"; then
+      printf 'KNOWN: ticketed violation pending GitHub Support removal: %s:%s (%s)\n' \
+        "$ref" "$path" "$object_id"
+      known_count=$((known_count + 1))
+      continue
+    fi
     if is_prohibited_path "$path"; then
       report "prohibited path in ${ref}:${path}"
     fi
@@ -256,5 +292,9 @@ if (( violations != 0 )); then
   exit 1
 fi
 
+if (( known_count != 0 )); then
+  printf 'Accepted %d known ticketed violation(s) pinned in %s; anything not pinned still fails.\n' \
+    "$known_count" "$exceptions_file"
+fi
 printf 'Public repository asset metadata check passed. Inspected %d advertised refs, %d unique trees, and %d releases without fetching blobs or assets.\n' \
   "$ref_count" "$tree_count" "$release_count"

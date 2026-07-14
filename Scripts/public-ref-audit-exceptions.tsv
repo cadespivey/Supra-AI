@@ -1,0 +1,80 @@
+# Ticketed pre-existing violations awaiting GitHub Support removal.
+# Owner decision (Cade Spivey, 2026-07-13): releases may proceed while Support
+# deletes these hidden pull-request refs; the exposure is unchanged by releasing
+# and every release artifact is independently verified font-free. Support ticket
+# filed 2026-07-13 requesting deletion of refs/pull/39-50 and garbage collection.
+# DELETE THIS FILE once Support confirms removal; the audit then requires a
+# fully clean advertisement again. Only refs/pull/N/head entries are honored.
+# Format: ref<TAB>blob-sha1<TAB>path
+refs/pull/39/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/39/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/39/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/39/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/39/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/39/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2
+refs/pull/40/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/40/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/40/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/40/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/40/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/40/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2
+refs/pull/41/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/41/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/41/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/41/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/41/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/41/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2
+refs/pull/42/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/42/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/42/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/42/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/42/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/42/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2
+refs/pull/43/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/43/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/43/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/43/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/43/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/43/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2
+refs/pull/44/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/44/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/44/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/44/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/44/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/44/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2
+refs/pull/45/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/45/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/45/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/45/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/45/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/45/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2
+refs/pull/46/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/46/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/46/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/46/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/46/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/46/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2
+refs/pull/47/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/47/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/47/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/47/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/47/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/47/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2
+refs/pull/48/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/48/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/48/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/48/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/48/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/48/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2
+refs/pull/49/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/49/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/49/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/49/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/49/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/49/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2
+refs/pull/50/head	a2427890de67fbc5ef37eaee8557308e08d25ec9	website/public/fonts/equity_a_regular.woff2
+refs/pull/50/head	21ed50d81b3d39dc5fce11597c7949e79da7fe20	website/public/fonts/equity_a_italic.woff2
+refs/pull/50/head	2977a86366333533d454e8362956dbc2ca273836	website/public/fonts/equity_a_bold.woff2
+refs/pull/50/head	339cc03e157d27ff9c05aa1398658156fc270a1d	website/public/fonts/equity_a_bold_italic.woff2
+refs/pull/50/head	592699d8db6504e287590d73cb202ba64bb587c1	website/public/fonts/equity_a_caps_regular.woff2
+refs/pull/50/head	a534fdb77da59665064b2f3ece47d779bffde437	website/public/fonts/equity_a_caps_bold.woff2

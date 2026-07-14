@@ -176,3 +176,13 @@ The weekly `Scheduled security verification` workflow remains read-only. It chec
 and release metadata, model IDs, repository security invariants, and website dependencies.
 Existing public-ref cleanup is coordinated separately with GitHub Support; no release-control
 exception weakens the local, artifact, or recurrence-prevention gates.
+
+Owner decision (2026-07-13): releases may proceed while GitHub Support completes deletion of
+the twelve ticketed pull-request refs (`refs/pull/39/head` through `refs/pull/50/head`) that
+still advertise the six known font blobs. `Scripts/public-ref-audit-exceptions.tsv` pins each
+ticketed violation by exact (ref, object, path); the audit reports pinned matches as KNOWN and
+fails on anything else. Only immutable `refs/pull/N/head` entries are honored — branches,
+tags, releases, new blobs, and new refs cannot be excepted, so the local, artifact, and
+recurrence-prevention gates are unchanged. Rationale: release artifacts are independently
+verified font-free, and publishing does not extend the pre-existing exposure, which only
+Support can remove. The exception file must be deleted as soon as Support confirms removal.
