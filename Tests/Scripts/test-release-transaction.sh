@@ -192,6 +192,51 @@ run_case \
     --service "$resolved_xpc_entitlements" \
     --bundle-id ai.evil.Other
 
+# GitHub takes several seconds to spawn a new pull request's check runs, and
+# `gh pr checks` errors with "no checks reported" instead of waiting when
+# queried in that window (observed live: the production transaction created
+# the appcast PR and died two seconds later). The checks wait must poll until
+# checks exist, then defer to --watch, and fail closed when they never appear.
+# Expected RED reason: release_wait_for_required_checks does not exist in
+# Scripts/lib/release-common.sh, so the probe exits 127.
+checks_mock_bin="${temporary_dir}/checks-bin"
+mkdir -p "$checks_mock_bin"
+cat >"${checks_mock_bin}/gh" <<'MOCK'
+#!/usr/bin/env bash
+count_file="${MOCK_CHECKS_COUNT_FILE:?}"
+count="$(cat "$count_file" 2>/dev/null || printf 0)"
+count=$((count + 1))
+printf '%s' "$count" >"$count_file"
+if (( count <= ${MOCK_CHECKS_ABSENT_CALLS:-0} )); then
+  printf "no checks reported on the 'synthetic' branch\n" >&2
+  exit 1
+fi
+printf 'all checks passed\n'
+MOCK
+chmod +x "${checks_mock_bin}/gh"
+
+wait_for_checks_probe() {
+  local absent_calls="$1"
+  env \
+    PATH="${checks_mock_bin}:$PATH" \
+    MOCK_CHECKS_COUNT_FILE="${temporary_dir}/checks-count-${RANDOM}" \
+    MOCK_CHECKS_ABSENT_CALLS="$absent_calls" \
+    SUPRA_RELEASE_TESTING=1 \
+    SUPRA_RELEASE_CHECK_POLL_SECONDS=0 \
+    bash -c 'source "$1/Scripts/lib/release-common.sh" && release_wait_for_required_checks https://example.invalid/pull/1 example/supra' \
+    _ "$repo_root"
+}
+run_case \
+  'required-checks wait survives late check registration' \
+  0 \
+  'all checks passed' \
+  wait_for_checks_probe 2
+run_case \
+  'required-checks wait fails closed when checks never appear' \
+  2 \
+  'never appeared' \
+  wait_for_checks_probe 999
+
 # The manifest CMS signer must select its identity deterministically and fail
 # closed when the requested identity does not exist, instead of silently
 # signing with an arbitrary default the way `security cms -S -N` does.
