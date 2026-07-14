@@ -16,6 +16,19 @@ release_require_command() {
   command -v "$1" >/dev/null 2>&1 || release_die "required command is unavailable: $1"
 }
 
+# Validate a configured command exactly as it will later be executed: bare
+# names resolve through PATH, path-qualified commands must be executable files.
+release_require_resolvable_command() {
+  local command_path="$1"
+  local context="$2"
+  if [[ "$command_path" == */* ]]; then
+    [[ -x "$command_path" ]] || release_die "${context} command is unavailable: $command_path"
+  else
+    command -v -- "$command_path" >/dev/null 2>&1 \
+      || release_die "${context} command is unavailable: $command_path"
+  fi
+}
+
 release_validate_sha() {
   [[ "$1" =~ ^[0-9a-f]{40}$ ]] || release_die "invalid full source SHA: $1"
 }

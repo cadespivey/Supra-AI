@@ -47,7 +47,7 @@ website_gate="$(release_resolve_command_override SUPRA_WEBSITE_GATE_COMMAND "${r
 appcast_publish="$(release_resolve_command_override SUPRA_APPCAST_PUBLISH_COMMAND "${root}/Scripts/publish-release-appcast.sh")"
 appcast_rollback="$(release_resolve_command_override SUPRA_APPCAST_ROLLBACK_COMMAND "${root}/Scripts/rollback-release-appcast.sh")"
 for command_path in "$gh_command" "$curl_command" "$website_gate" "$appcast_publish" "$appcast_rollback"; do
-  [[ -x "$command_path" ]] || release_die "release transaction command is unavailable: $command_path"
+  release_require_resolvable_command "$command_path" 'release transaction'
 done
 
 tag="v${version}"
