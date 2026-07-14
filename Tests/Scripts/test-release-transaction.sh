@@ -148,6 +148,50 @@ run_case \
   'Release source preflight passed for v2.3.0' \
   preflight_default_gh "$SOURCE_REPO" "$SOURCE_SHA" "${temporary_dir}/default-gh-preflight.json"
 
+# Signed-app entitlements carry the RESOLVED bundle identifier in the Sparkle
+# mach-lookup exception (Xcode substitutes $(PRODUCT_BUNDLE_IDENTIFIER) at
+# build time), so the artifact-side check must accept the resolved values for
+# the verified bundle id while the source-file check keeps expecting the
+# template. Expected RED reason: verify-entitlements.sh has no --bundle-id
+# mode, exits 2 on the unknown option, and the resolved fixture cannot pass.
+resolved_app_entitlements="${temporary_dir}/resolved-app.entitlements"
+resolved_xpc_entitlements="${temporary_dir}/resolved-xpc.entitlements"
+cat >"$resolved_app_entitlements" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.app-sandbox</key><true/>
+  <key>com.apple.security.files.bookmarks.app-scope</key><true/>
+  <key>com.apple.security.files.user-selected.read-write</key><true/>
+  <key>com.apple.security.network.client</key><true/>
+  <key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+  <array><string>ai.supra.SupraAI-spks</string><string>ai.supra.SupraAI-spki</string></array>
+</dict></plist>
+PLIST
+cat >"$resolved_xpc_entitlements" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.app-sandbox</key><true/>
+</dict></plist>
+PLIST
+run_case \
+  'resolved signed entitlements pass with the verified bundle id' \
+  0 \
+  'Entitlement expectations passed.' \
+  bash "${scripts}/verify-entitlements.sh" \
+    --app "$resolved_app_entitlements" \
+    --service "$resolved_xpc_entitlements" \
+    --bundle-id ai.supra.SupraAI
+run_case \
+  'resolved entitlements for a different bundle id fail' \
+  1 \
+  'app entitlement drift: com.apple.security.temporary-exception.mach-lookup.global-name' \
+  bash "${scripts}/verify-entitlements.sh" \
+    --app "$resolved_app_entitlements" \
+    --service "$resolved_xpc_entitlements" \
+    --bundle-id ai.evil.Other
+
 # The manifest CMS signer must select its identity deterministically and fail
 # closed when the requested identity does not exist, instead of silently
 # signing with an arbitrary default the way `security cms -S -N` does.
