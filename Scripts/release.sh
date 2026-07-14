@@ -151,7 +151,12 @@ codesign --verify --strict "$post_smoke_xpc" >/dev/null 2>&1 \
 bash "${root}/Scripts/create-preflight-manifest.sh" \
   --source-manifest "$source_manifest" --app "$app" --zip "$zip" --dmg "$dmg" \
   --team-id "$team_id" --smoke-result "$smoke_result" --output "$manifest"
-security cms -S -N "$manifest_identity" -i "$manifest" -o "$manifest_signature"
+# security cms -S -N resolves nicknames unreliably and silently falls back to
+# an arbitrary default identity; the Swift signer selects by exact certificate
+# label and validates the Team ID before signing.
+swift "${root}/Scripts/sign-release-manifest.swift" \
+  --identity "$manifest_identity" --team-id "$team_id" \
+  --input "$manifest" --output "$manifest_signature"
 
 bash "${root}/Scripts/verify-release-artifacts.sh" \
   --app "$app" --zip "$zip" --dmg "$dmg" \
