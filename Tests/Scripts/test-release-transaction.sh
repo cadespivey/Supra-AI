@@ -148,6 +148,22 @@ run_case \
   'Release source preflight passed for v2.3.0' \
   preflight_default_gh "$SOURCE_REPO" "$SOURCE_SHA" "${temporary_dir}/default-gh-preflight.json"
 
+# The manifest CMS signer must select its identity deterministically and fail
+# closed when the requested identity does not exist, instead of silently
+# signing with an arbitrary default the way `security cms -S -N` does.
+# Expected RED reason: Scripts/sign-release-manifest.swift does not exist, so
+# the interpreter fails without the required refusal message.
+run_case \
+  'manifest signer refuses an unknown identity' \
+  1 \
+  'no signing identity matches' \
+  env DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}" \
+    swift "${scripts}/sign-release-manifest.swift" \
+    --identity 'Nonexistent Release Identity (SYNTHETIC0)' \
+    --team-id SYNTHETIC0 \
+    --input "${repo_root}/Tests/Scripts/Fixtures/Release/mock-command.sh" \
+    --output "${temporary_dir}/never-created.cms"
+
 make_source_repo dirty
 printf '%s\n' dirty >"${SOURCE_REPO}/untracked.txt"
 run_case \
