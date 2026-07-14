@@ -117,6 +117,52 @@ run_case \
   "only refs/pull" \
   "" \
   "$branch_exceptions"
+# The exception match key must include the REF: the same pinned (object, path)
+# advertised by a branch is still a violation even while the pinned pull ref is
+# accepted as KNOWN. Pins the guarantee against key-narrowing refactors.
+run_case \
+  "pinned blob leaking onto a branch still fails" \
+  known-exception-branch-leak \
+  1 \
+  "prohibited path in refs/heads/evil:website/public/fonts/pull-ref-guard.woff2" \
+  "" \
+  "$known_exceptions"
+
+# The exception match key must include the PATH: the pinned object at a
+# different path inside the pinned pull ref is still a violation.
+run_case \
+  "pinned object at a different path still fails" \
+  known-exception-moved-path \
+  1 \
+  "prohibited path in refs/pull/51/head:website/public/fonts/moved-guard.woff2" \
+  "" \
+  "$known_exceptions"
+
+# Audit data-source overrides must be rejected inside the protected release
+# environment so only the reviewed in-repo exception file at the pinned SHA can
+# apply during a release.
+# Expected RED reason: the verifier honors PUBLIC_ASSET_* overrides
+# unconditionally, so the audit proceeds against the fixture instead of dying.
+override_guard_output="$(mktemp)"
+if env \
+    SUPRA_PROTECTED_RELEASE_ENVIRONMENT=1 \
+    PUBLIC_ASSET_FIXTURE_DIR="${fixtures}/clean" \
+    PUBLIC_ASSET_EXCEPTIONS_FILE=/dev/null \
+    bash "$verifier" example/synthetic >"$override_guard_output" 2>&1; then
+  override_guard_status=0
+else
+  override_guard_status=$?
+fi
+if [[ "$override_guard_status" -eq 2 ]] \
+    && grep -Fq "not permitted in the protected release environment" "$override_guard_output"; then
+  printf 'PASS: %s\n' "protected environment rejects audit overrides"
+else
+  printf 'FAIL: %s: expected status 2 with override rejection, got %s\n' \
+    "protected environment rejects audit overrides" "$override_guard_status" >&2
+  sed 's/^/  | /' "$override_guard_output" >&2
+  failures=$((failures + 1))
+fi
+rm -f "$override_guard_output"
 rm -f "$known_exceptions" "$wrong_object_exceptions" "$branch_exceptions"
 
 if (( failures != 0 )); then
