@@ -324,6 +324,30 @@ final class RedirectPolicyTests: XCTestCase {
         )
     }
 
+    /// Live capture 2026-07-14: the Hub now serves LFS weights from its Xet backend — every
+    /// one of the 19 catalog repos 302-redirects `…/resolve/<sha>/<weights>` to
+    /// `cas-bridge.xethub.hf.co` in a single hop (the signed URL then answers directly).
+    /// The previously captured `us.aws.cdn.hf.co` origin was never offered, so real model
+    /// downloads fail with `redirectRejected(originNotAllowed)` (surfaced in the app as
+    /// "NetworkPolicyError error 3"). Expected RED: `cas-bridge.xethub.hf.co` is absent from
+    /// the policy's origin inventory, so `requestForRedirect` throws.
+    func testHuggingFacePolicyAllowsCasBridgeXetDownloadOrigin() throws {
+        let hub = try XCTUnwrap(URL(string: "https://huggingface.co/org/model/resolve/0123456789abcdef0123456789abcdef01234567/model.safetensors"))
+        let casBridge = try XCTUnwrap(URL(string: "https://cas-bridge.xethub.hf.co/xet-bridge-us/object?X-Amz-Signature=canary"))
+        let policy = try RedirectPolicy.huggingFace(initialURL: hub)
+
+        var hubRequest = URLRequest(url: hub)
+        hubRequest.setValue("Bearer should-not-cross-origins", forHTTPHeaderField: "Authorization")
+        let allowed = try policy.requestForRedirect(
+            from: hubRequest,
+            response: redirectResponse(from: hub, to: casBridge, statusCode: 302),
+            proposedRequest: URLRequest(url: casBridge),
+            hopCount: 1
+        )
+        XCTAssertEqual(allowed.url?.host, "cas-bridge.xethub.hf.co")
+        XCTAssertNil(allowed.value(forHTTPHeaderField: "Authorization"))
+    }
+
     private func redirectResponse(from source: URL, to destination: URL, statusCode: Int) -> HTTPURLResponse {
         HTTPURLResponse(
             url: source,

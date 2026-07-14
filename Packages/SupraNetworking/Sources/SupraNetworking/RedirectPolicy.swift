@@ -242,15 +242,18 @@ public struct RedirectPolicy: Sendable {
 
     /// Hugging Face downloads are token-free. The exact host inventory is deliberately
     /// explicit. A live smoke on 2026-07-13 observed the Hub redirecting a small public LFS
-    /// object to `us.aws.cdn.hf.co`; every unobserved origin remains denied and must be added
-    /// only with a new captured redirect and regression test.
+    /// object to `us.aws.cdn.hf.co`; a capture on 2026-07-14 observed every catalog repo
+    /// redirecting LFS weights to the Xet backend at `cas-bridge.xethub.hf.co` (single hop).
+    /// Every unobserved origin remains denied and must be added only with a new captured
+    /// redirect and regression test.
     public static func huggingFace(initialURL: URL, maximumHops: Int = 5) throws -> RedirectPolicy {
         let hub = URL(string: "https://huggingface.co")!
         guard try Origin(url: initialURL, requiresHTTPS: true) == Origin(url: hub, requiresHTTPS: true) else {
             throw NetworkPolicyError.hostNotAllowed(initialURL.host?.lowercased() ?? "")
         }
         let cdnURLs = [
-            "https://us.aws.cdn.hf.co"
+            "https://us.aws.cdn.hf.co",
+            "https://cas-bridge.xethub.hf.co"
         ].compactMap(URL.init(string:))
         let origins = try cdnURLs.map {
             try AllowedOrigin(url: $0, service: "hugging-face-download", credentialOwner: nil)
