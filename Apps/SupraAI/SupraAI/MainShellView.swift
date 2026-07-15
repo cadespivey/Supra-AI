@@ -10,21 +10,24 @@ struct MainShellView: View {
     @State private var windowContentHeight: CGFloat = 720
 
     var body: some View {
-        ZStack {
+        // Top alignment matters: while the measured height lags the live
+        // proposal (first pass after mount, enlarging live resizes), the
+        // stale-shorter shell must hug the toolbar edge, not center with both
+        // edges adrift.
+        ZStack(alignment: .top) {
             // Measures the height SwiftUI actually proposes for the window's
-            // content region, which is what the fixed-height shell below must
-            // match exactly. Reading NSWindow metrics instead (the previous
-            // approach) breaks whenever AppKit's window arithmetic and SwiftUI's
-            // proposal disagree: on macOS 27 the proposed region excludes the
-            // unified toolbar while contentRect(forFrameRect:) still spans the
-            // full frame, so the over-tall shell was centered and its bottom
-            // ~26pt — the Recycle Bin bar and chat composer — hung below the
-            // window's bottom edge. The proposal is also updated on programmatic
-            // resizes (zoom, tiling), which the notification-based reader
-            // deliberately ignored. It never depends on content size, so the
-            // original feedback loop (tall pushed destinations growing the
-            // window, which grew the content, which grew the window) cannot
-            // restart.
+            // content region, which is what the shell's cap below must match
+            // exactly. Reading NSWindow metrics instead (the previous approach)
+            // breaks whenever AppKit's window arithmetic and SwiftUI's proposal
+            // disagree: on macOS 27 the proposed region excludes the unified
+            // toolbar while contentRect(forFrameRect:) still spans the full
+            // frame, so the over-tall shell was centered and its bottom ~26pt —
+            // the Recycle Bin bar and chat composer — hung below the window's
+            // bottom edge. The proposal is also updated on programmatic resizes
+            // (zoom, tiling), which the notification-based reader deliberately
+            // ignored. It never depends on content size, so the original
+            // feedback loop (tall pushed destinations growing the window, which
+            // grew the content, which grew the window) cannot restart.
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(
@@ -36,13 +39,22 @@ struct MainShellView: View {
                             }
                     }
                 )
+            // The columns are NOT pinned to the measured height: each split-view
+            // column is its own hosting environment with its own safe-area
+            // accounting (on macOS 27 the sidebar column adds a ~52pt toolbar
+            // inset internally), so a root-height frame inside a column can
+            // exceed the column's real region — SwiftUI resolves that by
+            // centering, which pushed the Recycle Bin bar ~26pt below the
+            // window bottom even while the outer shell measured flush. Greedy
+            // fills resolve to each column's own proposal exactly; only the
+            // ROOT frame below needs the pinned ideal/max, and that alone
+            // keeps content from growing the window.
             NavigationSplitView {
                 SidebarView(
                     selection: sidebarSelection,
                     matters: environment.mattersController,
                     onNewMatter: { showNewMatter = true }
                 )
-                .frame(height: windowContentHeight, alignment: .top)
             } detail: {
                 VStack(spacing: 0) {
                     if environment.usingFallbackStore {
@@ -56,7 +68,7 @@ struct MainShellView: View {
                     detailView
                         .frame(minWidth: 640, minHeight: 420)
                 }
-                .frame(height: windowContentHeight, alignment: .top)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
             .frame(minWidth: 880)
             // Flexible below the measured height, never above it: if the region
