@@ -83,10 +83,15 @@ final class DownloadHardeningTests: XCTestCase {
         }
 
         // The transfer now stalls (the fetcher is gated; no further bytes).
-        // Ticks must drive the PUBLISHED speed to 0 — not leave it stale/nil
-        // forever — which is what the 1s speed ticker does in production.
-        fakeNow = 1_002
-        controller.recordSpeedSample()
+        // Once the tracker's window has passed with no byte movement, ticks
+        // must drive the PUBLISHED speed to 0 — not leave it stale/nil forever
+        // — which is what the 1s speed ticker does in production. (Within the
+        // window a positive rate is correct: that's the locked windowed-average
+        // contract, so this asserts only the post-window steady state.)
+        for tick in 1...6 {
+            fakeNow = 1_000 + TimeInterval(tick)
+            controller.recordSpeedSample()
+        }
         guard case let .downloading(_, progress) = controller.state else {
             return XCTFail("expected downloading, got \(controller.state)")
         }

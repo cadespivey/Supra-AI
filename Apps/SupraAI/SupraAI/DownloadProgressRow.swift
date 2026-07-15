@@ -37,7 +37,9 @@ struct DownloadProgressRow: View {
     }
 
     private var caption: String {
-        var parts = ["\(Int((progress.fractionCompleted * 100).rounded()))%"]
+        // Floor, don't round: a download at 99.6% must read "99%", never a
+        // premature "100%".
+        var parts = ["\(Int(progress.fractionCompleted * 100))%"]
         if let speed = progress.speedText { parts.append(speed) }
         parts.append("\(progress.completedFiles)/\(progress.totalFiles) files")
         var text = parts.joined(separator: " · ")

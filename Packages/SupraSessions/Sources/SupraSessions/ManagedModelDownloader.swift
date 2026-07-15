@@ -44,6 +44,7 @@ enum ManagedModelDownloader {
             totalBytes: totalBytes,
             onProgress: onProgress
         )
+        defer { aggregator.invalidate() }
         aggregator.emit(currentFile: "", force: true)
 
         if !pending.isEmpty {
@@ -136,6 +137,8 @@ enum ManagedModelDownloader {
         private var verifiedBytes: Int64
         private let totalBytes: Int64
         private var inFlight: [String: Int64] = [:]
+        private var finishedFiles: Set<String> = []
+        private var isInvalidated = false
         private var lastEmittedBytes: Int64 = -1
         private let emitStride: Int64
         private let onProgress: @MainActor (ModelDownloadProgress) -> Void
@@ -151,11 +154,29 @@ enum ManagedModelDownloader {
             self.totalFiles = totalFiles
             self.verifiedBytes = verifiedBytes
             self.totalBytes = totalBytes
-            self.emitStride = max(1, totalBytes / 200)
+            // 0.5% steps, but never coarser than 4 MB: the controllers' rate
+            // tracker needs emissions more frequent than its sampling window
+            // at ordinary connection speeds, and totalBytes/200 alone is ~85 MB
+            // for a 17 GB repo — the MB/s indicator would never appear for
+            // exactly the downloads that need it.
+            self.emitStride = min(max(1, totalBytes / 200), 4_000_000)
             self.onProgress = onProgress
         }
 
+        /// Emissions stop the moment the transfer loop exits: byte reports
+        /// bridge through unstructured tasks, so a straggler can arrive after
+        /// cancel/failure settled the controller state — re-publishing then
+        /// would resurrect a phantom .downloading.
+        func invalidate() {
+            isInvalidated = true
+        }
+
         func reportInFlightBytes(_ bytes: Int64, for artifact: ModelArtifactManifest.File) {
+            guard !isInvalidated else { return }
+            // A bridged report can land after its file completed (the client
+            // forwards transport reports through unstructured tasks); counting
+            // it again would double the file against verifiedBytes.
+            guard !finishedFiles.contains(artifact.relativePath) else { return }
             // Reports are cumulative but can arrive out of order across executor
             // hops; keep the max and clamp to the manifest size so a transfer
             // can never account for more than its artifact.
@@ -165,6 +186,7 @@ enum ManagedModelDownloader {
         }
 
         func completeFile(_ artifact: ModelArtifactManifest.File) {
+            finishedFiles.insert(artifact.relativePath)
             inFlight[artifact.relativePath] = nil
             verifiedBytes += artifact.size
             completedFiles += 1
