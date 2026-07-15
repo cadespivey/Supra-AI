@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.3.0] - 2026-07-15
+
+Download experience upgrade and a macOS 27 window fix.
+
+### Added
+
+- **Download progress you can trust** — model and embedding downloads now show a
+  progress bar that fills by actual bytes transferred (resumed downloads start
+  partly filled), the live download speed in MB/s, and the file count. A stalled
+  connection reads 0.0 MB/s instead of freezing at the last healthy rate.
+- **Cancel any download** — every download surface (Models pane, download sheet,
+  embedding setup) now has a Cancel button, during both preparation and transfer.
+  Cancelling keeps verified files, so downloading again resumes where it left off.
+
+### Fixed
+
+- **The bottom of the window is reachable again on macOS 27** — the sidebar's
+  Recycle Bin bar and the chat message field were clipped below the window's
+  bottom edge on the macOS 27 beta. Every pane now ends exactly at the window
+  bottom on all supported macOS versions, including after zoom and window tiling.
+
 ## [2.2.2] - 2026-07-14
 
 Model downloads restored, plus a release-pipeline reliability fix.
