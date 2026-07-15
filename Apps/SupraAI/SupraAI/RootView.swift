@@ -304,12 +304,8 @@ struct FirstRunOnboardingView: View {
             Label("Downloaded", systemImage: "checkmark.circle.fill")
                 .font(.supraCaption).foregroundStyle(.green)
         } else if isDownloading(catalog) {
-            if case let .downloading(_, completed, total, file) = downloader.state {
-                VStack(alignment: .leading, spacing: 2) {
-                    ProgressView(value: Double(completed), total: Double(max(total, 1)))
-                    Text("\(completed)/\(total) — \(file)").font(.supraCaption)
-                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                }
+            if case let .downloading(_, progress) = downloader.state {
+                DownloadProgressRow(progress: progress)
             } else {
                 Text("Preparing…").font(.supraCaption).foregroundStyle(.secondary)
             }
@@ -325,8 +321,8 @@ struct FirstRunOnboardingView: View {
         } else if documentSetup.embeddingTestPassed, let model = documentSetup.selectedEmbeddingModel {
             Label("Ready — \(model.displayName)", systemImage: "checkmark.circle.fill")
                 .font(.supraCaption).foregroundStyle(.green)
-        } else if case let .downloading(_, completed, total, _) = embeddingDownloader.state {
-            ProgressView(value: Double(completed), total: Double(max(total, 1)))
+        } else if case let .downloading(_, progress) = embeddingDownloader.state {
+            DownloadProgressRow(progress: progress)
         } else if case .preparing = embeddingDownloader.state {
             Text("Preparing…").font(.supraCaption).foregroundStyle(.secondary)
         }
@@ -374,7 +370,7 @@ struct FirstRunOnboardingView: View {
         guard let catalog else { return false }
         switch downloader.state {
         case let .preparing(repoID): return repoID == catalog.repoID
-        case let .downloading(repoID, _, _, _): return repoID == catalog.repoID
+        case let .downloading(repoID, _): return repoID == catalog.repoID
         default: return false
         }
     }

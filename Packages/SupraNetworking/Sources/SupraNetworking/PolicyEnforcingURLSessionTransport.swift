@@ -40,8 +40,16 @@ public final class PolicyEnforcingURLSessionTransport: @unchecked Sendable {
         }
     }
 
-    public func download(for request: URLRequest, policy: RedirectPolicy) async throws -> PolicyHTTPDownload {
-        let delegate = RedirectTaskDelegate(initialRequest: request, policy: policy)
+    /// `onBytes` receives the cumulative bytes written for this transfer,
+    /// throttled to ~2 MB increments (URLSession's `didWriteData` fires per
+    /// buffer — far too often to forward for multi-gigabyte model weights).
+    /// Called on URLSession's delegate queue; callers hop executors themselves.
+    public func download(
+        for request: URLRequest,
+        policy: RedirectPolicy,
+        onBytes: (@Sendable (Int64) -> Void)? = nil
+    ) async throws -> PolicyHTTPDownload {
+        let delegate = RedirectTaskDelegate(initialRequest: request, policy: policy, onBytes: onBytes)
         do {
             let (temporaryURL, response) = try await session.download(for: request, delegate: delegate)
             try delegate.throwIfRejected()
@@ -57,18 +65,50 @@ public final class PolicyEnforcingURLSessionTransport: @unchecked Sendable {
     }
 }
 
-private final class RedirectTaskDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+private final class RedirectTaskDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate, @unchecked Sendable {
     private static let logger = Logger(subsystem: "com.supraai.networking", category: "redirect-policy")
+    /// Forwarding threshold for byte-progress callbacks.
+    private static let byteReportStride: Int64 = 2_000_000
 
     private let policy: RedirectPolicy
+    private let onBytes: (@Sendable (Int64) -> Void)?
     private let lock = NSLock()
     private var currentRequest: URLRequest
     private var storedRedirects: [RedirectAuditHop] = []
     private var rejection: RedirectRejection?
+    private var lastReportedBytes: Int64 = 0
 
-    init(initialRequest: URLRequest, policy: RedirectPolicy) {
+    init(
+        initialRequest: URLRequest,
+        policy: RedirectPolicy,
+        onBytes: (@Sendable (Int64) -> Void)? = nil
+    ) {
         self.currentRequest = initialRequest
         self.policy = policy
+        self.onBytes = onBytes
+    }
+
+    /// Required by URLSessionDownloadDelegate; the async `download(for:)` API
+    /// returns the temporary URL directly, so nothing to do here.
+    func urlSession(
+        _: URLSession,
+        downloadTask _: URLSessionDownloadTask,
+        didFinishDownloadingTo _: URL
+    ) {}
+
+    func urlSession(
+        _: URLSession,
+        downloadTask _: URLSessionDownloadTask,
+        didWriteData _: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite _: Int64
+    ) {
+        guard let onBytes else { return }
+        lock.lock()
+        let shouldReport = totalBytesWritten - lastReportedBytes >= Self.byteReportStride
+        if shouldReport { lastReportedBytes = totalBytesWritten }
+        lock.unlock()
+        if shouldReport { onBytes(totalBytesWritten) }
     }
 
     var redirects: [RedirectAuditHop] {

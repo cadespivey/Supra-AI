@@ -12,12 +12,13 @@ public final class EmbeddingModelDownloadController: ObservableObject {
     public enum State: Equatable, Sendable {
         case idle
         case preparing(repoID: String)
-        case downloading(repoID: String, completedFiles: Int, totalFiles: Int, currentFile: String)
+        case downloading(repoID: String, progress: ModelDownloadProgress)
         case finished(repoID: String, displayName: String)
         case failed(message: String)
     }
 
     @Published public private(set) var state: State = .idle
+    private var rateTracker = DownloadRateTracker()
 
     /// Invoked on the main actor right after a download registers (and optionally
     /// selects) its model in the store. Lets the setup controller refresh its cached
@@ -105,14 +106,19 @@ public final class EmbeddingModelDownloadController: ObservableObject {
             guard manifest.repositoryID == repoID else {
                 throw ManagedModelIntegrityError.manifestMismatch
             }
+            rateTracker = DownloadRateTracker()
             try await ManagedModelDownloader.downloadFiles(
                 manifest: manifest,
                 destinationRoot: destinationRoot,
                 fetcher: fetcher
-            ) { [weak self] completed, total, file in
-                self?.state = .downloading(
-                    repoID: repoID, completedFiles: completed, totalFiles: total, currentFile: file
+            ) { [weak self] progress in
+                guard let self else { return }
+                var progress = progress
+                progress.bytesPerSecond = self.rateTracker.record(
+                    bytes: progress.bytesReceived,
+                    at: ProcessInfo.processInfo.systemUptime
                 )
+                self.state = .downloading(repoID: repoID, progress: progress)
             }
             let installed = try ManagedModelStorage.loadVerifiedManifest(at: destinationRoot)
             guard installed == manifest.canonicalized() else {
