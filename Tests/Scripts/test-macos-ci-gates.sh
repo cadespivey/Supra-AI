@@ -385,28 +385,32 @@ run_case \
   env PATH=/usr/bin:/bin \
     bash "${repo_root}/Tests/Scripts/test-supra-sessions-swift6-portability.sh"
 
-# Expected RED after the window-resize feedback fix: Xcode 16.4 imports block-
-# based NotificationCenter callbacks as Sendable/nonisolated even when the
-# delivery queue is .main. Each callback must synchronously assert the documented
-# main-queue contract before touching the NSView's main-actor-isolated state.
+# The AppKit window-resize observer reader was replaced by a SwiftUI
+# layout-proposal probe (macOS 27 bottom-chrome clipping fix): the shell sizes
+# itself from the height SwiftUI proposes, never from NSWindow metrics observed
+# through NotificationCenter. Reintroducing either mechanism would bring back
+# the hazards this gate guards — the Sendable/nonisolated observer-callback
+# race the previous form of this gate counted isolation hops for, and the
+# AppKit-vs-SwiftUI geometry disagreement that clipped the Recycle Bin bar and
+# chat composer below the window's bottom edge on macOS 27 — so the gate now
+# fails closed on any observer registration or window-metric read in the shell
+# (comment lines excluded; the explanatory comments name those APIs).
 main_shell_source="${repo_root}/Apps/SupraAI/SupraAI/MainShellView.swift"
-window_resize_reader_source="${temporary_dir}/WindowLiveResizeHeightView.swift"
-sed -n \
-  '/^private final class WindowLiveResizeHeightView: NSView {/,/^}/p' \
-  "$main_shell_source" >"$window_resize_reader_source"
 window_resize_observers="$(
-  { grep -F 'NotificationCenter.default.addObserver(' "$window_resize_reader_source" || true; } |
+  { grep -vE '^[[:space:]]*//' "$main_shell_source" |
+      grep -F 'NotificationCenter.default.addObserver(' || true; } |
     wc -l | tr -d ' '
 )"
-main_actor_observer_hops="$(
-  { grep -F 'MainActor.assumeIsolated {' "$window_resize_reader_source" || true; } |
+window_metric_reads="$(
+  { grep -vE '^[[:space:]]*//' "$main_shell_source" |
+      grep -E 'contentRect\(forFrameRect:|contentLayoutRect|NSScreen|visibleFrame' || true; } |
     wc -l | tr -d ' '
 )"
-if [[ "$window_resize_observers" != '3' || "$main_actor_observer_hops" != '3' ]]; then
+if [[ "$window_resize_observers" != '0' || "$window_metric_reads" != '0' ]]; then
   record_failure \
-    "window resize observers are not synchronously main-actor isolated (observers=${window_resize_observers}, isolated=${main_actor_observer_hops})"
+    "shell height must come from the SwiftUI layout proposal, not AppKit window observation (observers=${window_resize_observers}, windowMetricReads=${window_metric_reads})"
 else
-  printf '%s\n' 'PASS: window resize observers synchronously assert main-actor isolation'
+  printf '%s\n' 'PASS: shell height comes from the layout proposal, not AppKit window observation'
 fi
 
 if (( failures != 0 )); then
