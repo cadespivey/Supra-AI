@@ -73,6 +73,7 @@
 		A42B02050000000000000005 /* SupraRuntimeModelSecurity in Frameworks */ = {isa = PBXBuildFile; productRef = A42B02050000000000000422 /* SupraRuntimeModelSecurity */; };
 		C8914D48FD9E94ED7FA33488 /* ScratchPadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8792ADFD107281343AFEEA5C /* ScratchPadView.swift */; };
 		D43B113C5FCE7B2343E29B6A /* PublicRecordsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEBC0EB0D3FD3BAFBA6FE8C8 /* PublicRecordsView.swift */; };
+		D75FC07E8CB2C15E194220DE /* WindowChromeLayoutUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0762F779C5E28BCDE5295FBA /* WindowChromeLayoutUITests.swift */; };
 		D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */; };
 		F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */; };
 /* End PBXBuildFile section */
@@ -110,6 +111,7 @@
 
 /* Begin PBXFileReference section */
 		34B94BA2F51DCE8E94476893 /* DownloadProgressRow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DownloadProgressRow.swift; sourceTree = "<group>"; };
+		0762F779C5E28BCDE5295FBA /* WindowChromeLayoutUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WindowChromeLayoutUITests.swift; sourceTree = "<group>"; };
 		45DF0346474345DA98F88B95 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		5A0000000000000000000101 /* SupraAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupraAIApp.swift; sourceTree = "<group>"; };
 		5A0000000000000000000102 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
@@ -350,6 +352,7 @@
 			children = (
 				BDDEEEEA83AAE455AE64D9F5 /* ResearchAuthoritiesUITests.swift */,
 				A42B02010000000000000101 /* RuntimeXPCIntegrationTests.swift */,
+				0762F779C5E28BCDE5295FBA /* WindowChromeLayoutUITests.swift */,
 			);
 			path = SupraAIUITests;
 			sourceTree = "<group>";
@@ -637,6 +640,7 @@
 			files = (
 				89AC1CC2D0CFEA61CB407D94 /* ResearchAuthoritiesUITests.swift in Sources */,
 				A42B02010000000000000001 /* RuntimeXPCIntegrationTests.swift in Sources */,
+				D75FC07E8CB2C15E194220DE /* WindowChromeLayoutUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
