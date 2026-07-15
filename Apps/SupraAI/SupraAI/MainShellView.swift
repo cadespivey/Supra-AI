@@ -10,31 +10,77 @@ struct MainShellView: View {
     @State private var windowContentHeight: CGFloat = 720
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView(
-                selection: sidebarSelection,
-                matters: environment.mattersController,
-                onNewMatter: { showNewMatter = true }
-            )
-            .frame(height: windowContentHeight, alignment: .top)
-        } detail: {
-            VStack(spacing: 0) {
-                if environment.usingFallbackStore {
-                    SupraWarningBanner(
-                        .warning,
-                        title: "Working in temporary storage",
-                        message: "Supra AI couldn't open its database, so matters, chats, and documents created now won't be saved when you quit. Restart the app; if this keeps happening, check the disk space and permissions for your Application Support folder."
-                    )
-                    .padding([.horizontal, .top], 12)
+        // Top alignment matters: while the measured height lags the live
+        // proposal (first pass after mount, enlarging live resizes), the
+        // stale-shorter shell must hug the toolbar edge, not center with both
+        // edges adrift.
+        ZStack(alignment: .top) {
+            // Measures the height SwiftUI actually proposes for the window's
+            // content region, which is what the shell's cap below must match
+            // exactly. Reading NSWindow metrics instead (the previous approach)
+            // breaks whenever AppKit's window arithmetic and SwiftUI's proposal
+            // disagree: on macOS 27 the proposed region excludes the unified
+            // toolbar while contentRect(forFrameRect:) still spans the full
+            // frame, so the over-tall shell was centered and its bottom ~26pt —
+            // the Recycle Bin bar and chat composer — hung below the window's
+            // bottom edge. The proposal is also updated on programmatic resizes
+            // (zoom, tiling), which the notification-based reader deliberately
+            // ignored. It never depends on content size, so the original
+            // feedback loop (tall pushed destinations growing the window, which
+            // grew the content, which grew the window) cannot restart.
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { updateWindowContentHeight(proxy.size.height) }
+                            .onChange(of: proxy.size.height) { _, newHeight in
+                                updateWindowContentHeight(newHeight)
+                            }
+                    }
+                )
+            // The columns are NOT pinned to the measured height: each split-view
+            // column is its own hosting environment with its own safe-area
+            // accounting (on macOS 27 the sidebar column adds a ~52pt toolbar
+            // inset internally), so a root-height frame inside a column can
+            // exceed the column's real region — SwiftUI resolves that by
+            // centering, which pushed the Recycle Bin bar ~26pt below the
+            // window bottom even while the outer shell measured flush. Greedy
+            // fills resolve to each column's own proposal exactly; only the
+            // ROOT frame below needs the pinned ideal/max, and that alone
+            // keeps content from growing the window.
+            NavigationSplitView {
+                SidebarView(
+                    selection: sidebarSelection,
+                    matters: environment.mattersController,
+                    onNewMatter: { showNewMatter = true }
+                )
+            } detail: {
+                VStack(spacing: 0) {
+                    if environment.usingFallbackStore {
+                        SupraWarningBanner(
+                            .warning,
+                            title: "Working in temporary storage",
+                            message: "Supra AI couldn't open its database, so matters, chats, and documents created now won't be saved when you quit. Restart the app; if this keeps happening, check the disk space and permissions for your Application Support folder."
+                        )
+                        .padding([.horizontal, .top], 12)
+                    }
+                    detailView
+                        .frame(minWidth: 640, minHeight: 420)
                 }
-                detailView
-                    .frame(minWidth: 640, minHeight: 420)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .frame(height: windowContentHeight, alignment: .top)
+            .frame(minWidth: 880)
+            // Flexible below the measured height, never above it: if the region
+            // shrinks (the toolbar registers a beat after the shell mounts), the
+            // shell follows in the same layout pass instead of forcing the window
+            // to grow — a rigid height here made the window gain the toolbar's
+            // 20pt every launch, and clipped again once the screen blocked the
+            // growth. The pinned ideal keeps tall pushed destinations from
+            // growing the window; the cap keeps the shell from ever exceeding
+            // the region (which SwiftUI resolves by centering, i.e. clipping).
+            .frame(minHeight: 420, idealHeight: windowContentHeight, maxHeight: windowContentHeight, alignment: .top)
         }
-        .frame(minWidth: 880)
-        .frame(height: windowContentHeight, alignment: .top)
-        .background(WindowLiveResizeHeightReader(height: $windowContentHeight))
         .onReceive(NotificationCenter.default.publisher(for: .supraNavigateToRoute)) { note in
             if let route = note.object as? AppRoute { selection = .route(route) }
         }
@@ -60,6 +106,15 @@ struct MainShellView: View {
                 }
             }
         }
+    }
+
+    /// Pins the shell to the proposed layout height, so the panes end exactly at
+    /// the window's bottom edge. The 420pt floor mirrors the detail pane's
+    /// minimum, guarding against transient degenerate proposals mid-teardown.
+    private func updateWindowContentHeight(_ proposedHeight: CGFloat) {
+        guard proposedHeight > 0 else { return }
+        let height = max(420, proposedHeight)
+        if windowContentHeight != height { windowContentHeight = height }
     }
 
     /// Selecting a matter row also scopes the controller so its workspace (and the
@@ -196,109 +251,6 @@ struct MainShellView: View {
         }
     }
 
-}
-
-/// Publishes a finite initial window height and subsequent user-driven live
-/// resizes only. Programmatic layout changes are deliberately ignored: feeding
-/// every AppKit resize back into SwiftUI caused long pushed destinations to grow
-/// the window, update the binding, and repeat while recentering vertically.
-private struct WindowLiveResizeHeightReader: NSViewRepresentable {
-    @Binding var height: CGFloat
-
-    func makeNSView(context: Context) -> WindowLiveResizeHeightView {
-        let view = WindowLiveResizeHeightView()
-        configureHeightCallback(for: view)
-        return view
-    }
-
-    func updateNSView(_ view: WindowLiveResizeHeightView, context: Context) {
-        configureHeightCallback(for: view)
-    }
-
-    private func configureHeightCallback(for view: WindowLiveResizeHeightView) {
-        view.onHeightChange = { newHeight in
-            DispatchQueue.main.async {
-                if height != newHeight { height = newHeight }
-            }
-        }
-    }
-
-    static func dismantleNSView(_ view: WindowLiveResizeHeightView, coordinator: ()) {
-        view.stopObserving()
-    }
-}
-
-private final class WindowLiveResizeHeightView: NSView {
-    var onHeightChange: ((CGFloat) -> Void)?
-    private var liveResizeStartObserver: NSObjectProtocol?
-    private var resizeObserver: NSObjectProtocol?
-    private var liveResizeEndObserver: NSObjectProtocol?
-    private var isUserResizing = false
-    private var lastHeight: CGFloat?
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        stopObserving()
-        guard let window else { return }
-        reportHeight(of: window, isInitialMeasurement: true)
-        liveResizeStartObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.willStartLiveResizeNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.isUserResizing = true
-            }
-        }
-        resizeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didResizeNotification,
-            object: window,
-            queue: .main
-        ) { [weak self, weak window] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.isUserResizing, let window else { return }
-                self.reportHeight(of: window, isInitialMeasurement: false)
-            }
-        }
-        liveResizeEndObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didEndLiveResizeNotification,
-            object: window,
-            queue: .main
-        ) { [weak self, weak window] _ in
-            MainActor.assumeIsolated {
-                guard let self, let window else { return }
-                self.reportHeight(of: window, isInitialMeasurement: false)
-                self.isUserResizing = false
-            }
-        }
-    }
-
-    private func reportHeight(of window: NSWindow, isInitialMeasurement: Bool) {
-        let currentHeight = window.contentRect(forFrameRect: window.frame).height
-        let visibleScreenHeight = window.screen?.visibleFrame.height
-            ?? NSScreen.main?.visibleFrame.height
-            ?? 900
-        guard currentHeight > 0 else { return }
-        let boundedHeight: CGFloat
-        if isInitialMeasurement, currentHeight > visibleScreenHeight {
-            boundedHeight = min(800, max(420, visibleScreenHeight - 80))
-        } else {
-            boundedHeight = min(currentHeight, max(420, visibleScreenHeight))
-        }
-        guard boundedHeight != lastHeight else { return }
-        lastHeight = boundedHeight
-        onHeightChange?(boundedHeight)
-    }
-
-    func stopObserving() {
-        for observer in [liveResizeStartObserver, resizeObserver, liveResizeEndObserver] {
-            if let observer { NotificationCenter.default.removeObserver(observer) }
-        }
-        liveResizeStartObserver = nil
-        resizeObserver = nil
-        liveResizeEndObserver = nil
-        isUserResizing = false
-    }
 }
 
 /// Hosts a matter's workspace, resolving the matter from the (observed) controller
