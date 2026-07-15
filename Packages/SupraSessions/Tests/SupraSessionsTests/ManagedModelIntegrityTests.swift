@@ -280,7 +280,7 @@ final class ManagedModelIntegrityTests: XCTestCase {
                 destinationRoot: directory,
                 fetcher: interrupted,
                 maxConcurrent: 1
-            ) { _, _, _ in }
+            ) { _ in }
             XCTFail("expected cancellation")
         } catch is CancellationError {
             // Expected.
@@ -294,7 +294,7 @@ final class ManagedModelIntegrityTests: XCTestCase {
             destinationRoot: directory,
             fetcher: resumed,
             maxConcurrent: 1
-        ) { _, _, _ in }
+        ) { _ in }
 
         XCTAssertEqual(resumed.downloadedFiles(), ["tokenizer.json"])
         XCTAssertEqual(try ManagedModelStorage.loadVerifiedManifest(at: directory), manifest)
@@ -431,7 +431,8 @@ private final class IntegrityFetcher: ModelRepositoryFetching, @unchecked Sendab
         repoID: String,
         revision: String,
         artifact: ModelArtifactManifest.File,
-        to destination: URL
+        to destination: URL,
+        onBytes: (@Sendable (Int64) async -> Void)?
     ) async throws {
         lock.withLock {
             downloads.append(artifact.relativePath)

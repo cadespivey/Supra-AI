@@ -65,6 +65,7 @@
 		5A0000000000000000000F02 /* MatterDraftingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000F03 /* MatterDraftingView.swift */; };
 		89AC1CC2D0CFEA61CB407D94 /* ResearchAuthoritiesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDDEEEEA83AAE455AE64D9F5 /* ResearchAuthoritiesUITests.swift */; };
 		92040226CB4C642EDABCE796 /* BillingDraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D443FEB23479EC80411A4759 /* BillingDraftView.swift */; };
+		9F6849EE81BB1AF60616E97D /* DownloadProgressRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34B94BA2F51DCE8E94476893 /* DownloadProgressRow.swift */; };
 		A42B02010000000000000001 /* RuntimeXPCIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02010000000000000101 /* RuntimeXPCIntegrationTests.swift */; };
 		A42B02020000000000000002 /* RuntimeXPCIntegrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02020000000000000102 /* RuntimeXPCIntegrationView.swift */; };
 		A42B02030000000000000003 /* RuntimeModelDirectoryAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02030000000000000103 /* RuntimeModelDirectoryAccess.swift */; };
@@ -109,6 +110,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		34B94BA2F51DCE8E94476893 /* DownloadProgressRow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DownloadProgressRow.swift; sourceTree = "<group>"; };
 		0762F779C5E28BCDE5295FBA /* WindowChromeLayoutUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WindowChromeLayoutUITests.swift; sourceTree = "<group>"; };
 		45DF0346474345DA98F88B95 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		5A0000000000000000000101 /* SupraAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupraAIApp.swift; sourceTree = "<group>"; };
@@ -249,6 +251,7 @@
 				AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */,
 				70160F9EC6701AF74DA1E3A5 /* SupraTheme.swift */,
 				EEBC0EB0D3FD3BAFBA6FE8C8 /* PublicRecordsView.swift */,
+				34B94BA2F51DCE8E94476893 /* DownloadProgressRow.swift */,
 			);
 			path = SupraAI;
 			sourceTree = "<group>";
@@ -611,6 +614,7 @@
 				4E4BB1F8196E2C8E3DDBF739 /* SupraTheme.swift in Sources */,
 				265DA3D6D17CF88EBFE1C27A /* AuthorityReaderView.swift in Sources */,
 				D43B113C5FCE7B2343E29B6A /* PublicRecordsView.swift in Sources */,
+				9F6849EE81BB1AF60616E97D /* DownloadProgressRow.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -8,11 +8,16 @@ public protocol ModelRepositoryFetching: Sendable {
     /// complete size/digest metadata for every artifact.
     func fetchManifest(repoID: String) async throws -> ModelArtifactManifest
     /// Downloads one artifact from the resolved revision to a caller-owned partial path.
+    /// `onBytes` receives the cumulative bytes transferred for THIS artifact as the
+    /// transfer proceeds (already throttled by the transport); implementations may
+    /// call it from any executor, and awaiting it lets tests observe each report
+    /// deterministically before the transfer continues.
     func downloadFile(
         repoID: String,
         revision: String,
         artifact: ModelArtifactManifest.File,
-        to destination: URL
+        to destination: URL,
+        onBytes: (@Sendable (Int64) async -> Void)?
     ) async throws
     /// Fetches `config.json` from the same immutable revision for the early
     /// compatibility check performed before multi-gigabyte weights are transferred.
@@ -106,7 +111,8 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         repoID: String,
         revision: String,
         artifact: ModelArtifactManifest.File,
-        to destination: URL
+        to destination: URL,
+        onBytes: (@Sendable (Int64) async -> Void)?
     ) async throws {
         try Self.validate(repoID)
         guard revision.count == 40, revision.allSatisfy(\.isHexDigit) else {
@@ -124,9 +130,19 @@ public struct HuggingFaceClient: ModelRepositoryFetching {
         }
         try Self.enforceHost(url)
 
+        // The transport reports on URLSession's delegate queue; bridge each
+        // (already ~2 MB-throttled) report into a task. Reports are cumulative,
+        // so out-of-order delivery is harmless — the aggregator keeps the max.
+        var bridgedProgress: (@Sendable (Int64) -> Void)?
+        if let onBytes {
+            bridgedProgress = { bytes in
+                Task { await onBytes(bytes) }
+            }
+        }
         let result = try await transport.download(
             for: URLRequest(url: url),
-            policy: RedirectPolicy.huggingFace(initialURL: url)
+            policy: RedirectPolicy.huggingFace(initialURL: url),
+            onBytes: bridgedProgress
         )
         do {
             try Self.check(result.response, file: artifact.relativePath)

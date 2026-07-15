@@ -1130,12 +1130,13 @@ struct EmbeddingModelSetupView: View {
     @ViewBuilder private var downloadStatus: some View {
         switch downloader.state {
         case .preparing(let repo):
-            Text("Preparing \(repo)…").font(.supraCaption).foregroundStyle(.secondary)
-        case let .downloading(_, completed, total, file):
-            VStack(alignment: .leading, spacing: 3) {
-                ProgressView(value: Double(completed), total: Double(max(total, 1)))
-                Text("\(completed)/\(total) files — \(file)").font(.supraCaption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            HStack(spacing: 10) {
+                Text("Preparing \(repo)…").font(.supraCaption).foregroundStyle(.secondary)
+                Button("Cancel", role: .cancel) { downloader.cancel() }
+                    .buttonStyle(.ghostDanger)
             }
+        case let .downloading(_, progress):
+            DownloadProgressRow(progress: progress, onCancel: { downloader.cancel() })
         case let .finished(_, name):
             Text("Downloaded \(name). Verifying it below…").font(.supraCaption).foregroundStyle(.green)
         case let .failed(message):

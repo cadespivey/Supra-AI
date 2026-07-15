@@ -408,7 +408,8 @@ private final class StubFetcher: ModelRepositoryFetching, @unchecked Sendable {
         repoID: String,
         revision: String,
         artifact: ModelArtifactManifest.File,
-        to destination: URL
+        to destination: URL,
+        onBytes: (@Sendable (Int64) async -> Void)?
     ) async throws {
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(),
@@ -459,7 +460,8 @@ private final class TrackingFetcher: ModelRepositoryFetching, @unchecked Sendabl
         repoID: String,
         revision: String,
         artifact: ModelArtifactManifest.File,
-        to destination: URL
+        to destination: URL,
+        onBytes: (@Sendable (Int64) async -> Void)?
     ) async throws {
         lock.withLock { downloaded.append(artifact.relativePath) }
         try FileManager.default.createDirectory(

@@ -12,12 +12,13 @@ public final class EmbeddingModelDownloadController: ObservableObject {
     public enum State: Equatable, Sendable {
         case idle
         case preparing(repoID: String)
-        case downloading(repoID: String, completedFiles: Int, totalFiles: Int, currentFile: String)
+        case downloading(repoID: String, progress: ModelDownloadProgress)
         case finished(repoID: String, displayName: String)
         case failed(message: String)
     }
 
     @Published public private(set) var state: State = .idle
+    private var rateTracker = DownloadRateTracker()
 
     /// Invoked on the main actor right after a download registers (and optionally
     /// selects) its model in the store. Lets the setup controller refresh its cached
@@ -27,16 +28,21 @@ public final class EmbeddingModelDownloadController: ObservableObject {
     private let store: SupraStore
     private let fetcher: ModelRepositoryFetching
     private let modelsDirectory: URL
+    /// Monotonic clock for speed sampling; injectable so tests drive stalls
+    /// deterministically.
+    private let now: () -> TimeInterval
     private var task: Task<Void, Never>?
 
     public init(
         store: SupraStore,
         fetcher: ModelRepositoryFetching,
-        modelsDirectory: URL = ManagedModelStorage.embeddingModelsDirectory()
+        modelsDirectory: URL = ManagedModelStorage.embeddingModelsDirectory(),
+        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.store = store
         self.fetcher = fetcher
         self.modelsDirectory = modelsDirectory
+        self.now = now
     }
 
     public var isBusy: Bool {
@@ -99,20 +105,47 @@ public final class EmbeddingModelDownloadController: ObservableObject {
 
         state = .preparing(repoID: repoID)
 
+        // Re-sample the transfer rate once a second so a stalled connection's
+        // MB/s decays to 0 instead of freezing at the last healthy reading
+        // (byte-driven emissions stop entirely during a stall).
+        let speedTicker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                self?.recordSpeedSample()
+            }
+        }
+        defer { speedTicker.cancel() }
+
         do {
             let manifest = try await fetcher.fetchManifest(repoID: repoID)
             try manifest.validateStructure()
             guard manifest.repositoryID == repoID else {
                 throw ManagedModelIntegrityError.manifestMismatch
             }
+            rateTracker = DownloadRateTracker()
             try await ManagedModelDownloader.downloadFiles(
                 manifest: manifest,
                 destinationRoot: destinationRoot,
                 fetcher: fetcher
-            ) { [weak self] completed, total, file in
-                self?.state = .downloading(
-                    repoID: repoID, completedFiles: completed, totalFiles: total, currentFile: file
+            ) { [weak self] progress in
+                guard let self else { return }
+                // A byte report bridged through an unstructured task can
+                // straggle in after cancel/failure settled the state; accepting
+                // it would wedge the controller in a phantom .downloading
+                // (cancel, dismissResult, and download are all no-ops there).
+                switch self.state {
+                case let .preparing(activeRepo) where activeRepo == repoID,
+                     let .downloading(activeRepo, _) where activeRepo == repoID:
+                    break
+                default:
+                    return
+                }
+                var progress = progress
+                progress.bytesPerSecond = self.rateTracker.record(
+                    bytes: progress.bytesReceived,
+                    at: self.now()
                 )
+                self.state = .downloading(repoID: repoID, progress: progress)
             }
             let installed = try ManagedModelStorage.loadVerifiedManifest(at: destinationRoot)
             guard installed == manifest.canonicalized() else {
@@ -141,6 +174,15 @@ public final class EmbeddingModelDownloadController: ObservableObject {
                 state = .failed(message: error.localizedDescription)
             }
         }
+    }
+
+    /// Re-samples the transfer rate against the clock and republishes the
+    /// current snapshot; with unchanged bytes the windowed rate reads 0, which
+    /// is exactly what a stalled download must display.
+    func recordSpeedSample() {
+        guard case .downloading(let repoID, var progress) = state else { return }
+        progress.bytesPerSecond = rateTracker.record(bytes: progress.bytesReceived, at: now())
+        state = .downloading(repoID: repoID, progress: progress)
     }
 
     private func registerModel(

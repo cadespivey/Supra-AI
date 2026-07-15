@@ -13,13 +13,18 @@ enum ManagedModelDownloader {
         destinationRoot: URL,
         fetcher: ModelRepositoryFetching,
         maxConcurrent: Int = maxConcurrentFiles,
-        onProgress: @MainActor (_ completedFiles: Int, _ totalFiles: Int, _ currentFile: String) -> Void
+        onProgress: @escaping @MainActor (ModelDownloadProgress) -> Void
     ) async throws {
         let manifest = suppliedManifest.canonicalized()
         try manifest.validateStructure()
+        let totalFiles = manifest.files.count
+        let totalBytes = manifest.files.reduce(Int64(0)) { $0 + $1.size }
         let alreadyComplete = try prepare(destinationRoot: destinationRoot, manifest: manifest)
         if alreadyComplete {
-            onProgress(manifest.files.count, manifest.files.count, "")
+            onProgress(ModelDownloadProgress(
+                completedFiles: totalFiles, totalFiles: totalFiles, currentFile: "",
+                bytesReceived: totalBytes, totalBytes: totalBytes
+            ))
             return
         }
 
@@ -30,11 +35,20 @@ enum ManagedModelDownloader {
             ) else { return true }
             return !isVerified(destination, artifact: artifact)
         }
-        var completed = manifest.files.count - pending.count
-        onProgress(completed, manifest.files.count, "")
+        // Files reused from an interrupted earlier run count as received bytes
+        // from the very first emission, so a resumed bar starts partly filled.
+        let aggregator = ProgressAggregator(
+            completedFiles: totalFiles - pending.count,
+            totalFiles: totalFiles,
+            verifiedBytes: totalBytes - pending.reduce(Int64(0)) { $0 + $1.size },
+            totalBytes: totalBytes,
+            onProgress: onProgress
+        )
+        defer { aggregator.invalidate() }
+        aggregator.emit(currentFile: "", force: true)
 
         if !pending.isEmpty {
-            try await withThrowingTaskGroup(of: String.self) { group in
+            try await withThrowingTaskGroup(of: ModelArtifactManifest.File.self) { group in
                 var iterator = pending.makeIterator()
                 var inFlight = 0
 
@@ -45,19 +59,21 @@ enum ManagedModelDownloader {
                             artifact,
                             manifest: manifest,
                             destinationRoot: destinationRoot,
-                            fetcher: fetcher
+                            fetcher: fetcher,
+                            onBytes: { bytes in
+                                await aggregator.reportInFlightBytes(bytes, for: artifact)
+                            }
                         )
-                        return artifact.relativePath
+                        return artifact
                     }
                     inFlight += 1
                 }
 
                 for _ in 0..<min(max(1, maxConcurrent), pending.count) { startNext() }
                 while inFlight > 0 {
-                    let finishedFile = try await group.next() ?? ""
+                    guard let finished = try await group.next() else { break }
                     inFlight -= 1
-                    completed += 1
-                    onProgress(completed, manifest.files.count, finishedFile)
+                    aggregator.completeFile(finished)
                     try Task.checkCancellation()
                     startNext()
                 }
@@ -110,11 +126,93 @@ enum ManagedModelDownloader {
         return false
     }
 
+    /// Serializes byte reports from up to `maxConcurrent` transfer tasks into
+    /// monotonic whole-download progress emissions. Emissions are throttled to
+    /// ~0.5% steps of the total (always on file completion), so a 17 GB repo
+    /// publishes a few hundred state updates instead of tens of thousands.
+    @MainActor
+    private final class ProgressAggregator {
+        private var completedFiles: Int
+        private let totalFiles: Int
+        private var verifiedBytes: Int64
+        private let totalBytes: Int64
+        private var inFlight: [String: Int64] = [:]
+        private var finishedFiles: Set<String> = []
+        private var isInvalidated = false
+        private var lastEmittedBytes: Int64 = -1
+        private let emitStride: Int64
+        private let onProgress: @MainActor (ModelDownloadProgress) -> Void
+
+        init(
+            completedFiles: Int,
+            totalFiles: Int,
+            verifiedBytes: Int64,
+            totalBytes: Int64,
+            onProgress: @escaping @MainActor (ModelDownloadProgress) -> Void
+        ) {
+            self.completedFiles = completedFiles
+            self.totalFiles = totalFiles
+            self.verifiedBytes = verifiedBytes
+            self.totalBytes = totalBytes
+            // 0.5% steps, but never coarser than 4 MB: the controllers' rate
+            // tracker needs emissions more frequent than its sampling window
+            // at ordinary connection speeds, and totalBytes/200 alone is ~85 MB
+            // for a 17 GB repo — the MB/s indicator would never appear for
+            // exactly the downloads that need it.
+            self.emitStride = min(max(1, totalBytes / 200), 4_000_000)
+            self.onProgress = onProgress
+        }
+
+        /// Emissions stop the moment the transfer loop exits: byte reports
+        /// bridge through unstructured tasks, so a straggler can arrive after
+        /// cancel/failure settled the controller state — re-publishing then
+        /// would resurrect a phantom .downloading.
+        func invalidate() {
+            isInvalidated = true
+        }
+
+        func reportInFlightBytes(_ bytes: Int64, for artifact: ModelArtifactManifest.File) {
+            guard !isInvalidated else { return }
+            // A bridged report can land after its file completed (the client
+            // forwards transport reports through unstructured tasks); counting
+            // it again would double the file against verifiedBytes.
+            guard !finishedFiles.contains(artifact.relativePath) else { return }
+            // Reports are cumulative but can arrive out of order across executor
+            // hops; keep the max and clamp to the manifest size so a transfer
+            // can never account for more than its artifact.
+            let clamped = min(max(bytes, inFlight[artifact.relativePath] ?? 0), artifact.size)
+            inFlight[artifact.relativePath] = clamped
+            emit(currentFile: artifact.relativePath, force: false)
+        }
+
+        func completeFile(_ artifact: ModelArtifactManifest.File) {
+            finishedFiles.insert(artifact.relativePath)
+            inFlight[artifact.relativePath] = nil
+            verifiedBytes += artifact.size
+            completedFiles += 1
+            emit(currentFile: artifact.relativePath, force: true)
+        }
+
+        func emit(currentFile: String, force: Bool) {
+            let received = min(totalBytes, verifiedBytes + inFlight.values.reduce(0, +))
+            guard force || received - lastEmittedBytes >= emitStride else { return }
+            lastEmittedBytes = received
+            onProgress(ModelDownloadProgress(
+                completedFiles: completedFiles,
+                totalFiles: totalFiles,
+                currentFile: currentFile,
+                bytesReceived: received,
+                totalBytes: totalBytes
+            ))
+        }
+    }
+
     private static func download(
         _ artifact: ModelArtifactManifest.File,
         manifest: ModelArtifactManifest,
         destinationRoot: URL,
-        fetcher: ModelRepositoryFetching
+        fetcher: ModelRepositoryFetching,
+        onBytes: @escaping @Sendable (Int64) async -> Void
     ) async throws {
         try Task.checkCancellation()
         var destination = try ManagedModelStorage.safeDestination(
@@ -141,7 +239,8 @@ enum ManagedModelDownloader {
             repoID: manifest.repositoryID,
             revision: manifest.revision,
             artifact: artifact,
-            to: partial
+            to: partial,
+            onBytes: onBytes
         )
         try Task.checkCancellation()
 
