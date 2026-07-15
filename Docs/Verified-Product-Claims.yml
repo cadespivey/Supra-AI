@@ -51,15 +51,15 @@ claims:
 
   - id: "SECURITY-SUPPORTED-RELEASE-LINE"
     topic: "security-support-line"
-    wording: "The currently supported release line is 2.2.x."
+    wording: "The currently supported release line is 2.3.x."
     owner: "Security and release engineering"
     code_anchor: "Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
     verification: "Scripts/verify-product-claims.sh"
     ci_job: "macos-ci/inventory"
     applicable_version: "2.2.0 and later"
-    last_reviewed: "2026-07-13"
+    last_reviewed: "2026-07-15"
     publication_anchor: "SECURITY.md"
-    expected: "2.2.x"
+    expected: "2.3.x"
 
   - id: "LOCAL-PROCESSING-BOUNDARY"
     topic: "on-device-processing"
