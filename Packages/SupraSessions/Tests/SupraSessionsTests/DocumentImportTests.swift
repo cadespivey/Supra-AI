@@ -431,6 +431,146 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertNil(try store.documentLibrary.fetchBlob(sha256: digest))
         XCTAssertEqual(try Data(contentsOf: orphan), bytes, "valid content-addressed orphan should survive for reconciliation")
     }
+
+    // MARK: - OCR warning hygiene (review finding: stale/contradictory warnings)
+
+    func testSuccessfulOCRDropsStaleExtractorAdvisory() async throws {
+        // Expected RED: assertion failure — after a healthy OCR (confidence 0.90, ample
+        // recovered text) the persisted warnings still carry the extractor's pre-OCR
+        // advisory, so the decoded array is exactly
+        //   ["PDF has little embedded text; OCR recommended."]
+        // instead of empty. The advisory recommends OCR that has already run, so both
+        // `XCTAssertFalse(contains(advisory))` and `XCTAssertTrue(isEmpty)` fail.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/mixed-recovered.pdf")
+        try FileManager.default.createDirectory(at: pdfURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let richText = "Retainer agreement between McKernon Motors and outside counsel, "
+            + "executed on 2024 01 15. This first page carries substantial embedded text so "
+            + "the extractor keeps it as a text page; only the trailing blank page is routed "
+            + "to OCR."
+        try makePDF(at: pdfURL, pages: [.text(richText), .empty])
+
+        // OCR recovers ample high-confidence text for the one blank page.
+        let ocr = MockOCRService(pageResults: [
+            1: OCRTextResult(text: "OCR recovered the full body text of the scanned second page for indexing.", confidence: 0.9)
+        ])
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        // Healthy recovery: OCR ran, text is ample, confidence is high — not review.
+        XCTAssertEqual(doc.status, MatterDocumentStatus.indexing.rawValue, "high-confidence recovered OCR is healthy, not review")
+
+        // Post-fix a healthy result carries no warnings (nil JSON); tolerate either shape.
+        let warnings: [String]
+        if let warningsJSON = doc.extractionWarningsJSON {
+            warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        } else {
+            warnings = []
+        }
+        // The pre-OCR advisory recommends work that already happened — it must be dropped.
+        XCTAssertFalse(
+            warnings.contains("PDF has little embedded text; OCR recommended."),
+            "the pre-OCR advisory must not survive a successful OCR; got \(warnings)"
+        )
+        // A healthy recovery carries no OCR warnings at all.
+        XCTAssertTrue(warnings.isEmpty, "successful high-confidence OCR should leave no warnings; got \(warnings)")
+    }
+
+    func testEmptyOCRWarningIsSingleAndAccurate() async throws {
+        // Expected RED: assertion failure — the persisted warnings stack three lines,
+        //   ["PDF has little embedded text; OCR recommended.",
+        //    "OCR confidence is low; verify the extracted text before relying on it.",
+        //    "OCR produced no usable text; the original may be blank or illegible. Review the document."]
+        // The extractor advisory is stale and the low-confidence line is nonsense (there
+        // is no extracted text to verify), so the array is not the single accurate line.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/all-blank-warn.pdf")
+        try FileManager.default.createDirectory(at: pdfURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try makePDF(at: pdfURL, pages: [.empty, .empty])
+
+        let ocr = MockOCRService(pageResults: [
+            0: OCRTextResult(text: "", confidence: 0),
+            1: OCRTextResult(text: "", confidence: 0)
+        ])
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(doc.status, MatterDocumentStatus.needsReview.rawValue, "empty OCR still routes to review")
+
+        let warningsJSON = try XCTUnwrap(doc.extractionWarningsJSON, "empty-OCR documents must record a review warning")
+        let warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        XCTAssertEqual(
+            warnings,
+            ["OCR produced no usable text; the original may be blank or illegible. Review the document."],
+            "empty OCR should record exactly one accurate warning, with no stale advisory or low-confidence line; got \(warnings)"
+        )
+    }
+
+    func testLittleTextOCRWarningIsAccurate() async throws {
+        // Expected RED: assertion failure — the persisted warnings are
+        //   ["Image requires OCR to extract text.",
+        //    "OCR confidence is low; verify the extracted text before relying on it.",
+        //    "OCR produced no usable text; the original may be blank or illegible. Review the document."]
+        // OCR recovered 31 non-whitespace chars (> 0 but < 40), so the "no usable text"
+        // line is factually wrong and the extractor advisory is stale.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let imageURL = sourceRoot.appendingPathComponent("Images/faint-notice.png")
+        try FileManager.default.createDirectory(at: imageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fake-png-bytes".utf8).write(to: imageURL)
+
+        // "Notice of default dated 2024-05-01." is 31 non-whitespace characters.
+        let ocr = MockOCRService(imageResult: OCRTextResult(text: "Notice of default dated 2024-05-01.", confidence: 0.40))
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([imageURL], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(doc.status, MatterDocumentStatus.needsReview.rawValue, "sparse OCR still routes to review")
+
+        let warningsJSON = try XCTUnwrap(doc.extractionWarningsJSON, "sparse-OCR documents must record a review warning")
+        let warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        XCTAssertEqual(
+            warnings,
+            ["OCR recovered very little text; review the document before relying on it."],
+            "little-text OCR should record exactly the little-text warning, with no stale advisory, low-confidence, or no-usable-text line; got \(warnings)"
+        )
+    }
+
+    func testLowConfidenceWithUsableTextKeepsOnlyConfidenceWarning() async throws {
+        // Expected RED: assertion failure — the persisted warnings are
+        //   ["Image requires OCR to extract text.",
+        //    "OCR confidence is low; verify the extracted text before relying on it."]
+        // OCR recovered ample text (>= 40 non-whitespace chars) at low confidence, so the
+        // low-confidence line is correct but the stale extractor advisory must be dropped.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let imageURL = sourceRoot.appendingPathComponent("Images/lowconf-notice.png")
+        try FileManager.default.createDirectory(at: imageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fake-png-bytes".utf8).write(to: imageURL)
+
+        // 67 non-whitespace characters — comfortably >= the 40-char usable-text floor.
+        let ocr = MockOCRService(imageResult: OCRTextResult(
+            text: "Notice of default and acceleration for the McKernon account dated 2024-05-01.",
+            confidence: 0.30
+        ))
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([imageURL], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(doc.status, MatterDocumentStatus.needsReview.rawValue, "low-confidence OCR still routes to review")
+
+        let warningsJSON = try XCTUnwrap(doc.extractionWarningsJSON, "low-confidence OCR must record a review warning")
+        let warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        XCTAssertEqual(
+            warnings,
+            ["OCR confidence is low; verify the extracted text before relying on it."],
+            "low-confidence OCR with usable text should keep only the confidence warning, dropping the stale extractor advisory; got \(warnings)"
+        )
+    }
 }
 
 /// Deterministic OCR double. `recognizeImage` keeps the original single-result
