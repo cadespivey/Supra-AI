@@ -57,8 +57,9 @@ public struct DocumentImportReport: Codable, Sendable {
 /// email attachments as child documents, extracts text, and produces an import
 /// report (plan §4–§5). Originals are never modified.
 ///
-/// OCR is applied later by `DocumentOCRPass` (WO 36); files that need OCR are
-/// left with `needs_ocr` status here.
+/// OCR runs inline during `importFile` (via `applyOCR`) for files that lack
+/// embedded text; a document keeps `needs_ocr` status only when the service is
+/// constructed without an OCR service.
 public final class DocumentImportService: @unchecked Sendable {
     private let store: SupraStore
     private let storage: DocumentStorage
@@ -372,9 +373,11 @@ public final class DocumentImportService: @unchecked Sendable {
         // Extract, then OCR if needed.
         do {
             var result = try await extraction.extract(fileURL: managedBlob.verifiedURL)
+            var ocrApplied = false
             if result.needsOCR, ocr != nil, let format {
                 do {
                     result = try await applyOCR(to: result, blobURL: managedBlob.verifiedURL, family: format.family)
+                    ocrApplied = true
                     _ = try? store.auditEvents.recordEvent(
                         matterID: matterID, eventType: "document_ocr_completed", actor: "system",
                         summary: "OCR completed for \(displayName)", relatedTable: "matter_documents", relatedID: document.id
@@ -388,7 +391,7 @@ public final class DocumentImportService: @unchecked Sendable {
                 }
             }
             try ledger.consumeDecoded(result)
-            try persistExtraction(result, documentID: document.id)
+            try persistExtraction(result, documentID: document.id, ocrApplied: ocrApplied)
             let disposition: DocumentImportDisposition
             if result.needsOCR {
                 disposition = .ocrNeeded
@@ -581,13 +584,21 @@ public final class DocumentImportService: @unchecked Sendable {
             merged.method = "vision-ocr-image"
             merged.needsOCR = false
         case .pdf:
-            let pageResults = try await ocr.recognizePDFPages(at: blobURL, pageIndices: nil)
+            let pageResults = try await ocr.recognizePDFPages(at: blobURL, pageIndices: result.ocrPageIndices)
+            let ocrTargets = Set(result.ocrPageIndices)
             merged.parts = result.parts.enumerated().map { index, part in
                 var updated = part
-                if let ocrResult = pageResults[part.pageIndex ?? index], ocrResult.text.count > part.text.count {
-                    updated.text = ocrResult.text
+                let pageIndex = part.pageIndex ?? index
+                // Only the pages the extractor flagged for OCR are touched. Their
+                // confidence is recorded even when OCR recovered nothing (so the
+                // review gate can see it), but the OCR text only replaces the
+                // embedded text when it is actually longer.
+                if ocrTargets.contains(pageIndex), let ocrResult = pageResults[pageIndex] {
                     updated.ocrConfidence = ocrResult.confidence
-                    updated.boundingBoxesJSON = ocrResult.boundingBoxesJSON
+                    if ocrResult.text.count > part.text.count {
+                        updated.text = ocrResult.text
+                        updated.boundingBoxesJSON = ocrResult.boundingBoxesJSON
+                    }
                 }
                 return updated
             }
@@ -601,7 +612,7 @@ public final class DocumentImportService: @unchecked Sendable {
 
     // MARK: - Persistence
 
-    private func persistExtraction(_ result: ExtractionResult, documentID: String) throws {
+    private func persistExtraction(_ result: ExtractionResult, documentID: String, ocrApplied: Bool = false) throws {
         let parts = result.parts.enumerated().map { index, part in
             DocumentPagePartRecord(
                 documentID: documentID,
@@ -628,9 +639,19 @@ public final class DocumentImportService: @unchecked Sendable {
         let lowConfidence = (meanOCR.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false)
         let ocrSummary = meanOCR.map { String(format: "OCR mean confidence %.2f%@", $0, lowConfidence ? " (low)" : "") }
 
+        // OCR ran but recovered almost no text — a blank or illegible original.
+        // Route it to review instead of laundering the empty output into a clean
+        // extraction. Keyed off `ocrApplied` so a fully failed render (no recorded
+        // confidences at all) is still caught (plan §6.2, §8.4).
+        let usableTextCount = result.combinedText.filter { !$0.isWhitespace }.count
+        let emptyOCR = ocrApplied && usableTextCount < OCRPolicy.minimumUsableTextLength
+
         var warnings = result.warnings
         if lowConfidence {
             warnings.append("OCR confidence is low; verify the extracted text before relying on it.")
+        }
+        if emptyOCR {
+            warnings.append("OCR produced no usable text; the original may be blank or illegible. Review the document.")
         }
         let warningsJSON = warnings.isEmpty ? nil : (try? JSONEncoder.encodeToString(warnings))
 
@@ -639,9 +660,9 @@ public final class DocumentImportService: @unchecked Sendable {
         if result.needsOCR {
             extractionStatus = .needsOCR
             status = .needsOCR
-        } else if !ocrConfidences.isEmpty {
+        } else if ocrApplied || !ocrConfidences.isEmpty {
             extractionStatus = .ocrComplete
-            status = lowConfidence ? .needsReview : .indexing
+            status = (lowConfidence || emptyOCR) ? .needsReview : .indexing
         } else {
             extractionStatus = .extracted
             status = .indexing

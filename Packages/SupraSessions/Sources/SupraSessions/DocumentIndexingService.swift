@@ -76,8 +76,10 @@ public final class DocumentIndexingService: @unchecked Sendable {
         }
         // Without an embedder the document remains text-indexed (searchable);
         // semantic readiness requires embeddings.
-        // The document is ready for search/Q&A once indexed.
-        try store.documentLibrary.updateStatus(documentID: documentID, status: .ready)
+        // Promote to ready only from an in-progress indexing state so a document
+        // parked in needs_review/failed survives indexing instead of being
+        // clobbered back to ready.
+        try store.documentLibrary.promoteStatus(documentID: documentID, to: .ready, whenCurrentIn: [.indexing, .embedding])
         return records.count
     }
 

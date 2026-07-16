@@ -3,11 +3,12 @@ import ImageIO
 import PDFKit
 import SupraCore
 
-/// Extracts embedded text from PDFs page by page (PDFKit). Pages/documents with
-/// little or no text are flagged `needsOCR` for the OCR step (WO 36).
+/// Extracts embedded text from PDFs page by page (PDFKit). Each page with little
+/// or no text is flagged for OCR in `ocrPageIndices`, and `needsOCR` is set when
+/// any page needs it (WO 36).
 public struct PDFExtractor: DocumentExtractor {
-    /// Below this many non-whitespace characters per page on average, the PDF is
-    /// treated as scanned and routed to OCR.
+    /// Below this many non-whitespace characters on a page, that page is treated
+    /// as scanned and routed to OCR.
     private let lowTextPerPageThreshold: Int
     private let policy: ImportPolicy
 
@@ -29,7 +30,7 @@ public struct PDFExtractor: DocumentExtractor {
         }
 
         var parts: [ExtractedPart] = []
-        var totalChars = 0
+        var ocrPageIndices: [Int] = []
         var totalPixels = 0.0
         for index in 0..<pageCount {
             try Task.checkCancellation()
@@ -40,7 +41,9 @@ public struct PDFExtractor: DocumentExtractor {
                 throw ImportPolicyViolation(.pixelLimit, "PDF rendering exceeds the \(policy.maxPixels)-pixel limit.")
             }
             let text = TextNormalization.normalize(page.string ?? "")
-            totalChars += text.filter { !$0.isWhitespace }.count
+            if text.filter({ !$0.isWhitespace }).count < lowTextPerPageThreshold {
+                ocrPageIndices.append(index)
+            }
             parts.append(ExtractedPart(
                 sourceKind: .pdfPage,
                 text: text,
@@ -50,7 +53,7 @@ public struct PDFExtractor: DocumentExtractor {
         }
         try policy.validateDecodedText(parts.map(\.text).joined(separator: "\n\n"))
 
-        let needsOCR = totalChars < lowTextPerPageThreshold * pageCount
+        let needsOCR = !ocrPageIndices.isEmpty
         var warnings: [String] = []
         if needsOCR {
             warnings.append("PDF has little embedded text; OCR recommended.")
@@ -62,6 +65,7 @@ public struct PDFExtractor: DocumentExtractor {
             method: "pdfkit",
             warnings: warnings,
             needsOCR: needsOCR,
+            ocrPageIndices: ocrPageIndices,
             metadataCreatedAt: attributes?[PDFDocumentAttribute.creationDateAttribute] as? Date,
             metadataModifiedAt: attributes?[PDFDocumentAttribute.modificationDateAttribute] as? Date
         )
@@ -90,7 +94,8 @@ public struct ImageExtractor: DocumentExtractor {
             parts: [part],
             method: "image",
             warnings: ["Image requires OCR to extract text."],
-            needsOCR: true
+            needsOCR: true,
+            ocrPageIndices: [0]
         )
     }
 }
