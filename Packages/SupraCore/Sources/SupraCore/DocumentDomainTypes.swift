@@ -84,6 +84,16 @@ public enum DocumentProcessingJobStatus: String, Codable, CaseIterable, Hashable
     case cancelled
 }
 
+/// What work an app-wide processing job performs. A job's `kind` selects which
+/// phases the queue runs: a full import/reindex, a classification-only pass over
+/// already-extracted documents, or a targeted re-extraction of named documents
+/// from their managed blobs. Raw values are the stable persisted strings.
+public enum DocumentProcessingJobKind: String, Codable, CaseIterable, Hashable, Sendable {
+    case process      // legacy import-or-reindex
+    case classify     // classification phase only
+    case reprocess    // re-extract named documents from their managed blobs
+}
+
 /// Status of an import batch.
 public enum DocumentImportBatchStatus: String, Codable, CaseIterable, Hashable, Sendable {
     case discovering

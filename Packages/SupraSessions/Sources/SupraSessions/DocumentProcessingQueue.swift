@@ -115,6 +115,71 @@ public final class DocumentProcessingQueue: ObservableObject {
         }
     }
 
+    /// Enqueues a classification-only job for a matter's pending documents. No-ops
+    /// (returns nil, creates no job) when classification is disabled, when no document
+    /// is eligible for classification, or when a job is already queued/active/paused for
+    /// the matter (which will classify as its final phase) — so it is safe to call
+    /// speculatively (e.g. when a model finishes loading or the Documents tab appears).
+    @discardableResult
+    public func enqueueClassify(matterID: String) -> String? {
+        guard classificationService != nil else { return nil }
+        let documents = (try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []
+        guard documents.contains(where: DocumentClassificationService.needsClassification) else { return nil }
+        let existing = (try? store.documentJobs.fetchJobs(matterID: matterID)) ?? []
+        let hasPendingJob = existing.contains { job in
+            job.status == DocumentProcessingJobStatus.queued.rawValue
+                || job.status == DocumentProcessingJobStatus.active.rawValue
+                || job.status == DocumentProcessingJobStatus.paused.rawValue
+        }
+        guard !hasPendingJob else { return nil }
+        do {
+            let job = try store.documentJobs.enqueueJob(
+                matterID: matterID, kind: DocumentProcessingJobKind.classify.rawValue
+            )
+            _ = try? store.auditEvents.recordEvent(
+                matterID: matterID, eventType: "document_classification_started", actor: "user",
+                summary: "Queued classification of pending documents",
+                relatedTable: "document_processing_jobs", relatedID: job.id
+            )
+            refresh()
+            pump()
+            return job.id
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Enqueues a reprocess job that re-extracts the named documents from their managed
+    /// blobs (a targeted retry). The targets are persisted in `payload_json` so the job
+    /// survives a relaunch. No-ops when `documentIDs` is empty.
+    @discardableResult
+    public func enqueueReprocess(matterID: String, documentIDs: [String]) -> String? {
+        guard !documentIDs.isEmpty else { return nil }
+        do {
+            let payloadJSON = String(
+                data: try JSONEncoder().encode(ReprocessPayload(documentIDs: documentIDs)),
+                encoding: .utf8
+            )
+            let job = try store.documentJobs.enqueueJob(
+                matterID: matterID,
+                kind: DocumentProcessingJobKind.reprocess.rawValue,
+                payloadJSON: payloadJSON
+            )
+            _ = try? store.auditEvents.recordEvent(
+                matterID: matterID, eventType: "document_reprocess_started", actor: "user",
+                summary: "Queued re-extraction of \(documentIDs.count) document(s)",
+                relatedTable: "document_processing_jobs", relatedID: job.id
+            )
+            refresh()
+            pump()
+            return job.id
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     public func cancelQueuedJob(id: String) {
         try? store.documentJobs.cancelJob(id: id)
         pendingSources[id] = nil
@@ -166,6 +231,16 @@ public final class DocumentProcessingQueue: ObservableObject {
 
     private func run(_ job: DocumentProcessingJobRecord) async {
         refresh()
+        switch DocumentProcessingJobKind(rawValue: job.kind) ?? .process {
+        case .process: await runImportOrReindex(job)
+        case .classify: await runClassify(job)
+        case .reprocess: await runReprocess(job)
+        }
+    }
+
+    /// The legacy import-or-reindex path: import (if sources are held) → index →
+    /// classify → complete, then fire a completion/failure notification.
+    private func runImportOrReindex(_ job: DocumentProcessingJobRecord) async {
         var importReport: DocumentImportReport?
         do {
             if let sources = pendingSources[job.id], !sources.isEmpty {
@@ -209,6 +284,90 @@ public final class DocumentProcessingQueue: ObservableObject {
         }
     }
 
+    /// A classification-only job: runs just the classify phase over the matter's pending
+    /// documents. It must NOT fire a completion/failure notification — it is a background
+    /// touch-up, not a user-initiated import whose finish the user is waiting on.
+    private func runClassify(_ job: DocumentProcessingJobRecord) async {
+        do {
+            setPhase(job.id, .classifying)
+            if let classificationService {
+                _ = await classificationService.classifyMatter(matterID: job.matterID)
+            }
+            try store.documentJobs.completeJob(id: job.id)
+            refresh()
+        } catch {
+            lastError = error.localizedDescription
+            try? store.documentJobs.failJob(id: job.id, errorSummary: error.localizedDescription)
+            _ = try? store.auditEvents.recordEvent(
+                matterID: job.matterID, eventType: "document_job_failed", actor: "system",
+                summary: "Classification job failed: \(error.localizedDescription)",
+                relatedTable: "document_processing_jobs", relatedID: job.id
+            )
+        }
+    }
+
+    /// A reprocess job: re-extracts each target named in `payload_json` from its managed
+    /// blob, then re-indexes and re-classifies the matter. A single document's failure is
+    /// collected (and audited) without failing the whole job; a completion notification
+    /// fires ONLY when one or more targets could not be re-extracted. A missing/malformed
+    /// payload fails the job with a clear summary.
+    private func runReprocess(_ job: DocumentProcessingJobRecord) async {
+        guard let json = job.payloadJSON,
+              let payload = try? JSONDecoder().decode(ReprocessPayload.self, from: Data(json.utf8)) else {
+            let message = "The reprocess job payload was missing or malformed."
+            lastError = message
+            try? store.documentJobs.failJob(id: job.id, errorSummary: message)
+            _ = try? store.auditEvents.recordEvent(
+                matterID: job.matterID, eventType: "document_job_failed", actor: "system",
+                summary: "Reprocess job failed: \(message)",
+                relatedTable: "document_processing_jobs", relatedID: job.id
+            )
+            return
+        }
+        do {
+            setPhase(job.id, .extractingText)
+            var failedTargets = 0
+            for documentID in payload.documentIDs {
+                do {
+                    try await importService.reprocessDocument(documentID: documentID)
+                } catch {
+                    failedTargets += 1
+                    _ = try? store.auditEvents.recordEvent(
+                        matterID: job.matterID, eventType: "document_reprocess_failed", actor: "system",
+                        summary: "Could not reprocess a document: \(error.localizedDescription)",
+                        relatedTable: "matter_documents", relatedID: documentID
+                    )
+                }
+            }
+
+            setPhase(job.id, .semanticEmbedding)
+            _ = try await makeIndexingService().indexMatter(matterID: job.matterID)
+
+            if let classificationService {
+                setPhase(job.id, .classifying)
+                _ = await classificationService.classifyMatter(matterID: job.matterID)
+            }
+
+            try store.documentJobs.completeJob(id: job.id)
+            refresh()
+            if failedTargets > 0 {
+                await notifier.notify(
+                    title: "Reprocessing complete with issues",
+                    body: "\(failedTargets) document(s) could not be re-extracted."
+                )
+            }
+        } catch {
+            lastError = error.localizedDescription
+            try? store.documentJobs.failJob(id: job.id, errorSummary: error.localizedDescription)
+            _ = try? store.auditEvents.recordEvent(
+                matterID: job.matterID, eventType: "document_job_failed", actor: "system",
+                summary: "Reprocess job failed: \(error.localizedDescription)",
+                relatedTable: "document_processing_jobs", relatedID: job.id
+            )
+            await notifier.notify(title: "Document processing failed", body: error.localizedDescription)
+        }
+    }
+
     /// Clears the in-app import-failure banner (called when the user dismisses it).
     public func clearImportFailure() { lastImportFailure = nil }
 
@@ -239,4 +398,10 @@ public final class DocumentProcessingQueue: ObservableObject {
         try? store.documentJobs.updateJobProgress(id: jobID, phase: phase)
         refresh()
     }
+}
+
+/// The `payload_json` shape for a reprocess job: the target document ids to
+/// re-extract from their managed blobs.
+private struct ReprocessPayload: Codable {
+    var documentIDs: [String]
 }

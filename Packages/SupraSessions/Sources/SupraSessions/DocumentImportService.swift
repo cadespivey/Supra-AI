@@ -563,6 +563,98 @@ public final class DocumentImportService: @unchecked Sendable {
         try store.documentLibrary.markTextEdited(documentID: documentID)
     }
 
+    // MARK: - Reprocess (re-extract from the managed blob)
+
+    /// A reprocess precondition that cannot be recovered per-document.
+    public enum ReprocessError: Error, LocalizedError, Equatable, Sendable {
+        case documentNotFound(String)
+        case blobNotFound(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .documentNotFound(let id): "The document \(id) no longer exists."
+            case .blobNotFound(let id): "The managed file for blob \(id) could not be found."
+            }
+        }
+    }
+
+    /// Re-extracts a single already-imported document from its verified managed blob,
+    /// as a targeted retry for a failed/stale document. Clears the prior classification
+    /// up front (the content is about to be re-derived), re-runs extraction (and OCR if
+    /// the format needs it), repopulates the parts, and marks the index stale so a later
+    /// indexing pass re-chunks/re-embeds it. A re-extraction that fails again re-marks the
+    /// instance `.failed` cleanly and leaves no partial parts — it does NOT throw, so the
+    /// queue's per-document loop and a direct caller both treat a re-mark as a normal
+    /// outcome. Only unrecoverable preconditions (missing document/blob, a managed-blob
+    /// integrity failure) throw.
+    ///
+    /// The managed bytes were already vetted against the full import policy when first
+    /// admitted, so this does NOT re-consume the per-import budget ledger; the extractor
+    /// still enforces the per-file source/parser/result limits internally.
+    public func reprocessDocument(documentID: String) async throws {
+        guard let document = try store.documentLibrary.fetchDocument(id: documentID) else {
+            throw ReprocessError.documentNotFound(documentID)
+        }
+        guard let blob = try store.documentLibrary.fetchBlob(id: document.blobID) else {
+            throw ReprocessError.blobNotFound(document.blobID)
+        }
+        // Verify the managed bytes against the recorded digest/size before re-reading
+        // them (mirrors importFile's verified-bytes use). An integrity failure is
+        // unrecoverable here and propagates.
+        let verifiedURL = try storage.verifyManagedBlob(
+            relativePath: blob.managedRelativePath,
+            expectedSHA256: blob.sha256,
+            expectedByteSize: blob.byteSize
+        )
+
+        // Clear any stale classification FIRST, unconditionally, before re-extraction —
+        // the old category no longer applies until the document is re-classified. This
+        // is the observable proof that reprocess ran even when the re-extraction fails.
+        try store.documentLibrary.updateClassification(documentID: documentID, classificationMetadataJSON: nil)
+
+        guard let format = SupportedDocumentTypes.format(for: verifiedURL) else {
+            // No supported extractor — re-mark failed cleanly with no leaked parts
+            // (mirrors importFile's unsupported path), and do not throw.
+            try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
+            try markExtractionFailed(documentID: documentID, error: ExtractionError.unsupportedFormat(verifiedURL.pathExtension))
+            return
+        }
+
+        do {
+            var result = try await extraction.extract(fileURL: verifiedURL)
+            var ocrApplied = false
+            if result.needsOCR, ocr != nil {
+                do {
+                    result = try await applyOCR(to: result, blobURL: verifiedURL, family: format.family)
+                    ocrApplied = true
+                    _ = try? store.auditEvents.recordEvent(
+                        matterID: document.matterID, eventType: "document_ocr_completed", actor: "system",
+                        summary: "OCR completed for \(document.displayName)", relatedTable: "matter_documents", relatedID: documentID
+                    )
+                } catch {
+                    _ = try? store.auditEvents.recordEvent(
+                        matterID: document.matterID, eventType: "document_ocr_failed", actor: "system",
+                        summary: "OCR failed for \(document.displayName)", relatedTable: "matter_documents", relatedID: documentID
+                    )
+                    throw error
+                }
+            }
+            try persistExtraction(result, documentID: documentID, ocrApplied: ocrApplied)
+            try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .stale)
+            _ = try? store.auditEvents.recordEvent(
+                matterID: document.matterID, eventType: "document_reprocessed", actor: "user",
+                summary: "Re-extracted \(document.displayName) from its managed copy",
+                relatedTable: "matter_documents", relatedID: documentID
+            )
+        } catch {
+            // A re-extraction that fails again re-marks the instance .failed cleanly and
+            // clears any parts (markExtractionFailed only zeroes the count). The failure
+            // is swallowed so a re-mark is a normal outcome for the caller.
+            try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
+            try markExtractionFailed(documentID: documentID, error: error)
+        }
+    }
+
     // MARK: - OCR
 
     /// Runs OCR over a document that lacks embedded text and merges the results

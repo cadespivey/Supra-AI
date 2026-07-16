@@ -1052,6 +1052,15 @@ public enum SupraMigrator {
                 ])
         }
 
+        migrator.registerMigration("v058_add_document_job_kind") { db in
+            try db.alter(table: "document_processing_jobs") { table in
+                table.add(column: "kind", .text)
+                    .notNull()
+                    .defaults(to: DocumentProcessingJobKind.process.rawValue)
+                table.add(column: "payload_json", .text)
+            }
+        }
+
         return migrator
     }
 

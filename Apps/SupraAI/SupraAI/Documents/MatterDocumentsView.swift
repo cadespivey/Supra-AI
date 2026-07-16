@@ -49,6 +49,7 @@ struct MatterDocumentsView: View {
             Divider()
             jobProgress
             importFailureBanner
+            classifyPendingBanner
             // A fixed-width folder rail (not a resizable split): HSplitView rebalanced its
             // panes to their ideal widths whenever the document list changed on folder
             // selection, so the panes visibly jumped. A stable rail avoids that.
@@ -105,7 +106,10 @@ struct MatterDocumentsView: View {
                 ) { showChronology = false }
             }
         }
-        .onAppear { controller.reload() }
+        .onAppear {
+            controller.reload()
+            controller.classifyPendingIfNeeded()
+        }
     }
 
     // MARK: - Action Bar
@@ -333,6 +337,12 @@ struct MatterDocumentsView: View {
             .buttonStyle(.plain).help("Preview")
         Button { openInDefaultApp(doc) } label: { Image(systemName: "arrow.up.forward.app") }
             .buttonStyle(.plain).help("Open & edit in your default app")
+        if doc.status == MatterDocumentStatus.failed.rawValue {
+            Button { controller.retryProcessing(documentID: doc.id) } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.plain).help("Retry processing")
+        }
         Menu {
             ForEach(controller.tags) { tag in
                 Button { controller.toggleTag(tag.id, on: doc.id) } label: {
@@ -554,6 +564,27 @@ struct MatterDocumentsView: View {
                 await Task.yield()
                 importFailureFocused = true
             }
+        }
+    }
+
+    /// A quiet prompt to classify documents that were imported while no model was
+    /// available (so they never got a taxonomy suggestion). Hidden while a job for this
+    /// matter is running — its classify phase will pick them up.
+    @ViewBuilder
+    private var classifyPendingBanner: some View {
+        if controller.unclassifiedCount > 0, controller.activeJob == nil {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles").foregroundStyle(.secondary)
+                Text("\(controller.unclassifiedCount) documents not yet classified")
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Classify") { controller.classifyPendingIfNeeded() }
+                    .buttonStyle(.ghost)
+                    .disabled(controller.activeJob != nil)
+            }
+            .font(.supraCaption)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
         }
     }
 

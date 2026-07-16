@@ -74,9 +74,17 @@ public final class DocumentJobRepository: @unchecked Sendable {
 
     // MARK: - Processing jobs
 
-    /// Enqueues a job at the end of the FIFO queue.
+    /// Enqueues a job at the end of the FIFO queue. `kind` selects the work the
+    /// queue runs (import/reindex, classification-only, or targeted reprocess);
+    /// `payloadJSON` carries any kind-specific targets. Existing callers keep the
+    /// default `process` kind and no payload.
     @discardableResult
-    public func enqueueJob(matterID: String, importBatchID: String? = nil) throws -> DocumentProcessingJobRecord {
+    public func enqueueJob(
+        matterID: String,
+        importBatchID: String? = nil,
+        kind: String = DocumentProcessingJobKind.process.rawValue,
+        payloadJSON: String? = nil
+    ) throws -> DocumentProcessingJobRecord {
         try writer.write { db in
             let maxPosition = try Int.fetchOne(
                 db,
@@ -92,6 +100,8 @@ public final class DocumentJobRepository: @unchecked Sendable {
             let record = DocumentProcessingJobRecord(
                 matterID: matterID,
                 importBatchID: importBatchID,
+                kind: kind,
+                payloadJSON: payloadJSON,
                 queuePosition: maxPosition + 1
             )
             try record.insert(db)

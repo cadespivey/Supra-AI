@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "syntheticDataDeclaration": "Every fixture contains deterministic synthetic records only; no user or production data is permitted.",
-  "currentMigration": "v057_add_remediation_recovery_queue",
+  "currentMigration": "v058_add_document_job_kind",
   "supportedVersions": [
     "v1.4.1",
     "v1.5.2",

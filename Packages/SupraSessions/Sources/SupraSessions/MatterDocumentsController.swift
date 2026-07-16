@@ -139,6 +139,24 @@ public final class MatterDocumentsController: ObservableObject {
         return job
     }
 
+    /// How many of this matter's documents are extracted but not yet classified —
+    /// drives the "N documents not yet classified" prompt and its Classify action.
+    public var unclassifiedCount: Int {
+        documents.filter(DocumentClassificationService.needsClassification).count
+    }
+
+    /// Kicks off a classification-only pass over the matter's pending documents. No-ops
+    /// when nothing is pending or a job is already running for the matter (see
+    /// `DocumentProcessingQueue.enqueueClassify`), so it is safe to call on tab appearance.
+    public func classifyPendingIfNeeded() {
+        queue.enqueueClassify(matterID: matterID)
+    }
+
+    /// Retries a failed/stale document by re-extracting it from its managed blob.
+    public func retryProcessing(documentID: String) {
+        queue.enqueueReprocess(matterID: matterID, documentIDs: [documentID])
+    }
+
     public func reload() {
         folders = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
         documents = (try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []

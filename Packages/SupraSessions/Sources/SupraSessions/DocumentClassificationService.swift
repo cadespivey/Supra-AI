@@ -172,7 +172,11 @@ public final class DocumentClassificationService {
         return parts.map(\.normalizedText).joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func needsClassification(_ document: MatterDocumentRecord) -> Bool {
+    /// Whether a document is eligible for (re)classification: extracted / OCR-complete /
+    /// edited, not yet classified, and not deleted. `nonisolated` so the queue and the
+    /// standing-guard tests can evaluate it without main-actor isolation (mirrors
+    /// `extractJSONObject`).
+    nonisolated static func needsClassification(_ document: MatterDocumentRecord) -> Bool {
         guard document.deletedAt == nil, document.classificationMetadataJSON == nil else { return false }
         return document.extractionStatus == DocumentExtractionStatus.extracted.rawValue
             || document.extractionStatus == DocumentExtractionStatus.ocrComplete.rawValue
