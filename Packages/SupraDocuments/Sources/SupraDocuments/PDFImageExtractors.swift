@@ -7,6 +7,11 @@ import SupraCore
 /// or no text is flagged for OCR in `ocrPageIndices`, and `needsOCR` is set when
 /// any page needs it (WO 36).
 public struct PDFExtractor: DocumentExtractor {
+    /// Pre-OCR advisory attached when pages lack embedded text. The import
+    /// pipeline drops it once OCR has actually run (the recommendation is then
+    /// satisfied) and records an outcome-specific warning instead.
+    public static let ocrRecommendedWarning = "PDF has little embedded text; OCR recommended."
+
     /// Below this many non-whitespace characters on a page, that page is treated
     /// as scanned and routed to OCR.
     private let lowTextPerPageThreshold: Int
@@ -56,7 +61,7 @@ public struct PDFExtractor: DocumentExtractor {
         let needsOCR = !ocrPageIndices.isEmpty
         var warnings: [String] = []
         if needsOCR {
-            warnings.append("PDF has little embedded text; OCR recommended.")
+            warnings.append(Self.ocrRecommendedWarning)
         }
 
         let attributes = document.documentAttributes
@@ -75,6 +80,11 @@ public struct PDFExtractor: DocumentExtractor {
 /// Images carry no embedded text; they are always routed to OCR (WO 36). The
 /// extractor emits a single image part as a placeholder locator.
 public struct ImageExtractor: DocumentExtractor {
+    /// Pre-OCR advisory attached because images carry no embedded text. The
+    /// import pipeline drops it once OCR has actually run and records an
+    /// outcome-specific warning instead.
+    public static let ocrRequiredWarning = "Image requires OCR to extract text."
+
     private let policy: ImportPolicy
 
     public init(policy: ImportPolicy = .default) { self.policy = policy }
@@ -93,7 +103,7 @@ public struct ImageExtractor: DocumentExtractor {
         return ExtractionResult(
             parts: [part],
             method: "image",
-            warnings: ["Image requires OCR to extract text."],
+            warnings: [Self.ocrRequiredWarning],
             needsOCR: true,
             ocrPageIndices: [0]
         )

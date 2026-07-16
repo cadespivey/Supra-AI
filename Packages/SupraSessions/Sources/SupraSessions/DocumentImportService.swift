@@ -639,19 +639,31 @@ public final class DocumentImportService: @unchecked Sendable {
         let lowConfidence = (meanOCR.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false)
         let ocrSummary = meanOCR.map { String(format: "OCR mean confidence %.2f%@", $0, lowConfidence ? " (low)" : "") }
 
-        // OCR ran but recovered almost no text — a blank or illegible original.
-        // Route it to review instead of laundering the empty output into a clean
+        // OCR ran but recovered little or no text — a blank or illegible original.
+        // Route it to review instead of laundering the output into a clean
         // extraction. Keyed off `ocrApplied` so a fully failed render (no recorded
         // confidences at all) is still caught (plan §6.2, §8.4).
         let usableTextCount = result.combinedText.filter { !$0.isWhitespace }.count
-        let emptyOCR = ocrApplied && usableTextCount < OCRPolicy.minimumUsableTextLength
+        let insufficientOCRText = ocrApplied && usableTextCount < OCRPolicy.minimumUsableTextLength
 
         var warnings = result.warnings
-        if lowConfidence {
+        if ocrApplied {
+            // OCR has now run, so the extractor's pre-OCR advisories would
+            // recommend work that already happened — drop them and record one
+            // outcome-specific warning instead: no text at all, too little text
+            // to rely on, or usable text at low confidence (plan §6.2, §8.4).
+            warnings.removeAll {
+                $0 == PDFExtractor.ocrRecommendedWarning || $0 == ImageExtractor.ocrRequiredWarning
+            }
+            if usableTextCount == 0 {
+                warnings.append("OCR produced no usable text; the original may be blank or illegible. Review the document.")
+            } else if usableTextCount < OCRPolicy.minimumUsableTextLength {
+                warnings.append("OCR recovered very little text; review the document before relying on it.")
+            } else if lowConfidence {
+                warnings.append("OCR confidence is low; verify the extracted text before relying on it.")
+            }
+        } else if lowConfidence {
             warnings.append("OCR confidence is low; verify the extracted text before relying on it.")
-        }
-        if emptyOCR {
-            warnings.append("OCR produced no usable text; the original may be blank or illegible. Review the document.")
         }
         let warningsJSON = warnings.isEmpty ? nil : (try? JSONEncoder.encodeToString(warnings))
 
@@ -662,7 +674,7 @@ public final class DocumentImportService: @unchecked Sendable {
             status = .needsOCR
         } else if ocrApplied || !ocrConfidences.isEmpty {
             extractionStatus = .ocrComplete
-            status = (lowConfidence || emptyOCR) ? .needsReview : .indexing
+            status = (lowConfidence || insufficientOCRText) ? .needsReview : .indexing
         } else {
             extractionStatus = .extracted
             status = .indexing
