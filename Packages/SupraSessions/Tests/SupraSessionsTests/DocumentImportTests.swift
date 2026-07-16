@@ -571,6 +571,75 @@ final class DocumentImportTests: XCTestCase {
             "low-confidence OCR with usable text should keep only the confidence warning, dropping the stale extractor advisory; got \(warnings)"
         )
     }
+
+    // MARK: - Reprocess (re-extract from the managed blob)
+
+    func testReprocessFailedDocumentReextractsAndRemarksFailedIdempotently() async throws {
+        // Expected RED: compile error — `reprocessDocument(documentID:)` is not a member of
+        // DocumentImportService.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        // A .docx whose bytes are not a zip: it passes type detection (no contradicting
+        // signature) but the DOCX extractor throws `.malformed`, so the instance persists as
+        // .failed with a valid managed blob. Reprocessing re-reads that same blob and fails
+        // identically — the idempotent re-mark case.
+        let corrupt = sourceRoot.appendingPathComponent("Broken/not-a-zip.docx")
+        try FileManager.default.createDirectory(at: corrupt.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "this is not a zip archive".write(to: corrupt, atomically: true, encoding: .utf8)
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: nil)
+        _ = try await service.importSources([corrupt], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(doc.status, MatterDocumentStatus.failed.rawValue, "precondition: a corrupt .docx imports as failed")
+        XCTAssertEqual(doc.extractionStatus, DocumentExtractionStatus.failed.rawValue)
+
+        // A prior (now-stale) classification is the observable proof that reprocess actually ran
+        // even though the re-extraction fails again: reprocess clears the classification up front.
+        try store.documentLibrary.updateClassification(documentID: doc.id, classificationMetadataJSON: #"{"primary_tag":"contracts_and_agreements"}"#)
+
+        try await service.reprocessDocument(documentID: doc.id)
+
+        let after = try XCTUnwrap(store.documentLibrary.fetchDocument(id: doc.id))
+        // Re-extraction fails the same way → the instance is re-marked .failed cleanly (idempotent).
+        XCTAssertEqual(after.status, MatterDocumentStatus.failed.rawValue)
+        XCTAssertEqual(after.extractionStatus, DocumentExtractionStatus.failed.rawValue)
+        // Proof reprocess ran and left no partial state: classification cleared, no parts leaked.
+        XCTAssertNil(after.classificationMetadataJSON, "reprocess must clear the stale classification")
+        XCTAssertTrue(try store.documentIndex.fetchParts(documentID: doc.id).isEmpty, "a failed re-extraction must leave no parts")
+    }
+
+    func testReprocessHealthyDocumentClearsClassificationStalesIndexAndRepopulatesParts() async throws {
+        // Expected RED: compile error — `reprocessDocument(documentID:)` is not a member of
+        // DocumentImportService.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: nil)
+        _ = try await service.importSources([sourceRoot.appendingPathComponent("Contracts/agreement.txt")], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let partID = try XCTUnwrap(store.documentIndex.fetchParts(documentID: doc.id).first?.id)
+
+        // Drive the doc into a fully-processed, classified, indexed state, then overwrite the
+        // extracted text with a sentinel so a genuine re-extraction is observable.
+        try store.documentLibrary.updateClassification(documentID: doc.id, classificationMetadataJSON: #"{"primary_tag":"contracts_and_agreements"}"#)
+        try store.documentLibrary.updateIndexStatus(documentID: doc.id, indexStatus: .ready)
+        try store.documentIndex.updatePartText(partID: partID, text: "STALE-SENTINEL-TEXT-DO-NOT-KEEP")
+
+        try await service.reprocessDocument(documentID: doc.id)
+
+        let after = try XCTUnwrap(store.documentLibrary.fetchDocument(id: doc.id))
+        XCTAssertNil(after.classificationMetadataJSON, "reprocess must clear the prior classification")
+        XCTAssertEqual(after.indexStatus, DocumentIndexStatus.stale.rawValue, "reprocess must mark the index stale")
+        XCTAssertEqual(after.status, MatterDocumentStatus.indexing.rawValue, "a healthy re-extraction returns the doc to .indexing")
+        XCTAssertEqual(after.extractionStatus, DocumentExtractionStatus.extracted.rawValue)
+
+        // Parts were repopulated from the managed blob — the stale sentinel is gone, replaced by
+        // a fresh extraction of the original bytes.
+        let repopulated = try store.documentIndex.fetchParts(documentID: doc.id)
+        XCTAssertEqual(repopulated.count, 1)
+        XCTAssertEqual(repopulated.first?.normalizedText, "Service agreement effective 2024-01-01.")
+        XCTAssertFalse(repopulated.contains { $0.normalizedText.contains("STALE-SENTINEL") }, "the stale text must be replaced by the re-extraction")
+    }
 }
 
 /// Deterministic OCR double. `recognizeImage` keeps the original single-result
