@@ -371,6 +371,67 @@ final class AppEnvironment: ObservableObject {
         }
         seedUITestCitationsChatIfNeeded()
         seedUITestRemediationWarningsIfNeeded()
+        seedUITestInterruptedImportIfNeeded()
+    }
+
+    /// Creates a five-source, three-complete/two-interrupted import only for the
+    /// dedicated recovery UI tests. The backing files and store are both
+    /// hermetic throwaways selected by `-uiTestMode`.
+    private func seedUITestInterruptedImportIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestInterruptedImport"),
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            let marker = "SupraAI UI-test interrupted import"
+            guard !(try store.documentJobs.fetchBatches(matterID: matterID)).contains(where: {
+                $0.sourceRootDisplay == marker
+            }) else { return }
+
+            let fixtureRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "SupraAI-UITest-Interrupted-\(ProcessInfo.processInfo.processIdentifier)",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+            let batch = try store.documentJobs.createBatch(
+                matterID: matterID,
+                sourceRootDisplay: marker
+            )
+            for index in 1...5 {
+                let name = "Resume Fixture \(index).txt"
+                let url = fixtureRoot.appendingPathComponent(name)
+                let bookmark: Data?
+                if index > 3 {
+                    try Data("Synthetic resumable UI fixture \(index).".utf8).write(to: url, options: .atomic)
+                    bookmark = try url.bookmarkData(
+                        options: [],
+                        includingResourceValuesForKeys: nil,
+                        relativeTo: nil
+                    )
+                } else {
+                    bookmark = nil
+                }
+                let source = try store.documentJobs.recordDiscovered(
+                    batchID: batch.id,
+                    matterID: matterID,
+                    sourceKey: "selection:\(index - 1)",
+                    sourceDisplayPath: name,
+                    sourceBookmark: bookmark,
+                    state: .selected
+                )
+                if index <= 3 {
+                    _ = try store.documentJobs.markState(sourceID: source.id, state: .admitted)
+                }
+            }
+            try store.documentJobs.updateBatchProgress(
+                id: batch.id,
+                discoveredCount: 5,
+                importedCount: 3,
+                failedCount: 0
+            )
+            _ = try store.documentJobs.enqueueJob(matterID: matterID, importBatchID: batch.id)
+            _ = try store.documentJobs.activateNextJobIfIdle()
+        } catch {
+            assertionFailure("Could not seed interrupted import accessibility fixture: \(error)")
+        }
     }
 
     /// Seeds explicit legacy-state fixtures only for the remediation accessibility

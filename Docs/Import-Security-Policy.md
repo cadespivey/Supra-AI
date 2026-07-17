@@ -62,4 +62,8 @@ batch target columns. On bootstrap, post-v059 batches left in `discovering` or
 synthesized from the ledger. Active source rows become re-entrant `interrupted`
 rows and retain only their top-level bookmark because copy resumption still
 needs that authorization; already-terminal rows and their exact reasons are
-preserved. The copy-resume user action remains a separate operational feature.
+preserved. The Documents tab offers Resume and Discard. Resume reopens only
+persisted top-level bookmarks, skips completed rows, and preserves the exact
+requested target folder; an unresolvable bookmark or missing target becomes an
+explicit terminal failure. Discard cancels only unfinished rows. Every terminal
+path clears its bookmark.

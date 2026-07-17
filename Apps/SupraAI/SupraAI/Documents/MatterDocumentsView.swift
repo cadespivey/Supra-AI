@@ -45,6 +45,7 @@ struct MatterDocumentsView: View {
             }
             documentActionBar
             Divider()
+            resumeImportBanner
             jobProgress
             importFailureBanner
             classifyPendingBanner
@@ -493,6 +494,39 @@ struct MatterDocumentsView: View {
 
     // MARK: - Pieces
 
+    @ViewBuilder
+    private var resumeImportBanner: some View {
+        if let interrupted = queue.resumableImports.first(where: { $0.matterID == controller.matterID }) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.clockwise.circle.fill")
+                    .foregroundStyle(.orange)
+                Text(interrupted.message)
+                    .font(.supraCaption)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+                    .accessibilityIdentifier("documents.resumeMessage")
+                Spacer()
+                Button("Resume") {
+                    queue.resume(jobID: interrupted.jobID)
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("documents.resumeAction")
+                Button("Discard") {
+                    queue.discard(jobID: interrupted.jobID)
+                }
+                .buttonStyle(.ghost)
+                .accessibilityIdentifier("documents.discardAction")
+            }
+            .padding(8)
+            .background(Color.orange.opacity(0.12))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("documents.resumeBanner")
+            .accessibilityLabel("Import interrupted")
+            .accessibilityValue(interrupted.message)
+        }
+    }
+
     private var setupBanner: some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
@@ -515,6 +549,7 @@ struct MatterDocumentsView: View {
     private var importFailureBanner: some View {
         if let failure = queue.lastImportFailure,
            failure.matterID == controller.matterID,
+           !queue.resumableImports.contains(where: { $0.matterID == controller.matterID }),
            dismissedImportFailureID != failure.id {
             let message = "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see the Audit tab for details."
             VStack(alignment: .trailing, spacing: 4) {

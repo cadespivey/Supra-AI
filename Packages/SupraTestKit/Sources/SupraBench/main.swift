@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import SupraCore
 import SupraDocuments
 import SupraSessions
 import SupraStore
@@ -96,6 +97,7 @@ private enum BenchmarkCLIError: LocalizedError {
     case repositoryRootNotFound
     case repositorySHANotFound
     case benchmarkSpecificationNotFound
+    case recoveryFixtureFailed
 
     var errorDescription: String? {
         switch self {
@@ -104,6 +106,7 @@ private enum BenchmarkCLIError: LocalizedError {
         case .repositoryRootNotFound: return "could not locate the repository root"
         case .repositorySHANotFound: return "could not resolve the repository SHA"
         case .benchmarkSpecificationNotFound: return "no benchmark-profile specification was found"
+        case .recoveryFixtureFailed: return "could not establish the deterministic recovery fixture"
         }
     }
 }
@@ -177,7 +180,159 @@ private struct DeterministicCorpusWorkload: Sendable {
                 denominator: retrievedSources.count
             )
         ))
+        observations.append(contentsOf: try await recoveryObservations(temporaryRoot: temporaryRoot))
         return observations
+    }
+
+    @MainActor
+    private func recoveryObservations(temporaryRoot: URL) async throws -> [BenchmarkObservation] {
+        let recoveryStoreRoot = temporaryRoot.appendingPathComponent("recovery-store", isDirectory: true)
+        try FileManager.default.createDirectory(at: recoveryStoreRoot, withIntermediateDirectories: true)
+        let store = try SupraStore(url: recoveryStoreRoot.appendingPathComponent("recovery.sqlite"))
+        let storage = DocumentStorage(root: temporaryRoot.appendingPathComponent("recovery-blobs", isDirectory: true))
+        let importer = DocumentImportService(store: store, storage: storage, ocr: nil)
+        let embedder = DeterministicBagOfWordsEmbedder()
+        let queue = DocumentProcessingQueue(
+            store: store,
+            importService: importer,
+            makeIndexingService: { DocumentIndexingService(store: store, embedder: embedder) },
+            notifier: BenchmarkDocumentNotifier()
+        )
+        let matter = try store.matters.createMatter(name: "Synthetic recovery benchmark")
+        let sourceRoot = temporaryRoot.appendingPathComponent("recovery-sources", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceRoot, withIntermediateDirectories: true)
+        let completedURL = sourceRoot.appendingPathComponent("Already Completed.txt")
+        let resumableURL = sourceRoot.appendingPathComponent("Resume Exactly Once.txt")
+        let discardedURL = sourceRoot.appendingPathComponent("Discarded Source.txt")
+        try Data("Synthetic completed recovery source.".utf8).write(to: completedURL)
+        try Data("Synthetic resumed recovery source.".utf8).write(to: resumableURL)
+        try Data("Synthetic discarded recovery source.".utf8).write(to: discardedURL)
+
+        let prior = try await importer.importSources([completedURL], matterID: matter.id)
+        guard prior.report.importedCount == 1,
+              let existingDocument = try store.documentLibrary.fetchDocuments(matterID: matter.id).first else {
+            throw BenchmarkCLIError.recoveryFixtureFailed
+        }
+        let documentsBeforeResume = try store.documentLibrary.fetchDocuments(matterID: matter.id).count
+
+        var successfulCases = 0
+        var duplicateWork = 0
+        var resumedUnits = 0
+
+        // Case 1: a resolvable bookmark resumes once while an admitted row is skipped.
+        let resumeBatch = try store.documentJobs.createBatch(matterID: matter.id)
+        let completedRow = try store.documentJobs.recordDiscovered(
+            batchID: resumeBatch.id,
+            matterID: matter.id,
+            sourceKey: "selection:0",
+            sourceDisplayPath: completedURL.lastPathComponent
+        )
+        _ = try store.documentJobs.markState(
+            sourceID: completedRow.id,
+            state: .admitted,
+            documentID: existingDocument.id
+        )
+        let resumeBookmark = try resumableURL.bookmarkData(
+            options: [],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+        _ = try store.documentJobs.recordDiscovered(
+            batchID: resumeBatch.id,
+            matterID: matter.id,
+            sourceKey: "selection:1",
+            sourceDisplayPath: resumableURL.lastPathComponent,
+            sourceBookmark: resumeBookmark,
+            state: .selected
+        )
+        try store.documentJobs.updateBatchProgress(id: resumeBatch.id, discoveredCount: 2, importedCount: 1)
+        let resumeJob = try store.documentJobs.enqueueJob(matterID: matter.id, importBatchID: resumeBatch.id)
+        _ = try store.documentJobs.activateNextJobIfIdle()
+        queue.bootstrap()
+        queue.resume(jobID: resumeJob.id)
+        await queue.waitUntilIdle()
+        let resumeSummary = try store.documentJobs.sourcesSummary(batchID: resumeBatch.id)
+        let documentsAfterResume = try store.documentLibrary.fetchDocuments(matterID: matter.id)
+        let resumedCopies = documentsAfterResume.filter { $0.displayName == resumableURL.lastPathComponent }.count
+        let repeatedCompleted = documentsAfterResume.filter { $0.id == existingDocument.id }.count - 1
+        duplicateWork += max(0, resumedCopies - 1) + max(0, repeatedCompleted)
+        resumedUnits += 1
+        if resumeSummary.unfinishedCount == 0,
+           resumeSummary.balanceErrorCount == 0,
+           documentsAfterResume.count == documentsBeforeResume + 1,
+           resumedCopies == 1,
+           try store.documentJobs.fetchBatch(id: resumeBatch.id)?.status == DocumentImportBatchStatus.complete.rawValue {
+            successfulCases += 1
+        }
+
+        // Case 2: lost authorization becomes an exact terminal failure.
+        let lostBatch = try store.documentJobs.createBatch(matterID: matter.id)
+        let lostSource = try store.documentJobs.recordDiscovered(
+            batchID: lostBatch.id,
+            matterID: matter.id,
+            sourceKey: "selection:0",
+            sourceDisplayPath: "Lost Authorization.txt",
+            sourceBookmark: Data([0xBA, 0xD0, 0x0D]),
+            state: .selected
+        )
+        try store.documentJobs.updateBatchProgress(id: lostBatch.id, discoveredCount: 1)
+        let lostJob = try store.documentJobs.enqueueJob(matterID: matter.id, importBatchID: lostBatch.id)
+        _ = try store.documentJobs.activateNextJobIfIdle()
+        queue.bootstrap()
+        queue.resume(jobID: lostJob.id)
+        await queue.waitUntilIdle()
+        let lostAfter = try store.documentJobs.fetchSources(batchID: lostBatch.id).first { $0.id == lostSource.id }
+        let lostSummary = try store.documentJobs.sourcesSummary(batchID: lostBatch.id)
+        if lostAfter?.state == DocumentImportSourceState.failed.rawValue,
+           lostAfter?.reason == "bookmark_unresolvable",
+           lostSummary.unfinishedCount == 0,
+           lostSummary.balanceErrorCount == 0 {
+            successfulCases += 1
+        }
+
+        // Case 3: explicit discard terminalizes the paused source as cancelled.
+        let discardBatch = try store.documentJobs.createBatch(matterID: matter.id)
+        let discardBookmark = try discardedURL.bookmarkData(
+            options: [],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+        let discardSource = try store.documentJobs.recordDiscovered(
+            batchID: discardBatch.id,
+            matterID: matter.id,
+            sourceKey: "selection:0",
+            sourceDisplayPath: discardedURL.lastPathComponent,
+            sourceBookmark: discardBookmark,
+            state: .selected
+        )
+        try store.documentJobs.updateBatchProgress(id: discardBatch.id, discoveredCount: 1)
+        let discardJob = try store.documentJobs.enqueueJob(matterID: matter.id, importBatchID: discardBatch.id)
+        _ = try store.documentJobs.activateNextJobIfIdle()
+        queue.bootstrap()
+        queue.discard(jobID: discardJob.id)
+        let discardAfter = try store.documentJobs.fetchSources(batchID: discardBatch.id).first { $0.id == discardSource.id }
+        let discardSummary = try store.documentJobs.sourcesSummary(batchID: discardBatch.id)
+        if discardAfter?.state == DocumentImportSourceState.cancelled.rawValue,
+           discardAfter?.sourceBookmark == nil,
+           discardSummary.unfinishedCount == 0,
+           discardSummary.balanceErrorCount == 0 {
+            successfulCases += 1
+        }
+
+        return [
+            BenchmarkObservation(
+                metricID: "B-REC-01",
+                name: "successful_recovery_rate",
+                unit: "rate",
+                result: BenchmarkMetrics.rate(numerator: successfulCases, denominator: 3, interval: .none)
+            ),
+            BenchmarkObservation(
+                metricID: "B-REC-01",
+                name: "duplicate_work_rate",
+                unit: "rate",
+                result: BenchmarkMetrics.rate(numerator: duplicateWork, denominator: resumedUnits, interval: .none)
+            ),
+        ]
     }
 
     private func sourceAccountingObservations(_ report: DocumentImportReport) -> [BenchmarkObservation] {
@@ -282,4 +437,10 @@ private struct DeterministicBagOfWordsEmbedder: TextEmbedder {
         }
         return Int(hash % UInt64(dimension))
     }
+}
+
+private struct BenchmarkDocumentNotifier: DocumentNotifying {
+    func authorizationStatus() async -> DocumentNotificationAuthorizationStatus { .denied }
+    func requestAuthorization() async -> DocumentNotificationAuthorizationStatus { .denied }
+    func notify(title: String, body: String) async {}
 }

@@ -554,9 +554,15 @@ public final class DocumentJobRepository: @unchecked Sendable {
                 sql: """
                 UPDATE document_processing_jobs
                 SET status = ?, queue_position = ?, paused_at = NULL, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status = ?
                 """,
-                arguments: [DocumentProcessingJobStatus.queued.rawValue, maxPosition + 1, now, id]
+                arguments: [
+                    DocumentProcessingJobStatus.queued.rawValue,
+                    maxPosition + 1,
+                    now,
+                    id,
+                    DocumentProcessingJobStatus.paused.rawValue,
+                ]
             )
         }
     }

@@ -17,7 +17,9 @@ final class DocumentImportRecoveryUITests: XCTestCase {
         let banner = app.descendants(matching: .any)["documents.resumeBanner"]
         XCTAssertTrue(banner.waitForExistence(timeout: 20), "Interrupted import banner did not appear")
         XCTAssertEqual(banner.label, "Import interrupted")
-        XCTAssertEqual(banner.value as? String, "Import interrupted — 2 of 5 files not yet imported")
+        let message = app.staticTexts["documents.resumeMessage"]
+        XCTAssertTrue(message.exists)
+        XCTAssertEqual(message.value as? String, "Import interrupted — 2 of 5 files not yet imported")
         XCTAssertTrue(app.buttons["documents.resumeAction"].exists)
         let discard = app.buttons["documents.discardAction"]
         XCTAssertTrue(discard.exists)

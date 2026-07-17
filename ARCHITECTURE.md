@@ -124,7 +124,9 @@ repository:
   bookmark in the same transaction as the terminal-state update. Relaunch
   reconciliation atomically marks unfinished rows as resumable `interrupted`,
   finalizes their orphaned batch, and reconstructs its failure summary from the
-  persisted ledger.
+  persisted ledger. Resume and discard consume that ledger directly: resume
+  reopens top-level bookmarks and the durable target-folder identity, while
+  discard terminalizes only unfinished rows.
 
 Repositories are grouped by cohesion (e.g. `DocumentLibraryRepository`,
 `DocumentIndexRepository`, `DocumentJobRepository`) rather than one-per-table, matching the

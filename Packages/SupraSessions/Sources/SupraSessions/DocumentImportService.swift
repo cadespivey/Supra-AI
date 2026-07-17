@@ -42,6 +42,7 @@ public struct DocumentImportReport: Codable, Sendable {
         items.filter {
             $0.disposition == DocumentImportDisposition.imported.rawValue
                 || $0.disposition == DocumentImportDisposition.duplicateBlobReused.rawValue
+                || $0.disposition == DocumentImportSourceState.admitted.rawValue
         }.count
     }
     public var failedCount: Int {
@@ -49,6 +50,11 @@ public struct DocumentImportReport: Codable, Sendable {
             $0.disposition == DocumentImportDisposition.extractionFailed.rawValue
                 || $0.disposition == DocumentImportDisposition.unsupported.rawValue
                 || $0.disposition == DocumentImportDisposition.ocrFailed.rawValue
+                || $0.disposition == DocumentImportSourceState.rejected.rawValue
+                || $0.disposition == DocumentImportSourceState.unsupportedByPolicy.rawValue
+                || $0.disposition == DocumentImportSourceState.failed.rawValue
+                || $0.disposition == DocumentImportSourceState.cancelled.rawValue
+                || $0.disposition == DocumentImportSourceState.interrupted.rawValue
         }.count
     }
 }
@@ -202,6 +208,124 @@ public final class DocumentImportService: @unchecked Sendable {
         return ImportOutcome(batchID: batch.id, report: report)
     }
 
+    /// Resumes a post-v059 batch exclusively from its persisted source ledger.
+    /// Already-terminal rows are skipped; top-level interrupted rows reopen their
+    /// bookmarks and re-enter at copying. A missing target or authorization is a
+    /// per-source terminal failure, never a silent fallback to the matter root.
+    @discardableResult
+    public func resumeBatch(batchID: String, matterID: String) async throws -> ImportOutcome {
+        try storage.initializeStorage()
+        guard let batch = try store.documentJobs.fetchBatch(id: batchID), batch.matterID == matterID else {
+            throw DocumentJobRepositoryError.batchMatterMismatch(batchID: batchID, matterID: matterID)
+        }
+        let initialRows = try store.documentJobs.fetchSources(batchID: batchID)
+        guard !initialRows.isEmpty else {
+            return ImportOutcome(batchID: batchID, report: DocumentImportReport())
+        }
+
+        let unfinished = initialRows.filter { !$0.isTerminal }
+        let targetFolderID: String?
+        if batch.targetFolderRequested {
+            if let requestedID = batch.targetFolderID,
+               let folder = try store.documentLibrary.fetchFolder(id: requestedID),
+               folder.matterID == matterID,
+               folder.deletedAt == nil {
+                targetFolderID = requestedID
+            } else {
+                for source in unfinished {
+                    try transitionSource(source.id, to: .failed, reason: "target_folder_unavailable")
+                }
+                return try finalizeLedgerBatch(batchID: batchID, matterID: matterID)
+            }
+        } else {
+            targetFolderID = nil
+        }
+
+        var folderCache: [String: String?] = [:]
+        let ledger = ImportBudgetLedger(policy: importPolicy)
+        var compatibilityReport = DocumentImportReport()
+        for source in unfinished where source.parentSourceID == nil {
+            guard let url = Self.resolveSourceBookmark(source.sourceBookmark) else {
+                try transitionSource(source.id, to: .failed, reason: "bookmark_unresolvable")
+                continue
+            }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                try transitionSource(source.id, to: .copying)
+                let root = try PinnedImportRoot(url: url)
+                try traversalFaultInjector(.afterRootPinned, url)
+                try root.verifyUnchanged()
+                var visited = Set<FileIdentity>()
+                try await importEntry(
+                    at: url,
+                    relativePath: source.sourceDisplayPath,
+                    depth: 0,
+                    root: root,
+                    ledger: ledger,
+                    visited: &visited,
+                    matterID: matterID,
+                    batchID: batchID,
+                    sourceID: source.id,
+                    sourceKey: source.sourceKey,
+                    currentFolderID: targetFolderID,
+                    rootFolderID: targetFolderID,
+                    folderCache: &folderCache,
+                    report: &compatibilityReport,
+                    sourceAlreadyCopying: true
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let violation as ImportPolicyViolation {
+                try recordPolicyRejection(
+                    violation,
+                    url: url,
+                    sourceDisplayPath: source.sourceDisplayPath,
+                    sourceID: source.id,
+                    report: &compatibilityReport
+                )
+            } catch {
+                try recordFailure(
+                    error,
+                    displayName: url.lastPathComponent,
+                    sourceDisplayPath: source.sourceDisplayPath,
+                    sourceID: source.id,
+                    report: &compatibilityReport
+                )
+            }
+        }
+
+        // Any nonterminal child that could not be rediscovered from its selected
+        // root must be explicit rather than silently omitted from final accounting.
+        for source in try store.documentJobs.unfinishedSources(batchID: batchID) {
+            try transitionSource(source.id, to: .failed, reason: "bookmark_unresolvable")
+        }
+        return try finalizeLedgerBatch(batchID: batchID, matterID: matterID)
+    }
+
+    /// Finalizes a paused import after the user chooses Discard. Succeeded rows
+    /// remain untouched; every re-entrant row becomes cancelled and releases its
+    /// bookmark in the same transaction as its state transition.
+    @discardableResult
+    public func discardBatch(batchID: String, matterID: String) throws -> DocumentImportReport {
+        guard let batch = try store.documentJobs.fetchBatch(id: batchID), batch.matterID == matterID else {
+            throw DocumentJobRepositoryError.batchMatterMismatch(batchID: batchID, matterID: matterID)
+        }
+        for source in try store.documentJobs.unfinishedSources(batchID: batchID) {
+            try transitionSource(source.id, to: .cancelled, reason: "Import discarded by user.")
+        }
+        let report = try ledgerReport(batchID: batchID)
+        try store.documentJobs.updateBatchProgress(
+            id: batchID,
+            discoveredCount: report.discoveredCount,
+            importedCount: report.importedCount,
+            failedCount: report.failedCount
+        )
+        let reportJSON = try JSONEncoder.encodeToString(report)
+        try store.documentJobs.finalizeBatch(id: batchID, status: .cancelled, reportJSON: reportJSON)
+        return report
+    }
+
     // MARK: - Discovery / recursion
 
     private func importEntry(
@@ -218,7 +342,8 @@ public final class DocumentImportService: @unchecked Sendable {
         currentFolderID: String?,
         rootFolderID: String?,
         folderCache: inout [String: String?],
-        report: inout DocumentImportReport
+        report: inout DocumentImportReport,
+        sourceAlreadyCopying: Bool = false
     ) async throws {
         try Task.checkCancellation()
         guard depth <= importPolicy.maxTreeDepth else {
@@ -237,8 +362,10 @@ public final class DocumentImportService: @unchecked Sendable {
         }
 
         if metadata.isDirectory {
-            try transitionSource(sourceID, to: .validated)
-            try transitionSource(sourceID, to: .copying)
+            if !sourceAlreadyCopying {
+                try transitionSource(sourceID, to: .validated)
+                try transitionSource(sourceID, to: .copying)
+            }
             let folderID = try folder(
                 forRelativeDir: relativePath,
                 matterID: matterID,
@@ -265,6 +392,7 @@ public final class DocumentImportService: @unchecked Sendable {
                     sourceDisplayPath: childPath,
                     parentSourceID: sourceID
                 )
+                if childRow.isTerminal { continue }
                 let isHidden = child.lastPathComponent.hasPrefix(".")
                     || (try? child.resourceValues(forKeys: [.isHiddenKey]).isHidden) == true
                 if isHidden {
@@ -276,6 +404,11 @@ public final class DocumentImportService: @unchecked Sendable {
                     continue
                 }
                 do {
+                    let childAlreadyCopying = childRow.sourceState == .interrupted
+                        || childRow.sourceState == .copying
+                    if childRow.sourceState == .interrupted {
+                        try transitionSource(childRow.id, to: .copying)
+                    }
                     try await importEntry(
                         at: child,
                         relativePath: childPath,
@@ -290,7 +423,8 @@ public final class DocumentImportService: @unchecked Sendable {
                         currentFolderID: folderID,
                         rootFolderID: rootFolderID,
                         folderCache: &folderCache,
-                        report: &report
+                        report: &report,
+                        sourceAlreadyCopying: childAlreadyCopying
                     )
                 } catch is CancellationError {
                     throw CancellationError()
@@ -322,8 +456,10 @@ public final class DocumentImportService: @unchecked Sendable {
         try importPolicy.validateSource(at: url)
         try ledger.consumeSource(byteSize: metadata.byteSize)
         try traversalFaultInjector(.afterCandidateValidated, url)
-        try transitionSource(sourceID, to: .validated)
-        try transitionSource(sourceID, to: .copying)
+        if !sourceAlreadyCopying {
+            try transitionSource(sourceID, to: .validated)
+            try transitionSource(sourceID, to: .copying)
+        }
         _ = try await importFile(
             at: url,
             folderID: currentFolderID,
@@ -1105,6 +1241,60 @@ public final class DocumentImportService: @unchecked Sendable {
             targetFolderID: targetFolderID,
             targetFolderRequested: targetFolderID != nil
         )
+    }
+
+    private func finalizeLedgerBatch(batchID: String, matterID: String) throws -> ImportOutcome {
+        let report = try ledgerReport(batchID: batchID)
+        let status: DocumentImportBatchStatus = report.failedCount > 0 ? .completeWithFailures : .complete
+        try store.documentJobs.updateBatchProgress(
+            id: batchID,
+            discoveredCount: report.discoveredCount,
+            importedCount: report.importedCount,
+            failedCount: report.failedCount
+        )
+        let reportJSON = try JSONEncoder.encodeToString(report)
+        try store.documentJobs.finalizeBatch(id: batchID, status: status, reportJSON: reportJSON)
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID,
+            eventType: report.failedCount > 0 ? "document_import_completed_with_failures" : "document_import_completed",
+            actor: "system",
+            summary: "Resumed import completed for \(report.importedCount)/\(report.discoveredCount) sources",
+            relatedTable: "document_import_batches",
+            relatedID: batchID
+        )
+        return ImportOutcome(batchID: batchID, report: report)
+    }
+
+    private func ledgerReport(batchID: String) throws -> DocumentImportReport {
+        let sources = try store.documentJobs.fetchSources(batchID: batchID)
+        let items = sources.map { source in
+            DocumentImportReportItem(
+                displayName: NSString(string: source.sourceDisplayPath).lastPathComponent,
+                sourceDisplayPath: source.sourceDisplayPath,
+                disposition: source.state,
+                reason: source.reason,
+                documentID: source.documentID,
+                parentDocumentID: nil,
+                rejectionCode: source.rejectionCode
+            )
+        }
+        return DocumentImportReport(items: items, counts: Self.tallyCounts(items))
+    }
+
+    private static func resolveSourceBookmark(_ bookmark: Data?) -> URL? {
+        guard let bookmark else { return nil }
+        for options: URL.BookmarkResolutionOptions in [[.withSecurityScope], []] {
+            var stale = false
+            if let url = try? URL(
+                resolvingBookmarkData: bookmark,
+                options: options,
+                relativeTo: nil,
+                bookmarkDataIsStale: &stale
+            ), !stale, FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        return nil
     }
 
     @discardableResult

@@ -29,6 +29,19 @@ public struct DocumentImportFailureSummary: Sendable, Equatable, Identifiable {
     public var id: String { "\(matterID)-\(discoveredCount)-\(importedCount)-\(failedCount)" }
 }
 
+/// Persisted relaunch work presented to the Documents tab.
+public struct ResumableDocumentImport: Sendable, Equatable, Identifiable {
+    public let jobID: String
+    public let matterID: String
+    public let totalCount: Int
+    public let unfinishedCount: Int
+
+    public var id: String { jobID }
+    public var message: String {
+        "Import interrupted — \(unfinishedCount) of \(totalCount) files not yet imported"
+    }
+}
+
 /// App-wide document processing queue (plan §5.2–§5.6). Exactly one job runs at a
 /// time; others queue FIFO. Jobs run import → indexing, report phase progress,
 /// fire completion/failure notifications, and reconcile safely after an
@@ -39,6 +52,7 @@ public final class DocumentProcessingQueue: ObservableObject {
     @Published public private(set) var queuedJobs: [DocumentProcessingJobRecord] = []
     /// Jobs paused by an interrupted quit, awaiting the user's resume decision.
     @Published public private(set) var resumableJobs: [DocumentProcessingJobRecord] = []
+    @Published public private(set) var resumableImports: [ResumableDocumentImport] = []
     @Published public private(set) var lastError: String?
     /// The most recent import that completed with per-file failures, for in-app
     /// surfacing (the Documents tab shows a banner). Cleared on a later clean
@@ -96,6 +110,18 @@ public final class DocumentProcessingQueue: ObservableObject {
         activeJob = try? store.documentJobs.fetchActiveJob()
         queuedJobs = (try? store.documentJobs.fetchQueuedJobs()) ?? []
         resumableJobs = (try? store.documentJobs.fetchPausedJobs()) ?? []
+        resumableImports = resumableJobs.compactMap { job in
+            guard let batchID = job.importBatchID,
+                  let summary = try? store.documentJobs.sourcesSummary(batchID: batchID),
+                  summary.totalCount > 0,
+                  summary.unfinishedCount > 0 else { return nil }
+            return ResumableDocumentImport(
+                jobID: job.id,
+                matterID: job.matterID,
+                totalCount: summary.totalCount,
+                unfinishedCount: summary.unfinishedCount
+            )
+        }
     }
 
     /// Enqueues an import job for the given source URLs.
@@ -219,6 +245,25 @@ public final class DocumentProcessingQueue: ObservableObject {
         pump()
     }
 
+    /// Discards a paused post-v059 import without touching rows that already
+    /// succeeded. Legacy paused jobs without a ledger retain the job-only cancel
+    /// behavior.
+    public func discard(jobID: String) {
+        do {
+            if let job = try store.documentJobs.fetchJob(id: jobID),
+               job.status == DocumentProcessingJobStatus.paused.rawValue,
+               let batchID = job.importBatchID,
+               !(try store.documentJobs.fetchSources(batchID: batchID)).isEmpty {
+                _ = try importService.discardBatch(batchID: batchID, matterID: job.matterID)
+            }
+            try store.documentJobs.cancelJob(id: jobID)
+            pendingSources[jobID] = nil
+            refresh()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     /// Awaits the current run loop until the queue is idle. Useful for tests and
     /// for a deterministic shutdown.
     public func waitUntilIdle() async {
@@ -279,6 +324,17 @@ public final class DocumentProcessingQueue: ObservableObject {
                 try? store.documentJobs.updateJobProgress(
                     id: job.id, phase: .extractingText,
                     completedUnits: outcome.report.importedCount, totalUnits: outcome.report.discoveredCount
+                )
+            } else if let batchID = job.importBatchID,
+                      !(try store.documentJobs.fetchSources(batchID: batchID)).isEmpty {
+                setPhase(job.id, .copyingHashing)
+                let outcome = try await importService.resumeBatch(batchID: batchID, matterID: job.matterID)
+                importReport = outcome.report
+                try? store.documentJobs.updateJobProgress(
+                    id: job.id,
+                    phase: .extractingText,
+                    completedUnits: outcome.report.importedCount,
+                    totalUnits: outcome.report.discoveredCount
                 )
             }
 
