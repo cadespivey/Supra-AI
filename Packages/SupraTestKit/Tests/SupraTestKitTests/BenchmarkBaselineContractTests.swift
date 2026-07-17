@@ -73,6 +73,8 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         XCTAssertEqual(try measuredValue("B-ACC-01", "source_accounting_accuracy", in: baseline), 1)
         XCTAssertEqual(try measuredValue("B-ACC-01", "source_balance_error_count", in: baseline), 0)
         XCTAssertEqual(try measuredValue("B-ISO-01", "cross_matter_leak_count", in: baseline), 0)
+        XCTAssertEqual(try measuredValue("B-REC-01", "successful_recovery_rate", in: baseline), 1)
+        XCTAssertEqual(try measuredValue("B-REC-01", "duplicate_work_rate", in: baseline), 0)
     }
 
     private func measuredValue(_ metricID: String, _ name: String, in report: BenchmarkReport) throws -> Double {

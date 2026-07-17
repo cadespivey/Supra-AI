@@ -2,6 +2,59 @@ import AppKit
 import CoreGraphics
 import XCTest
 
+/// T-OPS-02 drives the hermetic interrupted-import fixture through both user
+/// decisions. The production app seeds this state only under the explicit UI
+/// test launch flag, so real stores are never modified by the fixture.
+@MainActor
+final class DocumentImportRecoveryUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testInterruptedImportBannerExposesExactCopyAndDiscard() {
+        // T-OPS-02 expected RED: no seeded interrupted import or documents.resumeBanner exists.
+        let app = launchInterruptedImportApp()
+        let banner = app.descendants(matching: .any)["documents.resumeBanner"]
+        XCTAssertTrue(banner.waitForExistence(timeout: 20), "Interrupted import banner did not appear")
+        XCTAssertEqual(banner.label, "Import interrupted")
+        XCTAssertEqual(banner.value as? String, "Import interrupted — 2 of 5 files not yet imported")
+        XCTAssertTrue(app.buttons["documents.resumeAction"].exists)
+        let discard = app.buttons["documents.discardAction"]
+        XCTAssertTrue(discard.exists)
+        discard.click()
+        XCTAssertTrue(banner.waitForNonExistence(timeout: 10), "Discard must remove the resume banner")
+    }
+
+    func testInterruptedImportResumeDispatchesOnceAndFinishesBothFiles() {
+        // T-OPS-02 expected RED: the Documents tab has no persisted-source Resume action.
+        let app = launchInterruptedImportApp()
+        let banner = app.descendants(matching: .any)["documents.resumeBanner"]
+        XCTAssertTrue(banner.waitForExistence(timeout: 20), "Interrupted import banner did not appear")
+        let resume = app.buttons["documents.resumeAction"]
+        XCTAssertTrue(resume.exists)
+        resume.click()
+        XCTAssertTrue(banner.waitForNonExistence(timeout: 10), "Resume must dispatch and remove the paused banner")
+        XCTAssertTrue(app.staticTexts["Resume Fixture 4.txt"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["Resume Fixture 5.txt"].waitForExistence(timeout: 20))
+    }
+
+    private func launchInterruptedImportApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestInterruptedImport",
+            "-uiTestInitialMatterTab", "Documents",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        return app
+    }
+}
+
 /// End-to-end UI test driving the Research and Authorities tabs with mouse-style
 /// clicks and keyboard input — fully offline (no model or network). The app is
 /// launched with `-uiTestMode`, which opens a hermetic throwaway store seeded with
