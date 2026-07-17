@@ -21,6 +21,10 @@ public final class DocumentChronologyController: ObservableObject {
     private let runtimeClient: any RuntimeClientProtocol
     private let retrieval: DocumentRetrievalService
     private let defaultSystemPrompt: String?
+    /// Total safety cap on harvested sources (metadata-date and text-chunk
+    /// sources combined) — a guard against pathological scopes, not a tuning
+    /// knob. Fitting sources to a model's context is budgeting, and happens
+    /// downstream of the harvest.
     private let maxSources: Int
 
     public init(
@@ -28,7 +32,7 @@ public final class DocumentChronologyController: ObservableObject {
         store: SupraStore,
         runtimeClient: any RuntimeClientProtocol,
         defaultSystemPrompt: String? = nil,
-        maxSources: Int = 30
+        maxSources: Int = 1_000
     ) {
         self.matterID = matterID
         self.store = store
@@ -101,20 +105,20 @@ public final class DocumentChronologyController: ObservableObject {
         defer { isGenerating = false }
 
         do {
-            // Bound the assembled prompt so a large scope can't overflow the model
-            // context and silently lose mid-prompt source material (the KV cache
-            // evicts the middle when over budget). Reserve roughly half the context
-            // for source text (≈4 chars/token), the rest for instructions + answer.
-            let contextTokens = effectiveRoute?.options.maxContextTokens ?? 32_768
-            let characterBudget = max(8_000, contextTokens * 2)
-            let harvest = try harvestSources(scope: scope, characterBudget: characterBudget)
+            // The harvest is bounded only by the maxSources safety cap; fitting
+            // the packet to the model's context is the budgeting stage's job.
+            let harvest = try harvestSources(scope: scope)
             let prepared = harvest.sources
             guard !prepared.isEmpty else {
                 message = "No dated facts were found in the selected documents."
                 return nil
             }
             if harvest.droppedCount > 0 {
-                message = "Chronology covers \(prepared.count) of \(prepared.count + harvest.droppedCount) dated sources; the rest were omitted to fit the model's context budget. Narrow the scope or date range for full coverage."
+                let named = harvest.omittedDocuments.prefix(5)
+                var namesClause = named.joined(separator: ", ")
+                let remaining = harvest.omittedDocuments.count - named.count
+                if remaining > 0 { namesClause += " and \(remaining) more" }
+                message = "Chronology covers \(prepared.count) of \(prepared.count + harvest.droppedCount) dated sources; omitted to fit the model's budget: \(namesClause). Narrow the scope or date range for full coverage."
             }
             let prompt = DocumentChronologyPromptBuilder.build(sources: prepared.map(\.source), format: format)
             let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
@@ -194,40 +198,54 @@ public final class DocumentChronologyController: ObservableObject {
         var warnings: [String]
     }
 
-    private func harvestSources(scope: RetrievalScope, characterBudget: Int) throws -> (sources: [PreparedSource], droppedCount: Int) {
+    /// Harvests every date-bearing source in the scope, bounded only by the
+    /// `maxSources` safety cap. Metadata-date sources pass through the same cap
+    /// as text chunks so many metadata-dated documents cannot starve the dated
+    /// text chunks out of the packet. `omittedDocuments` lists the display name
+    /// of each document that lost at least one source to the cap (once per
+    /// name, in document order).
+    private func harvestSources(scope: RetrievalScope) throws -> (sources: [PreparedSource], omittedDocuments: [String], droppedCount: Int) {
         let scopeIDs = try store.documentLibrary.resolveScopeDocumentIDs(
             matterID: matterID, folderIDs: scope.folderIDs, documentIDs: scope.documentIDs,
             tagIDs: scope.tagIDs, dateStart: scope.dateStart, dateEnd: scope.dateEnd
         )
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID).filter { scopeIDs.contains($0.id) }
         var prepared: [PreparedSource] = []
+        var omittedDocuments: [String] = []
         var rank = 0
-        var usedCharacters = 0
         var droppedCount = 0
 
         for document in documents {
+            var documentHadDrop = false
+
             // Metadata date (file/email), distinguished from text dates.
             if let metaDate = document.metadataCreatedAt {
-                let label = "S\(rank + 1)"
-                let iso = ISO8601DateFormatter().string(from: metaDate)
-                prepared.append(PreparedSource(
-                    source: GroundingSource(
-                        sourceID: "\(matterID)/\(document.id)#metadata-date",
-                        label: label, documentName: document.displayName, locatorDisplay: "metadata date",
-                        text: "Document metadata date: \(iso) (metadata date)", excerpt: iso, lowConfidence: false
-                    ),
-                    documentID: document.id, chunkID: nil,
-                    locatorJSON: DocumentSourceLocator(sourceKind: .convertedDocument).encodedJSON(),
-                    rank: rank, warnings: []
-                ))
-                rank += 1
+                if prepared.count >= maxSources {
+                    droppedCount += 1
+                    documentHadDrop = true
+                } else {
+                    let label = "S\(rank + 1)"
+                    let iso = ISO8601DateFormatter().string(from: metaDate)
+                    prepared.append(PreparedSource(
+                        source: GroundingSource(
+                            sourceID: "\(matterID)/\(document.id)#metadata-date",
+                            label: label, documentName: document.displayName, locatorDisplay: "metadata date",
+                            text: "Document metadata date: \(iso) (metadata date)", excerpt: iso, lowConfidence: false
+                        ),
+                        documentID: document.id, chunkID: nil,
+                        locatorJSON: DocumentSourceLocator(sourceKind: .convertedDocument).encodedJSON(),
+                        rank: rank, warnings: []
+                    ))
+                    rank += 1
+                }
             }
 
             // Date-bearing chunks (text dates).
             let chunks = (try? store.documentIndex.fetchChunks(documentID: document.id)) ?? []
             for chunk in chunks where DateExtraction.containsDate(chunk.normalizedText) {
-                if prepared.count >= maxSources || usedCharacters >= characterBudget {
+                if prepared.count >= maxSources {
                     droppedCount += 1
+                    documentHadDrop = true
                     continue
                 }
                 let label = "S\(rank + 1)"
@@ -247,11 +265,14 @@ public final class DocumentChronologyController: ObservableObject {
                     documentID: document.id, chunkID: chunk.id, locatorJSON: locator.encodedJSON(),
                     rank: rank, warnings: low ? ["low OCR confidence"] : []
                 ))
-                usedCharacters += chunk.normalizedText.count
                 rank += 1
             }
+
+            if documentHadDrop, !omittedDocuments.contains(document.displayName) {
+                omittedDocuments.append(document.displayName)
+            }
         }
-        return (prepared, droppedCount)
+        return (prepared, omittedDocuments, droppedCount)
     }
 
     /// Leaves the source set pending until `createVersion` attaches it with the
