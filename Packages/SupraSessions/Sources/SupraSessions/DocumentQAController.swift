@@ -187,10 +187,10 @@ public final class DocumentQAController: ObservableObject {
     }
 
     /// Tier tuning (spec §3.1). Deep: wider candidate pool, LLM-reranked down to the
-    /// packed set (today's behavior, widened — 40 keeps the rerank prompt inside
-    /// small local-model contexts). Fast: small pool, no rerank, packs the RRF top —
-    /// a preliminary answer in seconds.
-    static let candidatePoolSize = 40
+    /// packed set (the shared `DocumentRerank` pool — 40 keeps the rerank prompt
+    /// inside small local-model contexts). Fast: small pool, no rerank, packs the
+    /// RRF top — a preliminary answer in seconds.
+    static let candidatePoolSize = DocumentRerank.candidatePoolSize
     static let packedSourceLimit = 10
     static let fastCandidatePoolSize = 12
     static let fastPackedSourceLimit = 8
@@ -223,42 +223,23 @@ public final class DocumentQAController: ObservableObject {
         return await rerankSources(candidates, question: question, modelID: modelID, route: route)
     }
 
-    /// LLM-reranks the candidate pool to the most relevant `packedSourceLimit`,
-    /// re-labeling them S1…SN in the new order. Best-effort: a model failure, or one
-    /// that returns too few valid labels, falls back to retrieval order.
-    /// Per-candidate snippet length shown to the reranker. Longer than the 220-char
-    /// display excerpt so the reranker scores on the same content the answer is
-    /// grounded in (the chunk + folded neighbors), not just the leading sentence.
-    static let rerankSnippetChars = 600
+    /// Per-candidate snippet length shown to the reranker (see
+    /// `DocumentRerank.snippetChars`).
+    static let rerankSnippetChars = DocumentRerank.snippetChars
 
+    /// LLM-reranks the candidate pool to the most relevant `packedSourceLimit`,
+    /// re-labeling them S1…SN in the new order. Delegates to the shared
+    /// `DocumentRerank` machinery (also used by the matter-chat grounded deep pass).
+    /// Best-effort: a model failure, or one that returns too few valid labels, falls
+    /// back to retrieval order.
     private func rerankSources(_ candidates: [PreparedSource], question: String, modelID: ModelID, route: ModelRoute?) async -> [PreparedSource] {
         guard candidates.count > Self.packedSourceLimit else { return relabeled(candidates) }
-        let listing = candidates
-            .map { "[\($0.source.label)] \(DocumentChunker.excerpt($0.source.text, limit: Self.rerankSnippetChars))" }
-            .joined(separator: "\n")
-        let prompt = """
-        Rank the passages by how directly they help answer the QUESTION.
-
-        QUESTION: \(question)
-
-        PASSAGES:
-        \(listing)
-
-        Return ONLY the labels of the \(Self.packedSourceLimit) most relevant passages, most relevant first, comma-separated (e.g. S3, S1, S7). No other text.
-        """
-        var options = GenerationPreset.extractive.defaultOptions
-        options.maxOutputTokens = 256
-        let request = GenerateRequest(
-            generationID: GenerationID(), modelID: modelID, prompt: prompt,
-            systemPrompt: "You are a retrieval reranker. Output only the source labels.", options: options
-        )
-        guard let raw = try? await runtimeClient.collectGeneratedText(request) else {
-            return relabeled(Array(candidates.prefix(Self.packedSourceLimit)))
-        }
-        let order = Self.rerankOrder(
-            retrievalLabels: candidates.map(\.source.label),
-            preferred: Self.parsePacketLabels(ReasoningContent.answer(from: raw)),
-            limit: Self.packedSourceLimit
+        let order = await DocumentRerank.packedOrder(
+            question: question,
+            candidates: candidates.map { DocumentRerank.Candidate(label: $0.source.label, text: $0.source.text) },
+            limit: Self.packedSourceLimit,
+            runtimeClient: runtimeClient,
+            modelID: modelID
         )
         let byLabel = Dictionary(candidates.map { ($0.source.label, $0) }, uniquingKeysWith: { first, _ in first })
         return relabeled(order.compactMap { byLabel[$0] })
@@ -273,33 +254,17 @@ public final class DocumentQAController: ObservableObject {
         }
     }
 
-    /// Final source order: the model's preferred labels first (in its order, ignoring
-    /// unknown/duplicate labels), then any remaining candidates in retrieval order,
-    /// capped at `limit`.
+    /// Final source order (see `DocumentRerank.rerankOrder`). Kept as a stable seam
+    /// for existing callers/tests; the implementation lives in the shared machinery.
     nonisolated static func rerankOrder(retrievalLabels: [String], preferred: [String], limit: Int) -> [String] {
-        let valid = Set(retrievalLabels)
-        var picked: [String] = []
-        var seen = Set<String>()
-        for label in preferred where valid.contains(label) && !seen.contains(label) {
-            picked.append(label); seen.insert(label)
-            if picked.count >= limit { break }
-        }
-        for label in retrievalLabels where picked.count < limit && !seen.contains(label) {
-            picked.append(label); seen.insert(label)
-        }
-        return picked
+        DocumentRerank.rerankOrder(retrievalLabels: retrievalLabels, preferred: preferred, limit: limit)
     }
 
-    /// Extracts S-style source labels (e.g. "S3") from a reranker's free-text reply.
-    /// Anchored so a digit-bearing word echoed from the question/excerpts (e.g.
-    /// "Windows10", "class3") doesn't yield a stray label that could promote a wrong
-    /// passage.
+    /// Extracts S-style source labels from a reranker's free-text reply (see
+    /// `DocumentRerank.parsePacketLabels`). Kept as a stable seam for existing
+    /// callers/tests; the implementation lives in the shared machinery.
     nonisolated static func parsePacketLabels(_ text: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: "(?<![A-Za-z0-9])[Ss]\\d+(?![0-9])") else { return [] }
-        let ns = NSRange(text.startIndex..., in: text)
-        return regex.matches(in: text, range: ns).compactMap {
-            Range($0.range, in: text).map { String(text[$0]).uppercased() }
-        }
+        DocumentRerank.parsePacketLabels(text)
     }
 
     private func prepareGuided(chunkIDs: [String]) -> [PreparedSource] {

@@ -121,7 +121,8 @@ public final class GlobalChatController: ObservableObject {
         self.scope = scope
         if case let .matter(id) = scope {
             self.documentGrounding = MatterChatDocumentGrounding(
-                store: store, embedder: embedder, matterID: id, defaultSystemPrompt: defaultSystemPrompt
+                store: store, embedder: embedder, matterID: id, defaultSystemPrompt: defaultSystemPrompt,
+                runtimeClient: runtimeClient
             )
         } else {
             self.documentGrounding = nil
@@ -733,7 +734,7 @@ public final class GlobalChatController: ObservableObject {
             // Gated on a loaded model so a no-model send doesn't pay for retrieval it
             // will discard at the guard below.
             let grounded: GroundedChatContext? = (attachments.isEmpty && modelID != nil)
-                ? await documentGrounding?.groundedContext(forQuestion: prompt, depth: documentDepth)
+                ? await documentGrounding?.groundedContext(forQuestion: prompt, depth: documentDepth, modelID: modelID)
                 : nil
 
             if grounded == nil, let route, route.usesOneShotLegalWorkflow {

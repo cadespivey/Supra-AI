@@ -263,7 +263,6 @@ struct MatterWorkspaceView: View {
                     controller: documents,
                     queue: queue,
                     library: library,
-                    qaController: controller.documentQAController,
                     chronologyController: controller.documentChronologyController
                 )
             } else {
