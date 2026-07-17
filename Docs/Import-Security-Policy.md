@@ -57,5 +57,9 @@ incremental and interrupted source accounting.
 Historical batches receive no fabricated source rows during v059 migration and
 retain their existing `report_json`. The pre-migration snapshot is the recovery
 path; a schema downgrade drops `document_import_sources` and the two additive
-batch target columns. The ledger itself does not enable resume behavior; resume
-and orphaned-batch reconciliation are separate operational features.
+batch target columns. On bootstrap, post-v059 batches left in `discovering` or
+`processing` are finalized as `interrupted` with a deterministic report
+synthesized from the ledger. Active source rows become re-entrant `interrupted`
+rows and retain only their top-level bookmark because copy resumption still
+needs that authorization; already-terminal rows and their exact reasons are
+preserved. The copy-resume user action remains a separate operational feature.

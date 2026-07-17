@@ -9,6 +9,21 @@ public struct DocumentImportFailureSummary: Sendable, Equatable, Identifiable {
     public let importedCount: Int
     public let discoveredCount: Int
     public let failedCount: Int
+    public let reasons: [String]
+
+    public init(
+        matterID: String,
+        importedCount: Int,
+        discoveredCount: Int,
+        failedCount: Int,
+        reasons: [String] = []
+    ) {
+        self.matterID = matterID
+        self.importedCount = importedCount
+        self.discoveredCount = discoveredCount
+        self.failedCount = failedCount
+        self.reasons = reasons
+    }
     /// Stable per-outcome id so a dismissed banner stays dismissed but a new
     /// failing import re-shows one.
     public var id: String { "\(matterID)-\(discoveredCount)-\(importedCount)-\(failedCount)" }
@@ -67,7 +82,13 @@ public final class DocumentProcessingQueue: ObservableObject {
     /// Relaunch reconciliation: any job left active is treated as interrupted and
     /// moved to paused for the user to resume (plan §5.4).
     public func bootstrap() {
-        _ = try? store.documentJobs.reconcileInterruptedJobs()
+        do {
+            _ = try store.documentJobs.reconcileOrphanedBatches()
+            _ = try store.documentJobs.reconcileInterruptedJobs()
+            lastImportFailure = try restoredImportFailure()
+        } catch {
+            lastError = error.localizedDescription
+        }
         refresh()
     }
 
@@ -380,7 +401,8 @@ public final class DocumentProcessingQueue: ObservableObject {
                 matterID: job.matterID,
                 importedCount: report.importedCount,
                 discoveredCount: report.discoveredCount,
-                failedCount: report.failedCount
+                failedCount: report.failedCount,
+                reasons: Self.failureReasons(from: report)
             )
             await notifier.notify(
                 title: "Import complete with issues",
@@ -400,6 +422,24 @@ public final class DocumentProcessingQueue: ObservableObject {
     private func setPhase(_ jobID: String, _ phase: DocumentProcessingPhase) {
         try? store.documentJobs.updateJobProgress(id: jobID, phase: phase)
         refresh()
+    }
+
+    private func restoredImportFailure() throws -> DocumentImportFailureSummary? {
+        guard let batch = try store.documentJobs.fetchLatestImportFailureBatch() else { return nil }
+        let report = batch.reportJSON
+            .flatMap { $0.data(using: .utf8) }
+            .flatMap { try? JSONDecoder().decode(DocumentImportReport.self, from: $0) }
+        return DocumentImportFailureSummary(
+            matterID: batch.matterID,
+            importedCount: batch.importedCount,
+            discoveredCount: batch.discoveredCount,
+            failedCount: batch.failedCount,
+            reasons: report.map { Self.failureReasons(from: $0) } ?? []
+        )
+    }
+
+    private static func failureReasons(from report: DocumentImportReport) -> [String] {
+        Array(Set(report.items.compactMap(\.reason))).sorted()
     }
 }
 

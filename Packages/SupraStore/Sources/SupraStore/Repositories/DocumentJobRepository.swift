@@ -92,6 +92,119 @@ public final class DocumentJobRepository: @unchecked Sendable {
         }
     }
 
+    /// Finalizes batches left active by a terminated process. Every active
+    /// source becomes resumable `interrupted`; already-accounted outcomes and
+    /// their exact reasons are preserved in a synthesized report. The batch
+    /// update and source transitions are one transaction and a repeated call is
+    /// a no-op because only discovering/processing batches are selected.
+    @discardableResult
+    public func reconcileOrphanedBatches() throws -> [DocumentImportBatchRecord] {
+        try writer.write { db in
+            var batches = try DocumentImportBatchRecord.fetchAll(
+                db,
+                sql: """
+                SELECT * FROM document_import_batches
+                WHERE status IN (?, ?)
+                ORDER BY started_at, id
+                """,
+                arguments: [
+                    DocumentImportBatchStatus.discovering.rawValue,
+                    DocumentImportBatchStatus.processing.rawValue,
+                ]
+            )
+            guard !batches.isEmpty else { return [] }
+
+            let now = Date()
+            let interruptionReason = "Import interrupted before completion."
+            let activeStates = [
+                DocumentImportSourceState.selected.rawValue,
+                DocumentImportSourceState.discovered.rawValue,
+                DocumentImportSourceState.validated.rawValue,
+                DocumentImportSourceState.copying.rawValue,
+            ]
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+
+            for index in batches.indices {
+                let batchID = batches[index].id
+                try db.execute(
+                    sql: """
+                    UPDATE document_import_sources
+                    SET state = ?, reason = COALESCE(reason, ?), updated_at = ?
+                    WHERE import_batch_id = ? AND state IN (?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        DocumentImportSourceState.interrupted.rawValue,
+                        interruptionReason,
+                        now,
+                        batchID,
+                        activeStates[0],
+                        activeStates[1],
+                        activeStates[2],
+                        activeStates[3],
+                    ]
+                )
+
+                let sources = try DocumentImportSourceRecord.fetchAll(
+                    db,
+                    sql: """
+                    SELECT * FROM document_import_sources
+                    WHERE import_batch_id = ?
+                    ORDER BY created_at, id
+                    """,
+                    arguments: [batchID]
+                )
+                let stateCounts = Dictionary(grouping: sources, by: \.state).mapValues { $0.count }
+                let importedCount = stateCounts[DocumentImportSourceState.admitted.rawValue, default: 0]
+                let failedCount = [
+                    DocumentImportSourceState.rejected,
+                    .unsupportedByPolicy,
+                    .failed,
+                    .cancelled,
+                    .interrupted,
+                ].reduce(into: 0) { count, state in
+                    count += stateCounts[state.rawValue, default: 0]
+                }
+                let report = ReconciledImportReport(
+                    items: sources.map(ReconciledImportReportItem.init),
+                    counts: stateCounts
+                )
+                let reportJSON = String(data: try encoder.encode(report), encoding: .utf8)
+
+                batches[index].status = DocumentImportBatchStatus.interrupted.rawValue
+                batches[index].discoveredCount = sources.count
+                batches[index].importedCount = importedCount
+                batches[index].failedCount = failedCount
+                batches[index].reportJSON = reportJSON
+                batches[index].completedAt = now
+                batches[index].updatedAt = now
+                try batches[index].update(db)
+            }
+            return batches
+        }
+    }
+
+    /// Most recent persisted batch that should restore the import-failure
+    /// banner after process recreation.
+    public func fetchLatestImportFailureBatch() throws -> DocumentImportBatchRecord? {
+        try writer.read { db in
+            try DocumentImportBatchRecord.fetchOne(
+                db,
+                sql: """
+                SELECT * FROM document_import_batches
+                WHERE status IN (?, ?, ?)
+                ORDER BY COALESCE(completed_at, updated_at) DESC, id DESC
+                LIMIT 1
+                """,
+                arguments: [
+                    DocumentImportBatchStatus.interrupted.rawValue,
+                    DocumentImportBatchStatus.completeWithFailures.rawValue,
+                    DocumentImportBatchStatus.failed.rawValue,
+                ]
+            )
+        }
+    }
+
     // MARK: - Import source ledger
 
     /// Inserts the durable identity for a selected/discovered source, or returns
@@ -231,9 +344,9 @@ public final class DocumentJobRepository: @unchecked Sendable {
         let hidden = count(.excludedHidden)
         let excluded = count(.excludedByUser)
         let terminal = admitted + containers + rejected + unsupported + failed
-            + cancelled + interrupted + hidden + excluded
+            + cancelled + hidden + excluded
         let unfinishedStates: Set<DocumentImportSourceState> = [
-            .selected, .discovered, .validated, .copying,
+            .selected, .discovered, .validated, .copying, .interrupted,
         ]
         let unfinished = sources.count {
             guard let state = $0.sourceState else { return false }
@@ -266,6 +379,7 @@ public final class DocumentJobRepository: @unchecked Sendable {
         if current == next { return true }
         if current == .interrupted, next == .copying { return true }
         if current.isTerminal { return false }
+        if next == .interrupted { return true }
         if next.isTerminal { return true }
         let rank: [DocumentImportSourceState: Int] = [
             .selected: 0,
@@ -529,6 +643,31 @@ public final class DocumentJobRepository: @unchecked Sendable {
             )
             return ids
         }
+    }
+}
+
+private struct ReconciledImportReport: Codable {
+    var items: [ReconciledImportReportItem]
+    var counts: [String: Int]
+}
+
+private struct ReconciledImportReportItem: Codable {
+    var displayName: String
+    var sourceDisplayPath: String
+    var disposition: String
+    var reason: String?
+    var documentID: String?
+    var parentDocumentID: String?
+    var rejectionCode: String?
+
+    init(_ source: DocumentImportSourceRecord) {
+        displayName = NSString(string: source.sourceDisplayPath).lastPathComponent
+        sourceDisplayPath = source.sourceDisplayPath
+        disposition = source.state
+        reason = source.reason
+        documentID = source.documentID
+        parentDocumentID = nil
+        rejectionCode = source.rejectionCode
     }
 }
 

@@ -121,7 +121,10 @@ repository:
   columns on `matters`.
 - Operational hardening added a per-source import ledger with transient top-level
   bookmarks and durable target-folder intent. Completed source rows release their
-  bookmark in the same transaction as the terminal-state update.
+  bookmark in the same transaction as the terminal-state update. Relaunch
+  reconciliation atomically marks unfinished rows as resumable `interrupted`,
+  finalizes their orphaned batch, and reconstructs its failure summary from the
+  persisted ledger.
 
 Repositories are grouped by cohesion (e.g. `DocumentLibraryRepository`,
 `DocumentIndexRepository`, `DocumentJobRepository`) rather than one-per-table, matching the

@@ -98,6 +98,7 @@ public enum DocumentProcessingJobKind: String, Codable, CaseIterable, Hashable, 
 public enum DocumentImportBatchStatus: String, Codable, CaseIterable, Hashable, Sendable {
     case discovering
     case processing
+    case interrupted
     case complete
     case completeWithFailures = "complete_with_failures"
     case failed
@@ -123,10 +124,10 @@ public enum DocumentImportSourceState: String, Codable, CaseIterable, Hashable, 
 
     public var isTerminal: Bool {
         switch self {
-        case .selected, .discovered, .validated, .copying:
+        case .selected, .discovered, .validated, .copying, .interrupted:
             false
         case .admitted, .containerCompleted, .rejected, .unsupportedByPolicy,
-             .failed, .cancelled, .interrupted, .excludedHidden, .excludedByUser:
+             .failed, .cancelled, .excludedHidden, .excludedByUser:
             true
         }
     }
