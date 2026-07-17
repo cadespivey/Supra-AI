@@ -1,6 +1,8 @@
 import Foundation
 import SupraCore
 import SupraDocuments
+import SupraRuntimeClient
+import SupraRuntimeInterface
 @testable import SupraSessions
 import SupraStore
 import XCTest
@@ -216,6 +218,267 @@ final class DocumentChronologyTests: XCTestCase {
         )
     }
 
+    // MARK: - W3.1 batched chronology (work order Phase 2)
+    //
+    // Shared fixture: twenty synthetic McKernon Motors "brake filing" documents,
+    // each with one date-bearing chunk (~690 packed characters), generated with a
+    // route whose 4,096-token context yields an 8,192-character per-batch budget.
+    // The ~13,800-character packet therefore requires more than one batch. The
+    // scripted model (see `scriptedAnswer`) echoes one supported table row per
+    // label it is shown — and, when shown the ENTIRE packet at once (both S1 and
+    // S20 in one prompt), emulates the real context-window failure this feature
+    // fixes by reproducing only the earliest three sources.
+
+    func testLargeScopeRunsMultipleBatchesAndMergesChronologically() async throws {
+        // Expected RED: today produce() makes exactly ONE generate call over the
+        // whole packet — the call-count assertion fails (1 is not > 1), and the
+        // truncated single-pass answer leaves the later batches' rows (e.g. the
+        // 2024-01-10 and 2024-01-20 filings) missing from the final markdown.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        try await seedBrakeFilings(store, matter.id, count: 20)
+        let log = PromptLog()
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: log))
+
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+
+        XCTAssertGreaterThan(log.prompts.count, 1, "a packet past the per-batch character budget must run multiple map passes")
+        let markdown = result.markdown
+        let early = try XCTUnwrap(markdown.range(of: "| 2024-01-01 | Brake filing 1 recorded"), "first batch's earliest row is missing")
+        let middle = try XCTUnwrap(markdown.range(of: "| 2024-01-10 | Brake filing 10 recorded"), "mid-packet row is missing")
+        let late = try XCTUnwrap(markdown.range(of: "| 2024-01-20 | Brake filing 20 recorded"), "last batch's row is missing — later batches were dropped")
+        XCTAssertTrue(
+            early.lowerBound < middle.lowerBound && middle.lowerBound < late.lowerBound,
+            "merged rows must appear in ascending date order"
+        )
+    }
+
+    func testGlobalSourceLabelsStableAcrossBatches() async throws {
+        // Expected RED: today there is a single pass, so the map-prompt count
+        // assertion fails (1 is not > 1) — per-batch global-label stability is
+        // unobservable until batching exists.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        try await seedBrakeFilings(store, matter.id, count: 20)
+        let log = PromptLog()
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: log))
+
+        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+
+        let mapPrompts = log.prompts.filter { $0.contains("BEGIN_UNTRUSTED_SOURCE_DATA") }
+        XCTAssertGreaterThan(mapPrompts.count, 1, "the packet must be split across multiple map passes")
+        for n in 1...20 {
+            // The trailing quote pins the exact envelope label ("S2" cannot match "S20").
+            let needle = "\"label\":\"S\(n)\""
+            let occurrences = mapPrompts.filter { $0.contains(needle) }.count
+            XCTAssertEqual(occurrences, 1, "label S\(n) must appear in exactly one map pass — labels are global and never restart per batch")
+        }
+        XCTAssertTrue(
+            mapPrompts.allSatisfy { !$0.contains("\"label\":\"S21\"") },
+            "no pass may relabel beyond the twenty harvested sources"
+        )
+    }
+
+    func testNarrativeSynthesisUsesMergedEntriesOnly() async throws {
+        // Expected RED: today narrative is one grounded pass — the only request's
+        // prompt contains the untrusted source envelope, so the final-request
+        // assertions (no envelope; merged entries present) fail, as does the
+        // call-count assertion.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        try await seedBrakeFilings(store, matter.id, count: 20)
+        let log = PromptLog()
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: log))
+
+        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID(), route: Self.tinyBatchRoute()))
+
+        XCTAssertGreaterThan(log.prompts.count, 1, "narrative over a multi-batch packet needs map passes plus one synthesis pass")
+        let synthesis = try XCTUnwrap(log.prompts.last, "no generate call recorded")
+        XCTAssertFalse(
+            synthesis.contains("BEGIN_UNTRUSTED_SOURCE_DATA"),
+            "the second-stage synthesis prompt consumes merged entries, never raw source envelopes"
+        )
+        XCTAssertTrue(synthesis.contains("Brake filing 1 recorded"), "synthesis prompt must carry merged entries from the first batch")
+        XCTAssertTrue(synthesis.contains("Brake filing 20 recorded"), "synthesis prompt must carry merged entries from the last batch")
+    }
+
+    func testCancelMidGenerationPersistsNothing() async throws {
+        // Expected RED: compile error — value of type 'DocumentChronologyController'
+        // has no member 'cancel'.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        try await seedBrakeFilings(store, matter.id, count: 20)
+        let secondPassStarted = expectation(description: "second map pass began streaming")
+        let runtime = HangingSecondCallRuntimeClient(secondCallStarted: secondPassStarted)
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let generation = Task { await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()) }
+        // The runtime double hangs its second stream, so the controller is
+        // provably suspended inside batch 2 when the cancel lands.
+        await fulfillment(of: [secondPassStarted], timeout: 5)
+        chronology.cancel()
+        let result = await generation.value
+
+        XCTAssertNil(result, "a cancelled chronology must not produce a result")
+        XCTAssertEqual(chronology.message, "Chronology generation was cancelled.")
+        XCTAssertTrue(
+            try store.structuredOutputs.fetchOutputs(matterID: matter.id).isEmpty,
+            "no structured output row may persist after cancellation"
+        )
+    }
+
+    func testVerifierChecksAllBatchSources() async throws {
+        // Expected RED: the truncated single pass never emits the last batch's
+        // table row, and the persisted verification JSON records no result
+        // touching S20. (The assertion is row-scoped — a bare "[S20]" search
+        // would silently pass today via the source appendix, which always lists
+        // every harvested label.)
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        try await seedBrakeFilings(store, matter.id, count: 20)
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: PromptLog()))
+
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+
+        XCTAssertTrue(
+            result.markdown.contains("| 2024-01-20 | Brake filing 20 recorded"),
+            "the merged chronology must carry the last batch's cited row (appendix mentions don't count)"
+        )
+        // Complete status proves S20 resolved AND verified against source 20's
+        // text: a verifier fed only batch 1's sources would flag S20 unresolved
+        // and force needsReview.
+        XCTAssertEqual(result.status, StructuredOutputStatus.complete.rawValue)
+        let version = try XCTUnwrap(
+            try store.structuredOutputs.fetchVersions(structuredOutputID: result.outputID).first { $0.id == result.versionID }
+        )
+        let verificationJSON = try XCTUnwrap(version.verificationJSON)
+        XCTAssertTrue(verificationJSON.contains("S20"), "verification results must cover sources from every batch, not just the first")
+    }
+
+    func testUnparsedMapRowsForceNeedsReviewWithNote() async throws {
+        // Expected RED: today no map-pass parsing exists — the scripted malformed
+        // rows are never produced, the clean truncated single-pass answer verifies
+        // complete, and the unparsed-row note is absent; both assertions fail.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        try await seedBrakeFilings(store, matter.id, count: 20)
+        let chronology = DocumentChronologyController(
+            matterID: matter.id, store: store,
+            runtimeClient: Self.batchScriptedRuntime(log: PromptLog(), appendMalformedRowsToFinalBatch: true)
+        )
+
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+
+        XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue, "dropped model output must force review")
+        XCTAssertTrue(
+            result.markdown.contains("2 intermediate chronology lines could not be parsed and were omitted."),
+            "the saved chronology must visibly disclose how many map-pass lines were dropped"
+        )
+    }
+
+    func testSingleBatchIsSinglePass() async throws {
+        // STANDING GUARD (green from day one — methodology §2): a scope whose
+        // packet fits one per-batch character budget must take exactly today's
+        // single-pass path. This test passes before the batching implementation
+        // lands; its job is to fail if the Phase-2 rewrite (or any later change)
+        // turns small scopes into multi-pass map/merge runs — added latency and
+        // an intermediate parse stage where none is needed.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        try await seedBrakeFilings(store, matter.id, count: 2)
+        let log = PromptLog()
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: log))
+
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID()))
+
+        XCTAssertEqual(log.prompts.count, 1, "a packet within one batch budget must remain a single pass")
+        XCTAssertEqual(result.status, StructuredOutputStatus.complete.rawValue)
+    }
+
+    // MARK: - Batching fixture + scripting helpers
+
+    private func seedBrakeFilings(_ store: SupraStore, _ matterID: String, count: Int) async throws {
+        for n in 1...count {
+            try await indexDoc(store, matterID, nil, String(format: "brake-filing-%02d.txt", n), Self.brakeFilingText(n))
+        }
+    }
+
+    /// One date-bearing chunk (~690 characters) per synthetic filing — under the
+    /// chunker's 1,200-character maximum so each document yields exactly one
+    /// chunk, and large enough that twenty of them (~13,800 characters) overflow
+    /// an 8,192-character per-batch budget. The filler contains no dates.
+    private static func brakeFilingText(_ n: Int) -> String {
+        let day = String(format: "%02d", n)
+        let filler = String(repeating: "The maintenance ledger for the switching yard remains under review by counsel. ", count: 8)
+        return "Brake filing \(n) recorded on 2024-01-\(day) at the yard. " + filler
+    }
+
+    /// A route whose 4,096-token context yields max(8_000, 4_096 × 2) = 8,192
+    /// characters of per-batch budget — small enough to force multiple batches
+    /// over the twenty-filing fixture.
+    private static func tinyBatchRoute() -> ModelRoute {
+        ModelRoute(
+            mode: .legalResearch,
+            role: .legalReasoning,
+            modelIdentifier: "synthetic-test-model",
+            options: GenerationOptions(preset: .legalResearch, maxContextTokens: 4_096),
+            requiresCourtListener: false,
+            requiresCitations: true,
+            requiresJurisdiction: false,
+            allowUngroundedLaw: false,
+            systemPrompt: "You are a legal document analysis assistant."
+        )
+    }
+
+    private static func batchScriptedRuntime(log: PromptLog, appendMalformedRowsToFinalBatch: Bool = false) -> StubRuntimeClient {
+        StubRuntimeClient(outcome: { request in
+            log.record(request.prompt)
+            let answer = Self.scriptedAnswer(for: request.prompt, appendMalformedRowsToFinalBatch: appendMalformedRowsToFinalBatch)
+            return .events([
+                .event(request, 0, .token, token: answer),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+    }
+
+    /// Scripts the model per request based on which global source labels the
+    /// prompt's envelope carries:
+    /// - a map pass over a strict subset of the packet echoes one supported table
+    ///   row per label (the row's date derives from the label number and matches
+    ///   the seeded chunk text, so the verifier can establish support);
+    /// - a single pass over the ENTIRE packet (both S1 and S20 in one prompt)
+    ///   emulates the context-window truncation this feature exists to fix:
+    ///   only the earliest three sources survive into the answer;
+    /// - a prompt with no source envelope (the narrative synthesis stage)
+    ///   returns a short narrative citing the packet's first and last sources.
+    private nonisolated static func scriptedAnswer(for prompt: String, appendMalformedRowsToFinalBatch: Bool) -> String {
+        let labels = labelNumbers(in: prompt)
+        guard !labels.isEmpty else {
+            return "Brake filing 1 recorded on 2024-01-01 [S1]. Brake filing 20 recorded on 2024-01-20 [S20]."
+        }
+        let truncatedSinglePass = labels.contains(1) && labels.contains(20)
+        let effective = truncatedSinglePass ? labels.filter { $0 <= 3 } : labels
+        var lines = ["| Date | Event | Source |"]
+        lines.append(contentsOf: effective.map { n in
+            "| 2024-01-\(String(format: "%02d", n)) | Brake filing \(n) recorded [S\(n)] | [S\(n)] |"
+        })
+        if appendMalformedRowsToFinalBatch, !truncatedSinglePass, labels.contains(20) {
+            lines.append("| 2024-01-31 | Broken row missing its source column")
+            lines.append("| Unknown")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Extracts the numeric part of every `"label":"S<n>"` field in the prompt's
+    /// JSON source envelope, sorted ascending.
+    private nonisolated static func labelNumbers(in prompt: String) -> [Int] {
+        guard let regex = try? NSRegularExpression(pattern: #""label":"S(\d+)""#) else { return [] }
+        let range = NSRange(prompt.startIndex..., in: prompt)
+        return regex.matches(in: prompt, range: range)
+            .compactMap { match in Range(match.range(at: 1), in: prompt).flatMap { Int(prompt[$0]) } }
+            .sorted()
+    }
+
     // MARK: - Helpers
 
     private func indexDoc(_ store: SupraStore, _ matterID: String, _ folderID: String?, _ name: String, _ text: String, metadataCreatedAt: Date? = nil) async throws {
@@ -243,4 +506,88 @@ final class DocumentChronologyTests: XCTestCase {
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
     }
+}
+
+// MARK: - Batching test doubles
+
+/// Thread-safe capture of every prompt the controller sends, for call-count and
+/// per-batch label assertions.
+private final class PromptLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _prompts: [String] = []
+
+    var prompts: [String] { lock.withLock { _prompts } }
+
+    func record(_ prompt: String) {
+        lock.withLock { _prompts.append(prompt) }
+    }
+}
+
+/// Runtime double for the cancellation test. The first generate call streams a
+/// complete map answer; the second yields one token and then hangs — the stream
+/// never finishes on its own. `cancelGeneration` finishes the held stream, like
+/// the real runtime cancelling an active generation. This makes "cancel after
+/// batch 1, during batch 2" deterministic: the controller is provably suspended
+/// mid-batch-2 (the `secondCallStarted` expectation has fulfilled and the stream
+/// is held open) at the moment the test cancels; there is no schedule on which
+/// the run can finish early and persist.
+private final class HangingSecondCallRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var callCount = 0
+    private var heldContinuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation?
+    private let secondCallStarted: XCTestExpectation
+    private let loadResult = LoadModelResponse(status: .loaded, modelID: ModelID())
+
+    init(secondCallStarted: XCTestExpectation) {
+        self.secondCallStarted = secondCallStarted
+    }
+
+    func connect() async throws {}
+
+    func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
+        loadResult
+    }
+
+    func generate(_ request: GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error> {
+        let call = lock.withLock { () -> Int in
+            callCount += 1
+            return callCount
+        }
+        if call == 1 {
+            return AsyncThrowingStream { continuation in
+                continuation.yield(.event(request, 0, .token, token: "| Date | Event | Source |\n| 2024-01-01 | Brake filing 1 recorded [S1] | [S1] |"))
+                continuation.yield(.event(request, 1, .generationCompleted))
+                continuation.finish()
+            }
+        }
+        return AsyncThrowingStream { continuation in
+            lock.withLock { heldContinuation = continuation }
+            continuation.yield(.event(request, 0, .token, token: "| Date |"))
+            secondCallStarted.fulfill()
+            // Deliberately left unfinished: only cancellation may end this stream.
+        }
+    }
+
+    func cancelGeneration(_ generationID: GenerationID) async throws -> CancelGenerationResponse {
+        lock.withLock { heldContinuation }?.finish()
+        return CancelGenerationResponse(status: .cancelled, generationID: generationID)
+    }
+
+    func recentEvents(for generationID: GenerationID, after sequenceNumber: Int) async throws -> [GenerationEvent] {
+        []
+    }
+
+    func unloadModel() async throws -> UnloadModelResponse {
+        UnloadModelResponse(status: .unloaded)
+    }
+
+    func reloadCurrentModel() async throws -> LoadModelResponse {
+        loadResult
+    }
+
+    func runtimeStatus() async throws -> RuntimeStatus {
+        RuntimeStatus(state: .modelLoaded, loadedModelID: loadResult.modelID, activeGenerationID: nil, message: nil, metrics: nil)
+    }
+
+    func restartRuntimeService() async throws {}
 }
