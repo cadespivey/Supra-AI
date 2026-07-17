@@ -575,7 +575,9 @@ struct MatterDocumentsView: View {
         if controller.unclassifiedCount > 0, controller.activeJob == nil {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles").foregroundStyle(.secondary)
-                Text("\(controller.unclassifiedCount) documents not yet classified")
+                Text(controller.unclassifiedCount == 1
+                    ? "1 document not yet classified"
+                    : "\(controller.unclassifiedCount) documents not yet classified")
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button("Classify") { controller.classifyPendingIfNeeded() }

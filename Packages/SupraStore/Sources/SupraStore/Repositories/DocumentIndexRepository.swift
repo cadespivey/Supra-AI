@@ -44,6 +44,30 @@ public final class DocumentIndexRepository: @unchecked Sendable {
         }
     }
 
+    /// Total extracted characters per document (SUM of the parts' `char_count`),
+    /// keyed by document id and scoped to one matter. A single GROUP BY so callers
+    /// that gate on text volume — e.g. the classification-floor check behind the
+    /// Documents tab's "not yet classified" prompt — don't fetch parts per document.
+    /// Documents with no parts are absent from the result (treat as 0).
+    public func fetchTotalCharCounts(matterID: String) throws -> [String: Int] {
+        try writer.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT p.document_id AS document_id, SUM(p.char_count) AS total_char_count
+                FROM document_pages_parts p
+                JOIN matter_documents d ON d.id = p.document_id
+                WHERE d.matter_id = ?
+                GROUP BY p.document_id
+                """,
+                arguments: [matterID]
+            )
+            return Dictionary(uniqueKeysWithValues: rows.map { row in
+                (row["document_id"] as String, row["total_char_count"] as Int)
+            })
+        }
+    }
+
     // MARK: - Chunks + FTS
 
     /// Replaces all chunks for a document and rebuilds its FTS rows in one
