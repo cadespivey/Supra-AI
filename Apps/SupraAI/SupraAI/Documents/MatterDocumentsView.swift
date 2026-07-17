@@ -709,8 +709,8 @@ struct PreviewItem: Identifiable {
     let model: DocumentPreviewModel
 }
 
-/// One-shot fact chronology over the matter's documents (WO 42), in a table or
-/// narrative format. Saved to the Outputs tab with its source set.
+/// Fact chronology over the matter's documents (WO 42), in a table or narrative
+/// format. Large scopes are batched; results are saved with their source set.
 struct DocumentChronologySheet: View {
     @ObservedObject var chronology: DocumentChronologyController
     let scopeFolderID: String?
@@ -742,7 +742,18 @@ struct DocumentChronologySheet: View {
                     .disabled(chronology.isGenerating || routeModel == nil)
             }
             Spacer()
-            if chronology.isGenerating { ProgressView().controlSize(.small) }
+            if chronology.isGenerating {
+                ProgressView().controlSize(.small)
+                if let caption = progressCaption {
+                    Text(caption)
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                }
+                if chronology.progress != .saving {
+                    Button("Cancel") { chronology.cancel() }
+                        .buttonStyle(.ghost)
+                }
+            }
             Button("Generate") { Task { await generate() } }
                 .buttonStyle(.ghost)
                 .keyboardShortcut(.defaultAction)
@@ -774,6 +785,9 @@ struct DocumentChronologySheet: View {
                 }
                 if let message = chronology.message {
                     Text(message).font(.supraCaption).foregroundStyle(.orange)
+                }
+                if let summary = chronology.summaryMessage {
+                    Text(summary).font(.supraCaption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -809,6 +823,21 @@ struct DocumentChronologySheet: View {
                     .font(.supraCaption)
                     .foregroundStyle(.orange)
             }
+        }
+    }
+
+    /// Footer caption for the generation stage; a large scope shows per-pass
+    /// progress ("Pass 2 of 3…") while it maps batches.
+    private var progressCaption: String? {
+        switch chronology.progress {
+        case .idle: nil
+        case .harvesting: "Harvesting…"
+        case .generating: "Generating…"
+        case let .mapping(batch, total): "Pass \(batch) of \(total)…"
+        case .merging: "Merging…"
+        case .synthesizing: "Synthesizing…"
+        case .verifying: "Verifying…"
+        case .saving: "Saving…"
         }
     }
 

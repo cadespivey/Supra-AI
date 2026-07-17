@@ -928,9 +928,9 @@ It is:
 
 ```text
 - user-initiated
-- one-shot
+- single-pass when the serialized request fits; otherwise batched map/reduce
 - generated from selected source scope
-- saved as generated
+- saved as the final assembled and verified artifact
 - regeneratable
 - exportable
 ```
@@ -970,7 +970,9 @@ Both formats require inline citations and source appendix references.
 
 ## 10.1 Saved Outputs
 
-Q&A answers and chronologies are saved exactly as generated.
+Q&A answers are saved as generated. Chronologies are saved after deterministic
+assembly and verification, so discarded overflow output and malformed intermediate
+rows never become the durable artifact.
 
 Required:
 
@@ -1619,7 +1621,7 @@ Acceptance:
 
 ## WO 42 - Fact Chronology
 
-Implement one-shot chronology generation with table/timeline and narrative formats, exact date handling, metadata/text date distinction, citations, save, regenerate, and export.
+Implement request-driven chronology generation with table/timeline and narrative formats, exact date handling, metadata/text date distinction, citations, save, regenerate, and export. Use deterministic batched map/reduce when the selected scope cannot fit one serialized request.
 
 Acceptance:
 
@@ -1627,6 +1629,10 @@ Acceptance:
 - chronology uses selected scope only
 - every factual entry has source support
 - exact/partial dates are labeled correctly
+- source labels remain stable across source-boundary batches
+- map outputs merge deterministically before narrative synthesis
+- parse, coverage, cross-batch citation, support, or narrative-completeness gaps persist needs_review
+- cancellation before the saving commit persists no output or pending source set
 ```
 
 ## WO 43 - Output Exports
@@ -2015,7 +2021,7 @@ Delivered:
 
 ## WO 42 — Fact Chronology — DONE (2026-06-17)
 
-Status: complete; chronology tests (2) green; app builds.
+Status: complete; expanded with bounded batching and adversarial review gates on 2026-07-17; 57 focused chronology tests green; app builds.
 
 Delivered:
 - `SupraDocuments/DocumentChronology`: `DateExtraction` (ISO/slashed/month-name/
@@ -2023,17 +2029,30 @@ Delivered:
   `factChronologyTable`/`factChronologyNarrative`), `DocumentChronologyPromptBuilder`
   (exact/partial date labeling, metadata-vs-text distinction, inline citations,
   source-only facts).
-- `SupraSessions/DocumentChronologyController` (@MainActor): readiness-gated,
-  one-shot. Harvests date-bearing chunks across the scope plus document metadata
-  dates (distinguished), builds the table/narrative prompt, generates, citation-
-  checks, and saves a `factChronology*` output + version + a `.chronology`-mode
-  source set + cited sources. Audited. Reuses the Q&A `QAResult`/`CitationCoverage`/
-  `SourceAppendix` machinery.
+- `SupraDocuments/ChronologyBatching`: strict table parsing, partial-date parsing,
+  stable date ordering, conservative deterministic deduplication, per-document batch
+  planning, table rendering, and narrative-entry coverage checks.
+- `SupraSessions/DocumentChronologyController` (@MainActor): readiness-gated. Harvests
+  date-bearing chunks across the scope plus distinguished document metadata dates.
+  Tables whose size estimate fits the model budget retain the original single-pass path;
+  larger tables and all narratives map in serialized-size-budgeted batches, merge
+  deterministically, and synthesize bounded narrative passes from merged entries only.
+  Serialized prompt accounting includes JSON and routed-system overhead; actual runtime
+  tokenizer overflow discards the affected output and splits/retries at source or entry
+  boundaries. Cancellation before the saving commit stops the runtime and persists nothing.
+  Intermediate parse, source-coverage, out-of-batch citation, per-source support, and
+  narrative-omission/extra-citation failures visibly force `needs_review` in both the artifact
+  and its persisted verification state. The optional output, source set/rows, version, source
+  attachment, and active-output update commit in one database transaction. Saves a
+  `factChronology*` output + version + a `.chronology`-mode source set + cited sources and
+  records an audit event.
 - App: `MattersController` vends `documentChronologyController`; Documents-tab
   "Chronology" sheet (`DocumentChronologySheet`) with format choice, optional folder
-  scope, readiness, and the rendered chronology.
-- Tests: scope-only facts (notes-folder narrative excludes the contract date;
-  whole-matter table references both docs) + date-form detection.
+  scope, readiness, per-pass progress, cancellation, and the rendered chronology.
+- Tests: 26 pure batching/parser/merge/synthesis-coverage tests and 31 controller
+  integration tests covering scope, budgeting, ordering, stable labels, support gates,
+  actual-overflow recovery, atomic persistence rollback, persisted review state, narrative
+  completeness, cancellation, and reentrancy.
 
 ## WO 43 — Output Exports — DONE (2026-06-17)
 

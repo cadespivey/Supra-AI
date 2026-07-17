@@ -67,6 +67,7 @@ public enum DocumentSupportVerifier {
         scopeFullyIndexed: Bool,
         timestamp: Date = Date()
     ) throws -> DocumentSupportReport {
+        try Task.checkCancellation()
         let propositions = extractPropositions(from: answer)
         let usedLabels = CitationCoverage.usedLabels(in: answer)
         let sourceByLabel = Dictionary(sources.map { ($0.label, $0) }, uniquingKeysWith: { first, _ in first })
@@ -90,6 +91,7 @@ public enum DocumentSupportVerifier {
             warnings.append(reason)
         } else {
             for proposition in propositions {
+                try Task.checkCancellation()
                 let decision = try evaluate(
                     proposition,
                     sourceByLabel: sourceByLabel,
@@ -152,6 +154,7 @@ public enum DocumentSupportVerifier {
 
         var citedSources: [DocumentSupportSource] = []
         for label in proposition.citationLabels {
+            try Task.checkCancellation()
             guard let source = sourceByLabel[label] else {
                 return try result(.unverifiable, ["Proposition \(proposition.id) cites unresolved source \(label)."])
             }
@@ -174,10 +177,11 @@ public enum DocumentSupportVerifier {
         }
 
         for source in citedSources {
-            guard !hasMaterialContradiction(to: proposition.text, in: source.text) else {
+            try Task.checkCancellation()
+            guard try !hasMaterialContradiction(to: proposition.text, in: source.text) else {
                 return try result(.unsupported, ["Cited source text contains materially contradictory evidence for proposition \(proposition.id)."])
             }
-            guard let excerpt = supportingExcerpt(for: proposition.text, in: source.text) else { continue }
+            guard let excerpt = try supportingExcerpt(for: proposition.text, in: source.text) else { continue }
             let evidence = SupportEvidence(
                 sourceID: source.sourceID,
                 sourceLabel: source.label,
@@ -241,7 +245,7 @@ public enum DocumentSupportVerifier {
         return propositions
     }
 
-    private static func supportingExcerpt(for proposition: String, in sourceText: String) -> String? {
+    private static func supportingExcerpt(for proposition: String, in sourceText: String) throws -> String? {
         let propositionTokens = significantTokens(in: proposition)
         guard propositionTokens.count >= 2 else { return nil }
         let propositionCritical = criticalTokens(in: proposition)
@@ -262,6 +266,7 @@ public enum DocumentSupportVerifier {
 
         var best: (text: String, extraTokenCount: Int)?
         for candidate in searchCandidates {
+            try Task.checkCancellation()
             let sourceTokens = significantTokens(in: candidate)
             let sourceCritical = criticalTokens(in: candidate)
             let sourceDates = canonicalDates(in: candidate)
@@ -531,7 +536,7 @@ public enum DocumentSupportVerifier {
         return !tokens.isDisjoint(with: ["no", "not", "never", "without", "none"])
     }
 
-    private static func hasMaterialContradiction(to proposition: String, in sourceText: String) -> Bool {
+    private static func hasMaterialContradiction(to proposition: String, in sourceText: String) throws -> Bool {
         let terms = Set(significantTokens(in: proposition))
         guard terms.count >= 2 else { return false }
         let propositionNegated = containsNegation(proposition)
@@ -540,13 +545,17 @@ public enum DocumentSupportVerifier {
         guard let regex = try? NSRegularExpression(pattern: #"[^.!?\n]+(?:[.!?]+|\n|$)"#) else {
             return false
         }
-        return regex.matches(in: sourceText, range: fullRange).contains { match in
+        for match in regex.matches(in: sourceText, range: fullRange) {
+            try Task.checkCancellation()
             let sentence = nsSource.substring(with: match.range)
-            guard containsNegation(sentence) != propositionNegated else { return false }
+            guard containsNegation(sentence) != propositionNegated else { continue }
             let matched = terms.intersection(significantTokens(in: sentence)).count
-            return matched >= min(3, terms.count)
-                && Double(matched) / Double(terms.count) >= 0.6
+            if matched >= min(3, terms.count),
+               Double(matched) / Double(terms.count) >= 0.6 {
+                return true
+            }
         }
+        return false
     }
 
     private static func orderedUnique(_ values: [String]) -> [String] {
