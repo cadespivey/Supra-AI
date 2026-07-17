@@ -114,13 +114,118 @@ final class DocumentChronologyTests: XCTestCase {
         XCTAssertFalse(DateExtraction.containsDate("No dates here at all."))
     }
 
+    // MARK: - W3.0 harvest fix (batched-chronology work order, Phase 1)
+
+    func testMetadataDatesDoNotStarveTextChunks() async throws {
+        // Every document carries BOTH a metadata date AND one dated text chunk.
+        // Today `harvestSources` appends each document's metadata-date source
+        // UNCONDITIONALLY — ahead of the `maxSources` cap that only text chunks are
+        // checked against — so with enough metadata-dated documents the uncapped
+        // metadata sources consume the budget and dated text chunks are dropped.
+        //
+        // Expected RED: with the default 30-source cap and 35 documents, the metadata
+        // and text sources interleave per document, so only 15 documents' dated text
+        // chunks survive before the cap fills (the other 20 are dropped) — the
+        // text-chunk source count (15) is NOT equal to the document count (35).
+        //
+        // NOTE ON THE ASSERTION (deviation, see report): the work order phrased this
+        // as "assert at least one text-chunk source survives", expecting zero
+        // survivors. Because metadata and chunks interleave per document, the first
+        // ~15 chunks always slip in before the cap fills, so a bare "≥ 1" assertion is
+        // already GREEN and cannot observe the bug. The genuine behavioral RED for
+        // this exact fixture is "no dated chunk is starved" → text-chunk count equals
+        // document count. The W3.0 fix routes metadata sources through the same cap
+        // and raises the default cap to 1,000, letting every dated chunk survive
+        // (35 == 35, GREEN).
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+
+        for i in 1...35 {
+            let name = String(format: "mckernon-record-%02d.txt", i)
+            try await indexDoc(
+                store, matter.id, nil, name,
+                "McKernon Motors record \(i): brake inspection dated 2024-03-03.",
+                metadataCreatedAt: Date(timeIntervalSince1970: 1_500_000_000 + Double(i) * 86_400)
+            )
+        }
+
+        // Any valid table answer; the assertion is on the persisted source packet.
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "| Date | Event | Source |\n| 2024-03-03 | Brake inspection [S1] | [S1] |"),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+        // Default maxSources (30) — the cap under test.
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID()))
+
+        let docCount = try store.documentLibrary.fetchDocuments(matterID: matter.id).count
+        let sources = try store.documentSources.fetchSources(structuredOutputVersionID: result.versionID)
+        // Metadata-date rows carry no chunkID; text-chunk rows do.
+        let metadataSources = sources.filter { $0.chunkID == nil }
+        let textChunkSources = sources.filter { $0.chunkID != nil }
+
+        // Precondition: metadata-date seeding wired one metadata source per document.
+        // A failure here means the harness could not seed `metadataCreatedAt`, not
+        // that the feature is (in)correct.
+        XCTAssertEqual(metadataSources.count, docCount, "each seeded document should contribute one metadata-date source")
+        // Invariant under test: metadata dates must not starve dated text chunks.
+        XCTAssertEqual(textChunkSources.count, docCount, "every document's dated text chunk should survive the harvest; got \(textChunkSources.count) of \(docCount)")
+    }
+
+    func testOmittedDocumentNamesAppearInMessage() async throws {
+        // Six distinctively named documents, each with one dated text chunk, over a
+        // small explicit cap of 3. The first three (alphabetically) survive; the last
+        // three are omitted.
+        //
+        // Expected RED: the omission message is the aggregate "Chronology covers 3 of
+        // 6 dated sources; the rest were omitted…" string, which names no documents,
+        // so it does not contain any omitted document's display name. The W3.0 fix
+        // makes produce() name up to five omitted documents in the message.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+
+        // Alphabetical order determines survival: a/b/c survive (cap 3); d/e/w omitted.
+        try await indexDoc(store, matter.id, nil, "amended-complaint.txt", "McKernon Motors amended complaint filed 2023-11-02.")
+        try await indexDoc(store, matter.id, nil, "brake-failure-analysis.txt", "Brake failure analysis dated 2023-11-05.")
+        try await indexDoc(store, matter.id, nil, "correspondence-liberty-rail.txt", "Correspondence with Liberty Rail on 2023-11-09.")
+        try await indexDoc(store, matter.id, nil, "deposition-calloway.txt", "Deposition of Calloway taken 2023-11-14.")
+        try await indexDoc(store, matter.id, nil, "expert-report-metallurgy.txt", "Metallurgy expert report dated 2023-11-20.")
+        try await indexDoc(store, matter.id, nil, "warranty-terms-mckernon.txt", "Warranty terms executed 2023-11-27.")
+
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "| Date | Event | Source |\n| 2023-11-02 | Complaint filed [S1] | [S1] |"),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+        // Explicit small cap so only three of six dated chunks survive.
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime, maxSources: 3)
+
+        // Unwrapping the result proves generation actually ran (and set `message` via
+        // the real omission path) instead of bailing early into an unrelated message.
+        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID()))
+
+        let message = try XCTUnwrap(chronology.message)
+        // "deposition-calloway.txt" is the first omitted document (4th alphabetically).
+        XCTAssertTrue(
+            message.contains("deposition-calloway.txt"),
+            "omission message should name an omitted document; got: \(message)"
+        )
+    }
+
     // MARK: - Helpers
 
-    private func indexDoc(_ store: SupraStore, _ matterID: String, _ folderID: String?, _ name: String, _ text: String) async throws {
+    private func indexDoc(_ store: SupraStore, _ matterID: String, _ folderID: String?, _ name: String, _ text: String, metadataCreatedAt: Date? = nil) async throws {
         let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(sha256: name, byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/\(name)")).blob
+        // `metadataCreatedAt` is persisted verbatim on insert; indexing only touches
+        // index/status columns, so a seeded metadata date survives to the harvest.
         let doc = try store.documentLibrary.insertDocument(MatterDocumentRecord(
             matterID: matterID, blobID: blob.id, folderID: folderID, displayName: name,
-            status: MatterDocumentStatus.indexing.rawValue, extractionStatus: DocumentExtractionStatus.extracted.rawValue
+            status: MatterDocumentStatus.indexing.rawValue, extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            metadataCreatedAt: metadataCreatedAt
         ))
         try store.documentIndex.replaceParts(documentID: doc.id, parts: [
             DocumentPagePartRecord(documentID: doc.id, partIndex: 0, sourceKind: DocumentSourceKind.text.rawValue, normalizedText: text, charCount: text.count)
