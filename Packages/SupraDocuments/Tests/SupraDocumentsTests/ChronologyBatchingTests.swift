@@ -278,4 +278,130 @@ final class ChronologyBatchingTests: XCTestCase {
             "ledger-c (2023) precedes filing-a (2024); the undated notes trail in input order"
         )
     }
+
+    // MARK: - §3.5 review-finding REDs (adversarial review of the batching diff)
+
+    func testMergeKeepsDistinctEventsWithCollidingPartialDates() {
+        // Review finding 1 (citation misattribution). Expected RED: dedupKey uses
+        // only the canonical parsed date + folded event text, so "Spring 2024" and
+        // "Fall 2024" both canonicalize to year-only 2024 and — with identical
+        // folded event text — fuse into ONE row ("| Spring 2024 | Quarterly board
+        // meeting held [S1] [S3] |"): merged.count is 1, the Fall event vanishes,
+        // and S3 is cited for a Spring meeting it never described.
+        let spring = ChronologyEntry(
+            dateText: "Spring 2024",
+            date: ChronologyDate.parse("Spring 2024"),
+            eventText: "Quarterly board meeting held",
+            labels: ["S1"]
+        )
+        let fall = ChronologyEntry(
+            dateText: "Fall 2024",
+            date: ChronologyDate.parse("Fall 2024"),
+            eventText: "Quarterly board meeting held",
+            labels: ["S3"]
+        )
+
+        let merged = ChronologyMerge.merge([[spring], [fall]])
+
+        XCTAssertEqual(merged.count, 2, "events with distinct partial-date texts must not fuse on their shared canonical year")
+        XCTAssertEqual(merged.first { $0.dateText == "Spring 2024" }?.labels, ["S1"], "the Spring row must keep only its own citation")
+        XCTAssertEqual(merged.first { $0.dateText == "Fall 2024" }?.labels, ["S3"], "the Fall row must keep only its own citation")
+
+        // The committed full-precision contract is unchanged: rows whose canonical
+        // dates are fully specified (year+month+day) still dedup across dateText
+        // renderings, unioning labels.
+        let iso = ChronologyEntry(
+            dateText: "2024-01-05",
+            date: ChronologyDate(year: 2024, month: 1, day: 5),
+            eventText: "Complaint served on McKernon Motors",
+            labels: ["S2"]
+        )
+        let named = ChronologyEntry(
+            dateText: "January 5, 2024",
+            date: ChronologyDate(year: 2024, month: 1, day: 5),
+            eventText: "complaint SERVED on McKernon Motors",
+            labels: ["S10"]
+        )
+        let dedup = ChronologyMerge.merge([[iso], [named]])
+        XCTAssertEqual(dedup.count, 1, "full-precision canonical dates still dedup across renderings")
+        XCTAssertEqual(dedup.first?.labels, ["S2", "S10"])
+    }
+
+    func testDateParsingHandlesDayFirstFormsAndRejectsImpossibleDays() {
+        // Review finding 2. Expected RED (concrete wrong values from the current
+        // parser): "15 January 2024" → (2024, 1, nil) — the day is silently
+        // dropped by the month-year fallback; "2 May 2024" → (2024, 5, nil);
+        // "3rd March 2024" → (2024, 3, nil); "the 15th day of January, 2024" →
+        // (2024, nil, nil) — bare-year fallback; "February 30, 2024" /
+        // "2024-02-30" / "April 31, 2024" are ACCEPTED as real dates instead of
+        // parsing to nil (undated trails — the conservative choice).
+        XCTAssertEqual(ChronologyDate.parse("15 January 2024"), ChronologyDate(year: 2024, month: 1, day: 15), "day-first month-name form must keep its day")
+        XCTAssertEqual(ChronologyDate.parse("2 May 2024"), ChronologyDate(year: 2024, month: 5, day: 2))
+        XCTAssertEqual(ChronologyDate.parse("3rd March 2024"), ChronologyDate(year: 2024, month: 3, day: 3), "ordinal day-first form must keep its day")
+        XCTAssertEqual(ChronologyDate.parse("the 15th day of January, 2024"), ChronologyDate(year: 2024, month: 1, day: 15), "formal US day-first form must keep its day")
+
+        // Impossible calendar days fail closed to nil (undated trail) rather than
+        // being accepted and sorted as real dates.
+        XCTAssertNil(ChronologyDate.parse("February 30, 2024"), "February 30 is not a date")
+        XCTAssertNil(ChronologyDate.parse("2024-02-30"), "February 30 is not a date in ISO form either")
+        XCTAssertNil(ChronologyDate.parse("April 31, 2024"), "April has 30 days")
+        // February 29 is representable (2024 is a leap year) — the impossible-day
+        // rejection must not over-tighten to a 28-day February.
+        XCTAssertEqual(ChronologyDate.parse("February 29, 2024"), ChronologyDate(year: 2024, month: 2, day: 29))
+        // Two-digit years stay unparsed — documented conservative choice: a
+        // century pivot guess is worse than an undated trail.
+        XCTAssertNil(ChronologyDate.parse("1/5/24"))
+
+        // Ordering consequence of the dropped day: the row the source dates
+        // January 15 currently sorts ABOVE January 3 (nil day ranks first)
+        // while displaying the 15th. With the day kept, January 3 leads.
+        let dayFirst = ChronologyEntry(
+            dateText: "15 January 2024",
+            date: ChronologyDate.parse("15 January 2024"),
+            eventText: "Coupler stress test performed",
+            labels: ["S2"]
+        )
+        let monthFirst = ChronologyEntry(
+            dateText: "January 3, 2024",
+            date: ChronologyDate.parse("January 3, 2024"),
+            eventText: "Complaint served on McKernon Motors",
+            labels: ["S1"]
+        )
+        let merged = ChronologyMerge.merge([[dayFirst], [monthFirst]])
+        XCTAssertEqual(
+            merged.map(\.eventText),
+            ["Complaint served on McKernon Motors", "Coupler stress test performed"],
+            "January 3 must precede January 15 — the displayed day governs the sort position"
+        )
+    }
+
+    func testBuildSynthesisWrapsEntriesInUntrustedBoundary() throws {
+        // Review finding 6 (injection surface). Expected RED: buildSynthesis
+        // currently inlines entry text bare under "MERGED ENTRIES:" — the prompt
+        // contains no SECURITY BOUNDARY preamble, no evidence-not-instructions
+        // statement, and no untrusted-entry markers around the entries block.
+        let entries = [
+            ChronologyEntry(
+                dateText: "2024-01-05",
+                date: ChronologyDate(year: 2024, month: 1, day: 5),
+                eventText: "Complaint served on McKernon Motors",
+                labels: ["S1"]
+            ),
+        ]
+
+        let prompt = DocumentChronologyPromptBuilder.buildSynthesis(entries: entries)
+
+        XCTAssertTrue(prompt.contains("SECURITY BOUNDARY:"), "the synthesis prompt must carry the untrusted-content boundary preamble")
+        XCTAssertTrue(prompt.contains("never instructions"), "entry text must be declared evidence, never instructions")
+        let begin = try XCTUnwrap(prompt.range(of: "BEGIN_UNTRUSTED_ENTRY_DATA"), "entries block must open with an untrusted-data marker")
+        let end = try XCTUnwrap(prompt.range(of: "END_UNTRUSTED_ENTRY_DATA"), "entries block must close with an untrusted-data marker")
+        let entryText = try XCTUnwrap(prompt.range(of: "Complaint served on McKernon Motors"))
+        XCTAssertTrue(
+            begin.lowerBound < entryText.lowerBound && entryText.lowerBound < end.lowerBound,
+            "the entry text must sit inside the untrusted-data markers"
+        )
+        // The raw SOURCE envelope stays absent — the committed controller pin
+        // (synthesis consumes merged entries, never raw source data) is unchanged.
+        XCTAssertFalse(prompt.contains("BEGIN_UNTRUSTED_SOURCE_DATA"), "the synthesis prompt must not regress to embedding raw source envelopes")
+    }
 }

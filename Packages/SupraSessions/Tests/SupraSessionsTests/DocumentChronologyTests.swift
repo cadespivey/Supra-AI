@@ -395,6 +395,98 @@ final class DocumentChronologyTests: XCTestCase {
         XCTAssertEqual(result.status, StructuredOutputStatus.complete.rawValue)
     }
 
+    // MARK: - §3.5 review-finding REDs (adversarial review of the batching diff)
+
+    func testReentrantGenerateDoesNotDisconnectCancelFromLiveRun() async throws {
+        // Review finding 3 (generationTask clobber). Expected RED: the re-entrant
+        // generate() overwrites the live run's task handle and its defer nils it,
+        // so cancel()'s task-cancellation half no-ops; the runtime cancel still
+        // finishes the hung stream, but the un-cancelled task classifies the
+        // resulting .interrupted as a failure — message is "Chronology generation
+        // failed: Generation ended unexpectedly." instead of "Chronology
+        // generation was cancelled."
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        try await seedBrakeFilings(store, matter.id, count: 20)
+        let secondPassStarted = expectation(description: "second map pass began streaming")
+        let runtime = HangingSecondCallRuntimeClient(secondCallStarted: secondPassStarted)
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let liveRun = Task { await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()) }
+        await fulfillment(of: [secondPassStarted], timeout: 5)
+        // Re-entrant call while the live run is suspended mid-batch-2 (the
+        // realistic double-click window). Launched concurrently — a compliant
+        // fix may either bounce immediately or await the live run, and a
+        // sequential await here would deadlock against the later cancel().
+        let reentrant = Task { await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()) }
+        // Let the re-entrant call reach the controller before cancelling.
+        await Task.yield()
+        chronology.cancel()
+        let liveResult = await liveRun.value
+        let reentrantResult = await reentrant.value
+
+        XCTAssertNil(liveResult, "the cancelled live run must not produce a result")
+        XCTAssertNil(reentrantResult, "the re-entrant call must not produce a result")
+        XCTAssertEqual(chronology.message, "Chronology generation was cancelled.")
+        XCTAssertTrue(
+            try store.structuredOutputs.fetchOutputs(matterID: matter.id).isEmpty,
+            "no structured output row may persist after cancellation, re-entrant call or not"
+        )
+    }
+
+    func testZeroEntryMapPassForcesNeedsReviewWithCoverageNote() async throws {
+        // Review finding 4 (zero-entry map pass fail-open). Expected RED: the
+        // final batch's prose-only answer parses to zero entries AND zero
+        // unparsed rows, so its facts silently vanish — status stays "complete"
+        // and the coverage note is absent from the saved markdown.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        try await seedBrakeFilings(store, matter.id, count: 20)
+        let runtime = StubRuntimeClient(outcome: { request in
+            let labels = Self.labelNumbers(in: request.prompt)
+            let answer: String
+            if labels.contains(20), !labels.contains(1) {
+                // The final map pass answers as prose — not one pipe-bearing line.
+                answer = "The remaining filings describe routine switching-yard maintenance and add no dated events."
+            } else {
+                answer = Self.scriptedAnswer(for: request.prompt, appendMalformedRowsToFinalBatch: false)
+            }
+            return .events([
+                .event(request, 0, .token, token: answer),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+
+        XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue, "a map pass that yielded no usable rows must force review")
+        XCTAssertTrue(
+            result.markdown.contains("1 of 2 map passes produced no usable rows; their sources may be uncovered."),
+            "the saved chronology must disclose the uncovered pass"
+        )
+    }
+
+    func testNarrativeOmittingMergedEntriesForcesNeedsReviewWithNote() async throws {
+        // Review finding 7 (narrative completeness fail-open). Expected RED: the
+        // scripted synthesis narrative reproduces only 2 of the 20 merged entries
+        // (S1 and S20); both surviving sentences verify extractively, so today the
+        // artifact persists as "complete" with no omission note — 18 facts
+        // silently absent from a chronology whose appendix lists all 20 sources.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        try await seedBrakeFilings(store, matter.id, count: 20)
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: PromptLog()))
+
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID(), route: Self.tinyBatchRoute()))
+
+        XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue, "silent narrative omission must force review")
+        XCTAssertTrue(
+            result.markdown.contains("The narrative omits 18 of 20 chronology entries; regenerate or use the table format."),
+            "the saved narrative must disclose how many merged entries it dropped"
+        )
+    }
+
     // MARK: - Batching fixture + scripting helpers
 
     private func seedBrakeFilings(_ store: SupraStore, _ matterID: String, count: Int) async throws {
