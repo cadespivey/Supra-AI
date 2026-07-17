@@ -50,6 +50,10 @@ public final class MatterDocumentsController: ObservableObject {
     private let previewLoader: DocumentPreviewLoader
     private var processingObserver: AnyCancellable?
     private var pollTimer: AnyCancellable?
+    /// Total extracted characters per document (SUM over its parts), refreshed in
+    /// `reload()`. Backs the classification-floor gate in `unclassifiedCount` so the
+    /// property stays cheap for the view to read.
+    private var documentCharCounts: [String: Int] = [:]
 
     public init(
         matterID: String,
@@ -139,9 +143,36 @@ public final class MatterDocumentsController: ObservableObject {
         return job
     }
 
+    /// How many of this matter's documents are extracted but not yet classified —
+    /// drives the "not yet classified" prompt and its Classify action. Counts only
+    /// documents the classifier can actually pick up: `needsClassification` AND at
+    /// least `OCRPolicy.minimumUsableTextLength` extracted characters. Sub-floor
+    /// documents (e.g. an OCR'd blank scan) are excluded — `classifyMatter` skips
+    /// them permanently, so counting them would pin the caption to a Classify
+    /// button that visibly no-ops.
+    public var unclassifiedCount: Int {
+        documents.filter {
+            DocumentClassificationService.needsClassification($0)
+                && (documentCharCounts[$0.id] ?? 0) >= OCRPolicy.minimumUsableTextLength
+        }.count
+    }
+
+    /// Kicks off a classification-only pass over the matter's pending documents. No-ops
+    /// when nothing is pending or a job is already running for the matter (see
+    /// `DocumentProcessingQueue.enqueueClassify`), so it is safe to call on tab appearance.
+    public func classifyPendingIfNeeded() {
+        queue.enqueueClassify(matterID: matterID)
+    }
+
+    /// Retries a failed/stale document by re-extracting it from its managed blob.
+    public func retryProcessing(documentID: String) {
+        queue.enqueueReprocess(matterID: matterID, documentIDs: [documentID])
+    }
+
     public func reload() {
         folders = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
         documents = (try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []
+        documentCharCounts = (try? store.documentIndex.fetchTotalCharCounts(matterID: matterID)) ?? [:]
         trashedDocuments = (try? store.documentLibrary.fetchSoftDeletedDocuments(matterID: matterID)) ?? []
         trashedFolders = ((try? store.documentLibrary.fetchFolders(matterID: matterID, includeDeleted: true)) ?? []).filter { $0.deletedAt != nil }
         tags = (try? store.documentLibrary.fetchTags(matterID: matterID)) ?? []

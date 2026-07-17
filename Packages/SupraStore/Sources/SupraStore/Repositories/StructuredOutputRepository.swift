@@ -156,6 +156,156 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         }
     }
 
+    /// Creates an optional new output, its source set and source rows, and the
+    /// first/next version as one database transaction. This is the strong write
+    /// boundary for generated document artifacts: a version failure cannot
+    /// leave a draft output or pending provenance behind.
+    @discardableResult
+    public func createVersionWithSourceSetAtomically(
+        structuredOutputID: String,
+        newOutput: StructuredOutputRecord?,
+        sourceSet: DocumentSourceSetRecord,
+        outputSources: [DocumentOutputSourceRecord],
+        contentMarkdown: String,
+        verificationStatus: OutputVerificationStatus,
+        verificationVersion: String,
+        verificationResults: [PropositionSupportResult],
+        outputStatus: StructuredOutputStatus
+    ) throws -> StructuredOutputVersionRecord {
+        let requiredSectionsJSON = try JSONCoding.encode([String]())
+        let verificationJSON = try JSONCoding.encode(verificationResults)
+        let normalizedVerificationVersion = verificationVersion
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if verificationStatus == .allSupported {
+            guard !normalizedVerificationVersion.isEmpty else {
+                throw StructuredOutputRepositoryError.verificationVersionRequired
+            }
+            guard !verificationResults.isEmpty,
+                  verificationResults.allSatisfy({ $0.status == .supported })
+            else {
+                throw StructuredOutputRepositoryError.allSupportedResultRequired
+            }
+        }
+        if outputStatus == .complete, verificationStatus != .allSupported {
+            throw StructuredOutputRepositoryError.completeStatusRequiresAllSupportedVerification
+        }
+        if let newOutput {
+            _ = try Self.requireNonEmpty(newOutput.title, fieldName: "title")
+            guard newOutput.id == structuredOutputID,
+                  newOutput.activeVersionID == nil,
+                  newOutput.status == StructuredOutputStatus.draft.rawValue,
+                  newOutput.deletedAt == nil
+            else {
+                throw StructuredOutputRepositoryError.outputUnavailable(structuredOutputID)
+            }
+        }
+        guard sourceSet.structuredOutputVersionID == nil,
+              sourceSet.status == DocumentSourceSetStatus.pending.rawValue,
+              outputSources.allSatisfy({
+                  $0.sourceSetID == sourceSet.id && $0.structuredOutputVersionID == nil
+              })
+        else {
+            throw StructuredOutputRepositoryError.sourceSetUnavailable(sourceSet.id)
+        }
+
+        return try writer.write { db in
+            let output: StructuredOutputRecord
+            if let newOutput {
+                try newOutput.insert(db)
+                output = newOutput
+            } else {
+                guard let existing = try StructuredOutputRecord.fetchOne(db, key: structuredOutputID),
+                      existing.deletedAt == nil
+                else {
+                    throw StructuredOutputRepositoryError.outputUnavailable(structuredOutputID)
+                }
+                output = existing
+            }
+            guard output.matterID == sourceSet.matterID else {
+                throw StructuredOutputRepositoryError.sourceSetUnavailable(sourceSet.id)
+            }
+
+            try sourceSet.insert(db)
+            for source in outputSources {
+                try source.insert(db)
+            }
+
+            let now = Date()
+            let versionIndex = try Int.fetchOne(
+                db,
+                sql: "SELECT COALESCE(MAX(version_index), 0) + 1 FROM structured_output_versions WHERE structured_output_id = ?",
+                arguments: [structuredOutputID]
+            ) ?? 1
+            let parentVersionID = try String.fetchOne(
+                db,
+                sql: """
+                SELECT id FROM structured_output_versions
+                WHERE structured_output_id = ?
+                ORDER BY version_index DESC LIMIT 1
+                """,
+                arguments: [structuredOutputID]
+            )
+            let version = StructuredOutputVersionRecord(
+                structuredOutputID: structuredOutputID,
+                versionIndex: versionIndex,
+                parentVersionID: parentVersionID,
+                contentMarkdown: contentMarkdown,
+                requiredSectionsJSON: requiredSectionsJSON,
+                presentSectionsJSON: requiredSectionsJSON,
+                missingSectionsJSON: requiredSectionsJSON,
+                verificationStatus: verificationStatus.rawValue,
+                verificationVersion: normalizedVerificationVersion,
+                verificationJSON: verificationJSON,
+                verifiedAt: now,
+                createdAt: now,
+                updatedAt: now
+            )
+            try version.insert(db)
+
+            try db.execute(
+                sql: """
+                UPDATE document_source_sets
+                SET structured_output_version_id = ?, status = ?
+                WHERE id = ?
+                  AND structured_output_version_id IS NULL
+                  AND status = ?
+                  AND matter_id = ?
+                """,
+                arguments: [
+                    version.id,
+                    DocumentSourceSetStatus.attached.rawValue,
+                    sourceSet.id,
+                    DocumentSourceSetStatus.pending.rawValue,
+                    output.matterID,
+                ]
+            )
+            guard db.changesCount == 1 else {
+                throw StructuredOutputRepositoryError.sourceSetUnavailable(sourceSet.id)
+            }
+            try db.execute(
+                sql: """
+                UPDATE document_output_sources
+                SET structured_output_version_id = ?
+                WHERE source_set_id = ?
+                """,
+                arguments: [version.id, sourceSet.id]
+            )
+            try db.execute(
+                sql: """
+                UPDATE structured_outputs
+                SET active_version_id = ?, status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                arguments: [version.id, outputStatus.rawValue, now, structuredOutputID]
+            )
+            guard db.changesCount == 1 else {
+                throw StructuredOutputRepositoryError.outputUnavailable(structuredOutputID)
+            }
+            return version
+        }
+    }
+
     public func updateStatus(outputID: String, status: StructuredOutputStatus) throws {
         try writer.write { db in
             try db.execute(
@@ -208,4 +358,5 @@ public enum StructuredOutputRepositoryError: Error, Equatable, Sendable {
     case allSupportedResultRequired
     case completeStatusRequiresAllSupportedVerification
     case sourceSetUnavailable(String)
+    case outputUnavailable(String)
 }

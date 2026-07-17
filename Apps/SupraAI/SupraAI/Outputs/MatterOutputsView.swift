@@ -43,7 +43,7 @@ struct MatterOutputsView: View {
             ContentUnavailableView {
                 Label("No Outputs", systemImage: "doc.text")
             } description: {
-                Text("Generate reusable legal outputs — issue spotting, rule synthesis, or drafting skeletons — that the local model drafts from the context you provide. (Document Q&A and chronologies are created from the Documents tab.)")
+                Text("Generate reusable legal outputs — issue spotting, rule synthesis, or drafting skeletons — that the local model drafts from the context you provide. (Chronologies are created from the Documents tab.)")
             } actions: {
                 Button("New Output") { showNew = true }
             }

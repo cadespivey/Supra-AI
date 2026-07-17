@@ -80,6 +80,23 @@ public final class DocumentSourceRepository: @unchecked Sendable {
         }
     }
 
+    /// Returns every source set for a matter, including pending sets. This is
+    /// intentionally broader than the version-scoped fetch so callers and
+    /// integrity tests can detect abandoned provenance writes.
+    public func fetchSourceSets(matterID: String) throws -> [DocumentSourceSetRecord] {
+        try writer.read { db in
+            try DocumentSourceSetRecord.fetchAll(
+                db,
+                sql: """
+                SELECT * FROM document_source_sets
+                WHERE matter_id = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                arguments: [matterID]
+            )
+        }
+    }
+
     // MARK: - Cited output sources
 
     public func addOutputSource(_ source: DocumentOutputSourceRecord) throws {

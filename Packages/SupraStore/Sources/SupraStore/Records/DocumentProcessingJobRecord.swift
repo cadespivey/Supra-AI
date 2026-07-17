@@ -10,6 +10,12 @@ public struct DocumentProcessingJobRecord: Codable, FetchableRecord, Persistable
     public var id: String
     public var matterID: String
     public var importBatchID: String?
+    /// What work this job performs (`DocumentProcessingJobKind`): a full
+    /// import/reindex, a classification-only pass, or a targeted re-extraction.
+    public var kind: String
+    /// Kind-specific JSON payload (e.g. the target document ids for a reprocess
+    /// job). Nil for jobs whose targets are derived from the matter.
+    public var payloadJSON: String?
     public var status: String
     public var phase: String
     public var queuePosition: Int?
@@ -28,6 +34,8 @@ public struct DocumentProcessingJobRecord: Codable, FetchableRecord, Persistable
         id: String = UUID().uuidString,
         matterID: String,
         importBatchID: String? = nil,
+        kind: String = DocumentProcessingJobKind.process.rawValue,
+        payloadJSON: String? = nil,
         status: String = DocumentProcessingJobStatus.queued.rawValue,
         phase: String = DocumentProcessingPhase.discovering.rawValue,
         queuePosition: Int? = nil,
@@ -45,6 +53,8 @@ public struct DocumentProcessingJobRecord: Codable, FetchableRecord, Persistable
         self.id = id
         self.matterID = matterID
         self.importBatchID = importBatchID
+        self.kind = kind
+        self.payloadJSON = payloadJSON
         self.status = status
         self.phase = phase
         self.queuePosition = queuePosition
@@ -64,6 +74,8 @@ public struct DocumentProcessingJobRecord: Codable, FetchableRecord, Persistable
         case id
         case matterID = "matter_id"
         case importBatchID = "import_batch_id"
+        case kind
+        case payloadJSON = "payload_json"
         case status
         case phase
         case queuePosition = "queue_position"

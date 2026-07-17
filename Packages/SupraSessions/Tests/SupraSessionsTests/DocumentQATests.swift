@@ -2,6 +2,7 @@ import Foundation
 import SupraCore
 import SupraDocuments
 import SupraResearch
+import SupraRuntimeInterface
 @testable import SupraSessions
 import SupraStore
 import XCTest
@@ -18,6 +19,55 @@ private final class SequencedDocumentAnswers: @unchecked Sendable {
             return answers.first ?? ""
         }
     }
+}
+
+/// Records every `GenerateRequest` a stub runtime is asked to satisfy, in order, so
+/// a test can count and inspect the generate calls a controller made (e.g. proving a
+/// deep grounded pass reranks before it answers). Thread-safe because the stub's
+/// outcome closure is `@Sendable`.
+private final class GenerateCallRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _requests: [GenerateRequest] = []
+
+    func record(_ request: GenerateRequest) { lock.withLock { _requests.append(request) } }
+    var requests: [GenerateRequest] { lock.withLock { _requests } }
+    var count: Int { lock.withLock { _requests.count } }
+}
+
+/// A rerank request is distinguished from a grounded-answer request by the reranker
+/// system prompt / prompt shape emitted by `DocumentQAController`'s rerank machinery
+/// (the same machinery the deep-tier chat pass is to reuse). Kept in lockstep with
+/// `DocumentQAController.rerankSources` — if that prompt shape changes, update this.
+private func isRerankRequest(_ request: GenerateRequest) -> Bool {
+    (request.systemPrompt?.localizedCaseInsensitiveContains("retrieval reranker") ?? false)
+        || request.prompt.hasPrefix("Rank the passages")
+}
+
+/// The `[S#]` labels of a rerank listing, in listing (retrieval) order. Each candidate
+/// occupies its own `"[S#] <excerpt>"` line, so a per-line prefix match extracts them.
+private func rerankLabels(in prompt: String) -> [String] {
+    prompt.split(separator: "\n").compactMap { line -> String? in
+        guard let range = line.range(of: #"^\[S\d+\]"#, options: .regularExpression) else { return nil }
+        return String(line[range]).trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+    }
+}
+
+/// The `[S#]` label of the single rerank listing line that contains `needle` (a
+/// per-document canary), letting the stub promote/exclude a known document by content
+/// without depending on retrieval order.
+private func rerankLabel(containing needle: String, in prompt: String) -> String? {
+    for line in prompt.split(separator: "\n") where line.contains(needle) {
+        if let range = line.range(of: #"\[S\d+\]"#, options: .regularExpression) {
+            return String(line[range]).trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        }
+    }
+    return nil
+}
+
+/// How many of `canaries` appear in `text` — the count of distinct documents whose
+/// content reached a prompt (rerank candidate pool vs. packed answer set).
+private func distinctCanaries(in text: String, canaries: [String]) -> Int {
+    canaries.filter { text.contains($0) }.count
 }
 
 @MainActor
@@ -209,6 +259,111 @@ final class DocumentQATests: XCTestCase {
         )
         XCTAssertNil(controller.deeperSearchOffer)
         XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
+    func testDeepGroundedChatPassReranksBeforeAnswering() async throws {
+        // Capability parity: the deleted "Ask Documents" sheet's DEEP tier LLM-reranked
+        // a wide candidate pool before answering (DocumentQAController.rerankSources);
+        // chat's grounded deep pass must do the same once the rerank machinery is ported.
+        //
+        // Expected RED: chat's deep grounded pass makes only ONE generate call today
+        // (the answer) because it has no rerank stage — the `recorder.count == 2`
+        // assertion fails at 1 != 2, and the second-call XCTUnwrap fails loudly.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
+        // Seed a pool larger than the deep pack (12) so the rerank has a real pool to
+        // narrow and the pool→packed reduction is observable.
+        let canaries = try await indexCanaryDocs(store, matter.id)
+        let keep = try XCTUnwrap(canaries.first)  // promoted to the top by the rerank stub
+        let drop = try XCTUnwrap(canaries.last)   // excluded from the reranked selection
+
+        let recorder = GenerateCallRecorder()
+        let runtime = StubRuntimeClient(outcome: { request in
+            recorder.record(request)
+            if isRerankRequest(request) {
+                // Return a valid ordering that puts KEEP first and omits DROP entirely.
+                // Every other candidate is included, so no matter the packed limit the
+                // backfill can never re-admit DROP.
+                let keepLabel = rerankLabel(containing: keep, in: request.prompt)
+                let dropLabel = rerankLabel(containing: drop, in: request.prompt)
+                let ordering = ([keepLabel].compactMap { $0 }
+                    + rerankLabels(in: request.prompt).filter { $0 != keepLabel && $0 != dropLabel })
+                    .joined(separator: ", ")
+                return .events([
+                    .event(request, 0, .token, token: ordering),
+                    .event(request, 1, .generationCompleted),
+                ])
+            }
+            return .events([
+                .event(request, 0, .token, token: "The widget contract delivery terms are net thirty days [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        controller.loadChats()
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .generalQA)
+
+        await controller.performSend(
+            prompt: "What do my documents say about the widget contract delivery terms?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route,
+            documentDepth: .deep
+        )
+
+        // The deep pass must rerank (call 1) and then answer (call 2), in that order.
+        XCTAssertEqual(recorder.count, 2, "Deep grounded chat should rerank (call 1) then answer (call 2).")
+        let rerankReq = try XCTUnwrap(recorder.requests.first)
+        // nil in RED (only one call), so this fails loudly instead of index-crashing.
+        let answerReq = try XCTUnwrap(recorder.requests.dropFirst().first)
+        XCTAssertTrue(isRerankRequest(rerankReq), "First deep-pass generate call must be the rerank.")
+        XCTAssertFalse(isRerankRequest(answerReq), "Second deep-pass generate call must be the grounded answer.")
+
+        // The rerank scored both canaries as candidates …
+        XCTAssertTrue(rerankReq.prompt.contains(keep), "Rerank pool must include the promoted document.")
+        XCTAssertTrue(rerankReq.prompt.contains(drop), "Rerank pool must include the document it then drops.")
+        // … and the answer is grounded in the reranked top selection: KEEP (ranked #1)
+        // is packed; DROP (excluded by the rerank) is not.
+        XCTAssertTrue(answerReq.prompt.contains(keep), "Reranked top selection must reach the answer prompt.")
+        XCTAssertFalse(answerReq.prompt.contains(drop), "A rerank-dropped passage must not reach the answer prompt.")
+        // Pool-size reduction: the answer packs strictly fewer passages than the rerank
+        // scored — proving a down-select, not packing the whole pool.
+        let candidatePool = distinctCanaries(in: rerankReq.prompt, canaries: canaries)
+        let packed = distinctCanaries(in: answerReq.prompt, canaries: canaries)
+        XCTAssertGreaterThan(candidatePool, packed, "Rerank must narrow the candidate pool before answering.")
+    }
+
+    func testFastGroundedChatPassDoesNotRerank() async throws {
+        // Standing guard (green from day one, per Test-First §2): the FAST grounded tier
+        // must answer in a single generate call — it has no rerank and must never gain
+        // one when the deep-pass rerank is ported, or every preliminary answer would pay
+        // a second generation. Seeding a pool larger than the fast pack (8) means a
+        // leaked rerank would actually have candidates to rerank and fire (2 calls), so
+        // this guard bites on the regression rather than passing vacuously.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
+        _ = try await indexCanaryDocs(store, matter.id)
+
+        let recorder = GenerateCallRecorder()
+        let runtime = StubRuntimeClient(outcome: { request in
+            recorder.record(request)
+            // A rerank request here would be the regression under guard; answer either way.
+            return .events([
+                .event(request, 0, .token, token: "The widget contract delivery terms are net thirty days [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let controller = makeGlobalChatController(store: store, runtimeClient: runtime, scope: .matter(id: matter.id))
+        controller.loadChats()
+        let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .generalQA)
+
+        await controller.performSend(
+            prompt: "What do my documents say about the widget contract delivery terms?",
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route,
+            documentDepth: .fast
+        )
+
+        XCTAssertEqual(recorder.count, 1, "Fast grounded tier must answer in a single generate call (no rerank).")
+        let only = try XCTUnwrap(recorder.requests.first)
+        XCTAssertFalse(isRerankRequest(only), "Fast tier must not issue a rerank request.")
     }
 
     func testUnrelatedResolvedCitationPersistsNeedsReviewProvenance() async throws {
@@ -415,6 +570,27 @@ final class DocumentQATests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// Indexes `count` synthetic documents that all match a shared retrieval query
+    /// ("widget contract delivery terms") but each carry a unique single-token canary,
+    /// so a test can trace which documents reached the rerank pool vs. the packed answer
+    /// set. Default 14 exceeds the deep pack (12) and the fast pack (8). Returns the
+    /// canaries in document order.
+    @discardableResult
+    private func indexCanaryDocs(_ store: SupraStore, _ matterID: String, count: Int = 14) async throws -> [String] {
+        let words = ["ALFA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOXTROT", "GOLF", "HOTEL",
+                     "INDIA", "JULIETT", "KILO", "LIMA", "MIKE", "NOVEMBER", "OSCAR", "PAPA"]
+        var canaries: [String] = []
+        for index in 0..<count {
+            let canary = "\(words[index])CANARY"
+            canaries.append(canary)
+            try await indexDoc(
+                store, matterID, "doc\(index).txt",
+                "\(canary) synthetic widget contract clause with delivery terms and payment schedule."
+            )
+        }
+        return canaries
+    }
 
     private func indexDoc(_ store: SupraStore, _ matterID: String, _ name: String, _ text: String) async throws {
         let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(sha256: name, byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/\(name)")).blob

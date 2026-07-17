@@ -345,6 +345,27 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
         }
     }
 
+    /// Promotes a document's status only when its current status is one of
+    /// `allowed` — a single conditional UPDATE so a concurrently-set terminal
+    /// state (needs_review, failed) is never clobbered by a stale promotion.
+    @discardableResult
+    public func promoteStatus(documentID: String, to status: MatterDocumentStatus, whenCurrentIn allowed: [MatterDocumentStatus]) throws -> Bool {
+        guard !allowed.isEmpty else { return false }
+        return try writer.write { db in
+            var arguments: [DatabaseValueConvertible] = [status.rawValue, Date(), documentID]
+            arguments.append(contentsOf: allowed.map(\.rawValue))
+            try db.execute(
+                sql: """
+                UPDATE matter_documents
+                SET status = ?, updated_at = ?
+                WHERE id = ? AND status IN (\(databaseQuestionMarks(count: allowed.count)))
+                """,
+                arguments: StatementArguments(arguments)
+            )
+            return db.changesCount > 0
+        }
+    }
+
     public func updateIndexStatus(documentID: String, indexStatus: DocumentIndexStatus) throws {
         try writer.write { db in
             try db.execute(

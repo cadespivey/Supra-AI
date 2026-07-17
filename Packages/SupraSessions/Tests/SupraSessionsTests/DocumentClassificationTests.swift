@@ -1,5 +1,7 @@
 import Foundation
+import SupraCore
 @testable import SupraSessions
+import SupraStore
 import XCTest
 
 /// Covers the deterministic parts of the 1.3.2 document classifier: decoding the
@@ -174,5 +176,39 @@ final class DocumentClassificationTests: XCTestCase {
         XCTAssertEqual(decoded.detectedPartiesOrEntities, ["Rachel Zane"])
         XCTAssertEqual(decoded.detectedJurisdiction, "S.D.N.Y.")
         XCTAssertEqual(decoded.warnings, ["partial OCR"])
+    }
+
+    // MARK: - needsClassification gate (standing guard)
+
+    func testNeedsClassificationGating() throws {
+        // Standing guard (per §2): pins exactly which documents the classifier picks up, so a
+        // future change can't silently widen the gate — e.g. start (re)classifying failed,
+        // needs-OCR, pending, deleted, or already-tagged documents. RED today: compile error —
+        // `needsClassification` is `private`; the contract exposes it (internal/static) for this guard.
+        func doc(
+            _ extraction: DocumentExtractionStatus,
+            classified: Bool = false,
+            deleted: Bool = false
+        ) -> MatterDocumentRecord {
+            MatterDocumentRecord(
+                matterID: "m", blobID: "b", displayName: "d.txt",
+                extractionStatus: extraction.rawValue,
+                classificationMetadataJSON: classified ? #"{"primary_tag":"statutes"}"# : nil,
+                deletedAt: deleted ? Date() : nil
+            )
+        }
+
+        // Eligible: extracted / ocr-complete / edited, unclassified, not deleted.
+        XCTAssertTrue(DocumentClassificationService.needsClassification(doc(.extracted)))
+        XCTAssertTrue(DocumentClassificationService.needsClassification(doc(.ocrComplete)))
+        XCTAssertTrue(DocumentClassificationService.needsClassification(doc(.edited)))
+        // Ineligible extraction states.
+        XCTAssertFalse(DocumentClassificationService.needsClassification(doc(.needsOCR)))
+        XCTAssertFalse(DocumentClassificationService.needsClassification(doc(.failed)))
+        XCTAssertFalse(DocumentClassificationService.needsClassification(doc(.pending)))
+        // Already classified → never re-picked.
+        XCTAssertFalse(DocumentClassificationService.needsClassification(doc(.extracted, classified: true)))
+        // Deleted → never picked.
+        XCTAssertFalse(DocumentClassificationService.needsClassification(doc(.extracted, deleted: true)))
     }
 }

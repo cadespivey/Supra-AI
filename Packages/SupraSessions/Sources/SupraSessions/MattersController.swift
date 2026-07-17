@@ -196,7 +196,6 @@ public final class MattersController: ObservableObject {
     @Published public private(set) var authoritiesController: AuthoritiesController?
     @Published public private(set) var outputsController: StructuredOutputController?
     @Published public private(set) var documentsController: MatterDocumentsController?
-    @Published public private(set) var documentQAController: DocumentQAController?
     @Published public private(set) var documentChronologyController: DocumentChronologyController?
     @Published public private(set) var billingProfileController: BillingProfileController?
     @Published public private(set) var draftingController: MatterDraftingController?
@@ -378,25 +377,24 @@ public final class MattersController: ObservableObject {
             authoritiesController = nil
             outputsController = nil
             documentsController = nil
-            documentQAController = nil
             documentChronologyController = nil
             billingProfileController = nil
             draftingController = nil
             return
         }
         // Built once and shared by every controller that retrieves over the matter's
-        // documents (chat grounding, outputs, document Q&A), so a single embedding
-        // model selection drives them all.
+        // documents (chat grounding, outputs), so a single embedding model selection
+        // drives them all.
         let embedder = (try? store.documentSettings.fetchSelectedEmbeddingModel())
             .flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
 
         // Matter chat reads the user's composed soul document fresh at send time
         // (see `SupraStore.composedAssistantPrompt(base:)`), layered OVER the route's
         // task prompt, so profile edits apply without reselecting the matter. The
-        // structured-output and document-Q&A workflows layer it over their task base
-        // too (the task/grounding contract still leads). The research query-planner
-        // and fact chronology stay base-only — their output is machine-parsed into a
-        // required structure that a free-form profile must not perturb.
+        // structured-output workflow layers it over its task base too (the
+        // task/grounding contract still leads). The research query-planner and fact
+        // chronology stay base-only — their output is machine-parsed into a required
+        // structure that a free-form profile must not perturb.
         // The embedder lets matter chat ground answers in the matter's own documents
         // (folder inventories + retrieval) instead of fabricating them.
         let controller = GlobalChatController(
@@ -443,13 +441,6 @@ public final class MattersController: ObservableObject {
             documentsController = nil
         }
 
-        documentQAController = DocumentQAController(
-            matterID: matterID,
-            store: store,
-            runtimeClient: runtimeClient,
-            embedder: embedder,
-            defaultSystemPrompt: defaultSystemPrompt
-        )
         documentChronologyController = DocumentChronologyController(
             matterID: matterID,
             store: store,

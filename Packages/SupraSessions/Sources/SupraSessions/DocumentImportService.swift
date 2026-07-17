@@ -57,8 +57,9 @@ public struct DocumentImportReport: Codable, Sendable {
 /// email attachments as child documents, extracts text, and produces an import
 /// report (plan §4–§5). Originals are never modified.
 ///
-/// OCR is applied later by `DocumentOCRPass` (WO 36); files that need OCR are
-/// left with `needs_ocr` status here.
+/// OCR runs inline during `importFile` (via `applyOCR`) for files that lack
+/// embedded text; a document keeps `needs_ocr` status only when the service is
+/// constructed without an OCR service.
 public final class DocumentImportService: @unchecked Sendable {
     private let store: SupraStore
     private let storage: DocumentStorage
@@ -372,9 +373,11 @@ public final class DocumentImportService: @unchecked Sendable {
         // Extract, then OCR if needed.
         do {
             var result = try await extraction.extract(fileURL: managedBlob.verifiedURL)
+            var ocrApplied = false
             if result.needsOCR, ocr != nil, let format {
                 do {
                     result = try await applyOCR(to: result, blobURL: managedBlob.verifiedURL, family: format.family)
+                    ocrApplied = true
                     _ = try? store.auditEvents.recordEvent(
                         matterID: matterID, eventType: "document_ocr_completed", actor: "system",
                         summary: "OCR completed for \(displayName)", relatedTable: "matter_documents", relatedID: document.id
@@ -388,7 +391,7 @@ public final class DocumentImportService: @unchecked Sendable {
                 }
             }
             try ledger.consumeDecoded(result)
-            try persistExtraction(result, documentID: document.id)
+            try persistExtraction(result, documentID: document.id, ocrApplied: ocrApplied)
             let disposition: DocumentImportDisposition
             if result.needsOCR {
                 disposition = .ocrNeeded
@@ -560,6 +563,98 @@ public final class DocumentImportService: @unchecked Sendable {
         try store.documentLibrary.markTextEdited(documentID: documentID)
     }
 
+    // MARK: - Reprocess (re-extract from the managed blob)
+
+    /// A reprocess precondition that cannot be recovered per-document.
+    public enum ReprocessError: Error, LocalizedError, Equatable, Sendable {
+        case documentNotFound(String)
+        case blobNotFound(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .documentNotFound(let id): "The document \(id) no longer exists."
+            case .blobNotFound(let id): "The managed file for blob \(id) could not be found."
+            }
+        }
+    }
+
+    /// Re-extracts a single already-imported document from its verified managed blob,
+    /// as a targeted retry for a failed/stale document. Clears the prior classification
+    /// up front (the content is about to be re-derived), re-runs extraction (and OCR if
+    /// the format needs it), repopulates the parts, and marks the index stale so a later
+    /// indexing pass re-chunks/re-embeds it. A re-extraction that fails again re-marks the
+    /// instance `.failed` cleanly and leaves no partial parts — it does NOT throw, so the
+    /// queue's per-document loop and a direct caller both treat a re-mark as a normal
+    /// outcome. Only unrecoverable preconditions (missing document/blob, a managed-blob
+    /// integrity failure) throw.
+    ///
+    /// The managed bytes were already vetted against the full import policy when first
+    /// admitted, so this does NOT re-consume the per-import budget ledger; the extractor
+    /// still enforces the per-file source/parser/result limits internally.
+    public func reprocessDocument(documentID: String) async throws {
+        guard let document = try store.documentLibrary.fetchDocument(id: documentID) else {
+            throw ReprocessError.documentNotFound(documentID)
+        }
+        guard let blob = try store.documentLibrary.fetchBlob(id: document.blobID) else {
+            throw ReprocessError.blobNotFound(document.blobID)
+        }
+        // Verify the managed bytes against the recorded digest/size before re-reading
+        // them (mirrors importFile's verified-bytes use). An integrity failure is
+        // unrecoverable here and propagates.
+        let verifiedURL = try storage.verifyManagedBlob(
+            relativePath: blob.managedRelativePath,
+            expectedSHA256: blob.sha256,
+            expectedByteSize: blob.byteSize
+        )
+
+        // Clear any stale classification FIRST, unconditionally, before re-extraction —
+        // the old category no longer applies until the document is re-classified. This
+        // is the observable proof that reprocess ran even when the re-extraction fails.
+        try store.documentLibrary.updateClassification(documentID: documentID, classificationMetadataJSON: nil)
+
+        guard let format = SupportedDocumentTypes.format(for: verifiedURL) else {
+            // No supported extractor — re-mark failed cleanly with no leaked parts
+            // (mirrors importFile's unsupported path), and do not throw.
+            try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
+            try markExtractionFailed(documentID: documentID, error: ExtractionError.unsupportedFormat(verifiedURL.pathExtension))
+            return
+        }
+
+        do {
+            var result = try await extraction.extract(fileURL: verifiedURL)
+            var ocrApplied = false
+            if result.needsOCR, ocr != nil {
+                do {
+                    result = try await applyOCR(to: result, blobURL: verifiedURL, family: format.family)
+                    ocrApplied = true
+                    _ = try? store.auditEvents.recordEvent(
+                        matterID: document.matterID, eventType: "document_ocr_completed", actor: "system",
+                        summary: "OCR completed for \(document.displayName)", relatedTable: "matter_documents", relatedID: documentID
+                    )
+                } catch {
+                    _ = try? store.auditEvents.recordEvent(
+                        matterID: document.matterID, eventType: "document_ocr_failed", actor: "system",
+                        summary: "OCR failed for \(document.displayName)", relatedTable: "matter_documents", relatedID: documentID
+                    )
+                    throw error
+                }
+            }
+            try persistExtraction(result, documentID: documentID, ocrApplied: ocrApplied)
+            try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .stale)
+            _ = try? store.auditEvents.recordEvent(
+                matterID: document.matterID, eventType: "document_reprocessed", actor: "user",
+                summary: "Re-extracted \(document.displayName) from its managed copy",
+                relatedTable: "matter_documents", relatedID: documentID
+            )
+        } catch {
+            // A re-extraction that fails again re-marks the instance .failed cleanly and
+            // clears any parts (markExtractionFailed only zeroes the count). The failure
+            // is swallowed so a re-mark is a normal outcome for the caller.
+            try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
+            try markExtractionFailed(documentID: documentID, error: error)
+        }
+    }
+
     // MARK: - OCR
 
     /// Runs OCR over a document that lacks embedded text and merges the results
@@ -581,13 +676,21 @@ public final class DocumentImportService: @unchecked Sendable {
             merged.method = "vision-ocr-image"
             merged.needsOCR = false
         case .pdf:
-            let pageResults = try await ocr.recognizePDFPages(at: blobURL, pageIndices: nil)
+            let pageResults = try await ocr.recognizePDFPages(at: blobURL, pageIndices: result.ocrPageIndices)
+            let ocrTargets = Set(result.ocrPageIndices)
             merged.parts = result.parts.enumerated().map { index, part in
                 var updated = part
-                if let ocrResult = pageResults[part.pageIndex ?? index], ocrResult.text.count > part.text.count {
-                    updated.text = ocrResult.text
+                let pageIndex = part.pageIndex ?? index
+                // Only the pages the extractor flagged for OCR are touched. Their
+                // confidence is recorded even when OCR recovered nothing (so the
+                // review gate can see it), but the OCR text only replaces the
+                // embedded text when it is actually longer.
+                if ocrTargets.contains(pageIndex), let ocrResult = pageResults[pageIndex] {
                     updated.ocrConfidence = ocrResult.confidence
-                    updated.boundingBoxesJSON = ocrResult.boundingBoxesJSON
+                    if ocrResult.text.count > part.text.count {
+                        updated.text = ocrResult.text
+                        updated.boundingBoxesJSON = ocrResult.boundingBoxesJSON
+                    }
                 }
                 return updated
             }
@@ -601,7 +704,7 @@ public final class DocumentImportService: @unchecked Sendable {
 
     // MARK: - Persistence
 
-    private func persistExtraction(_ result: ExtractionResult, documentID: String) throws {
+    private func persistExtraction(_ result: ExtractionResult, documentID: String, ocrApplied: Bool = false) throws {
         let parts = result.parts.enumerated().map { index, part in
             DocumentPagePartRecord(
                 documentID: documentID,
@@ -628,8 +731,30 @@ public final class DocumentImportService: @unchecked Sendable {
         let lowConfidence = (meanOCR.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false)
         let ocrSummary = meanOCR.map { String(format: "OCR mean confidence %.2f%@", $0, lowConfidence ? " (low)" : "") }
 
+        // OCR ran but recovered little or no text — a blank or illegible original.
+        // Route it to review instead of laundering the output into a clean
+        // extraction. Keyed off `ocrApplied` so a fully failed render (no recorded
+        // confidences at all) is still caught (plan §6.2, §8.4).
+        let usableTextCount = result.combinedText.filter { !$0.isWhitespace }.count
+        let insufficientOCRText = ocrApplied && usableTextCount < OCRPolicy.minimumUsableTextLength
+
         var warnings = result.warnings
-        if lowConfidence {
+        if ocrApplied {
+            // OCR has now run, so the extractor's pre-OCR advisories would
+            // recommend work that already happened — drop them and record one
+            // outcome-specific warning instead: no text at all, too little text
+            // to rely on, or usable text at low confidence (plan §6.2, §8.4).
+            warnings.removeAll {
+                $0 == PDFExtractor.ocrRecommendedWarning || $0 == ImageExtractor.ocrRequiredWarning
+            }
+            if usableTextCount == 0 {
+                warnings.append("OCR produced no usable text; the original may be blank or illegible. Review the document.")
+            } else if usableTextCount < OCRPolicy.minimumUsableTextLength {
+                warnings.append("OCR recovered very little text; review the document before relying on it.")
+            } else if lowConfidence {
+                warnings.append("OCR confidence is low; verify the extracted text before relying on it.")
+            }
+        } else if lowConfidence {
             warnings.append("OCR confidence is low; verify the extracted text before relying on it.")
         }
         let warningsJSON = warnings.isEmpty ? nil : (try? JSONEncoder.encodeToString(warnings))
@@ -639,9 +764,9 @@ public final class DocumentImportService: @unchecked Sendable {
         if result.needsOCR {
             extractionStatus = .needsOCR
             status = .needsOCR
-        } else if !ocrConfidences.isEmpty {
+        } else if ocrApplied || !ocrConfidences.isEmpty {
             extractionStatus = .ocrComplete
-            status = lowConfidence ? .needsReview : .indexing
+            status = (lowConfidence || insufficientOCRText) ? .needsReview : .indexing
         } else {
             extractionStatus = .extracted
             status = .indexing

@@ -1,3 +1,5 @@
+import CoreGraphics
+import CoreText
 import Foundation
 import SupraCore
 @testable import SupraDocuments
@@ -192,6 +194,24 @@ final class ExtractionTests: XCTestCase {
         }
     }
 
+    func testMixedPDFFlagsOnlySparsePagesForOCR() async throws {
+        // Expected RED: does not compile — `ocrPageIndices` is not a member of
+        // `ExtractionResult`. That build failure fails the whole SupraDocumentsTests
+        // target and is the recorded, observable RED (methodology §2).
+        let richText = "Retainer agreement between McKernon Motors and outside counsel, "
+            + "executed on 2024 01 15. This page carries substantial embedded text so the "
+            + "extractor treats it as a text page and not a scanned image. Distinctive anchor "
+            + "token ZQXCANARY marks this page for scoped assertions. The remaining two pages "
+            + "are intentionally blank so only they require OCR."
+        let url = tempDir.appendingPathComponent("mixed-scan.pdf")
+        try makePDF(at: url, pages: [.text(richText), .empty, .empty])
+
+        let result = try await service.extract(fileURL: url)
+
+        XCTAssertTrue(result.needsOCR, "a PDF with two blank pages still has OCR work to do")
+        XCTAssertEqual(result.ocrPageIndices, [1, 2], "only the two blank pages are flagged for OCR")
+    }
+
     // MARK: - Fixture authoring
 
     private func write(_ name: String, _ contents: String) throws -> URL {
@@ -245,4 +265,62 @@ final class ExtractionTests: XCTestCase {
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
     }
+
+    /// Builds a real PDF whose `.text` pages carry extractable embedded text (drawn
+    /// with Core Text so PDFKit's `page.string` recovers it) and whose `.empty`
+    /// pages carry none. Mirrors HostileImportPolicyTests' CG `makePDF` pattern but
+    /// adds text pages; kept private to this file so the hostile helper is untouched.
+    private func makePDF(at url: URL, pages: [PDFPageContent]) throws {
+        let consumer = try XCTUnwrap(CGDataConsumer(url: url as CFURL))
+        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let context = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &mediaBox, nil))
+        for page in pages {
+            context.beginPDFPage(nil)
+            if case let .text(string) = page {
+                try drawTextPage(string, in: context)
+            }
+            context.endPDFPage()
+        }
+        context.closePDF()
+    }
+
+    /// Draws `text` into the current PDF page as word-wrapped Core Text lines. Words
+    /// (including anchor tokens) are never split across lines, and ligatures are
+    /// disabled, so PDFKit extraction recovers each token contiguously.
+    private func drawTextPage(_ text: String, in context: CGContext) throws {
+        let font = CTFontCreateWithName("Helvetica" as CFString, 12, nil)
+        let ligaturesOff = NSNumber(value: 0)
+        var lines: [String] = []
+        var current = ""
+        for word in text.split(separator: " ", omittingEmptySubsequences: false) {
+            if current.isEmpty {
+                current = String(word)
+            } else if current.count + 1 + word.count <= 60 {
+                current += " " + word
+            } else {
+                lines.append(current)
+                current = String(word)
+            }
+        }
+        if !current.isEmpty { lines.append(current) }
+
+        var baseline: CGFloat = 740
+        for lineText in lines {
+            let attributed = try XCTUnwrap(CFAttributedStringCreate(
+                nil,
+                lineText as CFString,
+                [kCTFontAttributeName: font, kCTLigatureAttributeName: ligaturesOff] as CFDictionary
+            ))
+            let line = CTLineCreateWithAttributedString(attributed)
+            context.textPosition = CGPoint(x: 36, y: baseline)
+            CTLineDraw(line, context)
+            baseline -= 18
+        }
+    }
+}
+
+/// Page descriptor for the text-bearing `makePDF` fixture helper.
+private enum PDFPageContent {
+    case text(String)
+    case empty
 }

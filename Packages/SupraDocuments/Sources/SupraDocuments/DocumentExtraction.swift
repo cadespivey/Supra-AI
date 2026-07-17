@@ -61,6 +61,8 @@ public struct ExtractionResult: Sendable, Equatable {
     /// True when the document has little/no embedded text and should be OCR'd
     /// (scanned PDF, image). OCR itself runs in WO 36.
     public var needsOCR: Bool
+    /// Page indices needing OCR; empty when none.
+    public var ocrPageIndices: [Int]
     public var attachments: [ExtractedAttachment]
     public var metadataCreatedAt: Date?
     public var metadataModifiedAt: Date?
@@ -70,6 +72,7 @@ public struct ExtractionResult: Sendable, Equatable {
         method: String,
         warnings: [String] = [],
         needsOCR: Bool = false,
+        ocrPageIndices: [Int] = [],
         attachments: [ExtractedAttachment] = [],
         metadataCreatedAt: Date? = nil,
         metadataModifiedAt: Date? = nil
@@ -78,6 +81,7 @@ public struct ExtractionResult: Sendable, Equatable {
         self.method = method
         self.warnings = warnings
         self.needsOCR = needsOCR
+        self.ocrPageIndices = ocrPageIndices
         self.attachments = attachments
         self.metadataCreatedAt = metadataCreatedAt
         self.metadataModifiedAt = metadataModifiedAt

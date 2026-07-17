@@ -1,3 +1,5 @@
+import CoreGraphics
+import CoreText
 import Foundation
 import SupraCore
 import SupraDocuments
@@ -99,6 +101,136 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(try store.documentIndex.fetchParts(documentID: doc.id).first?.normalizedText, "Notice of default dated May 1, 2024.")
     }
 
+    func testMixedPDFOCRsOnlySparsePages() async throws {
+        // Expected RED: assertion failure — `recordedPageIndices` is empty because the
+        // document-average threshold marks the mixed PDF `needsOCR == false`, so
+        // `applyOCR` never runs and the blank pages keep empty text / nil confidence.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/mixed-scan.pdf")
+        try FileManager.default.createDirectory(at: pdfURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let richText = "Retainer agreement between McKernon Motors and outside counsel, "
+            + "executed on 2024 01 15. This page carries substantial embedded text so the "
+            + "extractor treats it as a text page and not a scanned image. Distinctive anchor "
+            + "token ZQXCANARY marks this page for scoped assertions. The remaining two pages "
+            + "are intentionally blank so only they require OCR."
+        try makePDF(at: pdfURL, pages: [.text(richText), .empty, .empty])
+
+        let ocr = MockOCRService(pageResults: [
+            1: OCRTextResult(text: "OCR recovered page two text QVX2.", confidence: 0.9),
+            2: OCRTextResult(text: "OCR recovered page three text QVX3.", confidence: 0.9)
+        ])
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        // (a) OCR is invoked exactly once, over only the two sparse pages.
+        XCTAssertEqual(ocr.recordedPageIndices.count, 1, "OCR should be invoked exactly once for the mixed PDF")
+        XCTAssertEqual(ocr.recordedPageIndices.first ?? nil, [1, 2], "only the two blank pages should be sent to OCR")
+
+        // (b) The rich first page keeps its embedded text (scoped to part 0).
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let parts = try store.documentIndex.fetchParts(documentID: doc.id)
+        XCTAssertEqual(parts.count, 3)
+        XCTAssertTrue(parts[0].normalizedText.contains("ZQXCANARY"), "page 0 must retain its embedded anchor text")
+
+        // (c) The two blank pages carry the mocked OCR text + its confidence.
+        XCTAssertTrue(parts[1].normalizedText.contains("page two text QVX2"), "page 1 should carry the OCR text")
+        XCTAssertEqual(parts[1].ocrConfidence ?? 0, 0.9, accuracy: 0.001)
+        XCTAssertTrue(parts[2].normalizedText.contains("page three text QVX3"), "page 2 should carry the OCR text")
+        XCTAssertEqual(parts[2].ocrConfidence ?? 0, 0.9, accuracy: 0.001)
+    }
+
+    func testEmptyOCRLeavesDocumentInNeedsReview() async throws {
+        // Expected RED: assertion failure — observed `extractionStatus == .extracted`
+        // and `status == .indexing`; empty OCR output is laundered into a successful
+        // extraction today, and no "OCR produced no usable text" warning is recorded.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/all-blank.pdf")
+        try FileManager.default.createDirectory(at: pdfURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try makePDF(at: pdfURL, pages: [.empty, .empty])
+
+        let ocr = MockOCRService(pageResults: [
+            0: OCRTextResult(text: "", confidence: 0),
+            1: OCRTextResult(text: "", confidence: 0)
+        ])
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(doc.status, MatterDocumentStatus.needsReview.rawValue)
+        XCTAssertEqual(doc.extractionStatus, DocumentExtractionStatus.ocrComplete.rawValue)
+        let warningsJSON = try XCTUnwrap(doc.extractionWarningsJSON, "empty-OCR documents must record a review warning")
+        let warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        XCTAssertTrue(
+            warnings.contains { $0.contains("OCR produced no usable text") },
+            "warnings should explain the empty-OCR review; got \(warnings)"
+        )
+    }
+
+    func testAllPagesRenderFailedOCRStillNeedsReview() async throws {
+        // Expected RED: assertion failure — observed `.extracted`/`.indexing`. With an
+        // empty page-results map no confidences are recorded at all, proving the review
+        // gate must key off an explicit ocrApplied flag, not recorded confidences.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/all-blank-failed.pdf")
+        try FileManager.default.createDirectory(at: pdfURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try makePDF(at: pdfURL, pages: [.empty, .empty])
+
+        let ocr = MockOCRService(pageResults: [:])
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(doc.status, MatterDocumentStatus.needsReview.rawValue)
+        XCTAssertEqual(doc.extractionStatus, DocumentExtractionStatus.ocrComplete.rawValue)
+        let warningsJSON = try XCTUnwrap(doc.extractionWarningsJSON, "failed-render OCR must record a review warning")
+        let warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        XCTAssertTrue(
+            warnings.contains { $0.contains("OCR produced no usable text") },
+            "warnings should explain the failed-render review; got \(warnings)"
+        )
+    }
+
+    func testIndexingPreservesNeedsReview() async throws {
+        // Expected RED: assertion failure — observed `status == .ready` after indexing
+        // (DocumentIndexingService.indexDocument unconditionally promotes to ready,
+        // clobbering the needs_review state).
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+
+        // A scanned image with low-confidence OCR routes to needs_review.
+        let imageURL = sourceRoot.appendingPathComponent("Images/scanned-notice.png")
+        try FileManager.default.createDirectory(at: imageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fake-png-bytes".utf8).write(to: imageURL)
+        let ocr = MockOCRService(imageResult: OCRTextResult(text: "Notice of default dated 2024-05-01.", confidence: 0.40))
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([imageURL], matterID: matter.id)
+
+        // A normal text file lands in `indexing` (extracted, no OCR).
+        _ = try await service.importSources([sourceRoot.appendingPathComponent("Contracts/agreement.txt")], matterID: matter.id)
+
+        let reviewDoc = try XCTUnwrap(
+            store.documentLibrary.fetchDocuments(matterID: matter.id).first { $0.displayName == "scanned-notice.png" }
+        )
+        XCTAssertEqual(reviewDoc.status, MatterDocumentStatus.needsReview.rawValue, "precondition: low-confidence OCR routes to needs_review")
+
+        let indexed = try await DocumentIndexingService(store: store, embedder: nil).indexMatter(matterID: matter.id)
+        XCTAssertGreaterThanOrEqual(indexed, 2, "both the review doc and the text doc should be indexed")
+
+        // Indexing must NOT clobber the manual-review status.
+        let reviewedAfter = try XCTUnwrap(store.documentLibrary.fetchDocument(id: reviewDoc.id))
+        XCTAssertEqual(reviewedAfter.status, MatterDocumentStatus.needsReview.rawValue)
+        XCTAssertEqual(reviewedAfter.indexStatus, DocumentIndexStatus.textIndexed.rawValue)
+
+        // The normal text path still promotes to ready.
+        let textDoc = try XCTUnwrap(
+            store.documentLibrary.fetchDocuments(matterID: matter.id).first { $0.displayName == "agreement.txt" }
+        )
+        XCTAssertEqual(textDoc.status, MatterDocumentStatus.ready.rawValue, "normal indexing still reaches ready")
+    }
+
     func testEditedTextMarksDocumentStaleForReindex() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
@@ -195,6 +327,57 @@ final class DocumentImportTests: XCTestCase {
         return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
     }
 
+    /// Builds a real PDF whose `.text` pages carry extractable embedded text (drawn
+    /// with Core Text so PDFKit's `page.string` recovers it) and whose `.empty`
+    /// pages carry none. Mirrors the CG `makePDF` pattern in HostileImportPolicyTests.
+    private func makePDF(at url: URL, pages: [PDFPageContent]) throws {
+        let consumer = try XCTUnwrap(CGDataConsumer(url: url as CFURL))
+        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let context = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &mediaBox, nil))
+        for page in pages {
+            context.beginPDFPage(nil)
+            if case let .text(string) = page {
+                try drawTextPage(string, in: context)
+            }
+            context.endPDFPage()
+        }
+        context.closePDF()
+    }
+
+    /// Draws `text` into the current PDF page as word-wrapped Core Text lines. Words
+    /// (including anchor tokens) are never split across lines, and ligatures are
+    /// disabled, so PDFKit extraction recovers each token contiguously.
+    private func drawTextPage(_ text: String, in context: CGContext) throws {
+        let font = CTFontCreateWithName("Helvetica" as CFString, 12, nil)
+        let ligaturesOff = NSNumber(value: 0)
+        var lines: [String] = []
+        var current = ""
+        for word in text.split(separator: " ", omittingEmptySubsequences: false) {
+            if current.isEmpty {
+                current = String(word)
+            } else if current.count + 1 + word.count <= 60 {
+                current += " " + word
+            } else {
+                lines.append(current)
+                current = String(word)
+            }
+        }
+        if !current.isEmpty { lines.append(current) }
+
+        var baseline: CGFloat = 740
+        for lineText in lines {
+            let attributed = try XCTUnwrap(CFAttributedStringCreate(
+                nil,
+                lineText as CFString,
+                [kCTFontAttributeName: font, kCTLigatureAttributeName: ligaturesOff] as CFDictionary
+            ))
+            let line = CTLineCreateWithAttributedString(attributed)
+            context.textPosition = CGPoint(x: 36, y: baseline)
+            CTLineDraw(line, context)
+            baseline -= 18
+        }
+    }
+
     func testACRBLOB009ExtractionUsesVerifiedManagedBytesAfterSourceMutation() async throws {
         // Expected RED: extraction currently reads the mutable original URL after hashing/copying it.
         let store = try makeStore()
@@ -248,12 +431,251 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertNil(try store.documentLibrary.fetchBlob(sha256: digest))
         XCTAssertEqual(try Data(contentsOf: orphan), bytes, "valid content-addressed orphan should survive for reconciliation")
     }
+
+    // MARK: - OCR warning hygiene (review finding: stale/contradictory warnings)
+
+    func testSuccessfulOCRDropsStaleExtractorAdvisory() async throws {
+        // Expected RED: assertion failure — after a healthy OCR (confidence 0.90, ample
+        // recovered text) the persisted warnings still carry the extractor's pre-OCR
+        // advisory, so the decoded array is exactly
+        //   ["PDF has little embedded text; OCR recommended."]
+        // instead of empty. The advisory recommends OCR that has already run, so both
+        // `XCTAssertFalse(contains(advisory))` and `XCTAssertTrue(isEmpty)` fail.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/mixed-recovered.pdf")
+        try FileManager.default.createDirectory(at: pdfURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let richText = "Retainer agreement between McKernon Motors and outside counsel, "
+            + "executed on 2024 01 15. This first page carries substantial embedded text so "
+            + "the extractor keeps it as a text page; only the trailing blank page is routed "
+            + "to OCR."
+        try makePDF(at: pdfURL, pages: [.text(richText), .empty])
+
+        // OCR recovers ample high-confidence text for the one blank page.
+        let ocr = MockOCRService(pageResults: [
+            1: OCRTextResult(text: "OCR recovered the full body text of the scanned second page for indexing.", confidence: 0.9)
+        ])
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        // Healthy recovery: OCR ran, text is ample, confidence is high — not review.
+        XCTAssertEqual(doc.status, MatterDocumentStatus.indexing.rawValue, "high-confidence recovered OCR is healthy, not review")
+
+        // Post-fix a healthy result carries no warnings (nil JSON); tolerate either shape.
+        let warnings: [String]
+        if let warningsJSON = doc.extractionWarningsJSON {
+            warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        } else {
+            warnings = []
+        }
+        // The pre-OCR advisory recommends work that already happened — it must be dropped.
+        XCTAssertFalse(
+            warnings.contains("PDF has little embedded text; OCR recommended."),
+            "the pre-OCR advisory must not survive a successful OCR; got \(warnings)"
+        )
+        // A healthy recovery carries no OCR warnings at all.
+        XCTAssertTrue(warnings.isEmpty, "successful high-confidence OCR should leave no warnings; got \(warnings)")
+    }
+
+    func testEmptyOCRWarningIsSingleAndAccurate() async throws {
+        // Expected RED: assertion failure — the persisted warnings stack three lines,
+        //   ["PDF has little embedded text; OCR recommended.",
+        //    "OCR confidence is low; verify the extracted text before relying on it.",
+        //    "OCR produced no usable text; the original may be blank or illegible. Review the document."]
+        // The extractor advisory is stale and the low-confidence line is nonsense (there
+        // is no extracted text to verify), so the array is not the single accurate line.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/all-blank-warn.pdf")
+        try FileManager.default.createDirectory(at: pdfURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try makePDF(at: pdfURL, pages: [.empty, .empty])
+
+        let ocr = MockOCRService(pageResults: [
+            0: OCRTextResult(text: "", confidence: 0),
+            1: OCRTextResult(text: "", confidence: 0)
+        ])
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(doc.status, MatterDocumentStatus.needsReview.rawValue, "empty OCR still routes to review")
+
+        let warningsJSON = try XCTUnwrap(doc.extractionWarningsJSON, "empty-OCR documents must record a review warning")
+        let warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        XCTAssertEqual(
+            warnings,
+            ["OCR produced no usable text; the original may be blank or illegible. Review the document."],
+            "empty OCR should record exactly one accurate warning, with no stale advisory or low-confidence line; got \(warnings)"
+        )
+    }
+
+    func testLittleTextOCRWarningIsAccurate() async throws {
+        // Expected RED: assertion failure — the persisted warnings are
+        //   ["Image requires OCR to extract text.",
+        //    "OCR confidence is low; verify the extracted text before relying on it.",
+        //    "OCR produced no usable text; the original may be blank or illegible. Review the document."]
+        // OCR recovered 31 non-whitespace chars (> 0 but < 40), so the "no usable text"
+        // line is factually wrong and the extractor advisory is stale.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let imageURL = sourceRoot.appendingPathComponent("Images/faint-notice.png")
+        try FileManager.default.createDirectory(at: imageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fake-png-bytes".utf8).write(to: imageURL)
+
+        // "Notice of default dated 2024-05-01." is 31 non-whitespace characters.
+        let ocr = MockOCRService(imageResult: OCRTextResult(text: "Notice of default dated 2024-05-01.", confidence: 0.40))
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([imageURL], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(doc.status, MatterDocumentStatus.needsReview.rawValue, "sparse OCR still routes to review")
+
+        let warningsJSON = try XCTUnwrap(doc.extractionWarningsJSON, "sparse-OCR documents must record a review warning")
+        let warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        XCTAssertEqual(
+            warnings,
+            ["OCR recovered very little text; review the document before relying on it."],
+            "little-text OCR should record exactly the little-text warning, with no stale advisory, low-confidence, or no-usable-text line; got \(warnings)"
+        )
+    }
+
+    func testLowConfidenceWithUsableTextKeepsOnlyConfidenceWarning() async throws {
+        // Expected RED: assertion failure — the persisted warnings are
+        //   ["Image requires OCR to extract text.",
+        //    "OCR confidence is low; verify the extracted text before relying on it."]
+        // OCR recovered ample text (>= 40 non-whitespace chars) at low confidence, so the
+        // low-confidence line is correct but the stale extractor advisory must be dropped.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let imageURL = sourceRoot.appendingPathComponent("Images/lowconf-notice.png")
+        try FileManager.default.createDirectory(at: imageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fake-png-bytes".utf8).write(to: imageURL)
+
+        // 67 non-whitespace characters — comfortably >= the 40-char usable-text floor.
+        let ocr = MockOCRService(imageResult: OCRTextResult(
+            text: "Notice of default and acceleration for the McKernon account dated 2024-05-01.",
+            confidence: 0.30
+        ))
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: ocr)
+        _ = try await service.importSources([imageURL], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(doc.status, MatterDocumentStatus.needsReview.rawValue, "low-confidence OCR still routes to review")
+
+        let warningsJSON = try XCTUnwrap(doc.extractionWarningsJSON, "low-confidence OCR must record a review warning")
+        let warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        XCTAssertEqual(
+            warnings,
+            ["OCR confidence is low; verify the extracted text before relying on it."],
+            "low-confidence OCR with usable text should keep only the confidence warning, dropping the stale extractor advisory; got \(warnings)"
+        )
+    }
+
+    // MARK: - Reprocess (re-extract from the managed blob)
+
+    func testReprocessFailedDocumentReextractsAndRemarksFailedIdempotently() async throws {
+        // Expected RED: compile error — `reprocessDocument(documentID:)` is not a member of
+        // DocumentImportService.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        // A .docx whose bytes are not a zip: it passes type detection (no contradicting
+        // signature) but the DOCX extractor throws `.malformed`, so the instance persists as
+        // .failed with a valid managed blob. Reprocessing re-reads that same blob and fails
+        // identically — the idempotent re-mark case.
+        let corrupt = sourceRoot.appendingPathComponent("Broken/not-a-zip.docx")
+        try FileManager.default.createDirectory(at: corrupt.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "this is not a zip archive".write(to: corrupt, atomically: true, encoding: .utf8)
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: nil)
+        _ = try await service.importSources([corrupt], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(doc.status, MatterDocumentStatus.failed.rawValue, "precondition: a corrupt .docx imports as failed")
+        XCTAssertEqual(doc.extractionStatus, DocumentExtractionStatus.failed.rawValue)
+
+        // A prior (now-stale) classification is the observable proof that reprocess actually ran
+        // even though the re-extraction fails again: reprocess clears the classification up front.
+        try store.documentLibrary.updateClassification(documentID: doc.id, classificationMetadataJSON: #"{"primary_tag":"contracts_and_agreements"}"#)
+
+        try await service.reprocessDocument(documentID: doc.id)
+
+        let after = try XCTUnwrap(store.documentLibrary.fetchDocument(id: doc.id))
+        // Re-extraction fails the same way → the instance is re-marked .failed cleanly (idempotent).
+        XCTAssertEqual(after.status, MatterDocumentStatus.failed.rawValue)
+        XCTAssertEqual(after.extractionStatus, DocumentExtractionStatus.failed.rawValue)
+        // Proof reprocess ran and left no partial state: classification cleared, no parts leaked.
+        XCTAssertNil(after.classificationMetadataJSON, "reprocess must clear the stale classification")
+        XCTAssertTrue(try store.documentIndex.fetchParts(documentID: doc.id).isEmpty, "a failed re-extraction must leave no parts")
+    }
+
+    func testReprocessHealthyDocumentClearsClassificationStalesIndexAndRepopulatesParts() async throws {
+        // Expected RED: compile error — `reprocessDocument(documentID:)` is not a member of
+        // DocumentImportService.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let service = DocumentImportService(store: store, storage: DocumentStorage(root: storageRoot), ocr: nil)
+        _ = try await service.importSources([sourceRoot.appendingPathComponent("Contracts/agreement.txt")], matterID: matter.id)
+
+        let doc = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let partID = try XCTUnwrap(store.documentIndex.fetchParts(documentID: doc.id).first?.id)
+
+        // Drive the doc into a fully-processed, classified, indexed state, then overwrite the
+        // extracted text with a sentinel so a genuine re-extraction is observable.
+        try store.documentLibrary.updateClassification(documentID: doc.id, classificationMetadataJSON: #"{"primary_tag":"contracts_and_agreements"}"#)
+        try store.documentLibrary.updateIndexStatus(documentID: doc.id, indexStatus: .ready)
+        try store.documentIndex.updatePartText(partID: partID, text: "STALE-SENTINEL-TEXT-DO-NOT-KEEP")
+
+        try await service.reprocessDocument(documentID: doc.id)
+
+        let after = try XCTUnwrap(store.documentLibrary.fetchDocument(id: doc.id))
+        XCTAssertNil(after.classificationMetadataJSON, "reprocess must clear the prior classification")
+        XCTAssertEqual(after.indexStatus, DocumentIndexStatus.stale.rawValue, "reprocess must mark the index stale")
+        XCTAssertEqual(after.status, MatterDocumentStatus.indexing.rawValue, "a healthy re-extraction returns the doc to .indexing")
+        XCTAssertEqual(after.extractionStatus, DocumentExtractionStatus.extracted.rawValue)
+
+        // Parts were repopulated from the managed blob — the stale sentinel is gone, replaced by
+        // a fresh extraction of the original bytes.
+        let repopulated = try store.documentIndex.fetchParts(documentID: doc.id)
+        XCTAssertEqual(repopulated.count, 1)
+        XCTAssertEqual(repopulated.first?.normalizedText, "Service agreement effective 2024-01-01.")
+        XCTAssertFalse(repopulated.contains { $0.normalizedText.contains("STALE-SENTINEL") }, "the stale text must be replaced by the re-extraction")
+    }
 }
 
-private struct MockOCRService: DocumentOCRService {
+/// Deterministic OCR double. `recognizeImage` keeps the original single-result
+/// behavior; `recognizePDFPages` returns `pageResults` (filtered to the requested
+/// indices when a non-nil set is passed) and records every call's `pageIndices`
+/// argument under an NSLock, following the StubRuntimeClient pattern.
+private final class MockOCRService: DocumentOCRService, @unchecked Sendable {
     let imageResult: OCRTextResult
-    func recognizeImage(at url: URL) async throws -> OCRTextResult { imageResult }
-    func recognizePDFPages(at url: URL, pageIndices: [Int]?) async throws -> [Int: OCRTextResult] {
-        [0: imageResult]
+    let pageResults: [Int: OCRTextResult]
+    private let lock = NSLock()
+    private var _recordedPageIndices: [[Int]?] = []
+
+    /// The `pageIndices` argument of every `recognizePDFPages` call, in call order.
+    var recordedPageIndices: [[Int]?] {
+        lock.withLock { _recordedPageIndices }
     }
+
+    init(
+        imageResult: OCRTextResult = OCRTextResult(text: "", confidence: 0),
+        pageResults: [Int: OCRTextResult] = [:]
+    ) {
+        self.imageResult = imageResult
+        self.pageResults = pageResults
+    }
+
+    func recognizeImage(at url: URL) async throws -> OCRTextResult { imageResult }
+
+    func recognizePDFPages(at url: URL, pageIndices: [Int]?) async throws -> [Int: OCRTextResult] {
+        lock.withLock { _recordedPageIndices.append(pageIndices) }
+        guard let pageIndices else { return pageResults }
+        return pageResults.filter { pageIndices.contains($0.key) }
+    }
+}
+
+/// Page descriptor for the text-bearing `makePDF` fixture helper.
+private enum PDFPageContent {
+    case text(String)
+    case empty
 }

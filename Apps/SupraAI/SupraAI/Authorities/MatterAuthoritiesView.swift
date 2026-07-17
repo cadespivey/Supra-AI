@@ -23,7 +23,7 @@ struct MatterAuthoritiesView: View {
                 Button { importResearch() } label: {
                     Label("Import Research", systemImage: "square.and.arrow.down")
                 }
-                .help("Import your own research (PDF, Word, RTF, or text). It's indexed for Ask Documents in the Documents tab.")
+                .help("Import your own research (PDF, Word, RTF, or text). It's indexed so you can ask about it in this matter's Chat tab.")
                 .accessibilityIdentifier("authorities.importResearch.header")
                 Button { onNewResearch() } label: {
                     Label("New Research Session", systemImage: "plus")
@@ -104,8 +104,8 @@ struct MatterAuthoritiesView: View {
     }
 
     /// Picks research files and runs them through the matter's document pipeline
-    /// (import → OCR/extract → chunk → embed), so the model can RAG over them via
-    /// "Ask Documents". Respects the Document Intelligence setup gate.
+    /// (import → OCR/extract → chunk → embed), so the model can RAG over them from
+    /// the matter's Chat tab. Respects the Document Intelligence setup gate.
     private func importResearch() {
         guard let documentsController else { return }
         guard documentsController.setupReady else {
@@ -122,7 +122,7 @@ struct MatterAuthoritiesView: View {
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         documentsController.importResearchDocuments(panel.urls)
         let count = panel.urls.count
-        importBanner = "Importing \(count) research file\(count == 1 ? "" : "s") into the “Research” folder — track progress and ask questions in the Documents tab."
+        importBanner = "Importing \(count) research file\(count == 1 ? "" : "s") into the “Research” folder — track progress in the Documents tab, then ask about them in the Chat tab."
     }
 
     private static let researchContentTypes: [UTType] = {

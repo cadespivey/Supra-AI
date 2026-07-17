@@ -100,6 +100,11 @@ final class AppEnvironment: ObservableObject {
     let documentQueue: DocumentProcessingQueue
 
     private let runtimeStatusController: RuntimeStatusController
+    /// Fires a classification-only pass for the selected matter whenever a model
+    /// finishes loading, so documents imported while no model was available get
+    /// classified once one is ready (the queue de-dupes and no-ops when nothing is
+    /// pending).
+    private var classifyOnModelLoadCancellable: AnyCancellable?
 
     init() {
         let runtimeClient = RuntimeClient()
@@ -230,6 +235,19 @@ final class AppEnvironment: ObservableObject {
         // Let speculative pre-warms back off while a generation is running, so they
         // never evict the model out from under an in-flight answer.
         modelLibrary.isRuntimeGenerating = { [weak self] in self?.runtimeServiceState == .generating }
+        // When a model becomes loaded, classify any pending documents in the selected
+        // matter (a no-op when none are pending). Collapse the load state to a Bool and
+        // fire only on the transition into loaded.
+        classifyOnModelLoadCancellable = modelLibrary.$loadState
+            .map { state -> Bool in
+                if case .loaded = state { return true } else { return false }
+            }
+            .removeDuplicates()
+            .filter { $0 }
+            .sink { [weak self] _ in
+                guard let self, let matterID = self.mattersController.selectedMatterID else { return }
+                self.documentQueue.enqueueClassify(matterID: matterID)
+            }
     }
 
     /// Loads persisted state and refreshes runtime status on launch.

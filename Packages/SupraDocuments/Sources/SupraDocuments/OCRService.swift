@@ -31,6 +31,10 @@ public protocol DocumentOCRService: Sendable {
 /// document is flagged for review (plan §6.2, §8.4).
 public enum OCRPolicy {
     public static let lowConfidenceThreshold = 0.5
+
+    /// Below this many non-whitespace characters after OCR, a document is routed
+    /// to review; mirrors the classifier's minimum.
+    public static let minimumUsableTextLength = 40
 }
 
 /// Vision-backed on-device OCR.

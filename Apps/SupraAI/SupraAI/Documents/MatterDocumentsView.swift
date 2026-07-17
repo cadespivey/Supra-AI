@@ -14,7 +14,6 @@ struct MatterDocumentsView: View {
     @ObservedObject var controller: MatterDocumentsController
     @ObservedObject var queue: DocumentProcessingQueue
     @ObservedObject var library: ModelLibrary
-    var qaController: DocumentQAController?
     var chronologyController: DocumentChronologyController?
 
     @State private var showImporter = false
@@ -24,7 +23,6 @@ struct MatterDocumentsView: View {
     /// folder row's "New Subfolder") or nil to follow the sidebar selection.
     @State private var newFolderParentID: String?
     @State private var showTrash = false
-    @State private var showQA = false
     @State private var showChronology = false
     @State private var dropTargeted = false
     @State private var preview: PreviewItem?
@@ -49,6 +47,7 @@ struct MatterDocumentsView: View {
             Divider()
             jobProgress
             importFailureBanner
+            classifyPendingBanner
             // A fixed-width folder rail (not a resizable split): HSplitView rebalanced its
             // panes to their ideal widths whenever the document list changed on folder
             // selection, so the panes visibly jumped. A stable rail avoids that.
@@ -87,15 +86,6 @@ struct MatterDocumentsView: View {
             }
         }
         .sheet(isPresented: $showTrash) { trashSheet }
-        .sheet(isPresented: $showQA) {
-            if let qaController {
-                DocumentQASheet(
-                    qa: qaController,
-                    scopeFolderID: controller.selectedFolderID,
-                    library: library
-                ) { showQA = false }
-            }
-        }
         .sheet(isPresented: $showChronology) {
             if let chronologyController {
                 DocumentChronologySheet(
@@ -105,7 +95,10 @@ struct MatterDocumentsView: View {
                 ) { showChronology = false }
             }
         }
-        .onAppear { controller.reload() }
+        .onAppear {
+            controller.reload()
+            controller.classifyPendingIfNeeded()
+        }
     }
 
     // MARK: - Action Bar
@@ -133,11 +126,6 @@ struct MatterDocumentsView: View {
             .accessibilityHint(controller.setupReady ? "Opens the document picker" : "Complete setup in Settings before importing documents")
 
             Divider().frame(height: 20)
-
-            SupraToolbarIconButton("Ask Documents", systemImage: "bubble.left.and.text.bubble.right") {
-                showQA = true
-            }
-            .disabled(qaController == nil)
 
             SupraToolbarIconButton("Fact Chronology", systemImage: "calendar.badge.clock") {
                 showChronology = true
@@ -333,6 +321,12 @@ struct MatterDocumentsView: View {
             .buttonStyle(.plain).help("Preview")
         Button { openInDefaultApp(doc) } label: { Image(systemName: "arrow.up.forward.app") }
             .buttonStyle(.plain).help("Open & edit in your default app")
+        if doc.status == MatterDocumentStatus.failed.rawValue {
+            Button { controller.retryProcessing(documentID: doc.id) } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.plain).help("Retry processing")
+        }
         Menu {
             ForEach(controller.tags) { tag in
                 Button { controller.toggleTag(tag.id, on: doc.id) } label: {
@@ -557,6 +551,29 @@ struct MatterDocumentsView: View {
         }
     }
 
+    /// A quiet prompt to classify documents that were imported while no model was
+    /// available (so they never got a taxonomy suggestion). Hidden while a job for this
+    /// matter is running — its classify phase will pick them up.
+    @ViewBuilder
+    private var classifyPendingBanner: some View {
+        if controller.unclassifiedCount > 0, controller.activeJob == nil {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles").foregroundStyle(.secondary)
+                Text(controller.unclassifiedCount == 1
+                    ? "1 document not yet classified"
+                    : "\(controller.unclassifiedCount) documents not yet classified")
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Classify") { controller.classifyPendingIfNeeded() }
+                    .buttonStyle(.ghost)
+                    .disabled(controller.activeJob != nil)
+            }
+            .font(.supraCaption)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+    }
+
     @ViewBuilder
     private var jobProgress: some View {
         if let job = controller.activeJob {
@@ -692,170 +709,8 @@ struct PreviewItem: Identifiable {
     let model: DocumentPreviewModel
 }
 
-/// Source-grounded Q&A over the matter's documents (WO 41). Auto-source by
-/// default; answers are saved to the Outputs tab with their source set.
-struct DocumentQASheet: View {
-    @ObservedObject var qa: DocumentQAController
-    let scopeFolderID: String?
-    @ObservedObject var library: ModelLibrary
-    let onClose: () -> Void
-
-    @State private var question = ""
-    @State private var mode: DocumentAnswerMode = .short
-    @State private var scopeThisFolder = false
-    @State private var routingMessage: String?
-
-    private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
-    private var route: ModelRoute? { router.route(forStructuredOutput: mode.outputType) }
-    private var routeModel: ModelSummary? {
-        guard let route else { return nil }
-        return library.resolvedModel(for: route.role, configuration: router.configuration)
-    }
-
-    private var scope: RetrievalScope {
-        (scopeThisFolder && scopeFolderID != nil) ? RetrievalScope(folderIDs: [scopeFolderID!]) : .wholeMatter
-    }
-
-    var body: some View {
-        SupraSheetScaffold("Ask the Documents", onClose: onClose) {
-            qaContent
-        } footer: {
-            if let result = qa.lastResult {
-                Button(result.depth == .fast ? "Search All Documents (slower)" : "Regenerate") {
-                    Task { await regenerate(outputID: result.outputID) }
-                }
-                .buttonStyle(.ghost)
-                .disabled(qa.isGenerating || routeModel == nil)
-                .help(result.depth == .fast
-                    ? "The preliminary answer searched the most relevant passages. Run the full pass across every document in scope."
-                    : "Run the full pass again.")
-            }
-            Spacer()
-            if qa.isGenerating { ProgressView().controlSize(.small) }
-            Button("Ask") { Task { await ask() } }
-                .buttonStyle(.ghost)
-                .keyboardShortcut(.defaultAction)
-                .disabled(qa.isGenerating || routeModel == nil || question.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-        .frame(minWidth: 520, idealWidth: 620, maxWidth: .infinity, minHeight: 460, idealHeight: 600, maxHeight: .infinity)
-        .onAppear {
-            library.refresh()
-            // Warm the model this Q&A / chronology will use while the user types the
-            // question, so generation doesn't wait on the load.
-            if !AppEnvironment.isUITestMode, let role = route?.role { library.prewarm(role: role) }
-        }
-    }
-
-    private var qaContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Form {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Your question").font(.subheadline).foregroundStyle(.secondary)
-                    MultilineField(
-                        placeholder: "e.g. What are the termination provisions in the lease?",
-                        text: $question,
-                        minLines: 3
-                    )
-                }
-                LabeledContent("Answer style") {
-                    GhostSegmentedControl(
-                        selection: $mode,
-                        segments: [(DocumentAnswerMode.short, "Short", ""), (DocumentAnswerMode.memo, "Memo", "")]
-                    )
-                }
-                if scopeFolderID != nil {
-                    Toggle("Limit to the selected folder", isOn: $scopeThisFolder)
-                }
-                if let readiness = qa.scopeReadiness(scope: scope) {
-                    Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) documents indexed")
-                        .font(.supraCaption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
-                }
-                routeStatus
-                if let routingMessage {
-                    Text(routingMessage).font(.supraCaption).foregroundStyle(.orange)
-                }
-                if let message = qa.message {
-                    Text(message).font(.supraCaption).foregroundStyle(.orange)
-                }
-            }
-            .formStyle(.grouped)
-
-            if let result = qa.lastResult {
-                Divider()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if result.depth == .fast {
-                            Label("Preliminary — searched the most relevant passages. “Search All Documents” runs the full pass.", systemImage: "hare")
-                                .font(.supraCaption).foregroundStyle(.secondary)
-                        }
-                        if result.status == StructuredOutputStatus.needsReview.rawValue {
-                            Label("Needs review — \(result.warnings.joined(separator: " "))", systemImage: "exclamationmark.triangle")
-                                .font(.supraCaption).foregroundStyle(.orange)
-                        }
-                        Text(Self.markdown(result.markdown))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding()
-                }
-                .frame(minHeight: 200)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var routeStatus: some View {
-        if let route {
-            if let routeModel {
-                Text("Uses \(route.role.displayName): \(routeModel.displayName)")
-                    .font(.supraCaption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Assign a \(route.role.displayName) model in Models to ask documents.")
-                    .font(.supraCaption)
-                    .foregroundStyle(.orange)
-            }
-        }
-    }
-
-    private func ask() async {
-        guard let resolved = await resolveRouteModel() else { return }
-        _ = await qa.generate(
-            question: question,
-            scope: scope,
-            mode: mode,
-            modelID: resolved.modelID,
-            route: resolved.route
-        )
-    }
-
-    private func regenerate(outputID: String) async {
-        guard let resolved = await resolveRouteModel() else { return }
-        _ = await qa.regenerate(outputID: outputID, modelID: resolved.modelID, route: resolved.route)
-    }
-
-    private func resolveRouteModel() async -> (modelID: ModelID, route: ModelRoute)? {
-        routingMessage = nil
-        guard let route else {
-            routingMessage = "No route is available for this document output."
-            return nil
-        }
-        switch await library.ensureLoadedRoutedModelID(for: route.role, configuration: router.configuration) {
-        case let .success(modelID):
-            return (modelID, route)
-        case let .failure(issue):
-            routingMessage = issue.message
-            return nil
-        }
-    }
-
-    private static func markdown(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
-    }
-}
-
-/// One-shot fact chronology over the matter's documents (WO 42), in a table or
-/// narrative format. Saved to the Outputs tab with its source set.
+/// Fact chronology over the matter's documents (WO 42), in a table or narrative
+/// format. Large scopes are batched; results are saved with their source set.
 struct DocumentChronologySheet: View {
     @ObservedObject var chronology: DocumentChronologyController
     let scopeFolderID: String?
@@ -887,7 +742,18 @@ struct DocumentChronologySheet: View {
                     .disabled(chronology.isGenerating || routeModel == nil)
             }
             Spacer()
-            if chronology.isGenerating { ProgressView().controlSize(.small) }
+            if chronology.isGenerating {
+                ProgressView().controlSize(.small)
+                if let caption = progressCaption {
+                    Text(caption)
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                }
+                if chronology.progress != .saving {
+                    Button("Cancel") { chronology.cancel() }
+                        .buttonStyle(.ghost)
+                }
+            }
             Button("Generate") { Task { await generate() } }
                 .buttonStyle(.ghost)
                 .keyboardShortcut(.defaultAction)
@@ -919,6 +785,9 @@ struct DocumentChronologySheet: View {
                 }
                 if let message = chronology.message {
                     Text(message).font(.supraCaption).foregroundStyle(.orange)
+                }
+                if let summary = chronology.summaryMessage {
+                    Text(summary).font(.supraCaption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -954,6 +823,21 @@ struct DocumentChronologySheet: View {
                     .font(.supraCaption)
                     .foregroundStyle(.orange)
             }
+        }
+    }
+
+    /// Footer caption for the generation stage; a large scope shows per-pass
+    /// progress ("Pass 2 of 3…") while it maps batches.
+    private var progressCaption: String? {
+        switch chronology.progress {
+        case .idle: nil
+        case .harvesting: "Harvesting…"
+        case .generating: "Generating…"
+        case let .mapping(batch, total): "Pass \(batch) of \(total)…"
+        case .merging: "Merging…"
+        case .synthesizing: "Synthesizing…"
+        case .verifying: "Verifying…"
+        case .saving: "Saving…"
         }
     }
 
