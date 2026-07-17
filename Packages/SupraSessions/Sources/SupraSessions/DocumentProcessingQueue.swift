@@ -42,8 +42,6 @@ public final class DocumentProcessingQueue: ObservableObject {
     /// persisted). A job whose sources are lost across a relaunch falls back to
     /// store-only reconciliation (re-indexing already-copied documents).
     private var pendingSources: [String: [URL]] = [:]
-    /// Optional destination folder per queued import job (nil = All Documents root).
-    private var pendingTargetFolderID: [String: String] = [:]
     private var runTask: Task<Void, Never>?
 
     public init(
@@ -84,10 +82,14 @@ public final class DocumentProcessingQueue: ObservableObject {
     public func enqueueImport(matterID: String, sources: [URL], sourceRootDisplay: String? = nil, targetFolderID: String? = nil) -> String? {
         guard !sources.isEmpty else { return nil }
         do {
-            let batch = try store.documentJobs.createBatch(matterID: matterID, sourceRootDisplay: sourceRootDisplay)
+            let batch = try store.documentJobs.createBatch(
+                matterID: matterID,
+                sourceRootDisplay: sourceRootDisplay,
+                targetFolderID: targetFolderID,
+                targetFolderRequested: targetFolderID != nil
+            )
             let job = try store.documentJobs.enqueueJob(matterID: matterID, importBatchID: batch.id)
             pendingSources[job.id] = sources
-            if let targetFolderID { pendingTargetFolderID[job.id] = targetFolderID }
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "document_import_started", actor: "user",
                 summary: "Queued import of \(sources.count) item(s)", relatedTable: "document_processing_jobs", relatedID: job.id
@@ -183,7 +185,6 @@ public final class DocumentProcessingQueue: ObservableObject {
     public func cancelQueuedJob(id: String) {
         try? store.documentJobs.cancelJob(id: id)
         pendingSources[id] = nil
-        pendingTargetFolderID[id] = nil
         refresh()
     }
 
@@ -245,13 +246,15 @@ public final class DocumentProcessingQueue: ObservableObject {
         do {
             if let sources = pendingSources[job.id], !sources.isEmpty {
                 setPhase(job.id, .copyingHashing)
+                let targetFolderID = try job.importBatchID.flatMap {
+                    try store.documentJobs.fetchBatch(id: $0)?.targetFolderID
+                }
                 let outcome = try await importService.importSources(
                     sources, matterID: job.matterID,
-                    targetFolderID: pendingTargetFolderID[job.id], batchID: job.importBatchID
+                    targetFolderID: targetFolderID, batchID: job.importBatchID
                 )
                 importReport = outcome.report
                 pendingSources[job.id] = nil
-                pendingTargetFolderID[job.id] = nil
                 try? store.documentJobs.updateJobProgress(
                     id: job.id, phase: .extractingText,
                     completedUnits: outcome.report.importedCount, totalUnits: outcome.report.discoveredCount

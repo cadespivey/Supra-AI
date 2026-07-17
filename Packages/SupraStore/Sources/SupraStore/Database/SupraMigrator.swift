@@ -1061,6 +1061,48 @@ public enum SupraMigrator {
             }
         }
 
+        migrator.registerMigration("v059_create_document_import_sources") { db in
+            try db.alter(table: "document_import_batches") { table in
+                table.add(column: "target_folder_id", .text)
+                table.add(column: "target_folder_requested", .boolean)
+                    .notNull()
+                    .defaults(to: false)
+            }
+            try db.create(table: "document_import_sources") { table in
+                table.column("id", .text).primaryKey()
+                table.column("import_batch_id", .text)
+                    .notNull()
+                    .references("document_import_batches", onDelete: .cascade)
+                table.column("matter_id", .text)
+                    .notNull()
+                    .references("matters", onDelete: .cascade)
+                table.column("source_key", .text).notNull()
+                table.column("source_display_path", .text).notNull()
+                table.column("source_bookmark", .blob)
+                table.column("parent_source_id", .text)
+                    .references("document_import_sources", onDelete: .setNull)
+                table.column("state", .text).notNull()
+                table.column("rejection_code", .text)
+                table.column("reason", .text)
+                table.column("document_id", .text)
+                    .references("matter_documents", onDelete: .setNull)
+                table.column("blob_sha256", .text)
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.create(
+                index: "idx_document_import_sources_batch_key",
+                on: "document_import_sources",
+                columns: ["import_batch_id", "source_key"],
+                unique: true
+            )
+            try db.create(
+                index: "idx_document_import_sources_matter_state",
+                on: "document_import_sources",
+                columns: ["matter_id", "state"]
+            )
+        }
+
         return migrator
     }
 
@@ -1080,6 +1122,7 @@ public enum SupraMigrator {
             "document_output_sources",
             "document_source_sets",
             "document_processing_jobs",
+            "document_import_sources",
             "document_import_batches",
             "document_chunk_embeddings",
             "document_embedding_models",

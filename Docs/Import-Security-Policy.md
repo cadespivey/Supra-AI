@@ -35,3 +35,27 @@ Policy failures are recorded per item with a stable `rejectionCode`; unrelated
 items continue until an aggregate budget is exhausted. Rejected hostile items
 must not leave a document row or managed blob. Cancellation propagates and
 removes import staging files.
+
+## Durable source accounting and file authority
+
+Migration v059 adds `document_import_sources`, an incremental ledger for every
+top-level selection and discovered child. Files, directories, attachments, hidden
+members, rejections, unsupported sources, failures, interruptions, cancellations,
+and user exclusions all receive explicit states. Directories finish as
+`container_completed` and never masquerade as content documents. Hidden members
+are enumerated into `excluded_hidden` rows but are not parsed and remain absent
+from the compatibility import report.
+
+Only a top-level user selection may carry a security-scoped bookmark. Child and
+attachment rows never store one, and every terminal transition clears the
+top-level bookmark in the same database transaction. The batch also preserves
+whether a target folder was requested and its exact identifier; repository writes
+reject a target belonging to another matter. The final `report_json` remains the
+completed-run compatibility artifact, while the ledger is authoritative for
+incremental and interrupted source accounting.
+
+Historical batches receive no fabricated source rows during v059 migration and
+retain their existing `report_json`. The pre-migration snapshot is the recovery
+path; a schema downgrade drops `document_import_sources` and the two additive
+batch target columns. The ledger itself does not enable resume behavior; resume
+and orphaned-batch reconciliation are separate operational features.

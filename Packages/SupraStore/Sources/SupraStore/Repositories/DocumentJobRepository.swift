@@ -15,9 +15,29 @@ public final class DocumentJobRepository: @unchecked Sendable {
     // MARK: - Import batches
 
     @discardableResult
-    public func createBatch(matterID: String, sourceRootDisplay: String? = nil) throws -> DocumentImportBatchRecord {
+    public func createBatch(
+        matterID: String,
+        sourceRootDisplay: String? = nil,
+        targetFolderID: String? = nil,
+        targetFolderRequested: Bool = false
+    ) throws -> DocumentImportBatchRecord {
         try writer.write { db in
-            let record = DocumentImportBatchRecord(matterID: matterID, sourceRootDisplay: sourceRootDisplay)
+            guard targetFolderRequested == (targetFolderID != nil) else {
+                throw DocumentJobRepositoryError.invalidTargetFolderIntent
+            }
+            if let targetFolderID {
+                guard let folder = try DocumentFolderRecord.fetchOne(db, key: targetFolderID),
+                      folder.matterID == matterID,
+                      folder.deletedAt == nil else {
+                    throw DocumentJobRepositoryError.targetFolderUnavailable(targetFolderID)
+                }
+            }
+            let record = DocumentImportBatchRecord(
+                matterID: matterID,
+                sourceRootDisplay: sourceRootDisplay,
+                targetFolderID: targetFolderID,
+                targetFolderRequested: targetFolderRequested
+            )
             try record.insert(db)
             return record
         }
@@ -70,6 +90,191 @@ public final class DocumentJobRepository: @unchecked Sendable {
                 arguments: [matterID]
             )
         }
+    }
+
+    // MARK: - Import source ledger
+
+    /// Inserts the durable identity for a selected/discovered source, or returns
+    /// the existing row for the batch/key idempotency contract. Child rows never
+    /// retain a top-level security-scoped bookmark.
+    @discardableResult
+    public func recordDiscovered(
+        batchID: String,
+        matterID: String,
+        sourceKey: String,
+        sourceDisplayPath: String,
+        sourceBookmark: Data? = nil,
+        parentSourceID: String? = nil,
+        state: DocumentImportSourceState = .discovered
+    ) throws -> DocumentImportSourceRecord {
+        let normalizedKey = sourceKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPath = sourceDisplayPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedKey.isEmpty else {
+            throw DocumentJobRepositoryError.requiredFieldMissing("source_key")
+        }
+        guard !normalizedPath.isEmpty, !NSString(string: normalizedPath).isAbsolutePath else {
+            throw DocumentJobRepositoryError.invalidSourceDisplayPath(sourceDisplayPath)
+        }
+        return try writer.write { db in
+            guard let batch = try DocumentImportBatchRecord.fetchOne(db, key: batchID),
+                  batch.matterID == matterID else {
+                throw DocumentJobRepositoryError.batchMatterMismatch(batchID: batchID, matterID: matterID)
+            }
+            if let existing = try DocumentImportSourceRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM document_import_sources WHERE import_batch_id = ? AND source_key = ?",
+                arguments: [batchID, normalizedKey]
+            ) {
+                guard existing.matterID == matterID else {
+                    throw DocumentJobRepositoryError.batchMatterMismatch(batchID: batchID, matterID: matterID)
+                }
+                guard existing.sourceDisplayPath == normalizedPath,
+                      existing.parentSourceID == parentSourceID else {
+                    throw DocumentJobRepositoryError.sourceIdentityMismatch(normalizedKey)
+                }
+                return existing
+            }
+            if let parentSourceID {
+                guard let parent = try DocumentImportSourceRecord.fetchOne(db, key: parentSourceID),
+                      parent.importBatchID == batchID,
+                      parent.matterID == matterID else {
+                    throw DocumentJobRepositoryError.parentSourceMismatch(parentSourceID)
+                }
+            }
+            let record = DocumentImportSourceRecord(
+                importBatchID: batchID,
+                matterID: matterID,
+                sourceKey: normalizedKey,
+                sourceDisplayPath: normalizedPath,
+                sourceBookmark: parentSourceID == nil && !state.isTerminal ? sourceBookmark : nil,
+                parentSourceID: parentSourceID,
+                state: state.rawValue
+            )
+            try record.insert(db)
+            return record
+        }
+    }
+
+    /// Advances one source toward a terminal accounting state. Bookmark clearing
+    /// occurs in the same transaction as the terminal state write.
+    @discardableResult
+    public func markState(
+        sourceID: String,
+        state: DocumentImportSourceState,
+        rejectionCode: String? = nil,
+        reason: String? = nil,
+        documentID: String? = nil,
+        blobSHA256: String? = nil
+    ) throws -> DocumentImportSourceRecord {
+        try writer.write { db in
+            guard var record = try DocumentImportSourceRecord.fetchOne(db, key: sourceID) else {
+                throw DocumentJobRepositoryError.sourceNotFound(sourceID)
+            }
+            let current = DocumentImportSourceState(rawValue: record.state)
+            guard Self.canTransition(from: current, to: state) else {
+                throw DocumentJobRepositoryError.invalidSourceTransition(from: record.state, to: state.rawValue)
+            }
+            if let documentID {
+                guard let document = try MatterDocumentRecord.fetchOne(db, key: documentID),
+                      document.matterID == record.matterID else {
+                    throw DocumentJobRepositoryError.documentMatterMismatch(documentID)
+                }
+            }
+            record.state = state.rawValue
+            if let rejectionCode { record.rejectionCode = rejectionCode }
+            if let reason { record.reason = reason }
+            if let documentID { record.documentID = documentID }
+            if let blobSHA256 { record.blobSHA256 = blobSHA256 }
+            if state.isTerminal { record.sourceBookmark = nil }
+            record.updatedAt = Date()
+            try record.update(db)
+            return record
+        }
+    }
+
+    public func fetchSources(batchID: String) throws -> [DocumentImportSourceRecord] {
+        try writer.read { db in
+            try DocumentImportSourceRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM document_import_sources WHERE import_batch_id = ? ORDER BY created_at, id",
+                arguments: [batchID]
+            )
+        }
+    }
+
+    public func fetchSources(matterID: String) throws -> [DocumentImportSourceRecord] {
+        try writer.read { db in
+            try DocumentImportSourceRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM document_import_sources WHERE matter_id = ? ORDER BY created_at, id",
+                arguments: [matterID]
+            )
+        }
+    }
+
+    public func unfinishedSources(batchID: String) throws -> [DocumentImportSourceRecord] {
+        try fetchSources(batchID: batchID).filter { !$0.isTerminal }
+    }
+
+    public func sourcesSummary(batchID: String) throws -> DocumentImportSourcesSummary {
+        let sources = try fetchSources(batchID: batchID)
+        func count(_ state: DocumentImportSourceState) -> Int {
+            sources.count { $0.state == state.rawValue }
+        }
+        let admitted = count(.admitted)
+        let containers = count(.containerCompleted)
+        let rejected = count(.rejected)
+        let unsupported = count(.unsupportedByPolicy)
+        let failed = count(.failed)
+        let cancelled = count(.cancelled)
+        let interrupted = count(.interrupted)
+        let hidden = count(.excludedHidden)
+        let excluded = count(.excludedByUser)
+        let terminal = admitted + containers + rejected + unsupported + failed
+            + cancelled + interrupted + hidden + excluded
+        let unfinishedStates: Set<DocumentImportSourceState> = [
+            .selected, .discovered, .validated, .copying,
+        ]
+        let unfinished = sources.count {
+            guard let state = $0.sourceState else { return false }
+            return unfinishedStates.contains(state)
+        }
+        let categorized = terminal + unfinished
+        return DocumentImportSourcesSummary(
+            totalCount: sources.count,
+            terminalCount: terminal,
+            unfinishedCount: unfinished,
+            contentDenominator: sources.count - containers,
+            admittedCount: admitted,
+            containerCompletedCount: containers,
+            rejectedCount: rejected,
+            unsupportedByPolicyCount: unsupported,
+            failedCount: failed,
+            cancelledCount: cancelled,
+            interruptedCount: interrupted,
+            excludedHiddenCount: hidden,
+            excludedByUserCount: excluded,
+            balanceErrorCount: abs(sources.count - categorized)
+        )
+    }
+
+    private static func canTransition(
+        from current: DocumentImportSourceState?,
+        to next: DocumentImportSourceState
+    ) -> Bool {
+        guard let current else { return false }
+        if current == next { return true }
+        if current == .interrupted, next == .copying { return true }
+        if current.isTerminal { return false }
+        if next.isTerminal { return true }
+        let rank: [DocumentImportSourceState: Int] = [
+            .selected: 0,
+            .discovered: 1,
+            .validated: 2,
+            .copying: 3,
+        ]
+        guard let currentRank = rank[current], let nextRank = rank[next] else { return false }
+        return nextRank >= currentRank
     }
 
     // MARK: - Processing jobs
@@ -325,4 +530,17 @@ public final class DocumentJobRepository: @unchecked Sendable {
             return ids
         }
     }
+}
+
+public enum DocumentJobRepositoryError: Error, Equatable, Sendable {
+    case requiredFieldMissing(String)
+    case invalidTargetFolderIntent
+    case targetFolderUnavailable(String)
+    case batchMatterMismatch(batchID: String, matterID: String)
+    case invalidSourceDisplayPath(String)
+    case parentSourceMismatch(String)
+    case sourceIdentityMismatch(String)
+    case sourceNotFound(String)
+    case invalidSourceTransition(from: String, to: String)
+    case documentMatterMismatch(String)
 }

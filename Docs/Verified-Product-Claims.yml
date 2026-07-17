@@ -15,7 +15,7 @@ claims:
 
   - id: "STORE-MIGRATION-SEQUENCE"
     topic: "migration-count"
-    wording: "The shipping database schema registers a contiguous migration sequence from v001 through v058."
+    wording: "The shipping database schema registers a contiguous migration sequence from v001 through v059."
     owner: "Persistence engineering"
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"
     verification: "Scripts/verify-migration-sequence.sh"
@@ -23,7 +23,7 @@ claims:
     applicable_version: "2.3.0 and later"
     last_reviewed: "2026-07-17"
     publication_anchor: "ARCHITECTURE.md"
-    expected: "v058_add_document_job_kind"
+    expected: "v059_create_document_import_sources"
 
   - id: "STORE-SUPPORTED-UPGRADES"
     topic: "supported-releases"
@@ -33,7 +33,7 @@ claims:
     verification: "Packages/SupraStore/Tests/SupraStoreTests/ShippingMigrationFixtureTests.swift"
     ci_job: "macos-ci/migration-fixtures"
     applicable_version: "2.2.0 and later"
-    last_reviewed: "2026-07-13"
+    last_reviewed: "2026-07-17"
     publication_anchor: "SECURITY.md"
     expected: "v1.4.1,v1.5.2,v1.8.0,v2.0.0,v2.1.0,v2.1.3,v2.2.0,latest-minus-one"
 
@@ -220,10 +220,10 @@ claims:
     wording: "Imported originals are opened read-only and are not modified; managed copies are written inside the sandbox, while exports use destinations selected by the user."
     owner: "Document engineering"
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/DocumentImportService.swift"
-    verification: "Packages/SupraSessions/Tests/SupraSessionsTests/HostileDocumentImportTests.swift"
+    verification: "Packages/SupraSessions/Tests/SupraSessionsTests/DocumentImportSourceLedgerTests.swift"
     ci_job: "macos-ci/swift-packages"
     applicable_version: "2.2.0 and later"
-    last_reviewed: "2026-07-13"
+    last_reviewed: "2026-07-17"
     publication_anchor: "SECURITY.md"
 
   - id: "PUBLIC-FONT-LICENSE"

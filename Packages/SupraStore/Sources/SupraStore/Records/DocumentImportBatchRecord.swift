@@ -11,6 +11,8 @@ public struct DocumentImportBatchRecord: Codable, FetchableRecord, PersistableRe
     public var matterID: String
     public var status: String
     public var sourceRootDisplay: String?
+    public var targetFolderID: String?
+    public var targetFolderRequested: Bool
     public var discoveredCount: Int
     public var importedCount: Int
     public var failedCount: Int
@@ -25,6 +27,8 @@ public struct DocumentImportBatchRecord: Codable, FetchableRecord, PersistableRe
         matterID: String,
         status: String = DocumentImportBatchStatus.discovering.rawValue,
         sourceRootDisplay: String? = nil,
+        targetFolderID: String? = nil,
+        targetFolderRequested: Bool = false,
         discoveredCount: Int = 0,
         importedCount: Int = 0,
         failedCount: Int = 0,
@@ -38,6 +42,8 @@ public struct DocumentImportBatchRecord: Codable, FetchableRecord, PersistableRe
         self.matterID = matterID
         self.status = status
         self.sourceRootDisplay = sourceRootDisplay
+        self.targetFolderID = targetFolderID
+        self.targetFolderRequested = targetFolderRequested
         self.discoveredCount = discoveredCount
         self.importedCount = importedCount
         self.failedCount = failedCount
@@ -53,6 +59,8 @@ public struct DocumentImportBatchRecord: Codable, FetchableRecord, PersistableRe
         case matterID = "matter_id"
         case status
         case sourceRootDisplay = "source_root_display"
+        case targetFolderID = "target_folder_id"
+        case targetFolderRequested = "target_folder_requested"
         case discoveredCount = "discovered_count"
         case importedCount = "imported_count"
         case failedCount = "failed_count"

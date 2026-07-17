@@ -104,6 +104,34 @@ public enum DocumentImportBatchStatus: String, Codable, CaseIterable, Hashable, 
     case cancelled
 }
 
+/// Incrementally persisted lifecycle of one selected or discovered import
+/// source. Raw values are the stable v059 database contract.
+public enum DocumentImportSourceState: String, Codable, CaseIterable, Hashable, Sendable {
+    case selected
+    case discovered
+    case validated
+    case copying
+    case admitted
+    case containerCompleted = "container_completed"
+    case rejected
+    case unsupportedByPolicy = "unsupported_by_policy"
+    case failed
+    case cancelled
+    case interrupted
+    case excludedHidden = "excluded_hidden"
+    case excludedByUser = "excluded_by_user"
+
+    public var isTerminal: Bool {
+        switch self {
+        case .selected, .discovered, .validated, .copying:
+            false
+        case .admitted, .containerCompleted, .rejected, .unsupportedByPolicy,
+             .failed, .cancelled, .interrupted, .excludedHidden, .excludedByUser:
+            true
+        }
+    }
+}
+
 /// Lifecycle of a source set attached to a generated output version.
 public enum DocumentSourceSetStatus: String, Codable, CaseIterable, Hashable, Sendable {
     case pending

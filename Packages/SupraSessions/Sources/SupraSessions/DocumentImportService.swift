@@ -25,6 +25,7 @@ public enum ImportTraversalStage: String, Sendable {
 }
 
 public typealias ImportTraversalFaultInjector = @Sendable (ImportTraversalStage, URL) throws -> Void
+public typealias ImportSourceStateObserver = @Sendable (DocumentImportSourceRecord) throws -> Void
 
 /// The final import report stored on the batch (plan §5.1).
 public struct DocumentImportReport: Codable, Sendable {
@@ -67,6 +68,7 @@ public final class DocumentImportService: @unchecked Sendable {
     private let importPolicy: ImportPolicy
     private let ocr: (any DocumentOCRService)?
     private let traversalFaultInjector: ImportTraversalFaultInjector
+    private let sourceStateObserver: ImportSourceStateObserver
 
     public init(
         store: SupraStore,
@@ -74,7 +76,8 @@ public final class DocumentImportService: @unchecked Sendable {
         extraction: ExtractionService? = nil,
         importPolicy: ImportPolicy = .default,
         ocr: (any DocumentOCRService)? = VisionOCRService(),
-        traversalFaultInjector: @escaping ImportTraversalFaultInjector = { _, _ in }
+        traversalFaultInjector: @escaping ImportTraversalFaultInjector = { _, _ in },
+        sourceStateObserver: @escaping ImportSourceStateObserver = { _ in }
     ) {
         self.store = store
         self.storage = storage
@@ -82,6 +85,7 @@ public final class DocumentImportService: @unchecked Sendable {
         self.importPolicy = importPolicy
         self.ocr = ocr
         self.traversalFaultInjector = traversalFaultInjector
+        self.sourceStateObserver = sourceStateObserver
     }
 
     public struct ImportOutcome: Sendable {
@@ -100,19 +104,41 @@ public final class DocumentImportService: @unchecked Sendable {
         batchID: String? = nil
     ) async throws -> ImportOutcome {
         try storage.initializeStorage()
-        let batch = try resolveBatch(matterID: matterID, batchID: batchID, sources: sources)
+        let batch = try resolveBatch(
+            matterID: matterID,
+            batchID: batchID,
+            sources: sources,
+            targetFolderID: targetFolderID
+        )
 
         var report = DocumentImportReport()
         var folderCache: [String: String?] = [:]  // managed relative dir path -> folder id
         let ledger = ImportBudgetLedger(policy: importPolicy)
 
-        for source in sources {
+        for (selectionIndex, source) in sources.enumerated() {
             // User-picked / dropped files are security-scoped under the App
             // Sandbox. Imports run asynchronously on the processing queue — long
             // after the picker callback — so we must (re)open scope here or every
             // read fails. App-owned/temp URLs return false and need no scope.
             let scoped = source.startAccessingSecurityScopedResource()
             defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+            let bookmarkOptions: URL.BookmarkCreationOptions = scoped
+                ? [.withSecurityScope, .securityScopeAllowOnlyReadAccess]
+                : []
+            let bookmark = try? source.bookmarkData(
+                options: bookmarkOptions,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+            let sourceKey = "selection:\(selectionIndex)"
+            let sourceRow = try recordSource(
+                batchID: batch.id,
+                matterID: matterID,
+                sourceKey: sourceKey,
+                sourceDisplayPath: source.lastPathComponent,
+                sourceBookmark: bookmark,
+                state: .selected
+            )
             do {
                 let root = try PinnedImportRoot(url: source)
                 try traversalFaultInjector(.afterRootPinned, source)
@@ -127,6 +153,8 @@ public final class DocumentImportService: @unchecked Sendable {
                     visited: &visited,
                     matterID: matterID,
                     batchID: batch.id,
+                    sourceID: sourceRow.id,
+                    sourceKey: sourceKey,
                     currentFolderID: targetFolderID,
                     rootFolderID: targetFolderID,
                     folderCache: &folderCache,
@@ -135,19 +163,21 @@ public final class DocumentImportService: @unchecked Sendable {
             } catch is CancellationError {
                 throw CancellationError()
             } catch let violation as ImportPolicyViolation {
-                Self.appendPolicyRejection(
+                try recordPolicyRejection(
                     violation,
                     url: source,
                     sourceDisplayPath: source.lastPathComponent,
+                    sourceID: sourceRow.id,
                     report: &report
                 )
             } catch {
-                report.items.append(DocumentImportReportItem(
+                try recordFailure(
+                    error,
                     displayName: source.lastPathComponent,
                     sourceDisplayPath: source.lastPathComponent,
-                    disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                    reason: "Unreadable: \(error.localizedDescription)"
-                ))
+                    sourceID: sourceRow.id,
+                    report: &report
+                )
             }
         }
 
@@ -183,6 +213,8 @@ public final class DocumentImportService: @unchecked Sendable {
         visited: inout Set<FileIdentity>,
         matterID: String,
         batchID: String,
+        sourceID: String,
+        sourceKey: String,
         currentFolderID: String?,
         rootFolderID: String?,
         folderCache: inout [String: String?],
@@ -205,6 +237,8 @@ public final class DocumentImportService: @unchecked Sendable {
         }
 
         if metadata.isDirectory {
+            try transitionSource(sourceID, to: .validated)
+            try transitionSource(sourceID, to: .copying)
             let folderID = try folder(
                 forRelativeDir: relativePath,
                 matterID: matterID,
@@ -213,11 +247,34 @@ public final class DocumentImportService: @unchecked Sendable {
             )
             let contents = try FileManager.default.contentsOfDirectory(
                 at: url,
-                includingPropertiesForKeys: [.isAliasFileKey, .isSymbolicLinkKey, .fileResourceIdentifierKey],
-                options: [.skipsHiddenFiles]
+                includingPropertiesForKeys: [
+                    .isAliasFileKey,
+                    .isHiddenKey,
+                    .isSymbolicLinkKey,
+                    .fileResourceIdentifierKey,
+                ],
+                options: []
             )
             for child in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 let childPath = "\(relativePath)/\(child.lastPathComponent)"
+                let childKey = "\(sourceKey)/\(child.lastPathComponent)"
+                let childRow = try recordSource(
+                    batchID: batchID,
+                    matterID: matterID,
+                    sourceKey: childKey,
+                    sourceDisplayPath: childPath,
+                    parentSourceID: sourceID
+                )
+                let isHidden = child.lastPathComponent.hasPrefix(".")
+                    || (try? child.resourceValues(forKeys: [.isHiddenKey]).isHidden) == true
+                if isHidden {
+                    try transitionSource(
+                        childRow.id,
+                        to: .excludedHidden,
+                        reason: "Hidden import source excluded by policy."
+                    )
+                    continue
+                }
                 do {
                     try await importEntry(
                         at: child,
@@ -228,6 +285,8 @@ public final class DocumentImportService: @unchecked Sendable {
                         visited: &visited,
                         matterID: matterID,
                         batchID: batchID,
+                        sourceID: childRow.id,
+                        sourceKey: childKey,
                         currentFolderID: folderID,
                         rootFolderID: rootFolderID,
                         folderCache: &folderCache,
@@ -236,21 +295,24 @@ public final class DocumentImportService: @unchecked Sendable {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let violation as ImportPolicyViolation {
-                    Self.appendPolicyRejection(
+                    try recordPolicyRejection(
                         violation,
                         url: child,
                         sourceDisplayPath: childPath,
+                        sourceID: childRow.id,
                         report: &report
                     )
                 } catch {
-                    report.items.append(DocumentImportReportItem(
+                    try recordFailure(
+                        error,
                         displayName: child.lastPathComponent,
                         sourceDisplayPath: childPath,
-                        disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                        reason: "Unreadable: \(error.localizedDescription)"
-                    ))
+                        sourceID: childRow.id,
+                        report: &report
+                    )
                 }
             }
+            try transitionSource(sourceID, to: .containerCompleted)
             return
         }
 
@@ -260,12 +322,16 @@ public final class DocumentImportService: @unchecked Sendable {
         try importPolicy.validateSource(at: url)
         try ledger.consumeSource(byteSize: metadata.byteSize)
         try traversalFaultInjector(.afterCandidateValidated, url)
+        try transitionSource(sourceID, to: .validated)
+        try transitionSource(sourceID, to: .copying)
         _ = try await importFile(
             at: url,
             folderID: currentFolderID,
             sourceDisplayPath: relativePath,
             matterID: matterID,
             batchID: batchID,
+            sourceID: sourceID,
+            sourceKey: sourceKey,
             pinnedSourceValidator: {
                 let current = try root.validateCandidate(url)
                 guard current.identity == metadata.identity,
@@ -291,6 +357,8 @@ public final class DocumentImportService: @unchecked Sendable {
         sourceDisplayPath: String,
         matterID: String,
         batchID: String,
+        sourceID: String,
+        sourceKey: String,
         parentDocumentID: String? = nil,
         attachmentDepth: Int = 0,
         pinnedSourceValidator: (@Sendable () throws -> Void)? = nil,
@@ -307,22 +375,24 @@ public final class DocumentImportService: @unchecked Sendable {
             }
             try pinnedSourceValidator?()
         } catch let violation as ImportPolicyViolation {
-            Self.appendPolicyRejection(
+            try recordPolicyRejection(
                 violation,
                 url: url,
                 sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceID,
                 parentDocumentID: parentDocumentID,
                 report: &report
             )
             return nil
         } catch {
-            report.items.append(DocumentImportReportItem(
+            try recordFailure(
+                error,
                 displayName: displayName,
                 sourceDisplayPath: sourceDisplayPath,
-                disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                reason: "Unreadable: \(error.localizedDescription)",
-                parentDocumentID: parentDocumentID
-            ))
+                sourceID: sourceID,
+                parentDocumentID: parentDocumentID,
+                report: &report
+            )
             return nil
         }
 
@@ -334,11 +404,14 @@ public final class DocumentImportService: @unchecked Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            report.items.append(DocumentImportReportItem(
-                displayName: displayName, sourceDisplayPath: sourceDisplayPath,
-                disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                reason: "Unreadable: \(error.localizedDescription)", parentDocumentID: parentDocumentID
-            ))
+            try recordFailure(
+                error,
+                displayName: displayName,
+                sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceID,
+                parentDocumentID: parentDocumentID,
+                report: &report
+            )
             return nil
         }
         let blob = managedBlob.record
@@ -365,6 +438,13 @@ public final class DocumentImportService: @unchecked Sendable {
                 disposition: DocumentImportDisposition.unsupported.rawValue,
                 reason: "Unsupported file type.", documentID: unsupported.id, parentDocumentID: parentDocumentID
             ))
+            try transitionSource(
+                sourceID,
+                to: .unsupportedByPolicy,
+                reason: "Unsupported file type.",
+                documentID: unsupported.id,
+                blobSHA256: blob.sha256
+            )
             return unsupported.id
         }
 
@@ -406,10 +486,12 @@ public final class DocumentImportService: @unchecked Sendable {
                 documentID: document.id, parentDocumentID: parentDocumentID
             ))
             // Expand email attachments as child documents.
-            for attachment in result.attachments {
+            for (attachmentIndex, attachment) in result.attachments.enumerated() {
                 try await importAttachment(
                     attachment,
                     parentDocument: document,
+                    parentSourceID: sourceID,
+                    sourceKey: "\(sourceKey)/attachment:\(attachmentIndex)",
                     folderID: folderID,
                     matterID: matterID,
                     batchID: batchID,
@@ -418,15 +500,22 @@ public final class DocumentImportService: @unchecked Sendable {
                     report: &report
                 )
             }
+            try transitionSource(
+                sourceID,
+                to: .admitted,
+                documentID: document.id,
+                blobSHA256: blob.sha256
+            )
         } catch is CancellationError {
             rollbackRejectedDocument(document.id)
             throw CancellationError()
         } catch let violation as ImportPolicyViolation {
             rollbackRejectedDocument(document.id)
-            Self.appendPolicyRejection(
+            try recordPolicyRejection(
                 violation,
                 url: url,
                 sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceID,
                 parentDocumentID: parentDocumentID,
                 report: &report
             )
@@ -434,10 +523,11 @@ public final class DocumentImportService: @unchecked Sendable {
         } catch let error as ExtractionError {
             if case .policyViolation(let violation) = error {
                 rollbackRejectedDocument(document.id)
-                Self.appendPolicyRejection(
+                try recordPolicyRejection(
                     violation,
                     url: url,
                     sourceDisplayPath: sourceDisplayPath,
+                    sourceID: sourceID,
                     parentDocumentID: parentDocumentID,
                     report: &report
                 )
@@ -454,6 +544,13 @@ public final class DocumentImportService: @unchecked Sendable {
                 disposition: disposition.rawValue,
                 reason: error.localizedDescription, documentID: document.id, parentDocumentID: parentDocumentID
             ))
+            try transitionSource(
+                sourceID,
+                to: disposition == .unsupported ? .unsupportedByPolicy : .failed,
+                reason: error.localizedDescription,
+                documentID: document.id,
+                blobSHA256: blob.sha256
+            )
         } catch {
             try store.documentLibrary.updateStatus(documentID: document.id, status: .failed)
             try? markExtractionFailed(documentID: document.id, error: error)
@@ -462,6 +559,13 @@ public final class DocumentImportService: @unchecked Sendable {
                 disposition: DocumentImportDisposition.extractionFailed.rawValue,
                 reason: error.localizedDescription, documentID: document.id, parentDocumentID: parentDocumentID
             ))
+            try transitionSource(
+                sourceID,
+                to: .failed,
+                reason: error.localizedDescription,
+                documentID: document.id,
+                blobSHA256: blob.sha256
+            )
         }
         return document.id
     }
@@ -480,6 +584,8 @@ public final class DocumentImportService: @unchecked Sendable {
     private func importAttachment(
         _ attachment: ExtractedAttachment,
         parentDocument: MatterDocumentRecord,
+        parentSourceID: String,
+        sourceKey: String,
         folderID: String?,
         matterID: String,
         batchID: String,
@@ -488,18 +594,28 @@ public final class DocumentImportService: @unchecked Sendable {
         report: inout DocumentImportReport
     ) async throws {
         let sourceDisplayPath = "\(parentDocument.sourceDisplayPath ?? parentDocument.displayName) ▸ \(attachment.fileName)"
+        let sourceRow = try recordSource(
+            batchID: batchID,
+            matterID: matterID,
+            sourceKey: sourceKey,
+            sourceDisplayPath: sourceDisplayPath,
+            parentSourceID: parentSourceID
+        )
         do {
             try ledger.consumeAttachment(byteSize: attachment.data.count, depth: attachmentDepth)
         } catch let violation as ImportPolicyViolation {
-            Self.appendPolicyRejection(
+            try recordPolicyRejection(
                 violation,
                 displayName: attachment.fileName,
                 sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceRow.id,
                 parentDocumentID: parentDocument.id,
                 report: &report
             )
             return
         }
+        try transitionSource(sourceRow.id, to: .validated)
+        try transitionSource(sourceRow.id, to: .copying)
         // Write the attachment bytes to a unique temp directory keeping the
         // original filename, so the path-based import pipeline (copy/dedup/extract)
         // handles it and the child document keeps the attachment's display name.
@@ -511,23 +627,29 @@ public final class DocumentImportService: @unchecked Sendable {
         let tempURL = tempDir.appendingPathComponent(safeName)
         let containedDir = tempDir.resolvingSymlinksInPath().path
         guard tempURL.resolvingSymlinksInPath().path.hasPrefix(containedDir + "/") else {
-            report.items.append(DocumentImportReportItem(
-                displayName: attachment.fileName, sourceDisplayPath: sourceDisplayPath,
-                disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                reason: "Rejected an attachment with an unsafe filename.", parentDocumentID: parentDocument.id,
-                rejectionCode: ImportPolicyViolation.Code.unsafeArchivePath.rawValue
-            ))
+            try recordPolicyRejection(
+                ImportPolicyViolation(.unsafeArchivePath, "Rejected an attachment with an unsafe filename."),
+                displayName: attachment.fileName,
+                sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceRow.id,
+                parentDocumentID: parentDocument.id,
+                report: &report
+            )
             return
         }
         do {
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             try attachment.data.write(to: tempURL)
         } catch {
-            report.items.append(DocumentImportReportItem(
-                displayName: attachment.fileName, sourceDisplayPath: sourceDisplayPath,
-                disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                reason: "Could not write attachment.", parentDocumentID: parentDocument.id
-            ))
+            try recordFailure(
+                error,
+                displayName: attachment.fileName,
+                sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceRow.id,
+                parentDocumentID: parentDocument.id,
+                reason: "Could not write attachment.",
+                report: &report
+            )
             return
         }
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -539,6 +661,8 @@ public final class DocumentImportService: @unchecked Sendable {
             sourceDisplayPath: sourceDisplayPath,
             matterID: matterID,
             batchID: batchID,
+            sourceID: sourceRow.id,
+            sourceKey: sourceKey,
             parentDocumentID: parentDocument.id,
             attachmentDepth: attachmentDepth,
             ledger: ledger,
@@ -958,37 +1082,107 @@ public final class DocumentImportService: @unchecked Sendable {
         return parentID
     }
 
-    private func resolveBatch(matterID: String, batchID: String?, sources: [URL]) throws -> DocumentImportBatchRecord {
+    private func resolveBatch(
+        matterID: String,
+        batchID: String?,
+        sources: [URL],
+        targetFolderID: String?
+    ) throws -> DocumentImportBatchRecord {
         if let batchID, let existing = try store.documentJobs.fetchBatch(id: batchID) {
+            guard existing.matterID == matterID else {
+                throw DocumentJobRepositoryError.batchMatterMismatch(batchID: batchID, matterID: matterID)
+            }
+            guard existing.targetFolderRequested == (targetFolderID != nil),
+                  existing.targetFolderID == targetFolderID else {
+                throw DocumentJobRepositoryError.invalidTargetFolderIntent
+            }
             return existing
         }
         let rootName = sources.first?.deletingLastPathComponent().lastPathComponent
-        return try store.documentJobs.createBatch(matterID: matterID, sourceRootDisplay: rootName)
+        return try store.documentJobs.createBatch(
+            matterID: matterID,
+            sourceRootDisplay: rootName,
+            targetFolderID: targetFolderID,
+            targetFolderRequested: targetFolderID != nil
+        )
     }
 
-    private static func appendPolicyRejection(
+    @discardableResult
+    private func recordSource(
+        batchID: String,
+        matterID: String,
+        sourceKey: String,
+        sourceDisplayPath: String,
+        sourceBookmark: Data? = nil,
+        parentSourceID: String? = nil,
+        state: DocumentImportSourceState = .discovered
+    ) throws -> DocumentImportSourceRecord {
+        let row = try store.documentJobs.recordDiscovered(
+            batchID: batchID,
+            matterID: matterID,
+            sourceKey: sourceKey,
+            sourceDisplayPath: sourceDisplayPath,
+            sourceBookmark: sourceBookmark,
+            parentSourceID: parentSourceID,
+            state: state
+        )
+        try sourceStateObserver(row)
+        return row
+    }
+
+    @discardableResult
+    private func transitionSource(
+        _ sourceID: String,
+        to state: DocumentImportSourceState,
+        rejectionCode: String? = nil,
+        reason: String? = nil,
+        documentID: String? = nil,
+        blobSHA256: String? = nil
+    ) throws -> DocumentImportSourceRecord {
+        let row = try store.documentJobs.markState(
+            sourceID: sourceID,
+            state: state,
+            rejectionCode: rejectionCode,
+            reason: reason,
+            documentID: documentID,
+            blobSHA256: blobSHA256
+        )
+        try sourceStateObserver(row)
+        return row
+    }
+
+    private func recordPolicyRejection(
         _ violation: ImportPolicyViolation,
         url: URL,
         sourceDisplayPath: String,
+        sourceID: String,
         parentDocumentID: String? = nil,
         report: inout DocumentImportReport
-    ) {
-        appendPolicyRejection(
+    ) throws {
+        try recordPolicyRejection(
             violation,
             displayName: url.lastPathComponent,
             sourceDisplayPath: sourceDisplayPath,
+            sourceID: sourceID,
             parentDocumentID: parentDocumentID,
             report: &report
         )
     }
 
-    private static func appendPolicyRejection(
+    private func recordPolicyRejection(
         _ violation: ImportPolicyViolation,
         displayName: String,
         sourceDisplayPath: String,
+        sourceID: String,
         parentDocumentID: String? = nil,
         report: inout DocumentImportReport
-    ) {
+    ) throws {
+        try transitionSource(
+            sourceID,
+            to: .rejected,
+            rejectionCode: violation.code.rawValue,
+            reason: violation.localizedDescription
+        )
         report.items.append(DocumentImportReportItem(
             displayName: displayName,
             sourceDisplayPath: sourceDisplayPath,
@@ -996,6 +1190,26 @@ public final class DocumentImportService: @unchecked Sendable {
             reason: violation.localizedDescription,
             parentDocumentID: parentDocumentID,
             rejectionCode: violation.code.rawValue
+        ))
+    }
+
+    private func recordFailure(
+        _ error: Error,
+        displayName: String,
+        sourceDisplayPath: String,
+        sourceID: String,
+        parentDocumentID: String? = nil,
+        reason: String? = nil,
+        report: inout DocumentImportReport
+    ) throws {
+        let persistedReason = reason ?? "Unreadable: \(error.localizedDescription)"
+        try transitionSource(sourceID, to: .failed, reason: persistedReason)
+        report.items.append(DocumentImportReportItem(
+            displayName: displayName,
+            sourceDisplayPath: sourceDisplayPath,
+            disposition: DocumentImportDisposition.extractionFailed.rawValue,
+            reason: persistedReason,
+            parentDocumentID: parentDocumentID
         ))
     }
 
