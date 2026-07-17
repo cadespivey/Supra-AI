@@ -64,6 +64,139 @@ final class DocumentProcessingQueueTests: XCTestCase {
         XCTAssertEqual(queue.resumableJobs.map(\.id), [job.id])
     }
 
+    func testTACC05BootstrapFinalizesOrphanedBatchWithLedgerBackedReportIdempotently() throws {
+        // T-ACC-05 expected RED: bootstrap leaves the batch processing and has no ledger-backed report.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic interrupted import")
+        let batch = try store.documentJobs.createBatch(matterID: matter.id)
+
+        let admitted = try store.documentJobs.recordDiscovered(
+            batchID: batch.id,
+            matterID: matter.id,
+            sourceKey: "selection:0",
+            sourceDisplayPath: "Imported.txt"
+        )
+        _ = try store.documentJobs.markState(sourceID: admitted.id, state: .admitted)
+
+        let rejected = try store.documentJobs.recordDiscovered(
+            batchID: batch.id,
+            matterID: matter.id,
+            sourceKey: "selection:1",
+            sourceDisplayPath: "Rejected.lnk"
+        )
+        _ = try store.documentJobs.markState(
+            sourceID: rejected.id,
+            state: .rejected,
+            rejectionCode: "synthetic_policy_rejection",
+            reason: "Synthetic policy rejection"
+        )
+
+        let bookmark = Data("synthetic-resume-bookmark".utf8)
+        let selected = try store.documentJobs.recordDiscovered(
+            batchID: batch.id,
+            matterID: matter.id,
+            sourceKey: "selection:2",
+            sourceDisplayPath: "Never Started.txt",
+            sourceBookmark: bookmark,
+            state: .selected
+        )
+        let copying = try store.documentJobs.recordDiscovered(
+            batchID: batch.id,
+            matterID: matter.id,
+            sourceKey: "selection:3",
+            sourceDisplayPath: "Copy Interrupted.txt",
+            sourceBookmark: bookmark,
+            state: .selected
+        )
+        _ = try store.documentJobs.markState(sourceID: copying.id, state: .copying)
+        try store.documentJobs.updateBatchProgress(id: batch.id, discoveredCount: 4, importedCount: 1, failedCount: 1)
+
+        let queue = makeQueue(store: store, notifier: RecordingNotifier())
+        queue.bootstrap()
+
+        let reconciled = try XCTUnwrap(store.documentJobs.fetchBatch(id: batch.id))
+        XCTAssertEqual(reconciled.status, "interrupted")
+        XCTAssertNotNil(reconciled.completedAt)
+        XCTAssertEqual(reconciled.discoveredCount, 4)
+        XCTAssertEqual(reconciled.importedCount, 1)
+        XCTAssertEqual(reconciled.failedCount, 3)
+
+        let rows = try store.documentJobs.fetchSources(batchID: batch.id)
+        let selectedAfter = try XCTUnwrap(rows.first { $0.id == selected.id })
+        let copyingAfter = try XCTUnwrap(rows.first { $0.id == copying.id })
+        XCTAssertEqual(selectedAfter.state, DocumentImportSourceState.interrupted.rawValue)
+        XCTAssertEqual(copyingAfter.state, DocumentImportSourceState.interrupted.rawValue)
+        XCTAssertEqual(selectedAfter.reason, "Import interrupted before completion.")
+        XCTAssertEqual(copyingAfter.reason, "Import interrupted before completion.")
+        XCTAssertEqual(selectedAfter.sourceBookmark, bookmark, "resumable authorization must survive reconciliation")
+        XCTAssertEqual(copyingAfter.sourceBookmark, bookmark, "interrupted is re-entrant, not terminal")
+        XCTAssertEqual(try store.documentJobs.unfinishedSources(batchID: batch.id).map(\.id).sorted(), [copying.id, selected.id].sorted())
+
+        let reportData = try XCTUnwrap(reconciled.reportJSON?.data(using: .utf8))
+        let report = try JSONDecoder().decode(DocumentImportReport.self, from: reportData)
+        XCTAssertEqual(
+            Set(report.items.map(\.sourceDisplayPath)),
+            Set(["Imported.txt", "Rejected.lnk", "Never Started.txt", "Copy Interrupted.txt"])
+        )
+        let rejectedItem = try XCTUnwrap(report.items.first { $0.sourceDisplayPath == "Rejected.lnk" })
+        XCTAssertEqual(rejectedItem.disposition, DocumentImportSourceState.rejected.rawValue)
+        XCTAssertEqual(rejectedItem.rejectionCode, "synthetic_policy_rejection")
+        XCTAssertEqual(rejectedItem.reason, "Synthetic policy rejection")
+        XCTAssertEqual(report.items.filter { $0.disposition == DocumentImportSourceState.interrupted.rawValue }.count, 2)
+
+        let firstReport = reconciled.reportJSON
+        let firstCompletedAt = reconciled.completedAt
+        queue.bootstrap()
+        let repeated = try XCTUnwrap(store.documentJobs.fetchBatch(id: batch.id))
+        XCTAssertEqual(repeated.reportJSON, firstReport)
+        XCTAssertEqual(repeated.completedAt, firstCompletedAt)
+    }
+
+    func testTOPS01ImportFailureSummarySurvivesTwoQueueRecreationsWithExactReasons() throws {
+        // T-OPS-01 expected RED: lastImportFailure is process memory and bootstrap does not reconstruct it.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic durable failure summary")
+        let batch = try store.documentJobs.createBatch(matterID: matter.id)
+        let rejected = try store.documentJobs.recordDiscovered(
+            batchID: batch.id,
+            matterID: matter.id,
+            sourceKey: "selection:0",
+            sourceDisplayPath: "Rejected.msg"
+        )
+        _ = try store.documentJobs.markState(
+            sourceID: rejected.id,
+            state: .rejected,
+            rejectionCode: "synthetic_rejection",
+            reason: "Synthetic rejected source"
+        )
+        _ = try store.documentJobs.recordDiscovered(
+            batchID: batch.id,
+            matterID: matter.id,
+            sourceKey: "selection:1",
+            sourceDisplayPath: "Interrupted.txt",
+            sourceBookmark: Data("synthetic-durable-bookmark".utf8),
+            state: .selected
+        )
+        try store.documentJobs.updateBatchProgress(id: batch.id, discoveredCount: 2, importedCount: 0, failedCount: 1)
+
+        let firstQueue = makeQueue(store: store, notifier: RecordingNotifier())
+        firstQueue.bootstrap()
+        let first = try XCTUnwrap(firstQueue.lastImportFailure)
+        XCTAssertEqual(first.matterID, matter.id)
+        XCTAssertEqual(first.discoveredCount, 2)
+        XCTAssertEqual(first.importedCount, 0)
+        XCTAssertEqual(first.failedCount, 2)
+        let firstReasons = Mirror(reflecting: first).children.first { $0.label == "reasons" }?.value as? [String]
+        XCTAssertEqual(firstReasons, ["Import interrupted before completion.", "Synthetic rejected source"])
+
+        let secondQueue = makeQueue(store: store, notifier: RecordingNotifier())
+        secondQueue.bootstrap()
+        let second = try XCTUnwrap(secondQueue.lastImportFailure)
+        XCTAssertEqual(second, first)
+        let secondReasons = Mirror(reflecting: second).children.first { $0.label == "reasons" }?.value as? [String]
+        XCTAssertEqual(secondReasons, firstReasons)
+    }
+
     func testCancelQueuedJob() async throws {
         try prepareSources()
         let store = try makeStore()

@@ -4,7 +4,7 @@ import SupraCore
 import XCTest
 
 final class DocumentImportSourceLedgerTests: XCTestCase {
-    func testTACC03TerminalBucketsBalanceAndContentDenominatorExcludesOnlyContainers() throws {
+    func testTACC03BucketsBalanceAndContentDenominatorExcludesOnlyContainers() throws {
         // T-ACC-03 expected RED: v059 ledger records, states, and summary APIs do not exist.
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Synthetic source accounting")
@@ -39,8 +39,8 @@ final class DocumentImportSourceLedgerTests: XCTestCase {
 
         let summary = try store.documentJobs.sourcesSummary(batchID: batch.id)
         XCTAssertEqual(summary.totalCount, 9)
-        XCTAssertEqual(summary.terminalCount, 9)
-        XCTAssertEqual(summary.unfinishedCount, 0)
+        XCTAssertEqual(summary.terminalCount, 8)
+        XCTAssertEqual(summary.unfinishedCount, 1, "interrupted is accounted but remains resumable")
         XCTAssertEqual(summary.contentDenominator, 8)
         XCTAssertEqual(summary.admittedCount, 1)
         XCTAssertEqual(summary.containerCompletedCount, 1)
@@ -52,7 +52,10 @@ final class DocumentImportSourceLedgerTests: XCTestCase {
         XCTAssertEqual(summary.excludedHiddenCount, 1)
         XCTAssertEqual(summary.excludedByUserCount, 1)
         XCTAssertEqual(summary.balanceErrorCount, 0)
-        XCTAssertTrue(try store.documentJobs.unfinishedSources(batchID: batch.id).isEmpty)
+        XCTAssertEqual(
+            try store.documentJobs.unfinishedSources(batchID: batch.id).map(\.state),
+            [DocumentImportSourceState.interrupted.rawValue]
+        )
 
         let emptyBatch = try store.documentJobs.createBatch(matterID: matter.id)
         let emptySummary = try store.documentJobs.sourcesSummary(batchID: emptyBatch.id)
