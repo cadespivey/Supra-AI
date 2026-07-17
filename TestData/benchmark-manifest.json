@@ -1,0 +1,124 @@
+{
+  "artifacts" : [
+    {
+      "kind" : "pdf",
+      "path" : "Adversarial\/prompt-injection-notice.pdf",
+      "sha256" : "5178313c7fa2243088d421c9399b253a6945240f4210594f285af7b2c0dfb8c5"
+    },
+    {
+      "kind" : "docx",
+      "path" : "Contracts\/amendment-01.docx",
+      "sha256" : "f76006e1c41dad816d366648b6313ef2e2d4694bc538f10a19f5aa37a671b469"
+    },
+    {
+      "kind" : "docx",
+      "path" : "Contracts\/master-services-draft.docx",
+      "sha256" : "b10dccf51569e2ac9fc1fe76910f74fe7882ed577f61ce9061bf72d433db9e7c"
+    },
+    {
+      "kind" : "docx",
+      "path" : "Contracts\/master-services-executed.docx",
+      "sha256" : "b987e468dce71e687f9edf6b3894ff1cf7556a3f16b447e0f7968f396bbab5df"
+    },
+    {
+      "kind" : "docx",
+      "path" : "Contracts\/master-services-redline.docx",
+      "sha256" : "802dc222ee50c9f395c2210d67b051e586a09ce72a27a17cc948c635e6495705"
+    },
+    {
+      "kind" : "docx",
+      "path" : "Contracts\/master-services-superseded.docx",
+      "sha256" : "72be376c8d95418dafdc10217f4b984cf0f50e05db2e75d35044cac517c8a828"
+    },
+    {
+      "expectedDisposition" : "unsupported_by_policy",
+      "kind" : "msg",
+      "path" : "Correspondence\/legacy-review.msg",
+      "sha256" : "eedc3d12524361aeb8f5dd63f45e7c24924455d4358f321137fd14695a470a07"
+    },
+    {
+      "kind" : "eml",
+      "path" : "Correspondence\/negotiation-thread.eml",
+      "sha256" : "e8e75eab43853fff7892959b2093986a1f60baa33e3d4b680db74140325c862e"
+    },
+    {
+      "kind" : "xlsx",
+      "path" : "Cross Matter Lookalike\/payment-draw-ledger.xlsx",
+      "sha256" : "ca2f210ce166dc30f31052c63f10b5de9d20d6fe95f8561fe60883ece1e5058e"
+    },
+    {
+      "kind" : "pdf",
+      "path" : "Discovery\/quill-deposition-transcript.pdf",
+      "sha256" : "74b0c035750520285a8a819c9ffd1ecb6155083f0cd08b3d6b9e261f8dca9276"
+    },
+    {
+      "kind" : "docx",
+      "path" : "Discovery\/requests-for-production.docx",
+      "sha256" : "7ee99b15f1a32b069b2111612bff4738d0be44ccf95db9141b3d23d28b1c9d81"
+    },
+    {
+      "kind" : "docx",
+      "path" : "Discovery\/responses-to-production.docx",
+      "sha256" : "6e0a7f53495b6d4bd6677ad5b2b98ac75f0b0a0704d1420f6b08950ac15df1b7"
+    },
+    {
+      "kind" : "docx",
+      "path" : "Duplicates\/master-services-executed-copy.docx",
+      "sha256" : "b987e468dce71e687f9edf6b3894ff1cf7556a3f16b447e0f7968f396bbab5df"
+    },
+    {
+      "kind" : "png",
+      "path" : "Evidence\/faint-ledger.png",
+      "sha256" : "315034032112189547aab3e297b54e6cc89008f290cb538d4533b68a1b1df724"
+    },
+    {
+      "kind" : "mixed_pdf",
+      "path" : "Evidence\/mixed-record.pdf",
+      "sha256" : "24695f0acfacbf343b08fc5e08e2de9d5891209cb7e4819d5de127b8e63c4f36"
+    },
+    {
+      "kind" : "scanned_pdf",
+      "path" : "Evidence\/scanned-exhibit-f.pdf",
+      "sha256" : "69263660b46380f95afbc0c01897fa9e1b350855925636f8c4e4838b05c2136a"
+    },
+    {
+      "kind" : "markdown",
+      "path" : "Notes\/attorney-notes.md",
+      "sha256" : "b8d5db2592c8763364ba44f5e52737006c25dbd479170b856fc615e93f92fa6c"
+    },
+    {
+      "kind" : "pdf",
+      "path" : "Pleadings\/synthetic-complaint.pdf",
+      "sha256" : "d5cb1cc7ad9f58d9818b8a14e4c02ea42c02cf58b754c95e6530bb5100506538"
+    },
+    {
+      "expectedDisposition" : "encrypted_source",
+      "kind" : "locked_pdf",
+      "path" : "Restricted\/privileged-locked.pdf",
+      "sha256" : "ae23955ee492afa65bb5c12bf415efee3dac8f9f91405df62a9a5c3143e39838"
+    },
+    {
+      "kind" : "text",
+      "path" : "SYNTHETIC-DATA-ONLY.txt",
+      "sha256" : "a18ca1aebb17858948c615545737c4234d3534b998855ee840758f6528ac60a8"
+    },
+    {
+      "kind" : "xlsx",
+      "path" : "Structured\/damages-model.xlsx",
+      "sha256" : "b0c059cc30058abd467c89274d6f10265f7f25a57fbcad75233024d3bdf17952"
+    },
+    {
+      "kind" : "docx",
+      "path" : "Structured\/structured-master-agreement.docx",
+      "sha256" : "0d56d067201150f949af2bc774da549f3bb0431265955992877fa0217e2f0b30"
+    },
+    {
+      "kind" : "json",
+      "path" : "_answer-key.json",
+      "sha256" : "eeb6141dce979ac50e16c1c44b2e1dad858c6cd9bda192b87fc82dcf5663ebf2"
+    }
+  ],
+  "dataClassification" : "synthetic_fictional_nonprivileged",
+  "root" : "TestData\/Synthetic Document Intelligence Benchmark",
+  "schemaVersion" : 1
+}

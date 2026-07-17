@@ -140,5 +140,126 @@
       "requiresOCR" : false,
       "sourceFilename" : "lien-vs-bond-research-memo.pdf"
     }
-  ]
+  ],
+  "taskKeys" : {
+    "chronology" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "delivery date and signature block",
+            "sourceFilename" : "delivery-receipt-lot4.png"
+          },
+          {
+            "locatorHint" : "Date header",
+            "sourceFilename" : "payment-dispute-thread.eml"
+          },
+          {
+            "locatorHint" : "recording stamp",
+            "sourceFilename" : "claim-of-lien-recorded.pdf"
+          },
+          {
+            "locatorHint" : "letter date",
+            "sourceFilename" : "demand-letter.docx"
+          }
+        ],
+        "expectedAnswer" : "2026-01-19 delivery; 2026-03-05 dispute email; 2026-03-11 lien recording; 2026-03-24 demand.",
+        "id" : "cl-chron-lien-dispute",
+        "prompt" : "Order delivery, payment dispute, lien recording, and demand."
+      }
+    ],
+    "comparisons" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "Draw Ledger NET UNPAID BALANCE row",
+            "sourceFilename" : "payment-draw-ledger.xlsx"
+          },
+          {
+            "locatorHint" : "paragraph 4",
+            "sourceFilename" : "claim-of-lien-recorded.pdf"
+          },
+          {
+            "locatorHint" : "demand paragraph",
+            "sourceFilename" : "demand-letter.docx"
+          }
+        ],
+        "expectedAnswer" : "Ledger and lien: $163,815; demand letter: $182,340; difference: $18,525.",
+        "id" : "cl-compare-balance-sources",
+        "prompt" : "Compare the unpaid balance stated by the ledger, lien, and demand letter."
+      }
+    ],
+    "contradictions" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "$182,340 demand paragraph",
+            "sourceFilename" : "demand-letter.docx"
+          },
+          {
+            "locatorHint" : "$163,815 net-balance row",
+            "sourceFilename" : "payment-draw-ledger.xlsx"
+          }
+        ],
+        "expectedAnswer" : "The demand overstates the ledger and recorded lien by $18,525, apparently double-counting the Lot 4 back-charge.",
+        "id" : "cl-contradiction-demand-overstatement",
+        "prompt" : "Identify the material balance contradiction."
+      }
+    ],
+    "lists" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "newest message items 1 and 2",
+            "sourceFilename" : "payment-dispute-thread.eml"
+          }
+        ],
+        "expectedAnswer" : "Pay-when-paid under Section 14.3 and an $18,525 Lot 4 back-charge.",
+        "id" : "cl-list-payment-defenses",
+        "prompt" : "List Coastal Marine's stated payment defenses."
+      }
+    ],
+    "negatives" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "bond discussion identifying the absent amount",
+            "sourceFilename" : "lien-vs-bond-research-memo.pdf"
+          }
+        ],
+        "expectedAnswer" : "Not supported; the corpus names the bond and surety but supplies no penal sum.",
+        "id" : "cl-negative-bond-penal-sum",
+        "prompt" : "What is the payment bond's penal sum?"
+      }
+    ],
+    "structures" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "Draw Ledger final row, Amount Paid column",
+            "sourceFilename" : "payment-draw-ledger.xlsx"
+          }
+        ],
+        "expectedAnswer" : "$163,815 in the NET UNPAID BALANCE row of the Draw Ledger sheet.",
+        "id" : "cl-structure-ledger-total",
+        "prompt" : "Resolve the net unpaid balance using its spreadsheet row and column context."
+      }
+    ],
+    "versions" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "NET UNPAID BALANCE",
+            "sourceFilename" : "payment-draw-ledger.xlsx"
+          },
+          {
+            "locatorHint" : "paragraph 4",
+            "sourceFilename" : "claim-of-lien-recorded.pdf"
+          }
+        ],
+        "expectedAnswer" : "Use the $163,815 ledger and recorded-lien balance, not the later $182,340 demand figure.",
+        "id" : "cl-version-controlling-balance",
+        "prompt" : "Which stated balance should be used for the claim?"
+      }
+    ]
+  }
 }

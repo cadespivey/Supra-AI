@@ -1,0 +1,219 @@
+{
+  "chronology" : [
+    {
+      "date" : "2026-01-15",
+      "event" : "Master Services Agreement DI-2026-001 executed.",
+      "sourceFilename" : "master-services-executed.docx"
+    },
+    {
+      "date" : "2026-01-27",
+      "event" : "Dana Quill confirms the production deadline and omitted Exhibit G.",
+      "sourceFilename" : "negotiation-thread.eml"
+    },
+    {
+      "date" : "2026-01-29",
+      "event" : "Scanned Exhibit F received under tracking code OCR-F-8842.",
+      "sourceFilename" : "scanned-exhibit-f.pdf"
+    },
+    {
+      "date" : "2026-02-01",
+      "event" : "Amendment 01 raises the liability cap to $275,000.",
+      "sourceFilename" : "amendment-01.docx"
+    },
+    {
+      "date" : "2026-02-03",
+      "event" : "Responses to Requests for Production are due.",
+      "sourceFilename" : "negotiation-thread.eml"
+    }
+  ],
+  "qa" : [
+    {
+      "crossDocument" : true,
+      "expectedAnswer" : "$275,000 under Amendment 01 effective February 1, 2026.",
+      "locatorHint" : "Section 2",
+      "question" : "What is the final liability cap after Amendment 01?",
+      "requiresOCR" : false,
+      "sourceFilename" : "amendment-01.docx"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "$275,000 in Damages Summary cell B5.",
+      "locatorHint" : "Damages Summary!B5",
+      "question" : "What cached total appears in the damages workbook?",
+      "requiresOCR" : false,
+      "sourceFilename" : "damages-model.xlsx"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "February 3, 2026.",
+      "locatorHint" : "Newest message body",
+      "question" : "What was the response deadline stated in the email thread?",
+      "requiresOCR" : false,
+      "sourceFilename" : "negotiation-thread.eml"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "OCR-F-8842.",
+      "locatorHint" : "Raster-only first page",
+      "question" : "What tracking code appears on scanned Exhibit F?",
+      "requiresOCR" : true,
+      "sourceFilename" : "scanned-exhibit-f.pdf"
+    },
+    {
+      "crossDocument" : false,
+      "expectedAnswer" : "41 responsive records.",
+      "locatorHint" : "Born-digital page 1 and raster page 2",
+      "question" : "How many responsive records does mixed record MIX-2048 state?",
+      "requiresOCR" : false,
+      "sourceFilename" : "mixed-record.pdf"
+    },
+    {
+      "crossDocument" : true,
+      "expectedAnswer" : "NOT SUPPORTED — the email, production index, and Response 12 state that Exhibit G is intentionally absent and does not exist.",
+      "locatorHint" : "Response to Request No. 12",
+      "question" : "Does produced Exhibit G exist?",
+      "requiresOCR" : false,
+      "sourceFilename" : "responses-to-production.docx"
+    }
+  ],
+  "taskKeys" : {
+    "chronology" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "execution line",
+            "sourceFilename" : "master-services-executed.docx"
+          },
+          {
+            "locatorHint" : "Date header and newest message",
+            "sourceFilename" : "negotiation-thread.eml"
+          },
+          {
+            "locatorHint" : "received line",
+            "sourceFilename" : "scanned-exhibit-f.pdf"
+          },
+          {
+            "locatorHint" : "effective-date line",
+            "sourceFilename" : "amendment-01.docx"
+          }
+        ],
+        "expectedAnswer" : "2026-01-15 execution; 2026-01-27 production confirmation; 2026-01-29 Exhibit F receipt; 2026-02-01 amendment; 2026-02-03 response deadline.",
+        "id" : "dib-chron-contract-family",
+        "prompt" : "Order execution, production confirmation, exhibit receipt, amendment, and response deadline."
+      }
+    ],
+    "comparisons" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "liability-cap line",
+            "sourceFilename" : "master-services-draft.docx"
+          },
+          {
+            "locatorHint" : "liability-cap line",
+            "sourceFilename" : "master-services-superseded.docx"
+          },
+          {
+            "locatorHint" : "Section 8.2",
+            "sourceFilename" : "master-services-executed.docx"
+          },
+          {
+            "locatorHint" : "Section 2",
+            "sourceFilename" : "amendment-01.docx"
+          }
+        ],
+        "expectedAnswer" : "Draft $150,000; superseded $225,000; executed $250,000; Amendment 01 controls at $275,000.",
+        "id" : "dib-compare-cap-versions",
+        "prompt" : "Compare the liability cap across the draft, superseded, executed, and amended versions."
+      }
+    ],
+    "contradictions" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "Lookalike Ledger row 2",
+            "sourceFilename" : "payment-draw-ledger.xlsx"
+          }
+        ],
+        "expectedAnswer" : "This benchmark matter states $41,900; the Bayfront lookalike states $163,815 and must not cross matter boundaries.",
+        "id" : "dib-contradiction-lookalike-ledger",
+        "prompt" : "Identify the incompatible payment-draw-ledger totals across matters."
+      }
+    ],
+    "lists" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "production-index.txt attachment",
+            "sourceFilename" : "negotiation-thread.eml"
+          },
+          {
+            "locatorHint" : "Response to Request No. 12",
+            "sourceFilename" : "responses-to-production.docx"
+          }
+        ],
+        "expectedAnswer" : "Produced: Exhibits A-F and H. Omitted: Exhibit G.",
+        "id" : "dib-list-produced-exhibits",
+        "prompt" : "List the produced and omitted exhibits."
+      }
+    ],
+    "negatives" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "newest message and production-index attachment",
+            "sourceFilename" : "negotiation-thread.eml"
+          },
+          {
+            "locatorHint" : "Response to Request No. 12",
+            "sourceFilename" : "responses-to-production.docx"
+          }
+        ],
+        "expectedAnswer" : "No. Exhibit G is absent; its contents cannot be established and completeness must not be claimed.",
+        "id" : "dib-negative-exhibit-g",
+        "prompt" : "Can the corpus establish the contents of Exhibit G?"
+      }
+    ],
+    "structures" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "Exposure table and tracked-change paragraph",
+            "sourceFilename" : "structured-master-agreement.docx"
+          }
+        ],
+        "expectedAnswer" : "The flowing final-state cap is $275,000; $150,000 is represented only as a tracked deletion.",
+        "id" : "dib-structure-docx-cap",
+        "prompt" : "Resolve the cap using the table, tracked change, footnote, comment, and revision context."
+      },
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "Damages Summary!B5 and Line Items table",
+            "sourceFilename" : "damages-model.xlsx"
+          }
+        ],
+        "expectedAnswer" : "$275,000, formula SUM(B3:B4), associated with the TOTAL row and Amount column.",
+        "id" : "dib-structure-xlsx-total",
+        "prompt" : "Resolve the damages total with its headers and cached formula."
+      }
+    ],
+    "versions" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "execution block and Section 8.2",
+            "sourceFilename" : "master-services-executed.docx"
+          },
+          {
+            "locatorHint" : "effective date and Section 2",
+            "sourceFilename" : "amendment-01.docx"
+          }
+        ],
+        "expectedAnswer" : "The January 15 executed agreement as modified by Amendment 01 effective February 1 controls; draft, redline, superseded, and duplicate copies do not independently control.",
+        "id" : "dib-version-controlling-contract",
+        "prompt" : "Which contract documents control the liability cap?"
+      }
+    ]
+  }
+}

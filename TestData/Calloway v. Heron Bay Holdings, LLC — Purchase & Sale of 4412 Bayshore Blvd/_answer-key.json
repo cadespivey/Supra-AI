@@ -146,5 +146,134 @@
       "requiresOCR" : false,
       "sourceFilename" : "psa-4412-bayshore-executed.pdf"
     }
-  ]
+  ],
+  "taskKeys" : {
+    "chronology" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "effective date, §7.2, and §9.1",
+            "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+          },
+          {
+            "locatorHint" : "execution date",
+            "sourceFilename" : "addendum-no-1-financing-extension.docx"
+          },
+          {
+            "locatorHint" : "effective date",
+            "sourceFilename" : "title-commitment-gulfstream.pdf"
+          },
+          {
+            "locatorHint" : "inspection date",
+            "sourceFilename" : "inspection-report-scanned.pdf"
+          },
+          {
+            "locatorHint" : "commitment date and attachment",
+            "sourceFilename" : "financing-contingency-status.eml"
+          }
+        ],
+        "expectedAnswer" : "2026-02-27 PSA; 03-04 addendum; 03-05 title; 03-06 inspection; 03-11 loan commitment; 03-14 contingency deadline; 04-10 closing.",
+        "id" : "ps-chron-contract-to-closing",
+        "prompt" : "Order execution, addendum, title, inspection, loan commitment, contingency deadline, and closing."
+      }
+    ],
+    "comparisons" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "§9.1",
+            "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+          },
+          {
+            "locatorHint" : "closing-date confirmation",
+            "sourceFilename" : "addendum-no-1-financing-extension.docx"
+          },
+          {
+            "locatorHint" : "email body",
+            "sourceFilename" : "financing-contingency-status.eml"
+          }
+        ],
+        "expectedAnswer" : "The PSA and Addendum set April 10, 2026; the lender email incorrectly says March 31, 2026.",
+        "id" : "ps-compare-closing-dates",
+        "prompt" : "Compare the contractual closing date with the email's asserted date."
+      }
+    ],
+    "contradictions" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "§9.1",
+            "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+          },
+          {
+            "locatorHint" : "closing-date sentence",
+            "sourceFilename" : "financing-contingency-status.eml"
+          }
+        ],
+        "expectedAnswer" : "Controlling contract documents state April 10, while the lender email states March 31.",
+        "id" : "ps-contradiction-closing-date",
+        "prompt" : "Identify the closing-date contradiction."
+      }
+    ],
+    "lists" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "Section 2",
+            "sourceFilename" : "addendum-no-1-financing-extension.docx"
+          },
+          {
+            "locatorHint" : "seller credit and lien-payoff rows",
+            "sourceFilename" : "closing-statement-settlement-sheet.xlsx"
+          }
+        ],
+        "expectedAnswer" : "$7,500 seller closing-cost credit and $4,800 code-enforcement lien payoff.",
+        "id" : "ps-list-closing-adjustments",
+        "prompt" : "List the material closing adjustments disclosed in the corpus."
+      }
+    ],
+    "negatives" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "agreement contains no HOA term",
+            "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+          }
+        ],
+        "expectedAnswer" : "Not supported; the corpus gives no HOA membership or fee.",
+        "id" : "ps-negative-hoa-fee",
+        "prompt" : "What HOA fee applies to the property?"
+      }
+    ],
+    "structures" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "Settlement sheet cash-to-close row",
+            "sourceFilename" : "closing-statement-settlement-sheet.xlsx"
+          }
+        ],
+        "expectedAnswer" : "$262,750 in the ESTIMATED CASH TO CLOSE FROM BUYER row.",
+        "id" : "ps-structure-cash-to-close",
+        "prompt" : "Resolve the buyer's estimated cash to close using spreadsheet labels."
+      }
+    ],
+    "versions" : [
+      {
+        "evidence" : [
+          {
+            "locatorHint" : "§9.1",
+            "sourceFilename" : "psa-4412-bayshore-executed.pdf"
+          },
+          {
+            "locatorHint" : "closing-date and credit provisions",
+            "sourceFilename" : "addendum-no-1-financing-extension.docx"
+          }
+        ],
+        "expectedAnswer" : "The executed PSA as supplemented by Addendum No. 1 controls; the unsupported MSG and inconsistent lender email do not amend it.",
+        "id" : "ps-version-controlling-closing-terms",
+        "prompt" : "Which documents control the closing date and seller credit?"
+      }
+    ]
+  }
 }

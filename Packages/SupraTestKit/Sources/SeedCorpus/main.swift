@@ -43,7 +43,19 @@ for specURL in specFiles {
     do {
         let spec = try MatterSpec.decode(from: try Data(contentsOf: specURL))
         let matterDir = outDir.appendingPathComponent(spec.matterName.replacingOccurrences(of: "/", with: "-"), isDirectory: true)
+        if spec.benchmarkProfile != nil, fm.fileExists(atPath: matterDir.path) {
+            try fm.removeItem(at: matterDir)
+        }
         try generator.write(matter: spec, to: matterDir)
+
+        if spec.benchmarkProfile != nil {
+            try BenchmarkManifestWriter.write(
+                matter: spec,
+                matterDirectory: matterDir,
+                relativeRoot: "TestData/\(matterDir.lastPathComponent)",
+                to: outDir.appendingPathComponent("benchmark-manifest.json")
+            )
+        }
 
         if let externals = externalByMatterKey[key] {
             let sources = externals.map { externalDir.appendingPathComponent($0) }

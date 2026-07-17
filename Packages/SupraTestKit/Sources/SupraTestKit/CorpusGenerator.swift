@@ -15,18 +15,32 @@ public struct CorpusGenerator {
             let folderURL = matterDir.appendingPathComponent(document.folder, isDirectory: true)
             try fm.createDirectory(at: folderURL, withIntermediateDirectories: true)
             let fileURL = folderURL.appendingPathComponent(document.filename)
+            if let duplicateOf = document.duplicateOf {
+                let sourceURL = matterDir.appendingPathComponent(duplicateOf)
+                try fm.copyItem(at: sourceURL, to: fileURL)
+                continue
+            }
             let body = document.bodyText ?? document.purpose ?? document.filename
+            let features = Set(document.benchmarkFeatures ?? [])
             switch document.format {
             case .pdf:
                 try CorpusRenderers.writeBornDigitalPDF(text: body, to: fileURL)
             case .scanned_pdf:
                 try CorpusRenderers.writeScannedPDF(text: body, to: fileURL)
+            case .mixed_pdf:
+                try CorpusRenderers.writeMixedPDF(text: body, to: fileURL)
+            case .locked_pdf:
+                try CorpusRenderers.writeLockedPDF(text: body, to: fileURL)
             case .image_png:
-                try CorpusRenderers.writeImagePNG(text: body, to: fileURL)
+                if features.contains(.lowConfidenceOCR) {
+                    try CorpusRenderers.writeLowConfidenceImagePNG(text: body, to: fileURL)
+                } else {
+                    try CorpusRenderers.writeImagePNG(text: body, to: fileURL)
+                }
             case .docx:
-                try CorpusRenderers.writeDOCX(text: body, to: fileURL)
+                try CorpusRenderers.writeDOCX(text: body, features: features, to: fileURL)
             case .xlsx:
-                try CorpusRenderers.writeXLSX(sheets: document.spreadsheet ?? [], to: fileURL)
+                try CorpusRenderers.writeXLSX(sheets: document.spreadsheet ?? [], features: features, to: fileURL)
             case .eml:
                 try CorpusRenderers.writeEML(document.email ?? fallbackEmail(document), to: fileURL)
             case .msg:
@@ -43,6 +57,17 @@ public struct CorpusGenerator {
         // The answer key travels with the corpus for reference / automated checks.
         let answerKeyData = try JSONEncoder.pretty.encode(matter.answerKey)
         try answerKeyData.write(to: matterDir.appendingPathComponent("_answer-key.json"))
+
+        if matter.benchmarkProfile != nil {
+            let marker = """
+            SYNTHETIC-DATA-ONLY
+
+            Every person, organization, matter, identifier, and event in this
+            benchmark is SYNTHETIC, FICTIONAL, AND NONPRIVILEGED. It is intended
+            only for deterministic document-ingestion testing.
+            """
+            try Data(marker.utf8).write(to: matterDir.appendingPathComponent("SYNTHETIC-DATA-ONLY.txt"))
+        }
     }
 
     /// Copies external source documents (real case law / procedural PDFs/DOCs)
