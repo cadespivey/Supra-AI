@@ -59,6 +59,19 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
 `SupraTestKit` is intentionally **not** part of `SupraAI.xcworkspace`, so it never
 affects the app build.
 
+The frozen document-ingestion report lives under `Benchmarks/`. From the
+repository root, run:
+
+```
+bash Scripts/run-benchmarks.sh --verify-baseline
+```
+
+The script imports the committed synthetic benchmark through the real pipeline
+and compares its canonical deterministic report with the SHA-named baseline.
+`Benchmarks/threshold-proposals.json` records proposals only; none becomes a
+statistical release gate until the repo owner explicitly approves it in an
+intentional baseline update.
+
 ## Manual / model validation
 See `VALIDATION-PLAN.md` for the per-matter Q&A, chronology, and CourtListener
 scenarios with expected answers — run these in the app once a chat + embedding

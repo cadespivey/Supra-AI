@@ -11,6 +11,7 @@ The required branch-protection checks are:
 - unsigned Debug and Release app/XPC builds
 - App UI and hosted XPC smoke
 - Shipping migration fixtures
+- Document benchmark deterministic gates
 - Website lint, build, audit, and asset guards
 - Secrets, entitlements, artifacts, models, and public metadata
 - Dependency review for pull requests
@@ -25,6 +26,16 @@ Live Hugging Face and public GitHub metadata checks are read-only and run on the
 security workflow. Pull requests run their offline or synthetic counterparts so an
 unrelated provider outage—or GitHub Support work on an existing hidden ref—cannot bypass or
 silently weaken the preventive gates. No workflow may fetch a prohibited public blob.
+
+Document-ingestion quality has a separate credential-free scheduled workflow,
+`.github/workflows/benchmarks.yml`, plus the pull-request
+`Document benchmark deterministic gates` job. Both run
+`Scripts/run-benchmarks.sh --verify-baseline` on `macos-15`. The script imports and
+indexes the synthetic benchmark, runs deterministic retrieval and matter-isolation probes,
+validates the baseline/threshold ledger, and fails if the canonical report drifts after
+removing only the run timestamp and current checkout SHA. Statistical threshold proposals
+remain non-gating until their `pending_owner_approval` entries are explicitly approved;
+the deterministic accounting and isolation values are still frozen at the baseline.
 
 ## Third-party Action pins and licenses
 
