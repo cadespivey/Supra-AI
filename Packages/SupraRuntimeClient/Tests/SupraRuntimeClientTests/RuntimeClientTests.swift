@@ -109,15 +109,35 @@ final class RuntimeClientTests: XCTestCase {
             }
         }
     }
+
+    func testCountTokensRejectsMalformedResponseCardinality() async throws {
+        // T-TOK-01 expected RED: the client has no countTokens RPC or reply validation.
+        let client = RuntimeClient(remoteService: FakeRuntimeXPCService(malformedTokenCounts: true))
+        do {
+            _ = try await client.countTokens(
+                CountTokensRequest(modelID: ModelID(), texts: ["one", "two"])
+            )
+            XCTFail("Expected malformed token-count cardinality to be rejected.")
+        } catch let error as RuntimeClientError {
+            guard case .invalidTokenCountResponse = error else {
+                return XCTFail("Expected invalidTokenCountResponse, got \(error).")
+            }
+        }
+    }
 }
 
 private final class FakeRuntimeXPCService: NSObject, SupraRuntimeXPCServiceProtocol {
     private let generateStartStatus: GenerateStartStatus
+    private let malformedTokenCounts: Bool
     private var loadedModelID: ModelID?
     private var eventsByGenerationID: [GenerationID: [GenerationEvent]] = [:]
 
-    init(generateStartStatus: GenerateStartStatus = .started) {
+    init(
+        generateStartStatus: GenerateStartStatus = .started,
+        malformedTokenCounts: Bool = false
+    ) {
         self.generateStartStatus = generateStartStatus
+        self.malformedTokenCounts = malformedTokenCounts
     }
 
     func loadChatModel(_ requestData: Data, withReply reply: @escaping (Data) -> Void) {
@@ -189,6 +209,16 @@ private final class FakeRuntimeXPCService: NSObject, SupraRuntimeXPCServiceProto
                 )
             )
         }
+    }
+
+    func countTokens(_ requestData: Data, withReply reply: @escaping (Data) -> Void) {
+        guard let request = try? RuntimeXPCCodec.decode(CountTokensRequest.self, from: requestData) else {
+            return reply(encoded(CountTokensResponse(modelID: ModelID(), counts: [])))
+        }
+        let counts = malformedTokenCounts
+            ? Array(repeating: 1, count: max(0, request.texts.count - 1))
+            : request.texts.map { $0.utf8.count }
+        reply(encoded(CountTokensResponse(modelID: request.modelID, counts: counts)))
     }
 
     func cancelGeneration(_ generationIDData: Data, withReply reply: @escaping (Data) -> Void) {

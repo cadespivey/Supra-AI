@@ -198,6 +198,91 @@ final class DocumentQATests: XCTestCase {
         XCTAssertNotNil(generated)
     }
 
+    func testContextOverflowRetriesOnceWithFewerSourcesAndPersistsOnlyRetryAnswer() async throws {
+        // T-TOK-04 expected RED: Q&A has no token preflight or overflow retry.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Token Matter")
+        try await indexDoc(
+            store,
+            matter.id,
+            "alpha.txt",
+            "ALPHA_TOKEN_CANARY. The payment obligation was due May 1, 2025."
+        )
+        try await indexDoc(
+            store,
+            matter.id,
+            "beta.txt",
+            "BETA_TOKEN_CANARY. The payment obligation was due May 1, 2025."
+        )
+        let recorder = GenerateCallRecorder()
+        let runtime = StubRuntimeClient(
+            tokenCountOutcome: { request in
+                CountTokensResponse(
+                    modelID: request.modelID,
+                    counts: request.texts.map { _ in 80 }
+                )
+            },
+            outcome: { request in
+                recorder.record(request)
+                if recorder.count == 1 {
+                    return .events([
+                        .event(request, 0, .token, token: "DISCARDED OVERFLOW OUTPUT"),
+                        .event(
+                            request,
+                            1,
+                            .generationCompleted,
+                            metrics: RuntimeMetrics(contextOverflowed: true)
+                        ),
+                    ])
+                }
+                return .events([
+                    .event(
+                        request,
+                        0,
+                        .token,
+                        token: "The payment obligation was due May 1, 2025 [S1]."
+                    ),
+                    .event(request, 1, .generationCompleted),
+                ])
+            }
+        )
+        let route = ModelRoute(
+            mode: .generalQA,
+            role: .legalReasoning,
+            modelIdentifier: "synthetic-token-model",
+            options: GenerationOptions(maxContextTokens: 1_024, maxOutputTokens: 128),
+            requiresCourtListener: false,
+            requiresCitations: false,
+            requiresJurisdiction: false,
+            allowUngroundedLaw: false,
+            systemPrompt: ""
+        )
+        let qa = DocumentQAController(
+            matterID: matter.id,
+            store: store,
+            runtimeClient: runtime,
+            embedder: nil
+        )
+
+        let generated = await qa.generate(
+            question: "When was the payment obligation due?",
+            modelID: ModelID(),
+            route: route
+        )
+        let result = try XCTUnwrap(generated)
+        XCTAssertEqual(recorder.count, 2)
+        XCTAssertGreaterThan(recorder.requests[0].prompt.utf8.count, recorder.requests[1].prompt.utf8.count)
+        XCTAssertFalse(result.markdown.contains("DISCARDED OVERFLOW OUTPUT"))
+        XCTAssertTrue(result.markdown.contains("May 1, 2025"))
+        XCTAssertEqual(qa.lastPackingReport?.overflowRetryCount, 1)
+        XCTAssertEqual(qa.lastPackingReport?.packedItemCount, 1)
+        XCTAssertEqual(qa.lastPackingReport?.cannotPackReason, nil)
+
+        let outputs = try store.structuredOutputs.fetchOutputs(matterID: matter.id)
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertEqual(try store.structuredOutputs.fetchVersions(structuredOutputID: outputs[0].id).count, 1)
+    }
+
     func testMissingCitationsMarkNeedsReview() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors")

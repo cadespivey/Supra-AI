@@ -304,6 +304,98 @@ final class MatterChatGroundingTests: XCTestCase {
         XCTAssertTrue(answer.localizedCaseInsensitiveContains("instruction"))
     }
 
+    func testInflatedExactCountsPackOnlyFirstSourceAndRecordBudgetOmissions() async throws {
+        // T-TOK-02 expected RED: matter grounding is count-capped and never asks
+        // the runtime tokenizer which serialized source prefixes actually fit.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Token Matter")
+        for index in 1...3 {
+            try await indexDocument(
+                store,
+                matterID: matter.id,
+                name: "source-\(index).txt",
+                text: "TOKEN_SOURCE_\(index). The indemnification clause covers synthetic claims."
+            )
+        }
+        let runtime = StubRuntimeClient(
+            tokenCountOutcome: { request in
+                CountTokensResponse(
+                    modelID: request.modelID,
+                    counts: request.texts.indices.map { $0 == 0 ? 100 : 10_000 }
+                )
+            }
+        )
+        let grounding = MatterChatDocumentGrounding(
+            store: store,
+            embedder: nil,
+            matterID: matter.id,
+            defaultSystemPrompt: nil,
+            runtimeClient: runtime
+        )
+
+        let maybeContext = await grounding.groundedContext(
+            forQuestion: "What do my documents say about indemnification?",
+            depth: .fast,
+            modelID: ModelID(),
+            options: GenerationOptions(maxContextTokens: 1_024, maxOutputTokens: 128)
+        )
+        let context = try XCTUnwrap(maybeContext)
+        XCTAssertEqual(context.sources.count, 1)
+        XCTAssertEqual(context.packingReport?.countMethod, .exact)
+        XCTAssertEqual(context.packingReport?.packedItemCount, 1)
+        XCTAssertEqual(context.packingReport?.omittedItemCount, 2)
+        XCTAssertEqual(
+            ["TOKEN_SOURCE_1", "TOKEN_SOURCE_2", "TOKEN_SOURCE_3"]
+                .filter(context.modelPrompt.contains)
+                .count,
+            1
+        )
+    }
+
+    func testGroundedStreamingOverflowPersistsRefusalAndNoAnswerOrCitations() async throws {
+        // T-TOK-05 expected RED: the streaming chat completion path ignores
+        // contextOverflowed and persists the model's partial grounded answer.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Overflow Matter")
+        try await indexDocument(
+            store,
+            matterID: matter.id,
+            name: "agreement.txt",
+            text: "The agreement requires notice on May 1, 2025."
+        )
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "UNSAFE PARTIAL ANSWER [S1]"),
+                .event(
+                    request,
+                    1,
+                    .generationCompleted,
+                    metrics: RuntimeMetrics(contextOverflowed: true)
+                ),
+            ])
+        })
+        let controller = makeGlobalChatController(
+            store: store,
+            runtimeClient: runtime,
+            scope: .matter(id: matter.id),
+            embedder: nil
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What do my documents say about notice?",
+            modelID: ModelID(),
+            systemPrompt: nil,
+            options: GenerationOptions(maxContextTokens: 1_024, maxOutputTokens: 128)
+        )
+
+        let assistant = try XCTUnwrap(controller.messages.last)
+        XCTAssertEqual(assistant.content, GlobalChatController.groundedContextOverflowRefusal)
+        XCTAssertEqual(assistant.status, .completed)
+        XCTAssertFalse(assistant.content.contains("UNSAFE PARTIAL ANSWER"))
+        XCTAssertTrue(assistant.citations.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func indexDocument(

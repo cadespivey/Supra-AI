@@ -74,6 +74,27 @@ final class RuntimeXPCCodecTests: XCTestCase {
         XCTAssertEqual(decoded.modelDirectoryIdentity, identity)
     }
 
+    func testCountTokensBatchRoundTripsUnicodeAndPreservesOrder() throws {
+        // T-TOK-01 expected RED: countTokens DTOs and the additive XPC RPC are missing.
+        let modelID = ModelID()
+        let request = CountTokensRequest(
+            modelID: modelID,
+            texts: ["short", "Unicode — café 東京", ""]
+        )
+        let decodedRequest = try RuntimeXPCCodec.decode(
+            CountTokensRequest.self,
+            from: RuntimeXPCCodec.encode(request)
+        )
+        XCTAssertEqual(decodedRequest, request)
+
+        let response = CountTokensResponse(modelID: modelID, counts: [1, 7, 0])
+        let decodedResponse = try RuntimeXPCCodec.decode(
+            CountTokensResponse.self,
+            from: RuntimeXPCCodec.encode(response)
+        )
+        XCTAssertEqual(decodedResponse, response)
+    }
+
     func testDefaultServiceNameMatchesAppXPCBundleIdentifier() {
         XCTAssertEqual(RuntimeXPCServiceNames.defaultServiceName, "ai.supra.SupraAI.SupraRuntimeService")
     }
