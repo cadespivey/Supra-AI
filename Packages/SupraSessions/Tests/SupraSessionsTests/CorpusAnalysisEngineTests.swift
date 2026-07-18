@@ -210,6 +210,66 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         XCTAssertTrue(prompts.allSatisfy { $0.contains("END_UNTRUSTED_SOURCE_DATA") })
     }
 
+    func testTENG06CancellationRetainsSuccessesAndTerminalizesEveryUnfinishedPartition() async throws {
+        // T-ENG-06 expected RED: cancellation marks only the run; unfinished partitions remain pending.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic cancelled corpus")
+        _ = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "cancelled.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: (1...6).map { "CANCEL-PART-\($0)" }
+        )
+        let probe = EngineProbe()
+
+        do {
+            _ = try await CorpusAnalysisEngine(store: store).run(
+                request: CorpusAnalysisRequest(
+                    runKey: "cancelled-run",
+                    matterID: matter.id,
+                    taskKind: .customExtraction,
+                    characterBudget: 1
+                )
+            ) { input in
+                let ordinal = await probe.recordAndReturnOrdinal(input)
+                if ordinal == 3 { throw CancellationError() }
+                return CorpusAnalysisMapOutput(findings: input.sources.map { source in
+                    CorpusAnalysisFinding(
+                        id: "finding-\(source.revisionID)",
+                        value: source.text,
+                        evidence: [.init(
+                            documentID: source.documentID,
+                            revisionID: source.revisionID,
+                            locatorJSON: source.locatorJSON
+                        )]
+                    )
+                })
+            }
+            XCTFail("Cancellation must escape to the caller")
+        } catch is CancellationError {
+            // Expected: the persisted ledger is the recovery artifact.
+        }
+
+        let run = try XCTUnwrap(store.corpusAnalysis.fetchRun(
+            matterID: matter.id,
+            runKey: "cancelled-run"
+        ))
+        let partitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: matter.id,
+            runID: run.id
+        )
+        XCTAssertEqual(run.status, CorpusAnalysisRunStatus.cancelled.rawValue)
+        XCTAssertNil(run.structuredOutputVersionID)
+        XCTAssertEqual(partitions.count, 6)
+        XCTAssertEqual(partitions.count { $0.disposition == CorpusAnalysisPartitionDisposition.succeeded.rawValue }, 2)
+        XCTAssertEqual(partitions.count { $0.disposition == CorpusAnalysisPartitionDisposition.cancelled.rawValue }, 4)
+        XCTAssertEqual(partitions.count { $0.disposition == CorpusAnalysisPartitionDisposition.pending.rawValue }, 0)
+        XCTAssertEqual(partitions.compactMap(\.findingsJSON).count, 2, "successful checkpoints must survive cancellation")
+    }
+
     private func makeStore() throws -> SupraStore {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CorpusAnalysisEngine-\(UUID().uuidString)", isDirectory: true)
@@ -302,6 +362,11 @@ private actor EngineProbe {
 
     func record(_ input: CorpusAnalysisPartitionInput) {
         inputs.append(input)
+    }
+
+    func recordAndReturnOrdinal(_ input: CorpusAnalysisPartitionInput) -> Int {
+        inputs.append(input)
+        return inputs.count
     }
 
     func claimEdit() -> Bool {
