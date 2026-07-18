@@ -57,6 +57,47 @@ final class DocumentImportRecoveryUITests: XCTestCase {
     }
 }
 
+/// T-OPS-07 proves a completed policy rejection remains actionable in the
+/// Documents surface instead of being reduced to an aggregate Audit event.
+@MainActor
+final class DocumentImportFailureDetailUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testTOPS07LockedSourceShowsFilenameCodeAndRecoveryGuidance() {
+        // T-OPS-07 expected RED: the queue drops per-file metadata and the banner
+        // exposes only "1 need attention — see the Audit tab".
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestImportFailure",
+            "-uiTestInitialMatterTab", "Documents",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+
+        let warning = app.descendants(matching: .any)["documents.importFailureWarning"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 20), "Import failure warning did not appear")
+
+        let detail = app.descendants(matching: .any)["documents.importFailureDetail.privileged-locked.pdf"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 10), "Rejected filename and guidance were not rendered")
+        XCTAssertEqual(detail.label, "privileged-locked.pdf")
+        XCTAssertTrue(
+            (detail.value as? String)?.contains("encrypted_source") == true,
+            "Stable rejection code is missing: \(detail.debugDescription)"
+        )
+        XCTAssertTrue(
+            (detail.value as? String)?.contains("Remove encryption from a copy and try again.") == true,
+            "Recovery guidance is missing: \(detail.debugDescription)"
+        )
+    }
+}
+
 /// T-UX-07 exercises the first extracted-part correction surface against a
 /// hermetic synthetic document; it never opens or modifies the user's store.
 @MainActor

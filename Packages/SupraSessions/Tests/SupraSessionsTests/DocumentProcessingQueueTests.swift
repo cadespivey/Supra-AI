@@ -254,6 +254,51 @@ final class DocumentProcessingQueueTests: XCTestCase {
         XCTAssertEqual(secondReasons, firstReasons)
     }
 
+    func testTOPS07ImportFailureSummaryPreservesExactPerFileGuidanceAcrossRelaunch() throws {
+        // T-OPS-07 expected RED: DocumentImportFailureSummary exposes aggregate
+        // counts/reasons only, so filename and rejection code are discarded.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic actionable rejection")
+        let batch = try store.documentJobs.createBatch(matterID: matter.id)
+        let guidance = "Password-protected or encrypted files cannot be imported. Remove encryption from a copy and try again."
+        let report = DocumentImportReport(items: [
+            DocumentImportReportItem(
+                displayName: "privileged-locked.pdf",
+                sourceDisplayPath: "privileged-locked.pdf",
+                disposition: DocumentImportSourceState.rejected.rawValue,
+                reason: guidance,
+                documentID: nil,
+                parentDocumentID: nil,
+                rejectionCode: "encrypted_source"
+            ),
+        ])
+        let reportData = try JSONEncoder().encode(report)
+        let reportJSON = try XCTUnwrap(String(data: reportData, encoding: .utf8))
+        try store.documentJobs.updateBatchProgress(
+            id: batch.id,
+            discoveredCount: 1,
+            importedCount: 0,
+            failedCount: 1
+        )
+        try store.documentJobs.finalizeBatch(
+            id: batch.id,
+            status: .completeWithFailures,
+            reportJSON: reportJSON
+        )
+
+        let firstQueue = makeQueue(store: store, notifier: RecordingNotifier())
+        firstQueue.bootstrap()
+        let first = try XCTUnwrap(firstQueue.lastImportFailure)
+        XCTAssertEqual(first.details.map(\.displayName), ["privileged-locked.pdf"])
+        XCTAssertEqual(first.details.map(\.rejectionCode), ["encrypted_source"])
+        XCTAssertEqual(first.details.map(\.reason), [guidance])
+
+        let secondQueue = makeQueue(store: store, notifier: RecordingNotifier())
+        secondQueue.bootstrap()
+        let second = try XCTUnwrap(secondQueue.lastImportFailure)
+        XCTAssertEqual(second.details, first.details)
+    }
+
     func testTACC06RelaunchResumeImportsNeverAdmittedSourceWithoutRepeatingSucceededRows() async throws {
         // T-ACC-06 expected RED: resume with empty pendingSources only reindexes existing documents.
         try prepareSources()
