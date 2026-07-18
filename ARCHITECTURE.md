@@ -120,6 +120,13 @@ repository:
   structure nodes and matter-scoped edges. Formats without specialized adapters emit a
   deterministic document/part wrapper tree; pre-v062 documents acquire wrappers lazily
   on their next extraction or indexing pass rather than through fabricated backfill.
+- Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
+  numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
+  pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the
+  presence of signature widgets. A signature-widget flag is not signature validation;
+  PDF table inference and alternative reading-order inference remain out of scope. OCR
+  and user-edited page selections reflow ranged regions against the selected immutable
+  revision while retaining form and annotation nodes outside body text.
 - Milestone 4 (ScratchPad) added scratch-pad days/entries/attachments, billing drafts +
   line items, and per-matter billing profiles, plus LEDES `client_id` / `client_matter_id`
   columns on `matters`.

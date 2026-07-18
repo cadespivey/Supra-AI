@@ -1098,6 +1098,7 @@ public final class DocumentImportService: @unchecked Sendable {
             }
             merged.method = result.method + "+ocr"
             merged.needsOCR = false
+            merged.structure = PDFStructureAdapter.reflow(result.structure, for: merged.parts)
         default:
             break
         }
@@ -1248,11 +1249,18 @@ public final class DocumentImportService: @unchecked Sendable {
         )
 
         let selectedParts = try store.documentIndex.fetchParts(documentID: documentID)
-        let structure = zip(result.parts, selectedParts).allSatisfy { extracted, selected in
+        let selectedExtractedParts = extractedParts(from: selectedParts)
+        let selectedMatchesExtraction = zip(result.parts, selectedParts).allSatisfy { extracted, selected in
             extracted.text == selected.normalizedText
         } && result.parts.count == selectedParts.count
-            ? result.structure
-            : .wrapper(for: extractedParts(from: selectedParts))
+        let structure: ExtractedDocumentStructure
+        if selectedMatchesExtraction {
+            structure = result.structure
+        } else if selectedExtractedParts.allSatisfy({ $0.sourceKind == .pdfPage }) {
+            structure = PDFStructureAdapter.reflow(result.structure, for: selectedExtractedParts)
+        } else {
+            structure = .wrapper(for: selectedExtractedParts)
+        }
         try persistStructure(
             structure,
             documentID: documentID,
