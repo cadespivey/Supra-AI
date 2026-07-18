@@ -199,6 +199,55 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(parts[2].ocrConfidence ?? 0, 0.9, accuracy: 0.001)
     }
 
+    func testTREV03MixedPDFRetainsEmbeddedAndOCRCandidatesAndIndexesSelection() async throws {
+        // T-REV-03 expected RED: applyOCR currently overwrites the embedded part
+        // when the OCR candidate is longer, and no immutable revision store or
+        // chunk revision binding exists.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic dual-candidate lineage")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/dual-candidate-lineage.pdf")
+        try FileManager.default.createDirectory(
+            at: pdfURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let embeddedText = "EMBEDDED-A1"
+        let ocrText = "OCR-BETA-DISTINCT-TEXT-THAT-WINS-V0"
+        try makePDF(at: pdfURL, pages: [.text(embeddedText)])
+
+        let ocr = MockOCRService(pageResults: [
+            0: OCRTextResult(
+                text: ocrText,
+                confidence: 0.93,
+                boundingBoxesJSON: #"[{"token":"OCR-BETA"}]"#
+            )
+        ])
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            ocr: ocr
+        )
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let revisions = try store.documentRevisions.fetchRevisions(documentID: document.id, partIndex: 0)
+        XCTAssertEqual(revisions.count, 2)
+        XCTAssertEqual(revisions.first { $0.origin == "embedded_pdf" }?.text, embeddedText)
+        XCTAssertEqual(revisions.first { $0.origin == "ocr" }?.text, ocrText)
+        XCTAssertEqual(revisions.first { $0.origin == "ocr" }?.ocrConfidence, 0.93)
+
+        let selectedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertEqual(selectedPart.normalizedText, ocrText, "v0 compatibility still selects the longer OCR text")
+        XCTAssertEqual(selectedPart.currentRevisionID, revisions.first { $0.origin == "ocr" }?.id)
+        XCTAssertNotNil(selectedPart.currentSelectionID)
+
+        _ = try await DocumentIndexingService(store: store, embedder: nil).indexDocument(documentID: document.id)
+        let chunks = try store.documentIndex.fetchChunks(documentID: document.id)
+        XCTAssertFalse(chunks.isEmpty)
+        XCTAssertTrue(chunks.allSatisfy { $0.revisionID == selectedPart.currentRevisionID })
+        XCTAssertTrue(chunks.allSatisfy { $0.normalizedText.contains("OCR-BETA-DISTINCT") })
+        XCTAssertFalse(chunks.contains { $0.normalizedText.contains("EMBEDDED-A1") })
+    }
+
     func testEmptyOCRLeavesDocumentInNeedsReview() async throws {
         // Expected RED: assertion failure — observed `extractionStatus == .extracted`
         // and `status == .indexing`; empty OCR output is laundered into a successful
