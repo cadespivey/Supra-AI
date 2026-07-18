@@ -7,6 +7,27 @@ import SupraRuntimeClient
 import SupraRuntimeInterface
 import SupraStore
 
+public enum ChatMessageArtifactAction: String, Equatable, Sendable {
+    case saveToOutputs = "save_to_outputs"
+}
+
+public enum ChatOutputPromotionError: Error, LocalizedError, Equatable, Sendable {
+    case messageUnavailable
+    case packetUnavailable
+    case verificationUnavailable
+
+    public var errorDescription: String? {
+        switch self {
+        case .messageUnavailable:
+            "Only a completed grounded assistant message can be saved to Outputs."
+        case .packetUnavailable:
+            "The grounded source packet is missing, already attached, or unavailable."
+        case .verificationUnavailable:
+            "The grounded answer's persisted verification record is unavailable or inconsistent."
+        }
+    }
+}
+
 /// Generates structured legal outputs for a matter (spec §12.4): builds the
 /// type's prompt, runs it through the local model, detects present/missing
 /// sections deterministically, and stores the output + version 1 + audit.
@@ -64,6 +85,111 @@ public final class StructuredOutputController: ObservableObject {
         self.retrieval = DocumentRetrievalService(store: store, embedder: embedder)
         self.matterID = matterID
         self.defaultSystemPrompt = defaultSystemPrompt
+    }
+
+    /// Converts one completed grounded chat answer into an ordinary document-Q&A
+    /// output. The store owns the atomic boundary; this layer reconstructs the
+    /// exact persisted verification and assurance contract from the message packet.
+    @discardableResult
+    public static func promoteGroundedMessage(
+        store: SupraStore,
+        matterID: String,
+        chatID: String,
+        message: ChatMessage
+    ) throws -> String {
+        guard message.role == .assistant,
+              message.status == .completed,
+              !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ChatOutputPromotionError.messageUnavailable
+        }
+        guard let sourceSet = try store.documentSources.fetchSourceSet(messageID: message.id),
+              sourceSet.matterID == matterID,
+              sourceSet.messageID == message.id,
+              sourceSet.status == DocumentSourceSetStatus.pending.rawValue,
+              sourceSet.structuredOutputVersionID == nil else {
+            throw ChatOutputPromotionError.packetUnavailable
+        }
+        let rows = try store.documentSources.fetchSources(sourceSetID: sourceSet.id)
+        guard !rows.isEmpty else { throw ChatOutputPromotionError.packetUnavailable }
+        let persistedPayloads = Set(rows.compactMap(\.warningsJSON))
+        guard persistedPayloads.count == 1,
+              rows.allSatisfy({ $0.warningsJSON != nil }),
+              let verificationJSON = persistedPayloads.first,
+              let data = verificationJSON.data(using: .utf8),
+              let verificationResults = try? JSONDecoder().decode(
+                  [PropositionSupportResult].self,
+                  from: data
+              ),
+              !verificationResults.isEmpty else {
+            throw ChatOutputPromotionError.verificationUnavailable
+        }
+
+        let verificationStatus: OutputVerificationStatus = verificationResults
+            .allSatisfy { $0.status == .supported } ? .allSupported : .needsReview
+        let assurance: OutputAssuranceState = if sourceSet.retrievalDepth == RetrievalDepth.fast.rawValue {
+            .preliminary
+        } else if verificationStatus == .allSupported {
+            .propositionSupported
+        } else {
+            .supportNeedsReview
+        }
+        let answer = ReasoningContent.answer(from: message.content)
+        let content: String
+        if OutputAssurancePresentation.isExportEligible(assurance) {
+            content = answer
+        } else {
+            content = """
+            > ⚠️ **\(OutputAssurancePresentation.text(for: assurance))** This saved chat answer remains review-gated and unavailable for export.
+
+            \(answer)
+            """
+        }
+        let dimensions = VerificationDimensionsMapper.dimensions(
+            verificationResults: verificationResults,
+            usedLabels: CitationCoverage.usedLabels(in: answer)
+        )
+        let outputID = UUID().uuidString
+        let now = Date()
+        let titleFragment = answer
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map { String($0.prefix(72)) }
+            ?? "Grounded answer"
+        let output = StructuredOutputRecord(
+            id: outputID,
+            matterID: matterID,
+            chatID: chatID,
+            title: "Saved chat answer — \(titleFragment)",
+            outputType: StructuredOutputType.documentQA.rawValue,
+            status: StructuredOutputStatus.draft.rawValue,
+            createdAt: now,
+            updatedAt: now
+        )
+        let outputStatus: StructuredOutputStatus = verificationStatus == .allSupported
+            && OutputAssurancePresentation.isExportEligible(assurance)
+            ? .complete
+            : .needsReview
+        _ = try store.structuredOutputs.promoteChatMessageAtomically(
+            newOutput: output,
+            messageID: message.id,
+            sourceSetID: sourceSet.id,
+            contentMarkdown: content,
+            verificationStatus: verificationStatus,
+            verificationVersion: DocumentSupportVerifier.version,
+            verificationResults: verificationResults,
+            verificationDimensions: dimensions,
+            outputStatus: outputStatus,
+            assuranceState: assurance
+        )
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID,
+            eventType: "chat_answer_promoted",
+            actor: "user",
+            summary: "Saved a grounded chat answer to Outputs",
+            relatedTable: "structured_outputs",
+            relatedID: outputID
+        )
+        return outputID
     }
 
     // MARK: - Document grounding (spec §12.4)

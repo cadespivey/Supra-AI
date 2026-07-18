@@ -186,6 +186,49 @@ public final class GlobalChatController: ObservableObject {
         }
     }
 
+    /// The per-message artifact policy intentionally has no export case. A chat
+    /// answer must first cross the atomic Outputs promotion boundary; export then
+    /// follows the ordinary output assurance gate.
+    public func availableArtifactActions(messageID: String) -> [ChatMessageArtifactAction] {
+        guard case .matter = scope,
+              let message = messages.first(where: { $0.id == messageID }),
+              message.role == .assistant,
+              message.status == .completed,
+              let sourceSet = try? store.documentSources.fetchSourceSet(messageID: messageID),
+              sourceSet.status == DocumentSourceSetStatus.pending.rawValue,
+              sourceSet.structuredOutputVersionID == nil else {
+            return []
+        }
+        return [.saveToOutputs]
+    }
+
+    /// Saves one grounded answer and its exact persisted packet to Outputs. The
+    /// store transaction guarantees retryable all-or-nothing behavior.
+    @discardableResult
+    public func saveToOutputs(messageID: String) -> String? {
+        guard case let .matter(matterID) = scope,
+              let chatID = selectedChatID,
+              let message = messages.first(where: { $0.id == messageID }),
+              availableArtifactActions(messageID: messageID).contains(.saveToOutputs) else {
+            errorMessage = ChatOutputPromotionError.messageUnavailable.localizedDescription
+            return nil
+        }
+        do {
+            let outputID = try StructuredOutputController.promoteGroundedMessage(
+                store: store,
+                matterID: matterID,
+                chatID: chatID,
+                message: message
+            )
+            errorMessage = nil
+            reloadMessages()
+            return outputID
+        } catch {
+            errorMessage = "Saving this answer to Outputs failed without changing the chat packet: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     @discardableResult
     public func createChat(title: String = "New Chat") throws -> ChatSummary {
         let record: ChatRecord

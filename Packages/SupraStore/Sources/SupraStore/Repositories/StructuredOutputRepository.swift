@@ -388,6 +388,161 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         }
     }
 
+    /// Promotes one persisted grounded-chat packet into a new structured output.
+    /// The message-owned source set already exists, so this transaction inserts
+    /// only the output/version and attaches that exact packet. Any failure after
+    /// the version insert rolls every promotion write back while leaving the chat
+    /// packet pending and retryable.
+    @discardableResult
+    public func promoteChatMessageAtomically(
+        newOutput: StructuredOutputRecord,
+        messageID: String,
+        sourceSetID: String,
+        contentMarkdown: String,
+        verificationStatus: OutputVerificationStatus,
+        verificationVersion: String,
+        verificationResults: [PropositionSupportResult],
+        verificationDimensions: VerificationDimensions,
+        outputStatus: StructuredOutputStatus,
+        assuranceState: OutputAssuranceState
+    ) throws -> StructuredOutputVersionRecord {
+        _ = try Self.requireNonEmpty(newOutput.title, fieldName: "title")
+        guard newOutput.activeVersionID == nil,
+              newOutput.status == StructuredOutputStatus.draft.rawValue,
+              newOutput.deletedAt == nil,
+              newOutput.chatID != nil else {
+            throw StructuredOutputRepositoryError.outputUnavailable(newOutput.id)
+        }
+        guard verificationDimensions.isComplete else {
+            throw StructuredOutputRepositoryError.verificationDimensionsRequired
+        }
+        let normalizedVerificationVersion = verificationVersion
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if verificationStatus == .allSupported {
+            guard !normalizedVerificationVersion.isEmpty else {
+                throw StructuredOutputRepositoryError.verificationVersionRequired
+            }
+            guard !verificationResults.isEmpty,
+                  verificationResults.allSatisfy({ $0.status == .supported }) else {
+                throw StructuredOutputRepositoryError.allSupportedResultRequired
+            }
+            guard verificationDimensions.satisfies(required: Self.factoredSupportDimensions) else {
+                throw StructuredOutputRepositoryError.allSupportedDimensionsRequired
+            }
+        }
+        if outputStatus == .complete {
+            guard verificationStatus == .allSupported else {
+                throw StructuredOutputRepositoryError.completeStatusRequiresAllSupportedVerification
+            }
+            guard Self.supportsCompleteStatus(assuranceState) else {
+                throw StructuredOutputRepositoryError.completeStatusRequiresSupportedAssurance
+            }
+        }
+
+        let emptySectionsJSON = try JSONCoding.encode([String]())
+        let verificationJSON = try JSONCoding.encode(verificationResults)
+        let dimensionsJSON = try JSONCoding.encode(verificationDimensions)
+
+        return try writer.write { db in
+            guard let message = try MessageRecord.fetchOne(
+                db,
+                sql: """
+                SELECT * FROM messages
+                WHERE id = ? AND role = ? AND status = ? AND deleted_at IS NULL
+                """,
+                arguments: [messageID, MessageRole.assistant.rawValue, MessageStatus.completed.rawValue]
+            ) else {
+                throw StructuredOutputRepositoryError.messageUnavailable(messageID)
+            }
+            guard let chat = try ChatRecord.fetchOne(
+                db,
+                sql: """
+                SELECT * FROM chats
+                WHERE id = ? AND scope = 'matter' AND matter_id = ? AND deleted_at IS NULL
+                """,
+                arguments: [message.chatID, newOutput.matterID]
+            ), chat.id == newOutput.chatID else {
+                throw StructuredOutputRepositoryError.messageUnavailable(messageID)
+            }
+            guard let sourceSet = try DocumentSourceSetRecord.fetchOne(db, key: sourceSetID),
+                  sourceSet.messageID == messageID,
+                  sourceSet.matterID == newOutput.matterID,
+                  sourceSet.status == DocumentSourceSetStatus.pending.rawValue,
+                  sourceSet.structuredOutputVersionID == nil else {
+                throw StructuredOutputRepositoryError.sourceSetUnavailable(sourceSetID)
+            }
+            guard try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM document_output_sources WHERE source_set_id = ?",
+                arguments: [sourceSetID]
+            ) ?? 0 > 0 else {
+                throw StructuredOutputRepositoryError.sourceSetUnavailable(sourceSetID)
+            }
+
+            try newOutput.insert(db)
+            let now = Date()
+            let version = StructuredOutputVersionRecord(
+                structuredOutputID: newOutput.id,
+                versionIndex: 1,
+                contentMarkdown: contentMarkdown,
+                requiredSectionsJSON: emptySectionsJSON,
+                presentSectionsJSON: emptySectionsJSON,
+                missingSectionsJSON: emptySectionsJSON,
+                verificationStatus: verificationStatus.rawValue,
+                verificationVersion: normalizedVerificationVersion,
+                verificationJSON: verificationJSON,
+                verificationDimensionsJSON: dimensionsJSON,
+                verifiedAt: now,
+                promptBuilderVersion: "chat-output-promotion-v1",
+                assuranceState: assuranceState.rawValue,
+                createdAt: now,
+                updatedAt: now
+            )
+            try version.insert(db)
+
+            try db.execute(
+                sql: """
+                UPDATE document_source_sets
+                SET structured_output_version_id = ?, status = ?
+                WHERE id = ?
+                  AND message_id = ?
+                  AND structured_output_version_id IS NULL
+                  AND status = ?
+                """,
+                arguments: [
+                    version.id,
+                    DocumentSourceSetStatus.attached.rawValue,
+                    sourceSetID,
+                    messageID,
+                    DocumentSourceSetStatus.pending.rawValue,
+                ]
+            )
+            guard db.changesCount == 1 else {
+                throw StructuredOutputRepositoryError.sourceSetUnavailable(sourceSetID)
+            }
+            try db.execute(
+                sql: """
+                UPDATE document_output_sources
+                SET structured_output_version_id = ?
+                WHERE source_set_id = ? AND structured_output_version_id IS NULL
+                """,
+                arguments: [version.id, sourceSetID]
+            )
+            try db.execute(
+                sql: """
+                UPDATE structured_outputs
+                SET active_version_id = ?, status = ?, updated_at = ?
+                WHERE id = ? AND active_version_id IS NULL
+                """,
+                arguments: [version.id, outputStatus.rawValue, now, newOutput.id]
+            )
+            guard db.changesCount == 1 else {
+                throw StructuredOutputRepositoryError.outputUnavailable(newOutput.id)
+            }
+            return version
+        }
+    }
+
     public func updateStatus(outputID: String, status: StructuredOutputStatus) throws {
         try writer.write { db in
             try db.execute(
@@ -669,6 +824,7 @@ public enum StructuredOutputRepositoryError: Error, Equatable, Sendable {
     case completeStatusRequiresAllSupportedVerification
     case completeStatusRequiresSupportedAssurance
     case sourceSetUnavailable(String)
+    case messageUnavailable(String)
     case outputUnavailable(String)
     case corpusRunUnavailable(String)
     case versionUnavailable(String)

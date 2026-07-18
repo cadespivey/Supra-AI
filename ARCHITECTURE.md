@@ -224,7 +224,14 @@ repository:
   loads the recorded immutable revision with its origin/time provenance, and PDF text matching is
   restricted to the locator page rather than accepting the first document-wide occurrence.
   Scope readiness keeps failed and review-required documents in its disclosed denominator and
-  names each blocker. Saved output, grounded chat, chronology, and export surfaces render one shared seven-state assurance vocabulary; export is permitted only for proposition-supported or corpus-complete artifacts, and exports embed the state.
+  names each blocker. A per-message `Save to Outputs` action atomically creates the output/version
+  and attaches the existing grounded-chat source set while retaining its message link, revisions,
+  verification results, lineage, and assurance. An injected failure after the version insert rolls
+  back the entire promotion; unpromoted messages have no export path. Saved output, grounded chat,
+  chronology, and export surfaces render one shared seven-state assurance vocabulary; export is
+  permitted only for proposition-supported or corpus-complete artifacts, and exports embed the
+  state. A grounded matter-chat answer can be saved to Outputs with its exact retained source
+  packet, verification, and assurance state; chat messages themselves never expose export.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the
