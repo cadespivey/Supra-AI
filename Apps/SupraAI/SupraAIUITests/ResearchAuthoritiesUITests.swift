@@ -125,6 +125,12 @@ final class DocumentCorrectionUITests: XCTestCase {
         let row = app.staticTexts["Correction Fixture.txt"]
         XCTAssertTrue(row.waitForExistence(timeout: 20), "Synthetic correction fixture did not appear")
         row.click()
+        // T-UX-09 accessibility companion expected RED: the selected row's
+        // preview action has no stable identifier and is collapsed into the row.
+        XCTAssertTrue(
+            app.buttons["documents.preview"].waitForExistence(timeout: 10),
+            "Selected document preview action is not independently accessible"
+        )
         let edit = app.buttons["documents.editExtractedText"]
         XCTAssertTrue(edit.waitForExistence(timeout: 10), "Edit extracted text action is missing")
         edit.click()
