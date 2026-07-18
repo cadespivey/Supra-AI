@@ -127,17 +127,16 @@ final class Milestone3ValidationTests: XCTestCase {
 
         // --- Q&A (stub model, cited) ---
         let runtime = StubRuntimeClient(outcome: { request in
-            // Expected RED after the approved v2 default flip: v2 retrieval ranks
-            // the exact agreement passage under a non-S1 label, while this legacy
-            // stub still cites S1 and therefore correctly fails export assurance.
-            XCTAssertEqual(
-                milestone3PromptSource(
-                    containing: "Indemnification survives termination",
-                    in: request.prompt
-                )?.label,
-                "S1"
+            // Expected RED at 06bb76e: after the approved v2 default flip, the
+            // exact agreement passage is S3 rather than S1. A deterministic model
+            // fixture must read the serialized packet instead of assuming rank.
+            let supportingSource = milestone3PromptSource(
+                containing: "Indemnification survives termination",
+                in: request.prompt
             )
-            return .events([.event(request, 0, .token, token: "Indemnification survives termination [S1]."), .event(request, 1, .generationCompleted)])
+            XCTAssertNotNil(supportingSource, "the v2 packet must retain the supporting agreement passage")
+            let answer = "Indemnification survives termination [\(supportingSource?.label ?? "S999")]."
+            return .events([.event(request, 0, .token, token: answer), .event(request, 1, .generationCompleted)])
         })
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: embedder)
         let qaGen = await qa.generate(
