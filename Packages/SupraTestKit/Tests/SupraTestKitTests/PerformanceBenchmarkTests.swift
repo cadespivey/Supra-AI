@@ -10,6 +10,7 @@ final class PerformanceBenchmarkTests: XCTestCase {
             documentCount: 50,
             inputBytes: 5 * 1_048_576,
             importIndexSeconds: 120,
+            fastRetrievalMilliseconds: [4, 1, 2],
             retrievalMilliseconds: [9, 1, 5, 7, 3],
             ledgerWriteMilliseconds: [4, 2, 3],
             structureWriteMilliseconds: [8, 6, 7],
@@ -19,6 +20,8 @@ final class PerformanceBenchmarkTests: XCTestCase {
             persistedStructureNodeCount: 100
         )
 
+        XCTAssertEqual(scale.fastRetrievalP50Milliseconds, 2)
+        XCTAssertEqual(scale.fastRetrievalP95Milliseconds, 4)
         XCTAssertEqual(scale.retrievalP50Milliseconds, 5)
         XCTAssertEqual(scale.retrievalP95Milliseconds, 9)
         XCTAssertEqual(scale.ledgerWriteP50Milliseconds, 3)
