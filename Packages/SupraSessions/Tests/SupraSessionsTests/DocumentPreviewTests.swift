@@ -171,6 +171,129 @@ final class DocumentPreviewTests: XCTestCase {
         XCTAssertEqual(legacy.revisionNotice, "revision unknown (pre-lineage)")
     }
 
+    func testTUX09PreviewCarriesInspectableHierarchyPayloadAndRelationships() throws {
+        // T-UX-09 expected RED: DocumentPreviewModel has no structure node or
+        // relationship projection, so the app cannot inspect persisted adapter output.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic structure preview")
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "structure-preview-sha",
+            byteSize: 1,
+            originalExtension: "docx",
+            managedRelativePath: "blobs/structure-preview.docx"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "structure-preview.docx"
+        ))
+        let bodyText = "The defined term appears in the agreement."
+        try store.documentIndex.replaceParts(documentID: document.id, parts: [
+            DocumentPagePartRecord(
+                documentID: document.id,
+                partIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                normalizedText: bodyText,
+                charCount: bodyText.count
+            )
+        ])
+        let revision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "structure-preview-revision",
+            origin: "parser",
+            method: "docx",
+            text: bodyText,
+            charCount: bodyText.count
+        ))
+        let nodes = [
+            DocumentStructureNodeRecord(
+                id: "structure-node-root",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "document",
+                ordinal: 0,
+                kind: "document"
+            ),
+            DocumentStructureNodeRecord(
+                id: "structure-node-body",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "body/paragraph/1",
+                parentNodeID: "structure-node-root",
+                ordinal: 0,
+                kind: "paragraph",
+                charStart: 0,
+                charEnd: bodyText.count,
+                payloadJSON: #"{"style":"Body Text"}"#
+            ),
+            DocumentStructureNodeRecord(
+                id: "structure-node-footnote",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "footnote/1",
+                parentNodeID: "structure-node-root",
+                ordinal: 1,
+                kind: "footnote",
+                textContent: "Synthetic footnote text",
+                payloadJSON: #"{"noteID":"1"}"#
+            ),
+            DocumentStructureNodeRecord(
+                id: "structure-node-comment",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "comment/1",
+                parentNodeID: "structure-node-root",
+                ordinal: 2,
+                kind: "comment",
+                textContent: "Synthetic reviewer comment"
+            ),
+        ]
+        try store.documentStructure.replaceStructure(
+            documentID: document.id,
+            revisionID: revision.id,
+            nodes: nodes,
+            edges: [
+                DocumentStructureEdgeRecord(
+                    id: "structure-edge-footnote",
+                    matterID: matter.id,
+                    fromNodeID: "structure-node-footnote",
+                    toNodeID: "structure-node-body",
+                    kind: "anchor_of"
+                ),
+                DocumentStructureEdgeRecord(
+                    id: "structure-edge-comment",
+                    matterID: matter.id,
+                    fromNodeID: "structure-node-comment",
+                    toNodeID: "structure-node-body",
+                    kind: "anchor_of"
+                ),
+            ]
+        )
+
+        let model = DocumentPreviewLoader(
+            store: store,
+            storage: DocumentStorage(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        ).loadDocument(documentID: document.id)
+
+        XCTAssertEqual(model.structureNodes.map(\.nodeKey), [
+            "document", "body/paragraph/1", "footnote/1", "comment/1",
+        ])
+        let body = try XCTUnwrap(model.structureNodes.first(where: { $0.nodeKey == "body/paragraph/1" }))
+        XCTAssertEqual(body.parentNodeKey, "document")
+        XCTAssertEqual(body.depth, 1)
+        XCTAssertEqual(body.charStart, 0)
+        XCTAssertEqual(body.charEnd, bodyText.count)
+        XCTAssertEqual(body.payloadJSON, #"{"style":"Body Text"}"#)
+        let footnote = try XCTUnwrap(model.structureNodes.first(where: { $0.nodeKey == "footnote/1" }))
+        XCTAssertEqual(footnote.textContent, "Synthetic footnote text")
+        XCTAssertEqual(footnote.payloadJSON, #"{"noteID":"1"}"#)
+        XCTAssertEqual(model.structureEdges.map(\.display), [
+            "anchor_of: footnote/1 → body/paragraph/1",
+            "anchor_of: comment/1 → body/paragraph/1",
+        ])
+    }
+
     private func makeStore() throws -> SupraStore {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("PreviewStore-\(UUID().uuidString)", isDirectory: true)

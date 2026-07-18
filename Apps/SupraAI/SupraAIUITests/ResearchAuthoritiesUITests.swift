@@ -615,6 +615,28 @@ final class ChatCitationsAndExportUITests: XCTestCase {
         let preview = app.descendants(matching: .any)["documentPreview"]
         XCTAssertTrue(preview.waitForExistence(timeout: 10), "Document preview did not open for [S1]")
         XCTAssertTrue(app.staticTexts["agreement.pdf"].waitForExistence(timeout: 5), "Preview did not show the document name")
+
+        // T-UX-09 expected RED: the document preview has no extraction-structure
+        // switch or accessible node/relationship rows.
+        let structureToggle = app.descendants(matching: .any)["documentPreview.structureToggle"]
+        XCTAssertTrue(structureToggle.waitForExistence(timeout: 5), "Extraction Structure control is missing")
+        structureToggle.click()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documentPreview.structureSummary"].waitForExistence(timeout: 5),
+            "Structure node/relationship count is missing"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documentPreview.structure.node.footnote/1"].waitForExistence(timeout: 5),
+            "Footnote structure node is missing"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documentPreview.structure.node.comment/1"].waitForExistence(timeout: 5),
+            "Comment structure node is missing"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documentPreview.structure.edge.anchor_of.footnote/1.body/paragraph/1"].waitForExistence(timeout: 5),
+            "Footnote anchor relationship is missing"
+        )
         app.buttons["Done"].click()
 
         // Export Chat is reachable from the chat's actions menu. (SwiftUI's Menu
