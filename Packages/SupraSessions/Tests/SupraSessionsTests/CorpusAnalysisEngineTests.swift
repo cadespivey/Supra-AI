@@ -334,6 +334,61 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         XCTAssertTrue(resumed.partitions.allSatisfy { $0.attemptCount == 1 })
     }
 
+    func testTENG08TransientRetryCapPersistsThreeAttemptsAndBalancesAsIncomplete() async throws {
+        // T-ENG-08 expected RED: mapper failures have no transient classification or durable bounded attempts.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic retry-exhausted corpus")
+        _ = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "retry.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: ["RETRY-PART-1"]
+        )
+        let probe = EngineProbe()
+
+        let result = try await CorpusAnalysisEngine(store: store).run(
+            request: CorpusAnalysisRequest(
+                runKey: "retry-run",
+                matterID: matter.id,
+                taskKind: .customExtraction,
+                characterBudget: 1,
+                maximumRetryCount: 2
+            )
+        ) { input in
+            _ = await probe.recordAndReturnOrdinal(input)
+            throw CorpusAnalysisMapFailure.transient("synthetic transient mapper failure")
+        }
+
+        let attemptsMade = await probe.inputs.count
+        XCTAssertEqual(attemptsMade, 3, "two retries means three total attempts")
+        let partition = try XCTUnwrap(result.partitions.first)
+        XCTAssertEqual(partition.attemptCount, 3)
+        XCTAssertEqual(partition.disposition, CorpusAnalysisPartitionDisposition.failed.rawValue)
+        XCTAssertEqual(partition.dispositionReason, "retry_exhausted")
+        XCTAssertEqual(partition.errorSummary, "synthetic transient mapper failure")
+        let history = try JSONDecoder().decode(
+            [SyntheticAttemptHistoryEntry].self,
+            from: Data(partition.attemptHistoryJSON.utf8)
+        )
+        XCTAssertEqual(history.map(\.attemptNumber), [1, 2, 3])
+        XCTAssertEqual(history.map(\.outcome), ["failed", "failed", "failed"])
+        XCTAssertTrue(history.allSatisfy(\.retryable))
+        XCTAssertTrue(history.allSatisfy { $0.errorSummary == "synthetic transient mapper failure" })
+
+        XCTAssertEqual(result.run.status, CorpusAnalysisRunStatus.persisted.rawValue)
+        XCTAssertEqual(result.run.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+        XCTAssertNil(result.run.structuredOutputVersionID)
+        XCTAssertEqual(result.coverage.partitionCount, 1)
+        XCTAssertEqual(result.coverage.failedPartitionCount, 1)
+        XCTAssertEqual(result.coverage.pendingPartitionCount, 0)
+        XCTAssertEqual(result.coverage.terminalPartitionCount, 1)
+        XCTAssertEqual(result.coverage.balanceErrorCount, 0)
+        XCTAssertTrue(result.findings.isEmpty)
+    }
+
     private func makeStore() throws -> SupraStore {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CorpusAnalysisEngine-\(UUID().uuidString)", isDirectory: true)
@@ -432,6 +487,20 @@ private struct CorpusFixtureDocument: Sendable {
     var documentID: String
     var partIDs: [String]
     var revisionIDs: [String]
+}
+
+private struct SyntheticAttemptHistoryEntry: Decodable {
+    var attemptNumber: Int
+    var outcome: String
+    var retryable: Bool
+    var errorSummary: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case attemptNumber = "attempt_number"
+        case outcome
+        case retryable
+        case errorSummary = "error_summary"
+    }
 }
 
 private actor EngineProbe {
