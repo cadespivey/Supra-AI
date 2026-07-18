@@ -67,9 +67,9 @@ public final class DocumentProcessingQueue: ObservableObject {
     private let classificationService: DocumentClassificationService?
     private let notifier: any DocumentNotifying
 
-    /// In-memory source URLs for not-yet-run import jobs (originals are not
-    /// persisted). A job whose sources are lost across a relaunch falls back to
-    /// store-only reconciliation (re-indexing already-copied documents).
+    /// Fast-path URLs for jobs that run in this process. Durable selected-source
+    /// rows and bookmarks are written before enqueue returns, so these are never
+    /// the sole source authority for FIFO-queued imports.
     private var pendingSources: [String: [URL]] = [:]
     private var runTask: Task<Void, Never>?
 
@@ -99,6 +99,7 @@ public final class DocumentProcessingQueue: ObservableObject {
         do {
             _ = try store.documentJobs.reconcileOrphanedBatches()
             _ = try store.documentJobs.reconcileInterruptedJobs()
+            try reconcileQueuedImportsAfterRelaunch()
             lastImportFailure = try restoredImportFailure()
         } catch {
             lastError = error.localizedDescription
@@ -134,6 +135,22 @@ public final class DocumentProcessingQueue: ObservableObject {
                 sourceRootDisplay: sourceRootDisplay,
                 targetFolderID: targetFolderID,
                 targetFolderRequested: targetFolderID != nil
+            )
+            for (selectionIndex, source) in sources.enumerated() {
+                _ = try store.documentJobs.recordDiscovered(
+                    batchID: batch.id,
+                    matterID: matterID,
+                    sourceKey: "selection:\(selectionIndex)",
+                    sourceDisplayPath: source.lastPathComponent,
+                    sourceBookmark: selectedSourceBookmark(for: source),
+                    state: .selected
+                )
+            }
+            try store.documentJobs.updateBatchProgress(
+                id: batch.id,
+                discoveredCount: sources.count,
+                importedCount: 0,
+                failedCount: 0
             )
             let job = try store.documentJobs.enqueueJob(matterID: matterID, importBatchID: batch.id)
             pendingSources[job.id] = sources
@@ -279,6 +296,41 @@ public final class DocumentProcessingQueue: ObservableObject {
         runTask = Task { [weak self] in
             await self?.runLoop()
         }
+    }
+
+    /// Queued imports survive a quit differently from the one job that was
+    /// active: orphan-batch reconciliation makes their persisted selections
+    /// interrupted, then this step pauses the queued job so the existing Resume
+    /// UI owns re-entry. Pre-v059/bug-window jobs with no source authority can
+    /// never resume and fail explicitly instead of blocking FIFO forever.
+    private func reconcileQueuedImportsAfterRelaunch() throws {
+        for job in try store.documentJobs.fetchQueuedJobs() {
+            guard let batchID = job.importBatchID,
+                  let batch = try store.documentJobs.fetchBatch(id: batchID),
+                  batch.status == DocumentImportBatchStatus.interrupted.rawValue else { continue }
+            let sources = try store.documentJobs.fetchSources(batchID: batchID)
+            if sources.isEmpty {
+                try store.documentJobs.failJob(
+                    id: job.id,
+                    errorSummary: "source_authorization_unavailable"
+                )
+            } else if sources.contains(where: { !$0.isTerminal }) {
+                try store.documentJobs.pauseJob(id: job.id)
+            }
+        }
+    }
+
+    private func selectedSourceBookmark(for source: URL) -> Data? {
+        let scoped = source.startAccessingSecurityScopedResource()
+        defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+        let options: URL.BookmarkCreationOptions = scoped
+            ? [.withSecurityScope, .securityScopeAllowOnlyReadAccess]
+            : []
+        return try? source.bookmarkData(
+            options: options,
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
     }
 
     private func runLoop() async {
