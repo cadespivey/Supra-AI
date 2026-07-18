@@ -188,6 +188,10 @@ private struct DeterministicCorpusWorkload: Sendable {
         }
         observations.append(contentsOf: retrievalObservations(tasks: tasks, retrievedByTask: retrievedByTask))
         observations.append(contentsOf: try ocrSelectionObservations())
+        observations.append(contentsOf: try spreadsheetHeaderObservations(
+            store: store,
+            matterID: benchmarkMatter.id
+        ))
 
         let benchmarkDocumentIDs = Set(
             try store.documentLibrary.fetchDocuments(matterID: benchmarkMatter.id).map(\.id)
@@ -206,6 +210,45 @@ private struct DeterministicCorpusWorkload: Sendable {
         ))
         observations.append(contentsOf: try await recoveryObservations(temporaryRoot: temporaryRoot))
         return observations
+    }
+
+    private func spreadsheetHeaderObservations(
+        store: SupraStore,
+        matterID: String
+    ) throws -> [BenchmarkObservation] {
+        let expected = SpreadsheetHeaderBenchmark.expectedAssociations(in: specification)
+        let evaluatedSheets = Set(expected.map { "\($0.sourceFilename)|\($0.sheetName)" })
+        var predicted: [SpreadsheetHeaderAssociation] = []
+
+        for document in try store.documentLibrary.fetchDocuments(matterID: matterID) {
+            guard document.displayName.lowercased().hasSuffix(".xlsx") else { continue }
+            let nodes = try store.documentStructure.fetchNodes(documentID: document.id)
+            let cellByNodeID: [String: SpreadsheetCellPayload] = Dictionary(
+                uniqueKeysWithValues: nodes.compactMap { node in
+                    guard let payload = node.payloadJSON,
+                          let decoded = try? JSONDecoder().decode(
+                              SpreadsheetCellPayload.self,
+                              from: Data(payload.utf8)
+                          ) else { return nil }
+                    return (node.id, decoded)
+                }
+            )
+            for edge in try store.documentStructure.fetchEdges(documentID: document.id)
+                where edge.kind == "header_for" {
+                guard let cell = cellByNodeID[edge.fromNodeID],
+                      let header = cellByNodeID[edge.toNodeID],
+                      cell.sheetName == header.sheetName,
+                      evaluatedSheets.contains("\(document.displayName)|\(cell.sheetName)") else { continue }
+                predicted.append(SpreadsheetHeaderAssociation(
+                    sourceFilename: document.displayName,
+                    sheetName: cell.sheetName,
+                    cellReference: cell.cellRef,
+                    headerReference: header.cellRef
+                ))
+            }
+        }
+
+        return SpreadsheetHeaderBenchmark.observations(expected: expected, predicted: predicted)
     }
 
     private func ocrSelectionObservations() throws -> [BenchmarkObservation] {
@@ -513,6 +556,11 @@ private struct DeterministicCorpusWorkload: Sendable {
                 + keys.negatives + keys.structures + keys.versions
         ).sorted { $0.id < $1.id }
     }
+}
+
+private struct SpreadsheetCellPayload: Decodable {
+    var sheetName: String
+    var cellRef: String
 }
 
 private struct DeterministicBagOfWordsEmbedder: TextEmbedder {

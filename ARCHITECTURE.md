@@ -126,7 +126,12 @@ repository:
   presence of signature widgets. A signature-widget flag is not signature validation;
   PDF table inference and alternative reading-order inference remain out of scope. OCR
   and user-edited page selections reflow ranged regions against the selected immutable
-  revision while retaining form and annotation nodes outside body text.
+  revision while retaining form and annotation nodes outside body text. XLSX preserves
+  typed cell values, formulas and cached results, number-format IDs, merges, explicit
+  tables, and deterministic header associations. Hidden sheets, rows, and columns remain
+  in the complete evidence projection with explicit hidden-source payloads; consumers
+  that request a visible-only projection must exclude those marked cells. Macros are
+  presence-flagged only, and charts or visual style fidelity are not inferred.
 - Milestone 4 (ScratchPad) added scratch-pad days/entries/attachments, billing drafts +
   line items, and per-matter billing profiles, plus LEDES `client_id` / `client_matter_id`
   columns on `matters`.
