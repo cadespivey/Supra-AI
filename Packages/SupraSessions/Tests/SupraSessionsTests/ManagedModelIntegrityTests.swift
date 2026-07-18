@@ -376,6 +376,37 @@ final class ManagedModelIntegrityTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testACR_MODEL_managedLoadRepairsKnownMisnameBeforeRuntimeRequest() async throws {
+        // Expected RED: the load boundary still rejects a missing canonical
+        // manifest instead of invoking the verified recovery path, so the
+        // otherwise complete model never reaches the runtime.
+        let context = try makeContext()
+        let directory = context.modelDirectory(repoID: repoID)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let payloads = validPayloads()
+        for (relativePath, data) in payloads {
+            try data.write(to: directory.appendingPathComponent(relativePath))
+        }
+        let manifest = makeManifest(repoID: repoID, revision: revisionA, payloads: payloads)
+        let candidate = directory.appendingPathComponent(" .json")
+        try ManagedModelStorage.writeManifest(manifest, to: candidate)
+        let model = try context.library.addModel(
+            displayName: "Recoverable model",
+            path: directory.path,
+            bookmarkData: nil
+        )
+
+        await context.library.activateAndLoad(modelID: model.id)
+
+        guard case .loaded = context.library.loadState else {
+            return XCTFail("verified recovery should continue into the runtime load")
+        }
+        XCTAssertEqual(context.runtime.loadRequests.count, 1)
+        XCTAssertEqual(try ManagedModelStorage.loadVerifiedManifest(at: directory), manifest.canonicalized())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: candidate.path))
+    }
+
     private func validPayloads(includingTokenizer: Bool = false) -> [String: Data] {
         var payloads = [
             "config.json": Data(#"{"model_type":"qwen2"}"#.utf8),
