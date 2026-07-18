@@ -140,6 +140,25 @@ final class PerformanceBenchmarkTests: XCTestCase {
         )
     }
 
+    func testApprovedGateFailsClosedWhenMemoryOrIncrementalBandsAreMissing() throws {
+        // D-09 expected RED: changing the manifest to approved while leaving the
+        // owner-set B-PERF-02 memory and B-PERF-03 incremental bands nil silently
+        // disables those two release gates.
+        let baseline = try report()
+        var thresholds = PerformanceThresholdManifest.approvedFixture(from: baseline)
+        thresholds.peakRSSCeilingMiB = nil
+        thresholds.incrementalWallClockRegressionFraction = nil
+
+        XCTAssertEqual(
+            PerformanceReleaseGate.evaluate(
+                report: baseline,
+                thresholds: thresholds,
+                requireApprovedStatisticalThresholds: true
+            ).violations.map(\.metricID),
+            ["B-PERF-02", "B-PERF-03"]
+        )
+    }
+
     private func report(
         retrievalP50: Double = 50,
         retrievalP95: Double = 100,
