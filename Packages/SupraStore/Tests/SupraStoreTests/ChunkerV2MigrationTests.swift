@@ -76,8 +76,8 @@ final class ChunkerV2MigrationTests: XCTestCase {
         }
 
         let before = try legacyChunkBytes(queue, id: chunk.id)
-        try migrator.migrate(queue)
-        try migrator.migrate(queue)
+        try migrator.migrate(queue, upTo: "v063_add_chunk_structure_binding")
+        try migrator.migrate(queue, upTo: "v063_add_chunk_structure_binding")
 
         try queue.read { db in
             XCTAssertEqual(try appliedMigrations(db).last, "v063_add_chunk_structure_binding")

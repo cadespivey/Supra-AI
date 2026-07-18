@@ -66,6 +66,7 @@ public final class DocumentProcessingQueue: ObservableObject {
     /// runtime). Best-effort and main-actor isolated; never fails a job.
     private let classificationService: DocumentClassificationService?
     private let notifier: any DocumentNotifying
+    private let corpusAnalysisRunner: (@Sendable (CorpusAnalysisJobPayload) async throws -> Void)?
 
     /// Fast-path URLs for jobs that run in this process. Durable selected-source
     /// rows and bookmarks are written before enqueue returns, so these are never
@@ -78,13 +79,15 @@ public final class DocumentProcessingQueue: ObservableObject {
         importService: DocumentImportService,
         makeIndexingService: @escaping @Sendable () -> DocumentIndexingService,
         classificationService: DocumentClassificationService? = nil,
-        notifier: any DocumentNotifying = SystemDocumentNotifier()
+        notifier: any DocumentNotifying = SystemDocumentNotifier(),
+        corpusAnalysisRunner: (@Sendable (CorpusAnalysisJobPayload) async throws -> Void)? = nil
     ) {
         self.store = store
         self.importService = importService
         self.makeIndexingService = makeIndexingService
         self.classificationService = classificationService
         self.notifier = notifier
+        self.corpusAnalysisRunner = corpusAnalysisRunner
     }
 
     deinit {
@@ -246,6 +249,29 @@ public final class DocumentProcessingQueue: ObservableObject {
         }
     }
 
+    /// Enqueues a persisted v064 corpus-analysis run. The run itself owns the
+    /// frozen snapshot and partition ledger; the job payload carries only its id.
+    @discardableResult
+    public func enqueueCorpusAnalysis(matterID: String, runID: String) -> String? {
+        do {
+            let payloadJSON = String(
+                data: try JSONEncoder().encode(CorpusAnalysisJobPayload(runID: runID)),
+                encoding: .utf8
+            )
+            let job = try store.documentJobs.enqueueJob(
+                matterID: matterID,
+                kind: DocumentProcessingJobKind.corpusAnalysis.rawValue,
+                payloadJSON: payloadJSON
+            )
+            refresh()
+            pump()
+            return job.id
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     /// Applies a correction through the import service's immutable-lineage path.
     /// The service's composed reindex enqueuer schedules the follow-up work.
     public func updateExtractedText(
@@ -372,6 +398,35 @@ public final class DocumentProcessingQueue: ObservableObject {
         case .process: await runImportOrReindex(job)
         case .classify: await runClassify(job)
         case .reprocess: await runReprocess(job)
+        case .corpusAnalysis: await runCorpusAnalysis(job)
+        }
+    }
+
+    private func runCorpusAnalysis(_ job: DocumentProcessingJobRecord) async {
+        guard let json = job.payloadJSON,
+              let payload = try? JSONDecoder().decode(CorpusAnalysisJobPayload.self, from: Data(json.utf8)),
+              let corpusAnalysisRunner else {
+            let message = "The corpus-analysis runner or job payload is unavailable."
+            lastError = message
+            try? store.documentJobs.failJob(id: job.id, errorSummary: message)
+            return
+        }
+        do {
+            setPhase(job.id, .analyzingCorpus)
+            try await corpusAnalysisRunner(payload)
+            try store.documentJobs.completeJob(id: job.id)
+            refresh()
+        } catch {
+            lastError = error.localizedDescription
+            try? store.documentJobs.failJob(id: job.id, errorSummary: error.localizedDescription)
+            _ = try? store.auditEvents.recordEvent(
+                matterID: job.matterID,
+                eventType: "corpus_analysis_failed",
+                actor: "system",
+                summary: "Corpus analysis failed: \(error.localizedDescription)",
+                relatedTable: "document_processing_jobs",
+                relatedID: job.id
+            )
         }
     }
 

@@ -1373,6 +1373,87 @@ public enum SupraMigrator {
             }
         }
 
+        migrator.registerMigration("v064_create_corpus_analysis_ledger") { db in
+            try db.create(table: "corpus_analysis_runs") { table in
+                table.column("id", .text).primaryKey()
+                table.column("run_key", .text).notNull()
+                table.column("matter_id", .text).notNull()
+                    .references("matters", onDelete: .cascade)
+                table.column("task_kind", .text).notNull()
+                table.column("scope_json", .text).notNull()
+                table.column("corpus_snapshot_json", .text).notNull()
+                table.column("partition_strategy", .text).notNull()
+                table.column("partition_strategy_version", .integer).notNull()
+                table.column("model_lineage_json", .text)
+                table.column("status", .text).notNull()
+                table.column("coverage_json", .text)
+                table.column("reconciliation_json", .text)
+                table.column("validation_results_json", .text)
+                table.column("assurance_state", .text)
+                table.column("assurance_reasons_json", .text)
+                table.column("structured_output_version_id", .text)
+                    .references("structured_output_versions", onDelete: .setNull)
+                table.column("created_at", .datetime).notNull()
+                table.column("completed_at", .datetime)
+            }
+            try db.create(
+                index: "idx_corpus_analysis_runs_matter_key",
+                on: "corpus_analysis_runs",
+                columns: ["matter_id", "run_key"],
+                unique: true
+            )
+            try db.create(
+                index: "idx_corpus_analysis_runs_matter_status",
+                on: "corpus_analysis_runs",
+                columns: ["matter_id", "status", "created_at"]
+            )
+
+            try db.create(table: "corpus_analysis_partitions") { table in
+                table.column("id", .text).primaryKey()
+                table.column("run_id", .text).notNull()
+                    .references("corpus_analysis_runs", onDelete: .cascade)
+                table.column("partition_key", .text).notNull()
+                table.column("input_revision_ids_json", .text).notNull()
+                table.column("attempt_count", .integer).notNull().defaults(to: 0)
+                table.column("attempt_history_json", .text).notNull().defaults(to: "[]")
+                table.column("disposition", .text).notNull().defaults(to: "pending")
+                table.column("disposition_reason", .text)
+                table.column("findings_json", .text)
+                table.column("error_summary", .text)
+                table.column("started_at", .datetime)
+                table.column("completed_at", .datetime)
+            }
+            try db.create(
+                index: "idx_corpus_analysis_partitions_run_key",
+                on: "corpus_analysis_partitions",
+                columns: ["run_id", "partition_key"],
+                unique: true
+            )
+            try db.create(
+                index: "idx_corpus_analysis_partitions_run_disposition",
+                on: "corpus_analysis_partitions",
+                columns: ["run_id", "disposition", "partition_key"]
+            )
+
+            // Defense in depth for INV-10: even direct SQL/repository misuse
+            // cannot persist corpus_complete while work is pending/failed or
+            // while snapshot exclusions are undisclosed.
+            try db.execute(sql: """
+                CREATE TRIGGER corpus_analysis_complete_guard
+                BEFORE UPDATE OF status, assurance_state, coverage_json ON corpus_analysis_runs
+                WHEN NEW.status = 'persisted' AND NEW.assurance_state = 'corpus_complete'
+                BEGIN
+                    SELECT CASE WHEN EXISTS (
+                        SELECT 1 FROM corpus_analysis_partitions
+                        WHERE run_id = NEW.id AND disposition <> 'succeeded'
+                    ) THEN RAISE(ABORT, 'corpus_complete requires all partitions succeeded') END;
+                    SELECT CASE WHEN COALESCE(
+                        json_extract(NEW.coverage_json, '$.excluded_members_disclosed'), 0
+                    ) <> 1 THEN RAISE(ABORT, 'corpus_complete requires disclosed exclusions') END;
+                END
+                """)
+        }
+
         return migrator
     }
 
@@ -1389,6 +1470,8 @@ public enum SupraMigrator {
             "matter_billing_profiles",
             // Milestone 3 document intelligence tables: drop children before parents.
             "document_exports",
+            "corpus_analysis_partitions",
+            "corpus_analysis_runs",
             "document_output_sources",
             "document_source_sets",
             "document_structure_edges",

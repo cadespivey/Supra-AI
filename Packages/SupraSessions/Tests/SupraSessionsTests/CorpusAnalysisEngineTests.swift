@@ -101,8 +101,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
             matterID: matter.id,
             sourceKey: "selection:hidden",
             sourceDisplayPath: ".synthetic-hidden",
-            state: .excludedHidden,
-            reason: "excluded_hidden"
+            state: .excludedHidden
         )
 
         let result = try await CorpusAnalysisEngine(store: store).run(

@@ -53,6 +53,7 @@ public enum DocumentProcessingPhase: String, Codable, CaseIterable, Hashable, Se
     case fullTextIndexing = "full_text_indexing"
     case semanticEmbedding = "semantic_embedding"
     case classifying
+    case analyzingCorpus = "analyzing_corpus"
     case finalizingReport = "finalizing_report"
     case complete
     case failed
@@ -92,6 +93,7 @@ public enum DocumentProcessingJobKind: String, Codable, CaseIterable, Hashable, 
     case process      // legacy import-or-reindex
     case classify     // classification phase only
     case reprocess    // re-extract named documents from their managed blobs
+    case corpusAnalysis = "corpus_analysis"
 }
 
 /// Status of an import batch.

@@ -107,7 +107,7 @@ Managed model downloads are bound to a repository revision and verified manifest
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v063. Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v064. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -125,6 +125,14 @@ repository:
   context. Persisted chunks record their node, structural unit kind, and chunker version;
   retrieval prefers same-revision parent context and explicitly discloses hidden-derived
   spreadsheet evidence. Legacy v1 text, locators, and packed source JSON remain unchanged.
+- Exhaustive corpus work uses a separate v064 coverage ledger rather than ranked retrieval.
+  Each run freezes the exact selected revision IDs plus failed/review-required/import-source
+  exclusions, plans deterministic part-range partitions with the shared chronology batching
+  seam, and checkpoints a terminal disposition and evidence-bound findings per partition.
+  SQLite and repository guards reject `corpus_complete` unless every partition succeeded and
+  exclusions are disclosed. Mid-run edits do not change mapper inputs and leave the persisted
+  result marked stale. The app-wide FIFO recognizes `corpus_analysis` jobs; task-specific
+  model mapping, bounded retry/resume, and output UX land in later work orders.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "syntheticDataDeclaration": "Every fixture contains deterministic synthetic records only; no user or production data is permitted.",
-  "currentMigration": "v063_add_chunk_structure_binding",
+  "currentMigration": "v064_create_corpus_analysis_ledger",
   "supportedVersions": [
     "v1.4.1",
     "v1.5.2",

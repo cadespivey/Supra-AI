@@ -25,6 +25,7 @@ public final class SupraStore: @unchecked Sendable {
     public let documentStructure: StructureRepository
     public let documentJobs: DocumentJobRepository
     public let documentSources: DocumentSourceRepository
+    public let corpusAnalysis: CorpusAnalysisRepository
     // Milestone 4: ScratchPad daily notes + billing.
     public let scratchPad: ScratchPadRepository
     public let billing: BillingRepository
@@ -52,6 +53,7 @@ public final class SupraStore: @unchecked Sendable {
         self.documentStructure = StructureRepository(writer: database.writer)
         self.documentJobs = DocumentJobRepository(writer: database.writer)
         self.documentSources = DocumentSourceRepository(writer: database.writer)
+        self.corpusAnalysis = CorpusAnalysisRepository(writer: database.writer)
         self.scratchPad = ScratchPadRepository(writer: database.writer)
         self.billing = BillingRepository(writer: database.writer)
     }
