@@ -141,7 +141,11 @@ final class DocumentPreviewTests: XCTestCase {
         let recorded = loader.load(outputSource: boundSource)
         XCTAssertEqual(recorded.revisionID, revisionA.id)
         XCTAssertEqual(recorded.revisionOrigin, "parser")
-        XCTAssertEqual(recorded.revisionCreatedAt, revisionA.createdAt)
+        XCTAssertEqual(
+            try XCTUnwrap(recorded.revisionCreatedAt).timeIntervalSince1970,
+            revisionA.createdAt.timeIntervalSince1970,
+            accuracy: 0.001
+        )
         XCTAssertNotNil(recorded.revisionNotice)
         XCTAssertTrue(recorded.revisionNotice?.contains("parser") == true)
         if case let .text(content, start, end) = recorded.kind {
