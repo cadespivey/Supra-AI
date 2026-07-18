@@ -7,6 +7,8 @@ import SupraSessions
 import SupraStore
 import SupraTestKit
 
+// Keep the @main type in a non-main.swift file. Some supported Swift
+// toolchains otherwise diagnose an implicit top-level entry point conflict.
 @main
 struct SupraBenchCommand {
     static func main() async {
