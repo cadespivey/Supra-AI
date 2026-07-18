@@ -107,7 +107,7 @@ Managed model downloads are bound to a repository revision and verified manifest
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v060. Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v061. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.

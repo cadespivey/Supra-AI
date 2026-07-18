@@ -1274,6 +1274,21 @@ public enum SupraMigrator {
                 """)
         }
 
+        migrator.registerMigration("v061_bind_document_output_source_revisions") { db in
+            // Historical source rows deliberately stay NULL: their denormalized
+            // excerpt/locator remains readable, but no exact revision can be
+            // proven retroactively. New repository writes stamp the revision.
+            try db.alter(table: "document_output_sources") { table in
+                table.add(column: "revision_id", .text)
+                    .references("document_part_revisions", onDelete: .setNull)
+            }
+            try db.create(
+                index: "idx_document_output_sources_revision",
+                on: "document_output_sources",
+                columns: ["revision_id"]
+            )
+        }
+
         return migrator
     }
 

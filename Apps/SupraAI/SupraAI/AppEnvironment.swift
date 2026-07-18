@@ -379,6 +379,62 @@ final class AppEnvironment: ObservableObject {
         seedUITestCitationsChatIfNeeded()
         seedUITestRemediationWarningsIfNeeded()
         seedUITestInterruptedImportIfNeeded()
+        seedUITestDocumentCorrectionIfNeeded()
+    }
+
+    /// Seeds one revision-backed text part only for T-UX-07. The fixture lives in
+    /// the throwaway UI-test database and never touches the user's document store.
+    private func seedUITestDocumentCorrectionIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestDocumentCorrection"),
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            guard !(try store.documentLibrary.fetchDocuments(matterID: matterID)).contains(where: {
+                $0.displayName == "Correction Fixture.txt"
+            }) else { return }
+            let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                sha256: "uitest-correction-fixture-sha",
+                byteSize: 0,
+                originalExtension: "txt",
+                managedRelativePath: "uitest/Correction Fixture.txt"
+            )).blob
+            let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+                matterID: matterID,
+                blobID: blob.id,
+                displayName: "Correction Fixture.txt",
+                status: MatterDocumentStatus.ready.rawValue,
+                extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                indexStatus: DocumentIndexStatus.ready.rawValue,
+                extractionMethod: "synthetic@toolchain:uitest"
+            ))
+            let part = DocumentPagePartRecord(
+                documentID: document.id,
+                partIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                normalizedText: "ORIGINAL-ALPHA",
+                charCount: 14
+            )
+            try store.documentIndex.replaceParts(documentID: document.id, parts: [part])
+            let revision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+                documentID: document.id,
+                partIndex: 0,
+                derivationKey: "uitest-correction-original",
+                origin: "parser",
+                method: "synthetic",
+                text: "ORIGINAL-ALPHA",
+                charCount: 14
+            ))
+            _ = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
+                documentID: document.id,
+                partIndex: 0,
+                selectedRevisionID: revision.id,
+                selectionKey: "uitest-correction-selection",
+                selectedBy: "policy",
+                policyVersion: 1,
+                decisionJSON: #"{"rule":"synthetic_ui_fixture"}"#
+            ))
+        } catch {
+            assertionFailure("Could not seed correction accessibility fixture: \(error)")
+        }
     }
 
     /// Creates a five-source, three-complete/two-interrupted import only for the

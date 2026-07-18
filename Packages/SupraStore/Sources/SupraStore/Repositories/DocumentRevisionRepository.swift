@@ -51,19 +51,98 @@ public final class DocumentRevisionRepository: @unchecked Sendable {
         }
     }
 
+    /// Appends one intentional user correction and its selection atomically.
+    /// The compatible part text is only the materialized projection; the prior
+    /// machine/user revision and selection remain immutable and queryable.
+    @discardableResult
+    public func appendUserEdit(
+        documentID: String,
+        partID: String,
+        text: String,
+        author: String,
+        reason: String
+    ) throws -> DocumentPartRevisionRecord {
+        try writer.write { db in
+            guard let part = try DocumentPagePartRecord.fetchOne(db, key: partID),
+                  part.documentID == documentID else {
+                throw DocumentRevisionRepositoryError.partNotFound(documentID: documentID, partIndex: -1)
+            }
+            guard let priorRevisionID = part.currentRevisionID,
+                  try DocumentPartRevisionRecord.fetchOne(db, key: priorRevisionID) != nil else {
+                throw DocumentRevisionRepositoryError.revisionScopeMismatch(part.currentRevisionID ?? partID)
+            }
+
+            let revision = DocumentPartRevisionRecord(
+                documentID: documentID,
+                partIndex: part.partIndex,
+                derivationKey: "user-edit:\(UUID().uuidString)",
+                origin: "user_edit",
+                method: "manual",
+                text: text,
+                charCount: text.count,
+                author: author,
+                reason: reason,
+                supersedesRevisionID: priorRevisionID
+            )
+            _ = try appendRevision(revision, db: db)
+            let decisionObject: [String: Any] = [
+                "author": author,
+                "reason": reason,
+                "rule": "user_edit",
+                "selectedRevisionID": revision.id,
+            ]
+            let decisionData = try JSONSerialization.data(
+                withJSONObject: decisionObject,
+                options: [.sortedKeys]
+            )
+            let selection = DocumentPartSelectionRecord(
+                documentID: documentID,
+                partIndex: part.partIndex,
+                selectedRevisionID: revision.id,
+                selectionKey: "user-edit:\(UUID().uuidString)",
+                selectedBy: "user",
+                policyVersion: nil,
+                decisionJSON: String(decoding: decisionData, as: UTF8.self),
+                supersedesSelectionID: part.currentSelectionID
+            )
+            _ = try appendSelection(selection, materializeExisting: false, db: db)
+            return revision
+        }
+    }
+
     /// Atomically replaces the compatible part projection while preserving all
     /// historical revisions/selections and appending the supplied new lineage.
+    @discardableResult
     public func replacePartsAndPersistLineage(
         documentID: String,
         parts: [DocumentPagePartRecord],
         revisions: [DocumentPartRevisionRecord],
-        selections: [DocumentPartSelectionRecord]
-    ) throws {
+        selections: [DocumentPartSelectionRecord],
+        preserveSelectedUserEdits: Bool = false
+    ) throws -> Set<Int> {
         try writer.write { db in
             guard parts.allSatisfy({ $0.documentID == documentID }),
                   revisions.allSatisfy({ $0.documentID == documentID }),
                   selections.allSatisfy({ $0.documentID == documentID }) else {
                 throw DocumentRevisionRepositoryError.revisionScopeMismatch(documentID)
+            }
+
+            var preservedSelections: [Int: (DocumentPartSelectionRecord, DocumentPartRevisionRecord)] = [:]
+            if preserveSelectedUserEdits {
+                let currentParts = try DocumentPagePartRecord.fetchAll(
+                    db,
+                    sql: "SELECT * FROM document_pages_parts WHERE document_id = ?",
+                    arguments: [documentID]
+                )
+                for part in currentParts {
+                    guard let revisionID = part.currentRevisionID,
+                          let selectionID = part.currentSelectionID,
+                          let revision = try DocumentPartRevisionRecord.fetchOne(db, key: revisionID),
+                          revision.origin == "user_edit",
+                          let selection = try DocumentPartSelectionRecord.fetchOne(db, key: selectionID)
+                    else { continue }
+                    preservedSelections[part.partIndex] = (selection, revision)
+                }
             }
 
             try db.execute(
@@ -80,9 +159,13 @@ public final class DocumentRevisionRepository: @unchecked Sendable {
             for revision in revisions {
                 _ = try appendRevision(revision, db: db)
             }
-            for selection in selections {
+            for selection in selections where preservedSelections[selection.partIndex] == nil {
                 _ = try appendSelection(selection, materializeExisting: true, db: db)
             }
+            for (_, preserved) in preservedSelections {
+                try materialize(preserved.0, revision: preserved.1, db: db)
+            }
+            return Set(preservedSelections.keys)
         }
     }
 

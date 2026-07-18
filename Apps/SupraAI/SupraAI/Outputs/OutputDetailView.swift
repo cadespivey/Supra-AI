@@ -14,6 +14,7 @@ struct OutputDetailView: View {
     @State private var selectedVersionID: String?
     @State private var showRaw = false
     @State private var routingMessage: String?
+    @State private var sourcePreview: PreviewItem?
 
     private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
 
@@ -87,6 +88,9 @@ struct OutputDetailView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("output.detail.\(outputTitle)")
         .onAppear { controller.loadOutputs() }
+        .sheet(item: $sourcePreview) { item in
+            DocumentPreviewView(model: item.model) { sourcePreview = nil }
+        }
     }
 
     @ViewBuilder
@@ -256,8 +260,16 @@ struct OutputDetailView: View {
             Label("Grounded in \(sources.count) document source\(sources.count == 1 ? "" : "s")", systemImage: "doc.text.magnifyingglass")
                 .font(.supraHeadline).foregroundStyle(.secondary)
             ForEach(sources) { source in
-                Text("[\(source.label)] \(source.documentName)\(source.locatorDisplay.isEmpty ? "" : " — \(source.locatorDisplay)")")
-                    .font(.supraCaption).foregroundStyle(.secondary).lineLimit(1)
+                Button {
+                    if let model = controller.previewSource(id: source.id) {
+                        sourcePreview = PreviewItem(model: model)
+                    }
+                } label: {
+                    Text("[\(source.label)] \(source.documentName)\(source.locatorDisplay.isEmpty ? "" : " — \(source.locatorDisplay)")")
+                        .font(.supraCaption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("output.source.\(source.label)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

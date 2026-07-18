@@ -28,6 +28,9 @@ public struct DocumentPreviewModel: Sendable, Equatable {
     public var documentName: String
     public var locatorDisplay: String
     public var warnings: [String]
+    /// Explicit provenance state for a cited output source. Nil means the
+    /// preview was not opened from a persisted output citation.
+    public var revisionNotice: String?
     public var kind: Kind
 }
 
@@ -47,7 +50,8 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
         guard let document = try? store.documentLibrary.fetchDocument(id: documentID) else {
             return DocumentPreviewModel(
                 documentName: "Document", locatorDisplay: locator.displayString,
-                warnings: [], kind: .unavailable(reason: "Document not found.", fallbackText: "")
+                warnings: [], revisionNotice: nil,
+                kind: .unavailable(reason: "Document not found.", fallbackText: "")
             )
         }
         let warnings = Self.warnings(for: document)
@@ -92,7 +96,67 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
             documentName: document.displayName,
             locatorDisplay: locator.displayString,
             warnings: warnings,
+            revisionNotice: nil,
             kind: kind
+        )
+    }
+
+    /// Resolves a persisted output citation against the exact immutable revision
+    /// it recorded. Legacy nil bindings remain visibly unknown and continue to
+    /// use their denormalized locator/excerpt-compatible preview path.
+    public func load(outputSource: DocumentOutputSourceRecord) -> DocumentPreviewModel {
+        let locator = (try? JSONDecoder().decode(
+            DocumentSourceLocator.self,
+            from: Data(outputSource.locatorJSON.utf8)
+        )) ?? DocumentSourceLocator(sourceKind: .text)
+        guard let documentID = outputSource.documentID else {
+            return DocumentPreviewModel(
+                documentName: "Document",
+                locatorDisplay: locator.displayString,
+                warnings: [],
+                revisionNotice: outputSource.revisionID == nil
+                    ? "revision unknown (pre-lineage)"
+                    : nil,
+                kind: .unavailable(
+                    reason: "Cited document unavailable.",
+                    fallbackText: outputSource.excerpt
+                )
+            )
+        }
+
+        guard let revisionID = outputSource.revisionID else {
+            var legacy = load(
+                documentID: documentID,
+                locator: locator,
+                matchText: outputSource.excerpt
+            )
+            legacy.revisionNotice = "revision unknown (pre-lineage)"
+            return legacy
+        }
+        guard let revision = try? store.documentRevisions.fetchRevision(id: revisionID),
+              revision.documentID == documentID,
+              let document = try? store.documentLibrary.fetchDocument(id: documentID) else {
+            return DocumentPreviewModel(
+                documentName: "Document",
+                locatorDisplay: locator.displayString,
+                warnings: [],
+                revisionNotice: nil,
+                kind: .unavailable(
+                    reason: "Recorded source revision unavailable.",
+                    fallbackText: outputSource.excerpt
+                )
+            )
+        }
+        return DocumentPreviewModel(
+            documentName: document.displayName,
+            locatorDisplay: locator.displayString,
+            warnings: Self.warnings(for: document),
+            revisionNotice: nil,
+            kind: .text(
+                content: revision.text,
+                highlightStart: locator.charStart,
+                highlightEnd: locator.charEnd
+            )
         )
     }
 

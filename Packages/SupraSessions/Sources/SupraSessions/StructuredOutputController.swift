@@ -112,6 +112,13 @@ public final class StructuredOutputController: ObservableObject {
         }
     }
 
+    /// Opens a retained output source against the revision recorded when the
+    /// output was generated, rather than substituting current document text.
+    public func previewSource(id: String) -> DocumentPreviewModel? {
+        guard let source = try? store.documentSources.fetchSource(id: id) else { return nil }
+        return DocumentPreviewLoader(store: store).load(outputSource: source)
+    }
+
     /// Exports an output's active version to the given format, returning the
     /// written file URL (plan §10.2). Applies to document Q&A/chronology outputs
     /// and any structured output.
@@ -706,13 +713,14 @@ public final class StructuredOutputController: ObservableObject {
                 sourceSetID: clone.id,
                 documentID: row.documentID,
                 chunkID: row.chunkID,
+                revisionID: row.revisionID,
                 citationLabel: row.citationLabel,
                 locatorJSON: row.locatorJSON,
                 excerpt: row.excerpt,
                 rank: row.rank,
                 warningsJSON: row.warningsJSON
             )
-        })
+        }, preserveUnknownRevision: true)
         return clone.id
     }
 

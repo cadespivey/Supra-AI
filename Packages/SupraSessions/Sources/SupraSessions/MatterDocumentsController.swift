@@ -14,6 +14,25 @@ public struct DocumentSearchHit: Identifiable, Sendable {
     public let locatorDisplay: String
 }
 
+public struct DocumentPartRevisionItem: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let origin: String
+    public let text: String
+    public let author: String?
+    public let reason: String?
+    public let createdAt: Date
+}
+
+public struct DocumentPartCorrectionDraft: Identifiable, Sendable, Equatable {
+    public var id: String { partID }
+    public let documentID: String
+    public let documentName: String
+    public let partID: String
+    public let partIndex: Int
+    public let text: String
+    public let history: [DocumentPartRevisionItem]
+}
+
 /// Drives the per-matter Documents tab: folders, document instances, tags, import,
 /// search, and trash (plan §39). Import is gated on completed Document Intelligence
 /// setup and routed through the app-wide processing queue.
@@ -119,6 +138,51 @@ public final class MatterDocumentsController: ObservableObject {
     /// Builds an in-app preview opening a document at its first part.
     public func preview(documentID: String) -> DocumentPreviewModel? {
         previewLoader.loadDocument(documentID: documentID)
+    }
+
+    /// Loads the first natural part as the initial correction entry point,
+    /// together with every immutable revision for review in the sheet.
+    public func correctionDraft(documentID: String) -> DocumentPartCorrectionDraft? {
+        guard let document = try? store.documentLibrary.fetchDocument(id: documentID),
+              let part = try? store.documentIndex.fetchParts(documentID: documentID).first
+        else { return nil }
+        let revisions = (try? store.documentRevisions.fetchRevisions(
+            documentID: documentID,
+            partIndex: part.partIndex
+        )) ?? []
+        return DocumentPartCorrectionDraft(
+            documentID: documentID,
+            documentName: document.displayName,
+            partID: part.id,
+            partIndex: part.partIndex,
+            text: part.normalizedText,
+            history: revisions.map {
+                DocumentPartRevisionItem(
+                    id: $0.id,
+                    origin: $0.origin,
+                    text: $0.text,
+                    author: $0.author,
+                    reason: $0.reason,
+                    createdAt: $0.createdAt
+                )
+            }
+        )
+    }
+
+    public func saveCorrection(
+        _ draft: DocumentPartCorrectionDraft,
+        text: String,
+        reason: String,
+        author: String = "Local user"
+    ) throws {
+        try queue.updateExtractedText(
+            documentID: draft.documentID,
+            partID: draft.partID,
+            text: text,
+            author: author,
+            reason: reason
+        )
+        reload()
     }
 
     /// The managed file URL of a document's original blob, for opening in the user's

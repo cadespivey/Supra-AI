@@ -26,6 +26,7 @@ struct MatterDocumentsView: View {
     @State private var showChronology = false
     @State private var dropTargeted = false
     @State private var preview: PreviewItem?
+    @State private var correctionDraft: DocumentPartCorrectionDraft?
     // Shared inspector-panel width, persisted across launches (same key as chat).
     @AppStorage("supra.slideOverWidth") private var previewWidthRaw: Double = 580
     private var previewWidth: Binding<CGFloat> {
@@ -94,6 +95,11 @@ struct MatterDocumentsView: View {
                     scopeFolderID: controller.selectedFolderID,
                     library: library
                 ) { showChronology = false }
+            }
+        }
+        .sheet(item: $correctionDraft) { draft in
+            PartTextEditSheet(draft: draft) { text, reason in
+                try controller.saveCorrection(draft, text: text, reason: reason)
             }
         }
         .onAppear {
@@ -280,7 +286,7 @@ struct MatterDocumentsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(doc.displayName).lineLimit(1)
                 HStack(spacing: 6) {
-                    statusBadge(doc.status)
+                    statusBadge(doc)
                     if let summary = doc.ocrConfidenceSummary {
                         Text(summary).font(.supraCaption).foregroundStyle(.orange)
                     }
@@ -322,12 +328,22 @@ struct MatterDocumentsView: View {
             .buttonStyle(.plain).help("Preview")
         Button { openInDefaultApp(doc) } label: { Image(systemName: "arrow.up.forward.app") }
             .buttonStyle(.plain).help("Open & edit in your default app")
-        if doc.status == MatterDocumentStatus.failed.rawValue {
-            Button { controller.retryProcessing(documentID: doc.id) } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.plain).help("Retry processing")
+        Button {
+            correctionDraft = controller.correctionDraft(documentID: doc.id)
+        } label: {
+            Image(systemName: "pencil.and.list.clipboard")
         }
+        .buttonStyle(.plain)
+        .help("Edit extracted text")
+        .accessibilityIdentifier("documents.editExtractedText")
+        Button { controller.retryProcessing(documentID: doc.id) } label: {
+            Image(systemName: "arrow.clockwise")
+        }
+        .buttonStyle(.plain)
+        .help(doc.status == MatterDocumentStatus.failed.rawValue
+            ? "Retry processing"
+            : "Reprocess extracted text")
+        .accessibilityIdentifier("documents.reprocess")
         Menu {
             ForEach(controller.tags) { tag in
                 Button { controller.toggleTag(tag.id, on: doc.id) } label: {
@@ -667,13 +683,18 @@ struct MatterDocumentsView: View {
         }
     }
 
-    private func statusBadge(_ status: String) -> some View {
-        let (label, color) = Self.statusAppearance(status)
+    private func statusBadge(_ document: MatterDocumentRecord) -> some View {
+        let reindexing = document.hasUserEditedText
+            && document.indexStatus == DocumentIndexStatus.stale.rawValue
+        let (label, color) = reindexing
+            ? ("Reindexing", Color.blue)
+            : Self.statusAppearance(document.status)
         return Text(label)
             .font(.supraCaption.weight(.medium))
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(color.opacity(0.18), in: Capsule())
             .foregroundStyle(color)
+            .accessibilityIdentifier(reindexing ? "documents.reindexingBadge" : "")
     }
 
     private static func statusAppearance(_ status: String) -> (String, Color) {
@@ -933,6 +954,19 @@ struct DocumentPreviewView: View {
                     Spacer()
                 }
                 .padding(.horizontal).padding(.bottom, 6)
+            }
+            if let revisionNotice = model.revisionNotice {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "clock.badge.questionmark")
+                        .foregroundStyle(.orange)
+                    Text(revisionNotice)
+                        .font(.supraCaption)
+                        .foregroundStyle(.orange)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 6)
+                .accessibilityIdentifier("documentPreview.revisionNotice")
             }
             Divider()
             body(for: model.kind)

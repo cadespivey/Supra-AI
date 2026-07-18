@@ -627,7 +627,7 @@ public final class DocumentImportService: @unchecked Sendable {
                 }
             }
             try ledger.consumeDecoded(result)
-            try persistExtraction(
+            _ = try persistExtraction(
                 result,
                 parserResult: parserResult,
                 ocrCandidates: ocrCandidates,
@@ -850,13 +850,25 @@ public final class DocumentImportService: @unchecked Sendable {
         reindexEnqueuer = enqueuer
     }
 
-    /// Applies a user edit to one extracted part's text and marks the document
-    /// edited + index-stale so a later indexing pass re-chunks/re-embeds it
-    /// (plan §6.2). The OCR/extraction text is the editable source of truth.
+    /// Appends a user-edit revision and selection, then marks the document edited
+    /// + index-stale so the queue re-chunks/re-embeds the selected correction.
+    /// The original extraction remains immutable and queryable.
     @MainActor
-    public func updateExtractedText(documentID: String, partID: String, text: String) throws {
+    public func updateExtractedText(
+        documentID: String,
+        partID: String,
+        text: String,
+        author: String = "Local user",
+        reason: String = "User correction"
+    ) throws {
         let matterID = try store.documentLibrary.fetchDocument(id: documentID)?.matterID
-        try store.documentIndex.updatePartText(partID: partID, text: TextNormalization.normalize(text))
+        _ = try store.documentRevisions.appendUserEdit(
+            documentID: documentID,
+            partID: partID,
+            text: TextNormalization.normalize(text),
+            author: author.trimmingCharacters(in: .whitespacesAndNewlines),
+            reason: reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         try store.documentLibrary.markTextEdited(documentID: documentID)
         if let matterID { reindexEnqueuer?(matterID) }
     }
@@ -904,6 +916,13 @@ public final class DocumentImportService: @unchecked Sendable {
             expectedSHA256: blob.sha256,
             expectedByteSize: blob.byteSize
         )
+        let hadSelectedUserEdit = try store.documentIndex.fetchParts(documentID: documentID).contains { part in
+            guard let revisionID = part.currentRevisionID,
+                  let revision = try? store.documentRevisions.fetchRevision(id: revisionID) else {
+                return false
+            }
+            return revision.origin == "user_edit"
+        }
 
         // Clear any stale classification FIRST, unconditionally, before re-extraction —
         // the old category no longer applies until the document is re-classified. This
@@ -913,8 +932,13 @@ public final class DocumentImportService: @unchecked Sendable {
         guard let format = SupportedDocumentTypes.format(for: verifiedURL) else {
             // No supported extractor — re-mark failed cleanly with no leaked parts
             // (mirrors importFile's unsupported path), and do not throw.
-            try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
-            try markExtractionFailed(documentID: documentID, error: ExtractionError.unsupportedFormat(verifiedURL.pathExtension))
+            let error = ExtractionError.unsupportedFormat(verifiedURL.pathExtension)
+            if hadSelectedUserEdit {
+                try markReprocessFailurePreservingUserEdit(document: document, error: error)
+            } else {
+                try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
+                try markExtractionFailed(documentID: documentID, error: error)
+            }
             return
         }
 
@@ -945,25 +969,32 @@ public final class DocumentImportService: @unchecked Sendable {
                     throw error
                 }
             }
-            try persistExtraction(
+            let selectionConflicts = try persistExtraction(
                 result,
                 parserResult: parserResult,
                 ocrCandidates: ocrCandidates,
                 documentID: documentID,
-                ocrApplied: ocrApplied
+                ocrApplied: ocrApplied,
+                preserveSelectedUserEdits: true
             )
             try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .stale)
             _ = try? store.auditEvents.recordEvent(
                 matterID: document.matterID, eventType: "document_reprocessed", actor: "user",
-                summary: "Re-extracted \(document.displayName) from its managed copy",
+                summary: selectionConflicts.isEmpty
+                    ? "Re-extracted \(document.displayName) from its managed copy"
+                    : "Re-extracted \(document.displayName); retained user corrections pending selection review",
                 relatedTable: "matter_documents", relatedID: documentID
             )
         } catch {
             // A re-extraction that fails again re-marks the instance .failed cleanly and
             // clears any parts (markExtractionFailed only zeroes the count). The failure
             // is swallowed so a re-mark is a normal outcome for the caller.
-            try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
-            try markExtractionFailed(documentID: documentID, error: error)
+            if hadSelectedUserEdit {
+                try markReprocessFailurePreservingUserEdit(document: document, error: error)
+            } else {
+                try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
+                try markExtractionFailed(documentID: documentID, error: error)
+            }
         }
     }
 
@@ -1085,8 +1116,9 @@ public final class DocumentImportService: @unchecked Sendable {
         parserResult: ExtractionResult,
         ocrCandidates: [Int: OCRTextResult],
         documentID: String,
-        ocrApplied: Bool = false
-    ) throws {
+        ocrApplied: Bool = false,
+        preserveSelectedUserEdits: Bool = false
+    ) throws -> Set<Int> {
         var parts: [DocumentPagePartRecord] = []
         var revisions: [DocumentPartRevisionRecord] = []
         var selections: [DocumentPartSelectionRecord] = []
@@ -1201,14 +1233,18 @@ public final class DocumentImportService: @unchecked Sendable {
                 supersedesSelectionID: supersedesSelectionID
             ))
         }
-        try store.documentRevisions.replacePartsAndPersistLineage(
+        let selectionConflicts = try store.documentRevisions.replacePartsAndPersistLineage(
             documentID: documentID,
             parts: parts,
             revisions: revisions,
-            selections: selections
+            selections: selections,
+            preserveSelectedUserEdits: preserveSelectedUserEdits
         )
 
-        let checksum = DocumentStorage.sha256Hex(of: Data(result.combinedText.utf8))
+        let selectedText = try store.documentIndex.fetchParts(documentID: documentID)
+            .map(\.normalizedText)
+            .joined(separator: "\n\n")
+        let checksum = DocumentStorage.sha256Hex(of: Data(selectedText.utf8))
 
         // OCR confidence summary + low-confidence review gating (plan §6.2).
         let ocrConfidences = ocrCandidates.values.map(\.confidence)
@@ -1228,6 +1264,11 @@ public final class DocumentImportService: @unchecked Sendable {
         }
 
         var warnings = result.warnings
+        if !selectionConflicts.isEmpty {
+            warnings.append(
+                "Selection conflict: reprocessing produced new extraction candidates, but retained the selected user correction. Review the revision history before changing the selection."
+            )
+        }
         if ocrApplied {
             // OCR has now run, so the extractor's pre-OCR advisories would
             // recommend work that already happened — drop them and record one
@@ -1255,10 +1296,12 @@ public final class DocumentImportService: @unchecked Sendable {
             status = .needsOCR
         } else if ocrApplied || !ocrConfidences.isEmpty {
             extractionStatus = .ocrComplete
-            status = (lowConfidence || insufficientOCRText || selectionNeedsReview) ? .needsReview : .indexing
+            status = (lowConfidence || insufficientOCRText || selectionNeedsReview || !selectionConflicts.isEmpty)
+                ? .needsReview
+                : .indexing
         } else {
             extractionStatus = .extracted
-            status = convertedLossy ? .needsReview : .indexing
+            status = (convertedLossy || !selectionConflicts.isEmpty) ? .needsReview : .indexing
         }
 
         try store.documentLibrary.updateExtraction(
@@ -1273,6 +1316,7 @@ public final class DocumentImportService: @unchecked Sendable {
             metadataCreatedAt: result.metadataCreatedAt,
             metadataModifiedAt: result.metadataModifiedAt
         )
+        return selectionConflicts
     }
 
     private func makeMachineRevision(
@@ -1334,6 +1378,35 @@ public final class DocumentImportService: @unchecked Sendable {
             pagePartCount: 0,
             errorsJSON: json
         )
+    }
+
+    private func markReprocessFailurePreservingUserEdit(
+        document: MatterDocumentRecord,
+        error: Error
+    ) throws {
+        var warnings: [String] = []
+        if let json = document.extractionWarningsJSON,
+           let data = json.data(using: .utf8),
+           let existing = try? JSONDecoder().decode([String].self, from: data) {
+            warnings = existing
+        }
+        warnings.append(
+            "Reprocessing failed; the selected user correction was retained. Review the extraction before changing the selection."
+        )
+        try store.documentLibrary.updateExtraction(
+            documentID: document.id,
+            status: .needsReview,
+            extractionStatus: .edited,
+            method: document.extractionMethod ?? "manual",
+            checksum: document.extractedTextChecksum,
+            pagePartCount: try store.documentIndex.fetchParts(documentID: document.id).count,
+            ocrConfidenceSummary: document.ocrConfidenceSummary,
+            warningsJSON: try JSONEncoder.encodeToString(warnings),
+            errorsJSON: try JSONEncoder.encodeToString([error.localizedDescription]),
+            metadataCreatedAt: document.metadataCreatedAt,
+            metadataModifiedAt: document.metadataModifiedAt
+        )
+        try store.documentLibrary.updateIndexStatus(documentID: document.id, indexStatus: .stale)
     }
 
     private struct ManagedImportedBlob {

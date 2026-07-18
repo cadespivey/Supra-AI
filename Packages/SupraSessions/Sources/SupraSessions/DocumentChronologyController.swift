@@ -519,6 +519,7 @@ public final class DocumentChronologyController: ObservableObject {
         var source: GroundingSource
         var documentID: String
         var chunkID: String?
+        var revisionID: String?
         var locatorJSON: String
         var rank: Int
         var warnings: [String]
@@ -565,7 +566,7 @@ public final class DocumentChronologyController: ObservableObject {
                             label: label, documentName: document.displayName, locatorDisplay: "metadata date",
                             text: "Document metadata date: \(iso) (metadata date)", excerpt: iso, lowConfidence: false
                         ),
-                        documentID: document.id, chunkID: nil,
+                        documentID: document.id, chunkID: nil, revisionID: nil,
                         locatorJSON: DocumentSourceLocator(sourceKind: .convertedDocument).encodedJSON(),
                         rank: rank, warnings: [],
                         documentOrderDate: document.metadataCreatedAt ?? document.createdAt
@@ -601,7 +602,8 @@ public final class DocumentChronologyController: ObservableObject {
                         label: label, documentName: document.displayName, locatorDisplay: locator.displayString,
                         text: chunk.normalizedText, excerpt: chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText), lowConfidence: low
                     ),
-                    documentID: document.id, chunkID: chunk.id, locatorJSON: locator.encodedJSON(),
+                    documentID: document.id, chunkID: chunk.id, revisionID: chunk.revisionID,
+                    locatorJSON: locator.encodedJSON(),
                     rank: rank, warnings: low ? ["low OCR confidence"] : [],
                     documentOrderDate: document.metadataCreatedAt ?? document.createdAt
                 ))
@@ -630,6 +632,7 @@ public final class DocumentChronologyController: ObservableObject {
         let rows = prepared.map { source in
             DocumentOutputSourceRecord(
                 sourceSetID: sourceSet.id, documentID: source.documentID, chunkID: source.chunkID,
+                revisionID: source.revisionID,
                 citationLabel: source.source.label, locatorJSON: source.locatorJSON,
                 excerpt: source.source.excerpt, rank: source.rank,
                 warningsJSON: source.warnings.isEmpty ? nil : (try? JSONEncoder.encodeToString(source.warnings))

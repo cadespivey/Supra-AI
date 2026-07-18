@@ -246,6 +246,24 @@ public final class DocumentProcessingQueue: ObservableObject {
         }
     }
 
+    /// Applies a correction through the import service's immutable-lineage path.
+    /// The service's composed reindex enqueuer schedules the follow-up work.
+    public func updateExtractedText(
+        documentID: String,
+        partID: String,
+        text: String,
+        author: String,
+        reason: String
+    ) throws {
+        try importService.updateExtractedText(
+            documentID: documentID,
+            partID: partID,
+            text: text,
+            author: author,
+            reason: reason
+        )
+    }
+
     public func cancelQueuedJob(id: String) {
         try? store.documentJobs.cancelJob(id: id)
         pendingSources[id] = nil

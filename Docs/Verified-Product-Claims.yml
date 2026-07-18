@@ -15,7 +15,7 @@ claims:
 
   - id: "STORE-MIGRATION-SEQUENCE"
     topic: "migration-count"
-    wording: "The shipping database schema registers a contiguous migration sequence from v001 through v060."
+    wording: "The shipping database schema registers a contiguous migration sequence from v001 through v061."
     owner: "Persistence engineering"
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"
     verification: "Scripts/verify-migration-sequence.sh"
@@ -23,7 +23,7 @@ claims:
     applicable_version: "2.3.0 and later"
     last_reviewed: "2026-07-17"
     publication_anchor: "ARCHITECTURE.md"
-    expected: "v060_create_document_part_lineage"
+    expected: "v061_bind_document_output_source_revisions"
 
   - id: "STORE-SUPPORTED-UPGRADES"
     topic: "supported-releases"
