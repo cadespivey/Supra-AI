@@ -604,8 +604,11 @@ struct MatterDocumentsView: View {
            failure.matterID == controller.matterID,
            !queue.resumableImports.contains(where: { $0.matterID == controller.matterID }),
            dismissedImportFailureID != failure.id {
-            let message = "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see the Audit tab for details."
-            VStack(alignment: .trailing, spacing: 4) {
+            let itemNoun = failure.failedCount == 1 ? "item" : "items"
+            let message = failure.details.isEmpty
+                ? "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see the Audit tab for details."
+                : "Imported \(failure.importedCount) of \(failure.discoveredCount). Review the \(failure.failedCount) \(itemNoun) below."
+            VStack(alignment: .leading, spacing: 6) {
                 SupraWarningBanner(
                     .warning,
                     title: "Some files couldn’t be imported",
@@ -618,16 +621,49 @@ struct MatterDocumentsView: View {
                 .accessibilityValue("Some files could not be imported. \(message)")
                 .accessibilityFocused($importFailureFocused)
 
-                Button {
-                    importFailureFocused = false
-                    dismissedImportFailureID = failure.id
-                    queue.clearImportFailure()
-                } label: {
-                    Label("Dismiss import warning", systemImage: "xmark")
+                ForEach(Array(failure.details.enumerated()), id: \.offset) { _, detail in
+                    let detailAccessibilityValue = [
+                        detail.rejectionCode.map { "Code: \($0)" },
+                        detail.reason,
+                    ].compactMap { $0 }.joined(separator: ". ")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(detail.displayName)
+                            .font(.supraCaption)
+                            .fontWeight(.semibold)
+                            .accessibilityIdentifier("documents.importFailureDetail.\(detail.displayName)")
+                            .accessibilityLabel(detail.displayName)
+                            .accessibilityValue(detailAccessibilityValue)
+                        if let code = detail.rejectionCode {
+                            Text("Code: \(code)")
+                                .font(.supraCaption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        if let reason = detail.reason {
+                            Text(reason)
+                                .font(.supraCaption)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.orange.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
-                .buttonStyle(.ghost)
-                .accessibilityIdentifier("documents.dismissImportFailureWarning")
-                .accessibilityHint("Removes this warning; rejection details remain in the Audit tab")
+
+                HStack {
+                    Spacer()
+                    Button {
+                        importFailureFocused = false
+                        dismissedImportFailureID = failure.id
+                        queue.clearImportFailure()
+                    } label: {
+                        Label("Dismiss import warning", systemImage: "xmark")
+                    }
+                    .buttonStyle(.ghost)
+                    .accessibilityIdentifier("documents.dismissImportFailureWarning")
+                    .accessibilityHint("Removes this warning; rejection details remain in the Audit tab")
+                }
             }
             .padding(.horizontal, 8)
             .padding(.top, 8)

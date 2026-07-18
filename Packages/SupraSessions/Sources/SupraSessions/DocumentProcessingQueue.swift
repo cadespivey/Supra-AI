@@ -3,6 +3,29 @@ import Foundation
 import SupraCore
 import SupraStore
 
+/// Actionable per-file detail retained from a completed import report.
+public struct DocumentImportFailureDetail: Sendable, Equatable {
+    public let displayName: String
+    public let sourceDisplayPath: String
+    public let disposition: String
+    public let rejectionCode: String?
+    public let reason: String?
+
+    public init(
+        displayName: String,
+        sourceDisplayPath: String,
+        disposition: String,
+        rejectionCode: String? = nil,
+        reason: String? = nil
+    ) {
+        self.displayName = displayName
+        self.sourceDisplayPath = sourceDisplayPath
+        self.disposition = disposition
+        self.rejectionCode = rejectionCode
+        self.reason = reason
+    }
+}
+
 /// Summary of an import that finished with per-file failures, for in-app display.
 public struct DocumentImportFailureSummary: Sendable, Equatable, Identifiable {
     public let matterID: String
@@ -10,19 +33,22 @@ public struct DocumentImportFailureSummary: Sendable, Equatable, Identifiable {
     public let discoveredCount: Int
     public let failedCount: Int
     public let reasons: [String]
+    public let details: [DocumentImportFailureDetail]
 
     public init(
         matterID: String,
         importedCount: Int,
         discoveredCount: Int,
         failedCount: Int,
-        reasons: [String] = []
+        reasons: [String] = [],
+        details: [DocumentImportFailureDetail] = []
     ) {
         self.matterID = matterID
         self.importedCount = importedCount
         self.discoveredCount = discoveredCount
         self.failedCount = failedCount
         self.reasons = reasons
+        self.details = details
     }
     /// Stable per-outcome id so a dismissed banner stays dismissed but a new
     /// failing import re-shows one.
@@ -583,7 +609,8 @@ public final class DocumentProcessingQueue: ObservableObject {
                 importedCount: report.importedCount,
                 discoveredCount: report.discoveredCount,
                 failedCount: report.failedCount,
-                reasons: Self.failureReasons(from: report)
+                reasons: Self.failureReasons(from: report),
+                details: Self.failureDetails(from: report)
             )
             await notifier.notify(
                 title: "Import complete with issues",
@@ -615,12 +642,43 @@ public final class DocumentProcessingQueue: ObservableObject {
             importedCount: batch.importedCount,
             discoveredCount: batch.discoveredCount,
             failedCount: batch.failedCount,
-            reasons: report.map { Self.failureReasons(from: $0) } ?? []
+            reasons: report.map { Self.failureReasons(from: $0) } ?? [],
+            details: report.map { Self.failureDetails(from: $0) } ?? []
         )
     }
 
     private static func failureReasons(from report: DocumentImportReport) -> [String] {
         Array(Set(report.items.compactMap(\.reason))).sorted()
+    }
+
+    private static func failureDetails(from report: DocumentImportReport) -> [DocumentImportFailureDetail] {
+        let failedDispositions: Set<String> = [
+            DocumentImportDisposition.extractionFailed.rawValue,
+            DocumentImportDisposition.unsupported.rawValue,
+            DocumentImportDisposition.ocrFailed.rawValue,
+            DocumentImportSourceState.rejected.rawValue,
+            DocumentImportSourceState.unsupportedByPolicy.rawValue,
+            DocumentImportSourceState.failed.rawValue,
+            DocumentImportSourceState.cancelled.rawValue,
+            DocumentImportSourceState.interrupted.rawValue,
+        ]
+        return report.items
+            .filter { failedDispositions.contains($0.disposition) }
+            .map {
+                DocumentImportFailureDetail(
+                    displayName: $0.displayName,
+                    sourceDisplayPath: $0.sourceDisplayPath,
+                    disposition: $0.disposition,
+                    rejectionCode: $0.rejectionCode,
+                    reason: $0.reason
+                )
+            }
+            .sorted {
+                if $0.sourceDisplayPath != $1.sourceDisplayPath {
+                    return $0.sourceDisplayPath < $1.sourceDisplayPath
+                }
+                return $0.displayName < $1.displayName
+            }
     }
 }
 

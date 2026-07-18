@@ -378,9 +378,58 @@ final class AppEnvironment: ObservableObject {
         }
         seedUITestCitationsChatIfNeeded()
         seedUITestRemediationWarningsIfNeeded()
+        seedUITestImportFailureIfNeeded()
         seedUITestInterruptedImportIfNeeded()
         seedUITestDocumentCorrectionIfNeeded()
         seedUITestDocumentRelationsIfNeeded()
+    }
+
+    /// Seeds one completed encrypted-source rejection for the T-OPS-07 warning
+    /// contract. The report and source row contain only synthetic fixture data.
+    private func seedUITestImportFailureIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestImportFailure"),
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            let marker = "SupraAI UI-test actionable import failure"
+            guard !(try store.documentJobs.fetchBatches(matterID: matterID)).contains(where: {
+                $0.sourceRootDisplay == marker
+            }) else { return }
+
+            let displayName = "privileged-locked.pdf"
+            let guidance = "Password-protected or encrypted files cannot be imported. Remove encryption from a copy and try again."
+            let batch = try store.documentJobs.createBatch(
+                matterID: matterID,
+                sourceRootDisplay: marker
+            )
+            let source = try store.documentJobs.recordDiscovered(
+                batchID: batch.id,
+                matterID: matterID,
+                sourceKey: "selection:0",
+                sourceDisplayPath: displayName
+            )
+            _ = try store.documentJobs.markState(
+                sourceID: source.id,
+                state: .rejected,
+                rejectionCode: "encrypted_source",
+                reason: guidance
+            )
+            let reportJSON = """
+            {"items":[{"displayName":"\(displayName)","sourceDisplayPath":"\(displayName)","disposition":"rejected","reason":"\(guidance)","rejectionCode":"encrypted_source"}],"counts":{"rejected":1}}
+            """
+            try store.documentJobs.updateBatchProgress(
+                id: batch.id,
+                discoveredCount: 1,
+                importedCount: 0,
+                failedCount: 1
+            )
+            try store.documentJobs.finalizeBatch(
+                id: batch.id,
+                status: .completeWithFailures,
+                reportJSON: reportJSON
+            )
+        } catch {
+            assertionFailure("Could not seed actionable import failure fixture: \(error)")
+        }
     }
 
     /// Seeds one proposal-only draft/executed family for the T-UX-08 review flow.

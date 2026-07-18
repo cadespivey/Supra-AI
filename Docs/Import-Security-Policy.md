@@ -36,6 +36,11 @@ items continue until an aggregate budget is exhausted. Rejected hostile items
 must not leave a document row or managed blob. Cancellation propagates and
 removes import staging files.
 
+When a completed import contains failures, the Documents warning reconstructs
+the persisted report after relaunch and lists each failed item's display name,
+stable rejection code when present, and exact recovery guidance. Aggregate Audit
+events remain supplementary rather than the only explanation visible to the user.
+
 ## Encrypted and legacy-format disposition
 
 Password-protected PDFs, OLE-wrapped encrypted OOXML packages exposing
