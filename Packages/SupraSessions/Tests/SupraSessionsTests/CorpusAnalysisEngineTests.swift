@@ -270,6 +270,70 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         XCTAssertEqual(partitions.compactMap(\.findingsJSON).count, 2, "successful checkpoints must survive cancellation")
     }
 
+    func testTENG07RelaunchResumesOnlyNonSucceededPartitionsAgainstFrozenSnapshot() async throws {
+        // T-ENG-07 expected RED: a cancelled run cannot reopen its non-succeeded partitions.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic resumed corpus")
+        let fixture = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "resumed.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: (1...5).map { "RESUME-PART-\($0)" }
+        )
+        let firstProbe = EngineProbe()
+        let request = CorpusAnalysisRequest(
+            runKey: "resumed-run",
+            matterID: matter.id,
+            taskKind: .customExtraction,
+            characterBudget: 1
+        )
+
+        do {
+            _ = try await CorpusAnalysisEngine(store: store).run(request: request) { input in
+                let ordinal = await firstProbe.recordAndReturnOrdinal(input)
+                if ordinal == 3 { throw CancellationError() }
+                return Self.mapFindings(input)
+            }
+            XCTFail("The first process life must stop after two checkpoints")
+        } catch is CancellationError {
+            // Simulates force-quit/cancel after durable successes.
+        }
+
+        let interrupted = try XCTUnwrap(store.corpusAnalysis.fetchRun(
+            matterID: matter.id,
+            runKey: request.runKey
+        ))
+        let frozenSnapshot = try JSONDecoder().decode(
+            CorpusAnalysisSnapshot.self,
+            from: Data(interrupted.corpusSnapshotJSON.utf8)
+        )
+        XCTAssertEqual(frozenSnapshot.members.first?.revisionIDs, fixture.revisionIDs)
+
+        let resumeProbe = EngineProbe()
+        let resumed = try await CorpusAnalysisEngine(store: store).run(request: request) { input in
+            await resumeProbe.record(input)
+            return Self.mapFindings(input)
+        }
+
+        let resumedTexts = await resumeProbe.inputs.flatMap(\.sources).map(\.text)
+        XCTAssertEqual(resumedTexts, ["RESUME-PART-3", "RESUME-PART-4", "RESUME-PART-5"])
+        XCTAssertFalse(resumedTexts.contains("RESUME-PART-1"), "a succeeded partition must be a cache hit")
+        XCTAssertFalse(resumedTexts.contains("RESUME-PART-2"), "a succeeded partition must be a cache hit")
+        XCTAssertEqual(resumed.snapshot, frozenSnapshot)
+        XCTAssertEqual(resumed.snapshot.members.first?.revisionIDs, fixture.revisionIDs)
+        XCTAssertEqual(resumed.run.status, CorpusAnalysisRunStatus.persisted.rawValue)
+        XCTAssertEqual(resumed.run.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
+        XCTAssertEqual(resumed.coverage.succeededPartitionCount, 5)
+        XCTAssertEqual(resumed.coverage.pendingPartitionCount, 0)
+        XCTAssertEqual(resumed.coverage.terminalPartitionCount, 5)
+        XCTAssertEqual(resumed.coverage.balanceErrorCount, 0)
+        XCTAssertEqual(resumed.findings.count, 5)
+        XCTAssertTrue(resumed.partitions.allSatisfy { $0.attemptCount == 1 })
+    }
+
     private func makeStore() throws -> SupraStore {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CorpusAnalysisEngine-\(UUID().uuidString)", isDirectory: true)
@@ -347,6 +411,20 @@ final class CorpusAnalysisEngineTests: XCTestCase {
             partIDs: parts.map(\.id),
             revisionIDs: revisions.map(\.id)
         )
+    }
+
+    private static func mapFindings(_ input: CorpusAnalysisPartitionInput) -> CorpusAnalysisMapOutput {
+        CorpusAnalysisMapOutput(findings: input.sources.map { source in
+            CorpusAnalysisFinding(
+                id: "finding-\(source.revisionID)",
+                value: source.text,
+                evidence: [.init(
+                    documentID: source.documentID,
+                    revisionID: source.revisionID,
+                    locatorJSON: source.locatorJSON
+                )]
+            )
+        })
     }
 }
 
