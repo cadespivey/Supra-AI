@@ -1,0 +1,829 @@
+{
+  "metrics" : [
+    {
+      "id" : "B-ACC-01",
+      "measurements" : [
+        {
+          "denominator" : 25,
+          "name" : "source_accounting_accuracy",
+          "numerator" : 25,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "denominator" : 25,
+          "name" : "source_balance_error_count",
+          "numerator" : 0,
+          "status" : "measured",
+          "unit" : "count",
+          "value" : 0
+        }
+      ],
+      "title" : "Source accounting"
+    },
+    {
+      "id" : "B-CHR-01",
+      "measurements" : [
+        {
+          "name" : "overall",
+          "reason" : "chronology result unavailable",
+          "status" : "not_applicable",
+          "unit" : "rate"
+        }
+      ],
+      "title" : "Chronology event accuracy"
+    },
+    {
+      "id" : "B-CHR-02",
+      "measurements" : [
+        {
+          "name" : "overall",
+          "reason" : "chronology result unavailable",
+          "status" : "not_applicable",
+          "unit" : "rate"
+        }
+      ],
+      "title" : "Chronology order and coverage"
+    },
+    {
+      "id" : "B-CLS-01",
+      "measurements" : [
+        {
+          "name" : "macro_f1",
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "recall_correspondence",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.34238022750665303,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 2,
+          "name" : "recall_financial_records",
+          "numerator" : 2,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        }
+      ],
+      "title" : "Classification macro F1"
+    },
+    {
+      "id" : "B-CLS-02",
+      "measurements" : [
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "abstention_precision",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "abstention_recall",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.4385029682449546,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 3,
+          "name" : "evidence_validity_rate",
+          "numerator" : 3,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        }
+      ],
+      "title" : "Classification abstention and evidence"
+    },
+    {
+      "id" : "B-CMP-01",
+      "measurements" : [
+        {
+          "denominator" : 3,
+          "name" : "completeness_false_claim_rate",
+          "numerator" : 0,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0
+        }
+      ],
+      "title" : "Completeness false claims"
+    },
+    {
+      "id" : "B-CTX-01",
+      "measurements" : [
+        {
+          "denominator" : 700,
+          "name" : "context_utilization",
+          "numerator" : 620,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0.8857142857142857
+        },
+        {
+          "denominator" : 620,
+          "name" : "fallback_estimate_error",
+          "numerator" : 20,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0.03225806451612903
+        }
+      ],
+      "title" : "Context utilization"
+    },
+    {
+      "id" : "B-CTX-02",
+      "measurements" : [
+        {
+          "denominator" : 1,
+          "name" : "overflow_recovery_rate",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "denominator" : 3,
+          "name" : "responsive_candidate_omission_rate",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0.3333333333333333
+        },
+        {
+          "denominator" : 1,
+          "name" : "silent_overflow_count",
+          "numerator" : 0,
+          "status" : "measured",
+          "unit" : "count",
+          "value" : 0
+        }
+      ],
+      "title" : "Context omission and overflow recovery"
+    },
+    {
+      "id" : "B-EXT-01",
+      "measurements" : [
+        {
+          "name" : "overall",
+          "reason" : "normalized extraction goldens do not exist before M4",
+          "status" : "not_applicable",
+          "unit" : "rate"
+        }
+      ],
+      "title" : "Extraction character error"
+    },
+    {
+      "id" : "B-EXT-02",
+      "measurements" : [
+        {
+          "name" : "overall",
+          "reason" : "typed extraction fields do not exist before M4",
+          "status" : "not_applicable",
+          "unit" : "rate"
+        }
+      ],
+      "title" : "Extraction field accuracy"
+    },
+    {
+      "id" : "B-ISO-01",
+      "measurements" : [
+        {
+          "denominator" : 151,
+          "name" : "cross_matter_leak_count",
+          "numerator" : 0,
+          "status" : "measured",
+          "unit" : "count",
+          "value" : 0
+        }
+      ],
+      "title" : "Matter isolation"
+    },
+    {
+      "id" : "B-LIN-01",
+      "measurements" : [
+        {
+          "denominator" : 5,
+          "name" : "stale_detection_precision",
+          "numerator" : 5,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "denominator" : 5,
+          "name" : "stale_detection_recall",
+          "numerator" : 5,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        }
+      ],
+      "title" : "Stale detection"
+    },
+    {
+      "id" : "B-LOC-01",
+      "measurements" : [
+        {
+          "denominator" : 4,
+          "name" : "resolution_accuracy",
+          "numerator" : 4,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        }
+      ],
+      "title" : "Locator round trip"
+    },
+    {
+      "id" : "B-LST-01",
+      "measurements" : [
+        {
+          "denominator" : 5,
+          "name" : "duplicate_output_rate",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0.2
+        },
+        {
+          "denominator" : 6,
+          "name" : "item_f1",
+          "numerator" : 4,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0.6666666666666666
+        },
+        {
+          "denominator" : 3,
+          "name" : "item_precision",
+          "numerator" : 2,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0.6666666666666666
+        },
+        {
+          "denominator" : 3,
+          "name" : "item_recall",
+          "numerator" : 2,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0.6666666666666666
+        }
+      ],
+      "title" : "Exhaustive list accuracy"
+    },
+    {
+      "id" : "B-NEG-01",
+      "measurements" : [
+        {
+          "denominator" : 2,
+          "name" : "negative_false_accept_rate",
+          "numerator" : 0,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0
+        }
+      ],
+      "title" : "Negative false accepts"
+    },
+    {
+      "id" : "B-OCR-01",
+      "measurements" : [
+        {
+          "denominator" : 4,
+          "name" : "selection_accuracy",
+          "numerator" : 4,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        }
+      ],
+      "title" : "OCR selection"
+    },
+    {
+      "id" : "B-OCR-02",
+      "measurements" : [
+        {
+          "denominator" : 4,
+          "name" : "brier_score",
+          "status" : "measured",
+          "unit" : "score",
+          "value" : 0.038996594999999995
+        },
+        {
+          "denominator" : 4,
+          "name" : "expected_calibration_error",
+          "status" : "measured",
+          "unit" : "score",
+          "value" : 0.17985
+        },
+        {
+          "denominator" : 1,
+          "name" : "false_clean_count",
+          "numerator" : 0,
+          "status" : "measured",
+          "unit" : "count",
+          "value" : 0
+        }
+      ],
+      "title" : "OCR calibration"
+    },
+    {
+      "id" : "B-PERF-01",
+      "measurements" : [
+        {
+          "name" : "overall",
+          "reason" : "fixed performance protocol unavailable",
+          "status" : "not_applicable",
+          "unit" : "rate"
+        }
+      ],
+      "title" : "Latency"
+    },
+    {
+      "id" : "B-PERF-02",
+      "measurements" : [
+        {
+          "name" : "overall",
+          "reason" : "fixed performance protocol unavailable",
+          "status" : "not_applicable",
+          "unit" : "rate"
+        }
+      ],
+      "title" : "Throughput and memory"
+    },
+    {
+      "id" : "B-PERF-03",
+      "measurements" : [
+        {
+          "name" : "overall",
+          "reason" : "incremental lineage path does not exist before M8",
+          "status" : "not_applicable",
+          "unit" : "rate"
+        }
+      ],
+      "title" : "Incremental work"
+    },
+    {
+      "id" : "B-REC-01",
+      "measurements" : [
+        {
+          "denominator" : 3,
+          "name" : "duplicate_work_rate",
+          "numerator" : 0,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0
+        },
+        {
+          "denominator" : 5,
+          "name" : "successful_recovery_rate",
+          "numerator" : 5,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        }
+      ],
+      "title" : "Recovery"
+    },
+    {
+      "id" : "B-RET-01",
+      "measurements" : [
+        {
+          "confidenceInterval" : {
+            "lower" : 0.4686688993346016,
+            "method" : "wilson_95",
+            "upper" : 0.8672001038970478
+          },
+          "denominator" : 17,
+          "name" : "recall_at_12",
+          "numerator" : 12,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0.7058823529411765
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.5897054143116588,
+            "method" : "wilson_95",
+            "upper" : 0.9380887336237901
+          },
+          "denominator" : 17,
+          "name" : "recall_at_40",
+          "numerator" : 14,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0.8235294117647058
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.41300363485218694,
+            "method" : "wilson_95",
+            "upper" : 0.8269027960275627
+          },
+          "denominator" : 17,
+          "name" : "recall_at_8",
+          "numerator" : 11,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0.6470588235294118
+        }
+      ],
+      "title" : "Retrieval recall at K"
+    },
+    {
+      "id" : "B-RET-02",
+      "measurements" : [
+        {
+          "confidenceInterval" : {
+            "lower" : 0.30574239460262737,
+            "method" : "wilson_95",
+            "upper" : 0.8631557141764026
+          },
+          "denominator" : 8,
+          "name" : "full_evidence_set_recall_at_40",
+          "numerator" : 5,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0.625
+        }
+      ],
+      "title" : "Full evidence-set recall"
+    },
+    {
+      "id" : "B-STR-01",
+      "measurements" : [
+        {
+          "name" : "overall",
+          "reason" : "structure nodes do not exist before M4",
+          "status" : "not_applicable",
+          "unit" : "rate"
+        }
+      ],
+      "title" : "Structure accuracy"
+    },
+    {
+      "id" : "B-SUP-01",
+      "measurements" : [
+        {
+          "denominator" : 4,
+          "name" : "support_false_accept_rate",
+          "numerator" : 0,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 0
+        }
+      ],
+      "title" : "Support false accepts"
+    },
+    {
+      "id" : "B-TAB-01",
+      "measurements" : [
+        {
+          "confidenceInterval" : {
+            "lower" : 0.8864866068260312,
+            "method" : "wilson_95",
+            "upper" : 0.9999999999999999
+          },
+          "denominator" : 30,
+          "name" : "header_association_f1",
+          "numerator" : 30,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.7961166989641515,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 15,
+          "name" : "header_association_precision",
+          "numerator" : 15,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.7961166989641515,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 15,
+          "name" : "header_association_recall",
+          "numerator" : 15,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        }
+      ],
+      "title" : "Table header association"
+    },
+    {
+      "id" : "B-VER-01",
+      "measurements" : [
+        {
+          "confidenceInterval" : {
+            "lower" : 0.34238022750665303,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 2,
+          "name" : "amendment_of_f1",
+          "numerator" : 2,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "amendment_of_precision",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "amendment_of_recall",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.34238022750665303,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 2,
+          "name" : "draft_of_f1",
+          "numerator" : 2,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "draft_of_precision",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "draft_of_recall",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.34238022750665303,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 2,
+          "name" : "exact_duplicate_f1",
+          "numerator" : 2,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "exact_duplicate_precision",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "exact_duplicate_recall",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.7224672001371107,
+            "method" : "wilson_95",
+            "upper" : 0.9999999999999999
+          },
+          "denominator" : 10,
+          "name" : "f1",
+          "numerator" : 10,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.5655175352168251,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 5,
+          "name" : "precision",
+          "numerator" : 5,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.5655175352168251,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 5,
+          "name" : "recall",
+          "numerator" : 5,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.34238022750665303,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 2,
+          "name" : "redline_of_f1",
+          "numerator" : 2,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "redline_of_precision",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "redline_of_recall",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.34238022750665303,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 2,
+          "name" : "supersedes_f1",
+          "numerator" : 2,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "supersedes_precision",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "confidenceInterval" : {
+            "lower" : 0.20654931437723745,
+            "method" : "wilson_95",
+            "upper" : 1
+          },
+          "denominator" : 1,
+          "name" : "supersedes_recall",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        }
+      ],
+      "title" : "Document relation accuracy"
+    },
+    {
+      "id" : "B-VER-02",
+      "measurements" : [
+        {
+          "denominator" : 1,
+          "name" : "ambiguous_block_rate",
+          "numerator" : 1,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        },
+        {
+          "denominator" : 3,
+          "name" : "operative_state_accuracy",
+          "numerator" : 3,
+          "status" : "measured",
+          "unit" : "rate",
+          "value" : 1
+        }
+      ],
+      "title" : "Operative state accuracy"
+    }
+  ],
+  "run" : {
+    "corpusManifestSHA256" : "301354160021b873c173592300f90a925aa3dafaf3c3a7f03f10838cf3781509",
+    "generatedAt" : "2026-07-18T10:20:52.981Z",
+    "mode" : "deterministic",
+    "repositorySHA" : "47ae56fe040a0e76f7f4d93cbcd8d8e83e603b7c"
+  },
+  "schemaVersion" : 1
+}
