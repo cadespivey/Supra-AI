@@ -93,6 +93,18 @@ final class Milestone3ValidationTests: XCTestCase {
         XCTAssertTrue(try store.documentIndex.searchChunks(matterID: matter.id, query: "deposition").isEmpty)
         try store.documentLibrary.restoreDocument(id: witness.id)
 
+        // This validation exercises proposition-supported generation and export,
+        // not a corpus-complete or negative claim. Terminal import failures and
+        // review-required sources remain visible in whole-matter readiness, so use
+        // the explicitly ready subset for the artifact pipeline below.
+        let readyScope = RetrievalScope(documentIDs: try store.documentLibrary
+            .fetchDocuments(matterID: matter.id)
+            .compactMap { document in
+                document.status == MatterDocumentStatus.ready.rawValue
+                    && document.indexStatus == DocumentIndexStatus.ready.rawValue
+                    ? document.id : nil
+            })
+
         // --- Q&A (stub model, cited) ---
         let runtime = StubRuntimeClient(outcome: { request in
             .events([.event(request, 0, .token, token: "Indemnification survives termination [S1]."), .event(request, 1, .generationCompleted)])
@@ -100,10 +112,12 @@ final class Milestone3ValidationTests: XCTestCase {
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: embedder)
         let qaGen = await qa.generate(
             question: "Does indemnification survive termination?",
+            scope: readyScope,
             modelID: ModelID(),
-            modelLineage: Self.modelLineage
+            modelLineage: Self.modelLineage,
+            depth: .deep
         )
-        let qaResult = try XCTUnwrap(qaGen)
+        let qaResult = try XCTUnwrap(qaGen, qa.message ?? "Q&A returned nil without a message")
         // Gate: Q&A has no unresolved citation ids.
         let qaSources = try store.documentSources.fetchSources(structuredOutputVersionID: qaResult.versionID)
         XCTAssertTrue(qaResult.citationLabels.allSatisfy { label in qaSources.contains { $0.citationLabel == label } })
@@ -114,7 +128,7 @@ final class Milestone3ValidationTests: XCTestCase {
         })
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: chronoRuntime)
         let chronoGen = await chronology.generate(
-            scope: .wholeMatter,
+            scope: readyScope,
             format: .table,
             modelID: ModelID(),
             modelLineage: Self.modelLineage
