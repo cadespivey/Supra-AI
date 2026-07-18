@@ -127,6 +127,57 @@ final class ChunkerComparisonReportTests: XCTestCase {
         XCTAssertEqual(regressedComparison.decision.status, "blocked_list_regression")
     }
 
+    func testTBEN07ComparisonRequiresAStructureSensitiveImprovement() async throws {
+        // T-BEN-07 expected RED: equal B-RET-02 values currently advance to
+        // owner approval even though M5-W3 requires a structure-sensitive win.
+        let v1 = try await report(
+            sha: "v1",
+            observations: [
+                rate("B-RET-01", "recall_at_8", 8, 10),
+                rate("B-RET-02", "typed_structure_evidence_recall", 0, 2),
+            ]
+        )
+        let equal = try await report(
+            sha: "v2-equal",
+            observations: [
+                rate("B-RET-01", "recall_at_8", 8, 10),
+                rate("B-RET-02", "typed_structure_evidence_recall", 0, 2),
+            ]
+        )
+        let improved = try await report(
+            sha: "v2-improved",
+            observations: [
+                rate("B-RET-01", "recall_at_8", 8, 10),
+                rate("B-RET-02", "typed_structure_evidence_recall", 2, 2),
+            ]
+        )
+
+        let equalComparison = try ChunkerComparisonReport.make(
+            repositorySHA: "decision-sha",
+            corpusManifestSHA256: "fixture-sha",
+            generatedAt: nil,
+            v1: v1,
+            v2: equal,
+            v1RetrievalSeconds: 1,
+            v2RetrievalSeconds: 1
+        )
+        XCTAssertEqual(equalComparison.decision.status, "blocked_no_structure_improvement")
+
+        let improvedComparison = try ChunkerComparisonReport.make(
+            repositorySHA: "decision-sha",
+            corpusManifestSHA256: "fixture-sha",
+            generatedAt: nil,
+            v1: v1,
+            v2: improved,
+            v1RetrievalSeconds: 1,
+            v2RetrievalSeconds: 1
+        )
+        XCTAssertEqual(improvedComparison.decision.status, "pending_owner_approval")
+        XCTAssertTrue(improvedComparison.decision.reasons.contains(
+            "At least one B-RET-02 structure-sensitive metric improved over v1."
+        ))
+    }
+
     private func report(
         sha: String,
         observations: [BenchmarkObservation]
