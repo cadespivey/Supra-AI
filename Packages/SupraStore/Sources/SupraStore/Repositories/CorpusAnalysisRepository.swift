@@ -8,6 +8,8 @@ public enum CorpusAnalysisRepositoryError: Error, LocalizedError, Equatable, Sen
     case partitionScopeMismatch(String)
     case partitionIdentityCollision(String)
     case terminalDispositionConflict(String)
+    case invalidAttemptHistory(String)
+    case attemptNotRunning(String)
     case invalidSnapshot
     case invalidStatusTransition(String)
     case corpusCompleteRequiresAllSucceeded
@@ -20,6 +22,8 @@ public enum CorpusAnalysisRepositoryError: Error, LocalizedError, Equatable, Sen
         case .partitionScopeMismatch(let id): "Corpus partition \(id) does not belong to the selected run."
         case .partitionIdentityCollision(let key): "Corpus partition key \(key) was reused for different revisions."
         case .terminalDispositionConflict(let id): "Corpus partition \(id) already has a different terminal disposition."
+        case .invalidAttemptHistory(let id): "Corpus partition \(id) has invalid attempt history."
+        case .attemptNotRunning(let id): "Corpus partition \(id) has no running attempt to finish."
         case .invalidSnapshot: "The corpus snapshot could not be decoded."
         case .invalidStatusTransition(let transition): "Invalid corpus run transition: \(transition)."
         case .corpusCompleteRequiresAllSucceeded: "Corpus-complete requires a balanced ledger with every partition succeeded."
@@ -112,6 +116,226 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
                 sql: "SELECT * FROM corpus_analysis_partitions WHERE run_id = ? ORDER BY partition_key ASC",
                 arguments: [runID]
             )
+        }
+    }
+
+    /// Reopens an interrupted/cancelled lifecycle without changing its frozen
+    /// snapshot or replaying successful partitions. A durable `running` attempt
+    /// tail means the prior process died before checkpoint completion and is
+    /// closed as a retryable failure before scheduling resumes.
+    @discardableResult
+    public func prepareForResume(
+        matterID: String,
+        runID: String,
+        maximumRetryCount: Int
+    ) throws -> CorpusAnalysisRunRecord {
+        try writer.write { db in
+            var run = try scopedRun(db, matterID: matterID, runID: runID)
+            guard run.status != CorpusAnalysisRunStatus.persisted.rawValue else {
+                throw CorpusAnalysisRepositoryError.invalidStatusTransition("persisted->running")
+            }
+            let partitions = try CorpusAnalysisPartitionRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM corpus_analysis_partitions WHERE run_id = ? ORDER BY partition_key ASC",
+                arguments: [runID]
+            )
+            for var partition in partitions {
+                var history = try decodeAttemptHistory(partition)
+                if history.last?.outcome == .running {
+                    let index = history.index(before: history.endIndex)
+                    history[index].outcome = .failed
+                    history[index].retryable = true
+                    history[index].errorSummary = "Interrupted before the attempt checkpoint completed."
+                    history[index].completedAt = Date()
+                    partition.attemptHistoryJSON = try canonicalJSON(history)
+                    partition.errorSummary = history[index].errorSummary
+                }
+
+                let retryableFailureCount = history.count { $0.outcome == .failed && $0.retryable }
+                let lastFailureWasRetryable = history.last?.outcome == .failed
+                    && history.last?.retryable == true
+                let disposition = CorpusAnalysisPartitionDisposition(rawValue: partition.disposition) ?? .pending
+                if disposition == .cancelled
+                    || (disposition == .failed
+                        && lastFailureWasRetryable
+                        && retryableFailureCount <= maximumRetryCount) {
+                    partition.disposition = CorpusAnalysisPartitionDisposition.pending.rawValue
+                    partition.dispositionReason = nil
+                    partition.findingsJSON = nil
+                    partition.errorSummary = nil
+                    partition.completedAt = nil
+                } else if disposition == .pending && retryableFailureCount > maximumRetryCount {
+                    partition.disposition = CorpusAnalysisPartitionDisposition.failed.rawValue
+                    partition.dispositionReason = "retry_exhausted"
+                    partition.completedAt = Date()
+                }
+                try partition.update(db)
+            }
+
+            run.status = CorpusAnalysisRunStatus.running.rawValue
+            run.coverageJSON = nil
+            run.reconciliationJSON = nil
+            run.validationResultsJSON = nil
+            run.assuranceState = nil
+            run.assuranceReasonsJSON = nil
+            run.structuredOutputVersionID = nil
+            run.completedAt = nil
+            try run.update(db)
+            return run
+        }
+    }
+
+    @discardableResult
+    public func beginAttempt(
+        matterID: String,
+        runID: String,
+        partitionID: String
+    ) throws -> CorpusAnalysisPartitionRecord {
+        try writer.write { db in
+            _ = try scopedRun(db, matterID: matterID, runID: runID)
+            var partition = try scopedPartition(db, runID: runID, partitionID: partitionID)
+            guard partition.disposition == CorpusAnalysisPartitionDisposition.pending.rawValue else {
+                throw CorpusAnalysisRepositoryError.terminalDispositionConflict(partitionID)
+            }
+            var history = try decodeAttemptHistory(partition)
+            guard history.last?.outcome != .running else {
+                throw CorpusAnalysisRepositoryError.attemptNotRunning(partitionID)
+            }
+            let now = Date()
+            partition.attemptCount += 1
+            history.append(CorpusAnalysisAttemptHistoryEntry(
+                attemptNumber: partition.attemptCount,
+                outcome: .running,
+                startedAt: now
+            ))
+            partition.attemptHistoryJSON = try canonicalJSON(history)
+            partition.startedAt = partition.startedAt ?? now
+            partition.completedAt = nil
+            try partition.update(db)
+            return partition
+        }
+    }
+
+    public func completeAttemptSucceeded(
+        matterID: String,
+        runID: String,
+        partitionID: String,
+        findingsJSON: String
+    ) throws {
+        try writer.write { db in
+            _ = try scopedRun(db, matterID: matterID, runID: runID)
+            var partition = try scopedPartition(db, runID: runID, partitionID: partitionID)
+            var history = try decodeAttemptHistory(partition)
+            try finishRunningAttempt(
+                partitionID: partitionID,
+                history: &history,
+                outcome: .succeeded,
+                retryable: false,
+                errorSummary: nil
+            )
+            partition.attemptHistoryJSON = try canonicalJSON(history)
+            partition.disposition = CorpusAnalysisPartitionDisposition.succeeded.rawValue
+            partition.dispositionReason = nil
+            partition.findingsJSON = findingsJSON
+            partition.errorSummary = nil
+            partition.completedAt = Date()
+            try partition.update(db)
+        }
+    }
+
+    /// Returns true when another attempt remains within the transient retry cap.
+    @discardableResult
+    public func completeAttemptFailed(
+        matterID: String,
+        runID: String,
+        partitionID: String,
+        retryable: Bool,
+        errorSummary: String,
+        maximumRetryCount: Int
+    ) throws -> Bool {
+        try writer.write { db in
+            _ = try scopedRun(db, matterID: matterID, runID: runID)
+            var partition = try scopedPartition(db, runID: runID, partitionID: partitionID)
+            var history = try decodeAttemptHistory(partition)
+            try finishRunningAttempt(
+                partitionID: partitionID,
+                history: &history,
+                outcome: .failed,
+                retryable: retryable,
+                errorSummary: errorSummary
+            )
+            let retryableFailureCount = history.count { $0.outcome == .failed && $0.retryable }
+            let shouldRetry = retryable && retryableFailureCount <= maximumRetryCount
+            partition.attemptHistoryJSON = try canonicalJSON(history)
+            partition.disposition = shouldRetry
+                ? CorpusAnalysisPartitionDisposition.pending.rawValue
+                : CorpusAnalysisPartitionDisposition.failed.rawValue
+            partition.dispositionReason = shouldRetry
+                ? "retry_scheduled"
+                : (retryable ? "retry_exhausted" : "map_failed")
+            partition.findingsJSON = nil
+            partition.errorSummary = errorSummary
+            partition.completedAt = shouldRetry ? nil : Date()
+            try partition.update(db)
+            return shouldRetry
+        }
+    }
+
+    public func completeAttemptCancelled(
+        matterID: String,
+        runID: String,
+        partitionID: String
+    ) throws {
+        try writer.write { db in
+            _ = try scopedRun(db, matterID: matterID, runID: runID)
+            var partition = try scopedPartition(db, runID: runID, partitionID: partitionID)
+            var history = try decodeAttemptHistory(partition)
+            try finishRunningAttempt(
+                partitionID: partitionID,
+                history: &history,
+                outcome: .cancelled,
+                retryable: true,
+                errorSummary: "Corpus analysis cancelled during this attempt."
+            )
+            partition.attemptHistoryJSON = try canonicalJSON(history)
+            partition.dispositionReason = "cancelled_during_attempt"
+            partition.errorSummary = "Corpus analysis cancelled during this attempt."
+            try partition.update(db)
+        }
+    }
+
+    /// Atomically balances a cancelled ledger: successful/failed checkpoints
+    /// remain intact and every unfinished row receives a terminal disposition.
+    @discardableResult
+    public func cancelRun(matterID: String, runID: String) throws -> CorpusAnalysisRunRecord {
+        try writer.write { db in
+            var run = try scopedRun(db, matterID: matterID, runID: runID)
+            let now = Date()
+            var partitions = try CorpusAnalysisPartitionRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM corpus_analysis_partitions WHERE run_id = ?",
+                arguments: [runID]
+            )
+            for index in partitions.indices
+                where partitions[index].disposition == CorpusAnalysisPartitionDisposition.pending.rawValue {
+                partitions[index].disposition = CorpusAnalysisPartitionDisposition.cancelled.rawValue
+                partitions[index].dispositionReason = partitions[index].dispositionReason ?? "run_cancelled"
+                partitions[index].errorSummary = partitions[index].errorSummary ?? "Corpus analysis cancelled."
+                partitions[index].completedAt = now
+                try partitions[index].update(db)
+            }
+            run.status = CorpusAnalysisRunStatus.cancelled.rawValue
+            run.coverageJSON = try canonicalJSON(try calculateCoverage(
+                db,
+                run: run,
+                exclusionsDisclosed: true
+            ))
+            run.assuranceState = nil
+            run.assuranceReasonsJSON = nil
+            run.structuredOutputVersionID = nil
+            run.completedAt = now
+            try run.update(db)
+            return run
         }
     }
 
@@ -297,6 +521,47 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
             throw CorpusAnalysisRepositoryError.runScopeMismatch(runID)
         }
         return run
+    }
+
+    private func scopedPartition(
+        _ db: Database,
+        runID: String,
+        partitionID: String
+    ) throws -> CorpusAnalysisPartitionRecord {
+        guard let partition = try CorpusAnalysisPartitionRecord.fetchOne(db, key: partitionID),
+              partition.runID == runID else {
+            throw CorpusAnalysisRepositoryError.partitionScopeMismatch(partitionID)
+        }
+        return partition
+    }
+
+    private func decodeAttemptHistory(
+        _ partition: CorpusAnalysisPartitionRecord
+    ) throws -> [CorpusAnalysisAttemptHistoryEntry] {
+        guard let data = partition.attemptHistoryJSON.data(using: .utf8),
+              let history = try? JSONDecoder().decode([CorpusAnalysisAttemptHistoryEntry].self, from: data),
+              history.count == partition.attemptCount,
+              history.enumerated().allSatisfy({ $0.element.attemptNumber == $0.offset + 1 }) else {
+            throw CorpusAnalysisRepositoryError.invalidAttemptHistory(partition.id)
+        }
+        return history
+    }
+
+    private func finishRunningAttempt(
+        partitionID: String,
+        history: inout [CorpusAnalysisAttemptHistoryEntry],
+        outcome: CorpusAnalysisAttemptOutcome,
+        retryable: Bool,
+        errorSummary: String?
+    ) throws {
+        guard !history.isEmpty, history[history.index(before: history.endIndex)].outcome == .running else {
+            throw CorpusAnalysisRepositoryError.attemptNotRunning(partitionID)
+        }
+        let index = history.index(before: history.endIndex)
+        history[index].outcome = outcome
+        history[index].retryable = retryable
+        history[index].errorSummary = errorSummary
+        history[index].completedAt = Date()
     }
 
     private static func sameImmutableRun(

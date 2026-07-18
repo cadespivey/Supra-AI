@@ -40,6 +40,49 @@ public enum CorpusAnalysisPartitionDisposition: String, Codable, CaseIterable, H
     public var isTerminal: Bool { self != .pending }
 }
 
+public enum CorpusAnalysisAttemptOutcome: String, Codable, CaseIterable, Hashable, Sendable {
+    case running
+    case succeeded
+    case failed
+    case cancelled
+}
+
+/// Append-only attempt history stored on each partition. A `running` tail is
+/// deliberately durable so relaunch can classify an interrupted process life.
+public struct CorpusAnalysisAttemptHistoryEntry: Codable, Equatable, Sendable {
+    public var attemptNumber: Int
+    public var outcome: CorpusAnalysisAttemptOutcome
+    public var retryable: Bool
+    public var errorSummary: String?
+    public var startedAt: Date
+    public var completedAt: Date?
+
+    public init(
+        attemptNumber: Int,
+        outcome: CorpusAnalysisAttemptOutcome,
+        retryable: Bool = false,
+        errorSummary: String? = nil,
+        startedAt: Date,
+        completedAt: Date? = nil
+    ) {
+        self.attemptNumber = attemptNumber
+        self.outcome = outcome
+        self.retryable = retryable
+        self.errorSummary = errorSummary
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case attemptNumber = "attempt_number"
+        case outcome
+        case retryable
+        case errorSummary = "error_summary"
+        case startedAt = "started_at"
+        case completedAt = "completed_at"
+    }
+}
+
 public enum CorpusAnalysisSnapshotDisposition: String, Codable, CaseIterable, Hashable, Sendable {
     case eligible
     case excluded

@@ -131,8 +131,14 @@ repository:
   seam, and checkpoints a terminal disposition and evidence-bound findings per partition.
   SQLite and repository guards reject `corpus_complete` unless every partition succeeded and
   exclusions are disclosed. Mid-run edits do not change mapper inputs and leave the persisted
-  result marked stale. The app-wide FIFO recognizes `corpus_analysis` jobs; task-specific
-  model mapping, bounded retry/resume, and output UX land in later work orders.
+  result marked stale. Each mapper attempt is durably opened and closed in an append-only
+  history. Explicitly transient failures receive at most two retries by default; permanent or
+  exhausted failures remain terminal and force `corpus_incomplete`. Cancellation atomically
+  retains successful checkpoints, marks every unfinished partition cancelled, and saves a
+  balanced ledger. Relaunch reuses the frozen snapshot, treats completed partitions as cache
+  hits, closes an orphaned running attempt as interrupted, and schedules only cancelled,
+  pending, or still-retryable work. The app-wide FIFO recognizes `corpus_analysis` jobs;
+  task-specific model mapping and output UX land in later work orders.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

@@ -26,6 +26,7 @@ public struct CorpusAnalysisRequest: Sendable {
     public var taskKind: CorpusAnalysisTaskKind
     public var scope: CorpusAnalysisScope
     public var characterBudget: Int
+    public var maximumRetryCount: Int
     public var modelLineageJSON: String?
 
     public init(
@@ -34,6 +35,7 @@ public struct CorpusAnalysisRequest: Sendable {
         taskKind: CorpusAnalysisTaskKind,
         scope: CorpusAnalysisScope = .wholeMatter,
         characterBudget: Int = 24_000,
+        maximumRetryCount: Int = 2,
         modelLineageJSON: String? = nil
     ) {
         self.runKey = runKey
@@ -41,6 +43,7 @@ public struct CorpusAnalysisRequest: Sendable {
         self.taskKind = taskKind
         self.scope = scope
         self.characterBudget = max(1, characterBudget)
+        self.maximumRetryCount = max(0, maximumRetryCount)
         self.modelLineageJSON = modelLineageJSON
     }
 }
@@ -132,9 +135,29 @@ public enum CorpusAnalysisEngineError: Error, LocalizedError, Equatable, Sendabl
     }
 }
 
+/// Mapper failures are permanent unless explicitly classified transient. This
+/// keeps malformed output/evidence from being retried as if it were transport
+/// instability while giving model/runtime callers a bounded retry seam.
+public enum CorpusAnalysisMapFailure: Error, LocalizedError, Equatable, Sendable {
+    case transient(String)
+    case permanent(String)
+
+    public var isTransient: Bool {
+        if case .transient = self { return true }
+        return false
+    }
+
+    public var errorDescription: String? {
+        switch self {
+        case .transient(let summary), .permanent(let summary): summary
+        }
+    }
+}
+
 /// Frozen-snapshot exhaustive orchestration. Unlike ordinary retrieval, this
 /// maps every planned revision range and therefore has no top-k/per-document
-/// retrieval cap. M6-W2 extends the same ledger with retry/resume semantics.
+/// retrieval cap. Partition checkpoints support cancellation, relaunch resume,
+/// orphan-attempt recovery, and explicitly bounded transient retries.
 public final class CorpusAnalysisEngine: @unchecked Sendable {
     public typealias Mapper = @Sendable (CorpusAnalysisPartitionInput) async throws -> CorpusAnalysisMapOutput
 
@@ -150,6 +173,8 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
     ) async throws -> CorpusAnalysisRunResult {
         let scopeJSON = try canonicalJSON(request.scope)
         let strategy = "part_range:characters=\(request.characterBudget)"
+        let plan: CorpusAnalysisPlan
+        let run: CorpusAnalysisRunRecord
         if let existing = try store.corpusAnalysis.fetchRun(
             matterID: request.matterID,
             runKey: request.runKey
@@ -164,33 +189,43 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
             if existing.status == CorpusAnalysisRunStatus.persisted.rawValue {
                 return try persistedResult(existing)
             }
-        }
-
-        let plan = try makePlan(request: request)
-        let proposed = CorpusAnalysisRunRecord(
-            runKey: request.runKey,
-            matterID: request.matterID,
-            taskKind: request.taskKind.rawValue,
-            scopeJSON: scopeJSON,
-            corpusSnapshotJSON: try canonicalJSON(plan.snapshot),
-            partitionStrategy: strategy,
-            partitionStrategyVersion: 1,
-            modelLineageJSON: request.modelLineageJSON,
-            status: CorpusAnalysisRunStatus.planning.rawValue
-        )
-        let run = try store.corpusAnalysis.createOrFetchRun(proposed)
-        try store.corpusAnalysis.createPartitions(
-            matterID: request.matterID,
-            runID: run.id,
-            partitions: try plan.partitions.map { try $0.record(runID: run.id) }
-        )
-
-        do {
+            guard let snapshotData = existing.corpusSnapshotJSON.data(using: .utf8),
+                  let snapshot = try? JSONDecoder().decode(CorpusAnalysisSnapshot.self, from: snapshotData) else {
+                throw CorpusAnalysisEngineError.invalidPersistedJSON("snapshot")
+            }
+            plan = CorpusAnalysisPlan(snapshot: snapshot, partitions: [])
+            run = try store.corpusAnalysis.prepareForResume(
+                matterID: request.matterID,
+                runID: existing.id,
+                maximumRetryCount: request.maximumRetryCount
+            )
+        } else {
+            plan = try makePlan(request: request)
+            let proposed = CorpusAnalysisRunRecord(
+                runKey: request.runKey,
+                matterID: request.matterID,
+                taskKind: request.taskKind.rawValue,
+                scopeJSON: scopeJSON,
+                corpusSnapshotJSON: try canonicalJSON(plan.snapshot),
+                partitionStrategy: strategy,
+                partitionStrategyVersion: 1,
+                modelLineageJSON: request.modelLineageJSON,
+                status: CorpusAnalysisRunStatus.planning.rawValue
+            )
+            run = try store.corpusAnalysis.createOrFetchRun(proposed)
+            try store.corpusAnalysis.createPartitions(
+                matterID: request.matterID,
+                runID: run.id,
+                partitions: try plan.partitions.map { try $0.record(runID: run.id) }
+            )
             _ = try store.corpusAnalysis.updateStatus(
                 matterID: request.matterID,
                 runID: run.id,
                 to: .running
             )
+        }
+
+        do {
             let documents = try store.documentLibrary.fetchDocuments(matterID: request.matterID)
             let nameByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0.displayName) })
             let partitions = try store.corpusAnalysis.fetchPartitions(
@@ -199,28 +234,44 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
             )
             for partition in partitions where partition.disposition == CorpusAnalysisPartitionDisposition.pending.rawValue {
                 try Task.checkCancellation()
-                do {
-                    let input = try partitionInput(partition, documentNames: nameByID)
-                    let output = try await mapper(input)
-                    try validate(output, against: input)
-                    try store.corpusAnalysis.setDisposition(
+                var partitionFinished = false
+                while !partitionFinished {
+                    let attempt = try store.corpusAnalysis.beginAttempt(
                         matterID: request.matterID,
                         runID: run.id,
-                        partitionID: partition.id,
-                        disposition: .succeeded,
-                        findingsJSON: try canonicalJSON(output.findings)
+                        partitionID: partition.id
                     )
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    try store.corpusAnalysis.setDisposition(
-                        matterID: request.matterID,
-                        runID: run.id,
-                        partitionID: partition.id,
-                        disposition: .failed,
-                        dispositionReason: "map_failed",
-                        errorSummary: error.localizedDescription
-                    )
+                    do {
+                        let input = try partitionInput(attempt, documentNames: nameByID)
+                        let output = try await mapper(input)
+                        try validate(output, against: input)
+                        try store.corpusAnalysis.completeAttemptSucceeded(
+                            matterID: request.matterID,
+                            runID: run.id,
+                            partitionID: partition.id,
+                            findingsJSON: try canonicalJSON(output.findings)
+                        )
+                        partitionFinished = true
+                    } catch is CancellationError {
+                        try store.corpusAnalysis.completeAttemptCancelled(
+                            matterID: request.matterID,
+                            runID: run.id,
+                            partitionID: partition.id
+                        )
+                        throw CancellationError()
+                    } catch {
+                        let classified = error as? CorpusAnalysisMapFailure
+                        let shouldRetry = try store.corpusAnalysis.completeAttemptFailed(
+                            matterID: request.matterID,
+                            runID: run.id,
+                            partitionID: partition.id,
+                            retryable: classified?.isTransient == true,
+                            errorSummary: error.localizedDescription,
+                            maximumRetryCount: request.maximumRetryCount
+                        )
+                        partitionFinished = !shouldRetry
+                        if shouldRetry { try Task.checkCancellation() }
+                    }
                 }
             }
 
@@ -303,10 +354,9 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                 assuranceReasons: reasons
             )
         } catch is CancellationError {
-            _ = try? store.corpusAnalysis.updateStatus(
+            _ = try? store.corpusAnalysis.cancelRun(
                 matterID: request.matterID,
-                runID: run.id,
-                to: .cancelled
+                runID: run.id
             )
             throw CancellationError()
         } catch {

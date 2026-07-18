@@ -526,12 +526,103 @@ private struct DeterministicCorpusWorkload: Sendable {
             successfulCases += 1
         }
 
+        // Case 4: corpus cancellation keeps two checkpoints, terminalizes the
+        // rest, and a new engine instance maps only the unfinished revisions.
+        let corpusMatter = try store.matters.createMatter(name: "Synthetic corpus recovery benchmark")
+        let corpusTexts = (1...4).map { "CORPUS-RECOVERY-PART-\($0)" }
+        let corpusFixture = try insertCorpusFixture(
+            store: store,
+            matterID: corpusMatter.id,
+            name: "corpus-recovery.txt",
+            partTexts: corpusTexts
+        )
+        let corpusRequest = CorpusAnalysisRequest(
+            runKey: "benchmark-corpus-cancel",
+            matterID: corpusMatter.id,
+            taskKind: .customExtraction,
+            characterBudget: 1
+        )
+        let cancellationProbe = BenchmarkCorpusProbe()
+        var cancellationObserved = false
+        do {
+            _ = try await CorpusAnalysisEngine(store: store).run(request: corpusRequest) { input in
+                let ordinal = await cancellationProbe.recordAndReturnOrdinal(input)
+                if ordinal == 3 { throw CancellationError() }
+                return Self.mapOutput(input)
+            }
+        } catch is CancellationError {
+            cancellationObserved = true
+        }
+        let cancelledRun = try store.corpusAnalysis.fetchRun(
+            matterID: corpusMatter.id,
+            runKey: corpusRequest.runKey
+        )
+        let cancelledPartitions = try cancelledRun.map {
+            try store.corpusAnalysis.fetchPartitions(matterID: corpusMatter.id, runID: $0.id)
+        } ?? []
+        let resumeProbe = BenchmarkCorpusProbe()
+        let resumed = try await CorpusAnalysisEngine(store: store).run(request: corpusRequest) { input in
+            await resumeProbe.record(input)
+            return Self.mapOutput(input)
+        }
+        let resumedRevisionIDs = Set(await resumeProbe.inputs.flatMap(\.sources).map(\.revisionID))
+        let checkpointedRevisionIDs = Set(corpusFixture.revisionIDs.prefix(2))
+        duplicateWork += resumedRevisionIDs.intersection(checkpointedRevisionIDs).count
+        resumedUnits += checkpointedRevisionIDs.count
+        if cancellationObserved,
+           cancelledRun?.status == CorpusAnalysisRunStatus.cancelled.rawValue,
+           cancelledPartitions.filter({ $0.disposition == CorpusAnalysisPartitionDisposition.succeeded.rawValue }).count == 2,
+           cancelledPartitions.filter({ $0.disposition == CorpusAnalysisPartitionDisposition.cancelled.rawValue }).count == 2,
+           cancelledPartitions.filter({ $0.disposition == CorpusAnalysisPartitionDisposition.pending.rawValue }).count == 0,
+           resumed.run.assuranceState == OutputAssuranceState.corpusComplete.rawValue,
+           resumed.coverage.succeededPartitionCount == 4,
+           resumed.coverage.pendingPartitionCount == 0,
+           resumed.coverage.balanceErrorCount == 0,
+           resumedRevisionIDs == Set(corpusFixture.revisionIDs.suffix(2)) {
+            successfulCases += 1
+        }
+
+        // Case 5: transient exhaustion is a successful recovery outcome only
+        // when all three attempts are durable and the ledger closes incomplete.
+        let retryMatter = try store.matters.createMatter(name: "Synthetic corpus retry benchmark")
+        _ = try insertCorpusFixture(
+            store: store,
+            matterID: retryMatter.id,
+            name: "corpus-retry.txt",
+            partTexts: ["CORPUS-RETRY-PART"]
+        )
+        let retryProbe = BenchmarkCorpusProbe()
+        let exhausted = try await CorpusAnalysisEngine(store: store).run(
+            request: CorpusAnalysisRequest(
+                runKey: "benchmark-corpus-retry",
+                matterID: retryMatter.id,
+                taskKind: .customExtraction,
+                characterBudget: 1,
+                maximumRetryCount: 2
+            )
+        ) { input in
+            _ = await retryProbe.recordAndReturnOrdinal(input)
+            throw CorpusAnalysisMapFailure.transient("synthetic benchmark transient failure")
+        }
+        let exhaustedPartition = exhausted.partitions.first
+        if await retryProbe.inputs.count == 3,
+           exhausted.run.assuranceState == OutputAssuranceState.corpusIncomplete.rawValue,
+           exhaustedPartition?.attemptCount == 3,
+           exhaustedPartition?.disposition == CorpusAnalysisPartitionDisposition.failed.rawValue,
+           exhaustedPartition?.dispositionReason == "retry_exhausted",
+           exhausted.coverage.failedPartitionCount == 1,
+           exhausted.coverage.pendingPartitionCount == 0,
+           exhausted.coverage.terminalPartitionCount == 1,
+           exhausted.coverage.balanceErrorCount == 0 {
+            successfulCases += 1
+        }
+
         return [
             BenchmarkObservation(
                 metricID: "B-REC-01",
                 name: "successful_recovery_rate",
                 unit: "rate",
-                result: BenchmarkMetrics.rate(numerator: successfulCases, denominator: 3, interval: .none)
+                result: BenchmarkMetrics.rate(numerator: successfulCases, denominator: 5, interval: .none)
             ),
             BenchmarkObservation(
                 metricID: "B-REC-01",
@@ -540,6 +631,83 @@ private struct DeterministicCorpusWorkload: Sendable {
                 result: BenchmarkMetrics.rate(numerator: duplicateWork, denominator: resumedUnits, interval: .none)
             ),
         ]
+    }
+
+    private func insertCorpusFixture(
+        store: SupraStore,
+        matterID: String,
+        name: String,
+        partTexts: [String]
+    ) throws -> BenchmarkCorpusFixture {
+        let key = name.replacingOccurrences(of: ".", with: "-")
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "benchmark-corpus-\(key)-\(UUID().uuidString)",
+            byteSize: partTexts.reduce(0) { $0 + $1.utf8.count },
+            originalExtension: "txt",
+            managedRelativePath: "blobs/\(key).txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matterID,
+            blobID: blob.id,
+            displayName: name,
+            status: MatterDocumentStatus.ready.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            indexStatus: DocumentIndexStatus.textIndexed.rawValue
+        ))
+        let parts = partTexts.enumerated().map { index, text in
+            DocumentPagePartRecord(
+                id: "\(key)-part-\(index)",
+                documentID: document.id,
+                partIndex: index,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                normalizedText: text,
+                charCount: text.count
+            )
+        }
+        let revisions = partTexts.enumerated().map { index, text in
+            DocumentPartRevisionRecord(
+                id: "\(key)-revision-\(index)",
+                documentID: document.id,
+                partIndex: index,
+                derivationKey: "benchmark-fixture-\(index)",
+                origin: "synthetic_benchmark",
+                method: "plain-text",
+                text: text,
+                charCount: text.count
+            )
+        }
+        let selections = revisions.map { revision in
+            DocumentPartSelectionRecord(
+                id: "\(key)-selection-\(revision.partIndex)",
+                documentID: document.id,
+                partIndex: revision.partIndex,
+                selectedRevisionID: revision.id,
+                selectionKey: "benchmark-fixture-\(revision.partIndex)",
+                selectedBy: "SupraBench",
+                decisionJSON: #"{"rule":"synthetic_benchmark"}"#
+            )
+        }
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: parts,
+            revisions: revisions,
+            selections: selections
+        )
+        return BenchmarkCorpusFixture(revisionIDs: revisions.map(\.id))
+    }
+
+    private static func mapOutput(_ input: CorpusAnalysisPartitionInput) -> CorpusAnalysisMapOutput {
+        CorpusAnalysisMapOutput(findings: input.sources.map { source in
+            CorpusAnalysisFinding(
+                id: "finding-\(source.revisionID)",
+                value: source.text,
+                evidence: [.init(
+                    documentID: source.documentID,
+                    revisionID: source.revisionID,
+                    locatorJSON: source.locatorJSON
+                )]
+            )
+        })
     }
 
     private func sourceAccountingObservations(_ report: DocumentImportReport) -> [BenchmarkObservation] {
@@ -627,6 +795,23 @@ private struct DeterministicWorkloadResult: Sendable {
 private struct SpreadsheetCellPayload: Decodable {
     var sheetName: String
     var cellRef: String
+}
+
+private struct BenchmarkCorpusFixture: Sendable {
+    var revisionIDs: [String]
+}
+
+private actor BenchmarkCorpusProbe {
+    private(set) var inputs: [CorpusAnalysisPartitionInput] = []
+
+    func record(_ input: CorpusAnalysisPartitionInput) {
+        inputs.append(input)
+    }
+
+    func recordAndReturnOrdinal(_ input: CorpusAnalysisPartitionInput) -> Int {
+        inputs.append(input)
+        return inputs.count
+    }
 }
 
 private struct DeterministicBagOfWordsEmbedder: TextEmbedder {
