@@ -805,6 +805,117 @@ final class DocumentImportTests: XCTestCase {
 
     // MARK: - Reprocess (re-extract from the managed blob)
 
+    @MainActor
+    func testTREV04UserCorrectionAppendsImmutableRevisionAndSelection() async throws {
+        // T-REV-04 expected RED: updateExtractedText has no author/reason inputs and
+        // still mutates document_pages_parts.normalized_text in place.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic immutable correction")
+        let source = sourceRoot.appendingPathComponent("Corrections/original.txt")
+        try FileManager.default.createDirectory(
+            at: source.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("fixture bytes".utf8).write(to: source)
+        let extractor = SequencedTextExtractor(texts: ["ORIGINAL-ALPHA"])
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            extraction: ExtractionService(extractors: [.plainText: extractor]),
+            ocr: nil
+        )
+        _ = try await service.importSources([source], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let originalPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        let originalRevisionID = try XCTUnwrap(originalPart.currentRevisionID)
+        let originalSelectionID = try XCTUnwrap(originalPart.currentSelectionID)
+
+        try service.updateExtractedText(
+            documentID: document.id,
+            partID: originalPart.id,
+            text: "CORRECTED-BETA",
+            author: "Synthetic Reviewer",
+            reason: "Corrected the nondefault fixture text"
+        )
+
+        let revisions = try store.documentRevisions.fetchRevisions(documentID: document.id, partIndex: 0)
+        XCTAssertEqual(revisions.count, 2)
+        let original = try XCTUnwrap(revisions.first { $0.id == originalRevisionID })
+        XCTAssertEqual(original.text, "ORIGINAL-ALPHA")
+        XCTAssertNotEqual(original.text, "CORRECTED-BETA")
+        let correction = try XCTUnwrap(revisions.first { $0.origin == "user_edit" })
+        XCTAssertEqual(correction.text, "CORRECTED-BETA")
+        XCTAssertEqual(correction.author, "Synthetic Reviewer")
+        XCTAssertEqual(correction.reason, "Corrected the nondefault fixture text")
+        XCTAssertEqual(correction.supersedesRevisionID, originalRevisionID)
+
+        let currentPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertEqual(currentPart.normalizedText, "CORRECTED-BETA")
+        XCTAssertEqual(currentPart.currentRevisionID, correction.id)
+        XCTAssertNotEqual(currentPart.currentSelectionID, originalSelectionID)
+        let selections = try store.documentRevisions.fetchSelections(documentID: document.id, partIndex: 0)
+        XCTAssertEqual(selections.count, 2)
+        XCTAssertEqual(selections.last?.selectedRevisionID, correction.id)
+        XCTAssertEqual(selections.last?.selectedBy, "user")
+    }
+
+    @MainActor
+    func testTREV05ReprocessPreservesSelectedUserEditAndRoutesConflictToReview() async throws {
+        // T-REV-05 expected RED: reprocessDocument replaces the compatible part
+        // projection and silently selects the new parser output over a user edit.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic correction conflict")
+        let source = sourceRoot.appendingPathComponent("Corrections/reprocess.txt")
+        try FileManager.default.createDirectory(
+            at: source.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("fixture bytes".utf8).write(to: source)
+        let extractor = SequencedTextExtractor(texts: ["ORIGINAL-ALPHA", "REPROCESSED-GAMMA"])
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            extraction: ExtractionService(extractors: [.plainText: extractor]),
+            ocr: nil
+        )
+        _ = try await service.importSources([source], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let originalPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        try service.updateExtractedText(
+            documentID: document.id,
+            partID: originalPart.id,
+            text: "CORRECTED-BETA",
+            author: "Synthetic Reviewer",
+            reason: "Preserve this correction across reprocessing"
+        )
+        let editedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        let selectedEditRevisionID = try XCTUnwrap(editedPart.currentRevisionID)
+        let selectedEditSelectionID = try XCTUnwrap(editedPart.currentSelectionID)
+
+        try await service.reprocessDocument(documentID: document.id)
+
+        let revisions = try store.documentRevisions.fetchRevisions(documentID: document.id, partIndex: 0)
+        XCTAssertEqual(revisions.count, 3)
+        XCTAssertEqual(revisions.first { $0.id == selectedEditRevisionID }?.text, "CORRECTED-BETA")
+        XCTAssertEqual(revisions.first { $0.origin == "user_edit" }?.author, "Synthetic Reviewer")
+        XCTAssertEqual(revisions.first { $0.text == "REPROCESSED-GAMMA" }?.origin, "parser")
+        let currentPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertEqual(currentPart.normalizedText, "CORRECTED-BETA")
+        XCTAssertEqual(currentPart.currentRevisionID, selectedEditRevisionID)
+        XCTAssertEqual(currentPart.currentSelectionID, selectedEditSelectionID)
+
+        let after = try XCTUnwrap(store.documentLibrary.fetchDocument(id: document.id))
+        XCTAssertEqual(after.status, MatterDocumentStatus.needsReview.rawValue)
+        let warningData = try XCTUnwrap(after.extractionWarningsJSON?.data(using: .utf8))
+        let warnings = try JSONDecoder().decode([String].self, from: warningData)
+        XCTAssertTrue(
+            warnings.contains { $0.localizedCaseInsensitiveContains("selection conflict") },
+            "the review warning must explicitly name the selection conflict; got \(warnings)"
+        )
+    }
+
     func testReprocessFailedDocumentReextractsAndRemarksFailedIdempotently() async throws {
         // Expected RED: compile error — `reprocessDocument(documentID:)` is not a member of
         // DocumentImportService.
@@ -877,6 +988,30 @@ private struct EditReindexNotifier: DocumentNotifying {
     func authorizationStatus() async -> DocumentNotificationAuthorizationStatus { .denied }
     func requestAuthorization() async -> DocumentNotificationAuthorizationStatus { .denied }
     func notify(title: String, body: String) async {}
+}
+
+/// Returns one deterministic parser result per extraction call so reprocessing
+/// can prove that a changed machine candidate never displaces a selected edit.
+private final class SequencedTextExtractor: DocumentExtractor, @unchecked Sendable {
+    private let lock = NSLock()
+    private let texts: [String]
+    private var callIndex = 0
+
+    init(texts: [String]) {
+        self.texts = texts
+    }
+
+    func extract(fileURL: URL) async throws -> ExtractionResult {
+        let text = lock.withLock { () -> String in
+            let index = min(callIndex, texts.count - 1)
+            callIndex += 1
+            return texts[index]
+        }
+        return ExtractionResult(
+            parts: [ExtractedPart(sourceKind: .text, text: text)],
+            method: "synthetic-sequenced-parser"
+        )
+    }
 }
 
 /// Deterministic OCR double. `recognizeImage` keeps the original single-result

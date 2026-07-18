@@ -57,6 +57,63 @@ final class DocumentImportRecoveryUITests: XCTestCase {
     }
 }
 
+/// T-UX-07 exercises the first extracted-part correction surface against a
+/// hermetic synthetic document; it never opens or modifies the user's store.
+@MainActor
+final class DocumentCorrectionUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testTUX07CorrectionEditorSavesHistoryAndShowsReindexing() {
+        // T-UX-07 expected RED: no part-edit caller, editor/reason controls, or
+        // correction-history accessibility surface exists in the Documents tab.
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestDocumentCorrection",
+            "-uiTestInitialMatterTab", "Documents",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+
+        let row = app.staticTexts["Correction Fixture.txt"]
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "Synthetic correction fixture did not appear")
+        row.click()
+        let edit = app.buttons["documents.editExtractedText"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 10), "Edit extracted text action is missing")
+        edit.click()
+
+        let editor = app.textViews["documents.partEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "Part editor did not appear")
+        editor.click()
+        editor.typeKey("a", modifierFlags: .command)
+        editor.typeText("CORRECTED-BETA UI wire proof")
+        let reason = app.textFields["documents.editReason"]
+        XCTAssertTrue(reason.exists)
+        reason.click()
+        reason.typeText("Corrected the synthetic nondefault text")
+        app.buttons["documents.saveCorrection"].click()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documents.reindexingBadge"].waitForExistence(timeout: 10),
+            "Saved correction did not expose the Reindexing badge"
+        )
+
+        row.click()
+        XCTAssertTrue(edit.waitForExistence(timeout: 10))
+        edit.click()
+        XCTAssertEqual(app.textViews["documents.partEditor"].value as? String, "CORRECTED-BETA UI wire proof")
+        XCTAssertTrue(app.staticTexts["Revision history (2)"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["ORIGINAL-ALPHA"].exists)
+        XCTAssertTrue(app.staticTexts["CORRECTED-BETA UI wire proof"].exists)
+    }
+}
+
 /// End-to-end UI test driving the Research and Authorities tabs with mouse-style
 /// clicks and keyboard input — fully offline (no model or network). The app is
 /// launched with `-uiTestMode`, which opens a hermetic throwaway store seeded with

@@ -53,6 +53,115 @@ final class DocumentPreviewTests: XCTestCase {
         if case .unavailable = model.kind {} else { XCTFail("expected unavailable") }
     }
 
+    func testTREV06CitationPreviewResolvesRecordedRevisionAndLabelsLegacyUnknown() throws {
+        // T-REV-06 expected RED: output-source rows have no revision binding and
+        // DocumentPreviewLoader always substitutes the part's current text.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic revision preview")
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "revision-preview-sha",
+            byteSize: 1,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/revision-preview.txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "revision-preview.txt"
+        ))
+        let part = DocumentPagePartRecord(
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: "REVISION-A repeated anchor",
+            charCount: 26
+        )
+        try store.documentIndex.replaceParts(documentID: document.id, parts: [part])
+        let revisionA = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "preview-revision-a",
+            origin: "parser",
+            method: "synthetic",
+            text: "REVISION-A repeated anchor",
+            charCount: 26
+        ))
+        _ = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revisionA.id,
+            selectionKey: "preview-selection-a",
+            selectedBy: "policy",
+            policyVersion: 1,
+            decisionJSON: #"{"selected":"A"}"#
+        ))
+        let locator = DocumentSourceLocator(
+            sourceKind: .text,
+            charStart: 0,
+            charEnd: 10
+        )
+        let sourceSet = try store.documentSources.createSourceSet(matterID: matter.id, mode: .autoSource)
+        let boundSource = DocumentOutputSourceRecord(
+            sourceSetID: sourceSet.id,
+            documentID: document.id,
+            revisionID: revisionA.id,
+            citationLabel: "S1",
+            locatorJSON: locator.encodedJSON(),
+            excerpt: "REVISION-A",
+            rank: 0
+        )
+        try store.documentSources.addOutputSource(boundSource)
+
+        let revisionB = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "preview-revision-b",
+            origin: "user_edit",
+            method: "manual",
+            text: "REVISION-B repeated anchor",
+            charCount: 26,
+            author: "Synthetic Reviewer",
+            reason: "Correction",
+            supersedesRevisionID: revisionA.id
+        ))
+        _ = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revisionB.id,
+            selectionKey: "preview-selection-b",
+            selectedBy: "user",
+            policyVersion: 1,
+            decisionJSON: #"{"selected":"B"}"#
+        ))
+
+        let loader = DocumentPreviewLoader(
+            store: store,
+            storage: DocumentStorage(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        )
+        let recorded = loader.load(outputSource: boundSource)
+        XCTAssertNil(recorded.revisionNotice)
+        if case let .text(content, start, end) = recorded.kind {
+            XCTAssertEqual(content, "REVISION-A repeated anchor")
+            XCTAssertEqual(start, 0)
+            XCTAssertEqual(end, 10)
+            XCTAssertFalse(content.contains("REVISION-B"))
+        } else {
+            XCTFail("expected revision-bound text preview, got \(recorded.kind)")
+        }
+
+        let legacySource = DocumentOutputSourceRecord(
+            sourceSetID: sourceSet.id,
+            documentID: document.id,
+            revisionID: nil,
+            citationLabel: "S2",
+            locatorJSON: locator.encodedJSON(),
+            excerpt: "historical excerpt",
+            rank: 1
+        )
+        let legacy = loader.load(outputSource: legacySource)
+        XCTAssertEqual(legacy.revisionNotice, "revision unknown (pre-lineage)")
+    }
+
     private func makeStore() throws -> SupraStore {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("PreviewStore-\(UUID().uuidString)", isDirectory: true)
