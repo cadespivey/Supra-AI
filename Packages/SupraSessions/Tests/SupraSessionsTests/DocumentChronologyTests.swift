@@ -627,7 +627,10 @@ final class DocumentChronologyTests: XCTestCase {
             mode: .legalResearch,
             role: .legalReasoning,
             modelIdentifier: "synthetic-ordering-model",
-            options: GenerationOptions(preset: .extractive, maxContextTokens: 768, maxOutputTokens: 128),
+            // The exact budget now reserves the full output plus the 256-token
+            // chat-template margin. 1,024 keeps one serialized source safe while
+            // still forcing the two documents into separate map passes.
+            options: GenerationOptions(preset: .extractive, maxContextTokens: 1_024, maxOutputTokens: 128),
             requiresCourtListener: false,
             requiresCitations: true,
             requiresJurisdiction: false,

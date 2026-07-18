@@ -182,6 +182,7 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         let paths = [
             "Packages/SupraTestKit/Package.swift",
             "Packages/SupraTestKit/Sources/SupraBench/main.swift",
+            "Packages/SupraTestKit/Sources/SupraTestKit/ContextPackingBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/DocumentRelationBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/BenchmarkMetrics.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/BenchmarkReport.swift",

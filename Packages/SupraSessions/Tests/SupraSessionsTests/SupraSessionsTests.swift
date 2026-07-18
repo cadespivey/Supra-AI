@@ -3733,7 +3733,9 @@ final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
         tokenCountOutcome: @escaping @Sendable (CountTokensRequest) throws -> CountTokensResponse = { request in
             CountTokensResponse(
                 modelID: request.modelID,
-                counts: request.texts.map(TokenBudgeter.fallbackTokenCount)
+                // Existing controller fixtures model the historical four-byte
+                // token estimate unless a test injects nondefault exact counts.
+                counts: request.texts.map { ($0.utf8.count + 3) / 4 }
             )
         },
         outcome: @escaping @Sendable (GenerateRequest) -> GenerationOutcome = { _ in .events([]) }
@@ -3741,6 +3743,12 @@ final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
         self.loadResult = loadResult
         self.tokenCountOutcome = tokenCountOutcome
         self.outcome = outcome
+    }
+
+    convenience init(
+        _ outcome: @escaping @Sendable (GenerateRequest) -> GenerationOutcome
+    ) {
+        self.init(outcome: outcome)
     }
 
     func connect() async throws {}

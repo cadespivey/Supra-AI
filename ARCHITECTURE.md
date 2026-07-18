@@ -89,12 +89,25 @@ Dependency rules that are enforced by package boundaries:
 
 `SupraRuntimeService` is a Swift-only XPC service that owns MLX model loading and execution.
 The app talks to it through `SupraRuntimeClient`, using DTOs/protocols defined in
-`SupraRuntimeInterface`. The boundary carries two kinds of work:
+`SupraRuntimeInterface`. The boundary carries three kinds of work:
 
 - **Chat generation** — load a chat model, stream generation events, cancel, report metrics.
 - **Embeddings** (added in Milestone 3) — explicit `LoadEmbeddingModel` / `EmbedText` RPCs
   rather than overloading chat generation. Embedding requests are serialized inside the
   service so one batch can't race another.
+- **Token counting** — the additive batched `CountTokens` RPC reuses the tokenizer of the
+  loaded chat model and returns one ordered count per serialized prompt packet. The client
+  rejects model-ID, cardinality, and negative-count mismatches instead of treating a malformed
+  reply as usable budget data.
+
+`SupraCore.TokenBudgeter` reserves the configured output and chat-template margin, then
+selects the largest cumulative packet prefix whose exact token count fits. If the service is
+unavailable, it uses a stricter two-UTF-8-bytes-per-token estimate. Document Q&A permits one
+source-boundary retry after an authoritative runtime overflow; chronology retains its
+split-and-retry path; grounded chat persists a refusal instead of partial model output or
+citations when the complete packet cannot fit. The deterministic benchmark companion emits
+B-CTX utilization, estimate-error, omission, recovery, and silent-overflow measurements;
+protected model runs replace its frozen count matrix with the loaded tokenizer's counts.
 
 Model weights may live outside the app sandbox. The app mints a transferable security-scoped
 bookmark while holding its own scope; the sandboxed service resolves it and holds the scope
@@ -237,7 +250,9 @@ existing convention where a repository owns several related tables.
    resumable background job.
 2. Chunks are indexed into FTS5 and embedded locally; index status advances per document.
 3. A question runs hybrid retrieval (FTS + cosine over normalized vectors) scoped to the
-   selected folders/tags/documents/dates, gated on the scope being fully indexed.
+   selected folders/tags/documents/dates, gated on the scope being fully indexed. Each
+   cumulative source packet is counted with the loaded model tokenizer (or a fail-closed
+   fallback), and only the largest safe prefix crosses the generation boundary.
 4. The model answers from the retrieved source set with inline citations; a citation-coverage
    check resolves every label to a real source or marks the answer as needing review.
 5. The answer is saved as a versioned structured output with its source set; regeneration

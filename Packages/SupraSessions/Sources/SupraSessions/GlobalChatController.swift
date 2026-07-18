@@ -734,7 +734,12 @@ public final class GlobalChatController: ObservableObject {
             // Gated on a loaded model so a no-model send doesn't pay for retrieval it
             // will discard at the guard below.
             let grounded: GroundedChatContext? = (attachments.isEmpty && modelID != nil)
-                ? await documentGrounding?.groundedContext(forQuestion: prompt, depth: documentDepth, modelID: modelID)
+                ? await documentGrounding?.groundedContext(
+                    forQuestion: prompt,
+                    depth: documentDepth,
+                    modelID: modelID,
+                    options: options
+                )
                 : nil
 
             if grounded == nil, let route, route.usesOneShotLegalWorkflow {
@@ -797,6 +802,22 @@ public final class GlobalChatController: ObservableObject {
 
             reloadMessages()
 
+            if grounded?.packingReport?.canPack == false {
+                try store.chats.appendToken(
+                    to: variant.id,
+                    token: Self.groundedContextOverflowRefusal
+                )
+                try store.chats.completeVariant(variant.id)
+                try store.generation.completeGeneration(generationID: session.id)
+                updateMessage(
+                    id: assistant.id,
+                    content: Self.groundedContextOverflowRefusal,
+                    status: .completed
+                )
+                reloadMessages()
+                return
+            }
+
             let request = GenerateRequest(
                 generationID: generationID,
                 modelID: modelID,
@@ -811,11 +832,16 @@ public final class GlobalChatController: ObservableObject {
             var sawTerminal = false
             var finalMetrics: RuntimeMetrics?
 
-            for try await event in try runtimeClient.generate(request) {
+            generationEvents: for try await event in try runtimeClient.generate(request) {
                 switch event.type {
                 case .token:
                     guard let token = event.tokenText else { break }
-                    try store.chats.appendToken(to: variant.id, token: token)
+                    // Grounded tokens stay transient until the terminal metrics
+                    // prove the packet did not overflow. This lets the refusal
+                    // replace discarded model output instead of following it.
+                    if grounded == nil {
+                        try store.chats.appendToken(to: variant.id, token: token)
+                    }
                     if !sawFirstToken {
                         sawFirstToken = true
                         try? store.generation.markFirstToken(generationID: session.id)
@@ -829,6 +855,21 @@ public final class GlobalChatController: ObservableObject {
                 case .generationCompleted:
                     sawTerminal = true
                     finalMetrics = event.metrics ?? finalMetrics
+                    if grounded != nil, finalMetrics?.contextOverflowed == true {
+                        streamedContent = Self.groundedContextOverflowRefusal
+                        try store.chats.appendToken(to: variant.id, token: streamedContent)
+                        try store.chats.completeVariant(variant.id)
+                        try store.generation.completeGeneration(
+                            generationID: session.id,
+                            metrics: storedMetrics(from: finalMetrics)
+                        )
+                        logGenerationTiming(finalMetrics, generationID: session.id)
+                        updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                        break generationEvents
+                    }
+                    if grounded != nil, !streamedContent.isEmpty {
+                        try store.chats.appendToken(to: variant.id, token: streamedContent)
+                    }
                     // The runtime dropped oldest turns to fit the window — tell the
                     // user (persist it too) rather than silently losing context.
                     if finalMetrics?.contextTrimmed == true {
@@ -1634,6 +1675,8 @@ public final class GlobalChatController: ObservableObject {
     /// window, so the user knows earlier messages were not in view for this reply
     /// rather than silently losing that context.
     static let contextTrimmedNotice = "\n\n---\n_Note: this conversation exceeded the model's context window, so the earliest messages were dropped from view for this reply. Start a new chat to reset the context._"
+
+    static let groundedContextOverflowRefusal = "I can’t provide a source-grounded answer because the complete instruction and evidence packet does not fit this model’s context window. Use fewer sources or a model with a larger context window, then try again."
 
     /// A hard verification failure: a fabricated/unsupported citation or quotation,
     /// or — when the route requires jurisdiction — a jurisdiction mismatch.

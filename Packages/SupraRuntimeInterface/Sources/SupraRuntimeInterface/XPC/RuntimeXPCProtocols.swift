@@ -13,6 +13,11 @@ public protocol SupraRuntimeXPCServiceProtocol: NSObjectProtocol {
         withReply reply: @escaping (Data) -> Void
     )
 
+    func countTokens(
+        _ requestData: Data,
+        withReply reply: @escaping (Data) -> Void
+    )
+
     func cancelGeneration(
         _ generationIDData: Data,
         withReply reply: @escaping (Data) -> Void

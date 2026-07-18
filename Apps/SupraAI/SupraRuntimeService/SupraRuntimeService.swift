@@ -114,6 +114,37 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         beginGeneration(request, eventSink: eventSink, ownerConnection: nil, reply: reply)
     }
 
+    func countTokens(
+        _ request: CountTokensRequest,
+        reply: @escaping (CountTokensResponse) -> Void
+    ) {
+        stateLock.lock()
+        let isLoaded = loadedModelID == request.modelID
+        stateLock.unlock()
+        guard isLoaded else {
+            reply(CountTokensResponse(
+                modelID: request.modelID,
+                counts: [],
+                error: RuntimeErrorMapper.modelNotLoaded()
+            ))
+            return
+        }
+
+        let reply = RuntimeReply(reply)
+        modelOperations.enqueue { [modelController, reply] in
+            do {
+                let counts = try await modelController.countTokens(texts: request.texts)
+                reply(CountTokensResponse(modelID: request.modelID, counts: counts))
+            } catch {
+                reply(CountTokensResponse(
+                    modelID: request.modelID,
+                    counts: [],
+                    error: RuntimeErrorMapper.tokenCountingFailed(error)
+                ))
+            }
+        }
+    }
+
     private func beginGeneration(
         _ request: GenerateRequest,
         eventSink: GenerationEventSinkProtocol,
@@ -701,6 +732,23 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
                     )
                 )
             )
+        }
+    }
+
+    func countTokens(_ requestData: Data, withReply reply: @escaping (Data) -> Void) {
+        do {
+            let request = try RuntimeXPCCodec.decode(CountTokensRequest.self, from: requestData)
+            countTokens(request) { response in
+                reply(Self.encoded(response))
+            }
+        } catch {
+            reply(Self.encoded(CountTokensResponse(
+                modelID: ModelID(),
+                counts: [],
+                error: RuntimeErrorMapper.invalidRequest(
+                    "The token-count request could not be decoded."
+                )
+            )))
         }
     }
 

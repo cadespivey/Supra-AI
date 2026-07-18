@@ -391,7 +391,7 @@ public final class DocumentChronologyController: ObservableObject {
                 sources: prepared.map(\.source),
                 format: format
             )
-            if requestFitsPromptBudget(oneShotPrompt, route: route) {
+            if await requestFitsPromptBudget(oneShotPrompt, modelID: modelID, route: route) {
                 try Task.checkCancellation()
                 progress = .generating
                 await Task.yield()
@@ -443,7 +443,7 @@ public final class DocumentChronologyController: ObservableObject {
         route: ModelRoute?,
         ledger: ChronologyLedgerSession
     ) async throws -> GenerationOutcome {
-        let planned = try planMapBatches(prepared: prepared, route: route)
+        let planned = try await planMapBatches(prepared: prepared, modelID: modelID, route: route)
         var pending = planned.map(\.sourceIndices)
         var completedPassCount = 0
         var batchEntries: [[ChronologyEntry]] = []
@@ -458,7 +458,7 @@ public final class DocumentChronologyController: ObservableObject {
             let mapPrompt = DocumentChronologyPromptBuilder.buildMapPass(
                 sources: sourceIndices.map { prepared[$0].source }
             )
-            guard requestFitsPromptBudget(mapPrompt, route: route) else {
+            guard await requestFitsPromptBudget(mapPrompt, modelID: modelID, route: route) else {
                 throw ChronologyGenerationError.promptTooLarge(stage: "map pass")
             }
 
@@ -1086,63 +1086,101 @@ public final class DocumentChronologyController: ObservableObject {
         }
     }
 
-    /// Uses the same clamped context/output limits as the runtime and estimates
-    /// four UTF-8 bytes per prompt token. The routed system prompt is part of the
-    /// serialized request even though it is sent separately from `prompt`. This
-    /// is a preflight only; runtime tokenizer overflow triggers split-and-retry.
-    private func serializedPromptByteBudget(route: ModelRoute?) -> Int {
-        let options = (route?.options ?? GenerationOptions()).clampedForRuntime()
-        return PromptBudget.promptTokenBudget(
-            maxContextTokens: options.maxContextTokens,
-            maxOutputTokens: options.maxOutputTokens
-        ) * 4
+    private func requestFitsPromptBudget(
+        _ prompt: String,
+        modelID: ModelID,
+        route: ModelRoute?
+    ) async -> Bool {
+        let systemPrompt = routedSystemPrompt(route)
+        let report = await RuntimeTokenBudgeting.report(
+            serializedPackets: [RuntimeTokenBudgeting.serializedPacket(
+                systemPrompt: systemPrompt,
+                prompt: prompt
+            )],
+            modelID: modelID,
+            options: route?.options ?? GenerationOptions(),
+            runtimeClient: runtimeClient
+        )
+        return report.canPack
     }
 
-    private func requestFitsPromptBudget(_ prompt: String, route: ModelRoute?) -> Bool {
-        let systemBytes = routedSystemPrompt(route)?.utf8.count ?? 0
-        return prompt.utf8.count + systemBytes <= serializedPromptByteBudget(route: route)
-    }
-
-    /// Plans with the actual JSON-serialized envelope cost rather than only the
-    /// source text. Each incremental cost includes a comma reserve for joining
-    /// JSON objects, making the estimate conservative; every completed prompt is
-    /// checked again against the true request size before generation.
+    /// Orders sources with the shared document-contiguous planner, then greedily
+    /// packs whole document groups using the actual serialized map prompt. A
+    /// document that cannot fit as a group is split only at source boundaries and
+    /// owns its batches, preserving the established chronology batching contract.
     private func planMapBatches(
         prepared: [PreparedSource],
+        modelID: ModelID,
         route: ModelRoute?
-    ) throws -> [ChronologyBatch] {
-        let emptyPromptBytes = DocumentChronologyPromptBuilder.buildMapPass(sources: []).utf8.count
-        let systemBytes = routedSystemPrompt(route)?.utf8.count ?? 0
-        let sourceByteBudget = serializedPromptByteBudget(route: route) - systemBytes - emptyPromptBytes
-        guard sourceByteBudget > 0 else {
-            throw ChronologyGenerationError.promptTooLarge(stage: "map-pass instruction")
-        }
-
+    ) async throws -> [ChronologyBatch] {
         let items = prepared.map { item in
-            let singletonBytes = DocumentChronologyPromptBuilder
-                .buildMapPass(sources: [item.source])
-                .utf8.count
             return ChronologyBatchPlanner.Item(
                 documentKey: item.documentID,
-                // The combined JSON array adds one comma between objects. Adding
-                // one to every item is a safe overestimate for the first object.
-                charCount: max(1, singletonBytes - emptyPromptBytes + 1),
+                charCount: max(1, item.source.packedText.utf8.count),
                 orderDate: item.documentOrderDate
             )
         }
-        let batches = ChronologyBatchPlanner.plan(items: items, characterBudget: sourceByteBudget)
-        guard !batches.isEmpty else {
+        guard let ordered = ChronologyBatchPlanner
+            .plan(items: items, characterBudget: Int.max)
+            .first?.sourceIndices,
+            !ordered.isEmpty else {
             throw ChronologyGenerationError.promptTooLarge(stage: "map pass")
         }
-        for (index, batch) in batches.enumerated() {
-            let prompt = DocumentChronologyPromptBuilder.buildMapPass(
-                sources: batch.sourceIndices.map { prepared[$0].source }
-            )
-            guard requestFitsPromptBudget(prompt, route: route) else {
-                throw ChronologyGenerationError.promptTooLarge(stage: "map pass \(index + 1)")
+
+        var groups: [[Int]] = []
+        for index in ordered {
+            if let lastIndex = groups.last?.last,
+               prepared[lastIndex].documentID == prepared[index].documentID {
+                groups[groups.count - 1].append(index)
+            } else {
+                groups.append([index])
             }
         }
-        return batches
+
+        func fits(_ indices: [Int]) async -> Bool {
+            let prompt = DocumentChronologyPromptBuilder.buildMapPass(
+                sources: indices.map { prepared[$0].source }
+            )
+            return await requestFitsPromptBudget(prompt, modelID: modelID, route: route)
+        }
+
+        var planned: [ChronologyBatch] = []
+        var current: [Int] = []
+        func closeCurrent() {
+            guard !current.isEmpty else { return }
+            planned.append(ChronologyBatch(sourceIndices: current))
+            current = []
+        }
+
+        for group in groups {
+            if await fits(current + group) {
+                current.append(contentsOf: group)
+                continue
+            }
+
+            closeCurrent()
+            if await fits(group) {
+                current = group
+                continue
+            }
+
+            // Oversized document: split at item boundaries and close its final
+            // partial batch before considering a neighboring document.
+            for index in group {
+                if await fits(current + [index]) {
+                    current.append(index)
+                    continue
+                }
+                closeCurrent()
+                guard await fits([index]) else {
+                    throw ChronologyGenerationError.promptTooLarge(stage: "map pass")
+                }
+                current = [index]
+            }
+            closeCurrent()
+        }
+        closeCurrent()
+        return planned
     }
 
     /// Verifies every intermediate citation against its own cited source. The
@@ -1238,16 +1276,16 @@ public final class DocumentChronologyController: ObservableObject {
         var chunks: [[ChronologyEntry]] = []
         var current: [ChronologyEntry] = []
 
-        func fits(_ candidate: [ChronologyEntry]) -> Bool {
+        func fits(_ candidate: [ChronologyEntry]) async -> Bool {
             let prompt = DocumentChronologyPromptBuilder.buildSynthesis(entries: candidate)
             let outputProxy = ChronologyMerge.renderTable(candidate)
-            return requestFitsPromptBudget(prompt, route: route)
+            return await requestFitsPromptBudget(prompt, modelID: modelID, route: route)
                 && outputProxy.utf8.count <= outputByteBudget
         }
 
         for entry in entries {
             let candidate = current + [entry]
-            if fits(candidate) {
+            if await fits(candidate) {
                 current = candidate
                 continue
             }
@@ -1256,7 +1294,7 @@ public final class DocumentChronologyController: ObservableObject {
             }
             chunks.append(current)
             current = [entry]
-            guard fits(current) else {
+            guard await fits(current) else {
                 throw ChronologyGenerationError.promptTooLarge(stage: "narrative synthesis")
             }
         }

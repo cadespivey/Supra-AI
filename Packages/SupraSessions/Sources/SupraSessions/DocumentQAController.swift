@@ -15,6 +15,7 @@ public final class DocumentQAController: ObservableObject {
     @Published public private(set) var isGenerating = false
     @Published public private(set) var message: String?
     @Published public private(set) var lastResult: QAResult?
+    @Published public private(set) var lastPackingReport: TokenPackingReport?
 
     public struct QAResult: Sendable, Equatable {
         public var outputID: String
@@ -95,6 +96,7 @@ public final class DocumentQAController: ObservableObject {
 
         isGenerating = true
         message = nil
+        lastPackingReport = nil
         defer { isGenerating = false }
 
         let isGuided = (guidedChunkIDs?.isEmpty == false)
@@ -111,9 +113,15 @@ public final class DocumentQAController: ObservableObject {
                 message = "No matching sources were found in the selected scope."
                 return nil
             }
-            let groundingSources = prepared.map(\.source)
-            let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: trimmed, sources: groundingSources, mode: mode)
-            let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
+            let budgeted = try await collectBudgetedAnswer(
+                question: trimmed,
+                mode: mode,
+                prepared: prepared,
+                modelID: modelID,
+                route: effectiveRoute
+            )
+            prepared = budgeted.prepared
+            let answer = budgeted.answer
 
             let verification = try verify(
                 answer: answer,
@@ -382,14 +390,22 @@ public final class DocumentQAController: ObservableObject {
         }
         isGenerating = true
         message = nil
+        lastPackingReport = nil
         defer { isGenerating = false }
         let isGuided = (guidedChunkIDs?.isEmpty == false)
         do {
             let readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope)) ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
-            let prepared = try await prepareSources(question: question, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute, depth: depth)
+            var prepared = try await prepareSources(question: question, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute, depth: depth)
             guard !prepared.isEmpty else { message = "No matching sources were found."; return nil }
-            let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: question, sources: prepared.map(\.source), mode: mode)
-            let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
+            let budgeted = try await collectBudgetedAnswer(
+                question: question,
+                mode: mode,
+                prepared: prepared,
+                modelID: modelID,
+                route: effectiveRoute
+            )
+            prepared = budgeted.prepared
+            let answer = budgeted.answer
             let verification = try verify(
                 answer: answer,
                 prepared: prepared,
@@ -492,6 +508,91 @@ public final class DocumentQAController: ObservableObject {
         )
         let output = try await runtimeClient.collectGeneratedText(request)
         return ReasoningContent.answer(from: output)
+    }
+
+    private struct BudgetedAnswer {
+        var answer: String
+        var prepared: [PreparedSource]
+    }
+
+    private enum QABudgetError: LocalizedError {
+        case requiredPacketTooLarge
+
+        var errorDescription: String? {
+            "The grounded question and its first source cannot fit the selected model's context window."
+        }
+    }
+
+    /// Counts the actual serialized cumulative source prefixes, packs the
+    /// largest safe prefix, and permits exactly one source-boundary retry when
+    /// the runtime tokenizer still reports overflow.
+    private func collectBudgetedAnswer(
+        question: String,
+        mode: DocumentAnswerMode,
+        prepared: [PreparedSource],
+        modelID: ModelID,
+        route: ModelRoute?
+    ) async throws -> BudgetedAnswer {
+        let systemPrompt = routedSystemPrompt(route)
+        let packetPrompts = prepared.indices.map { upperBound in
+            DocumentQAPromptBuilder.buildQAPrompt(
+                question: question,
+                sources: Array(prepared.prefix(upperBound + 1)).map(\.source),
+                mode: mode
+            )
+        }
+        var report = await RuntimeTokenBudgeting.report(
+            serializedPackets: packetPrompts.map {
+                RuntimeTokenBudgeting.serializedPacket(systemPrompt: systemPrompt, prompt: $0)
+            },
+            modelID: modelID,
+            options: route?.options ?? GenerationOptions(),
+            runtimeClient: runtimeClient
+        )
+        lastPackingReport = report
+        guard report.canPack else { throw QABudgetError.requiredPacketTooLarge }
+
+        var selected = Array(prepared.prefix(report.packedItemCount))
+        var prompt = DocumentQAPromptBuilder.buildQAPrompt(
+            question: question,
+            sources: selected.map(\.source),
+            mode: mode
+        )
+        do {
+            return BudgetedAnswer(
+                answer: try await collect(prompt: prompt, modelID: modelID, route: route),
+                prepared: selected
+            )
+        } catch let error as GenerationStreamError where error == .contextOverflowed {
+            guard selected.count > 1 else { throw error }
+        }
+
+        selected.removeLast()
+        prompt = DocumentQAPromptBuilder.buildQAPrompt(
+            question: question,
+            sources: selected.map(\.source),
+            mode: mode
+        )
+        let retryReport = await RuntimeTokenBudgeting.report(
+            serializedPackets: [
+                RuntimeTokenBudgeting.serializedPacket(systemPrompt: systemPrompt, prompt: prompt)
+            ],
+            modelID: modelID,
+            options: route?.options ?? GenerationOptions(),
+            runtimeClient: runtimeClient
+        )
+        report.countMethod = retryReport.countMethod
+        report.selectedInputTokens = retryReport.selectedInputTokens
+        report.packedItemCount = selected.count
+        report.omittedItemCount = report.consideredItemCount - selected.count
+        report.omissionReason = "context_overflow_retry"
+        report.overflowRetryCount = 1
+        lastPackingReport = report
+
+        return BudgetedAnswer(
+            answer: try await collect(prompt: prompt, modelID: modelID, route: route),
+            prepared: selected
+        )
     }
 
     private func routedSystemPrompt(_ route: ModelRoute?) -> String? {

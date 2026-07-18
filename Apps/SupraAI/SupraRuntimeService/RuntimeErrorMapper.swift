@@ -58,6 +58,14 @@ enum RuntimeErrorMapper {
         )
     }
 
+    static func tokenCountingFailed(_ error: Error) -> RuntimeError {
+        RuntimeError(
+            category: "tokenCountingFailed",
+            message: "The MLX tokenizer could not count the request.",
+            technicalDetails: error.localizedDescription
+        )
+    }
+
     private static func looksLikeMemoryPressure(_ message: String) -> Bool {
         let lower = message.lowercased()
         return lower.contains("memory")

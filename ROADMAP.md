@@ -57,6 +57,12 @@ They sharpen what already ships:
   proposals remain non-operative until a user confirms or rejects them in an audited Documents
   queue. Confirmed relations add explicit version-state metadata; unresolved in-scope relations
   block clean comparison and negative-result assurance instead of silently choosing a document.
+- **Tokenizer-aware grounded packing (implemented in source)** — the runtime exposes batched
+  exact token counts for the loaded model. Q&A and chronology preflight the serialized packet,
+  Q&A retries one overflow with fewer sources, and grounded chat refuses rather than saving
+  partial output or citations after a context overflow. A conservative no-runtime estimate and
+  deterministic B-CTX accounting cover fallback and recovery behavior; the live-model matrix
+  remains part of protected on-device validation.
 - **Documents tab UX** — nested folder tree presentation and drag-between-folders (move/copy
   already exists at the controller/repository level; the v1 sidebar is a flat list).
 - **Guided Q&A in the UI** — manual source selection is supported in `DocumentQAController`

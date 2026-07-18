@@ -256,6 +256,7 @@ private struct DeterministicCorpusWorkload: Sendable {
             store: store,
             matterID: benchmarkMatter.id
         ))
+        observations.append(contentsOf: contextPackingObservations())
 
         let benchmarkDocumentIDs = Set(
             try store.documentLibrary.fetchDocuments(matterID: benchmarkMatter.id).map(\.id)
@@ -278,6 +279,42 @@ private struct DeterministicCorpusWorkload: Sendable {
             observations: observations,
             retrievalSeconds: max(retrievalSeconds, Double.leastNonzeroMagnitude)
         )
+    }
+
+    private func contextPackingObservations() -> [BenchmarkObservation] {
+        // This deterministic companion freezes the accounting contract without
+        // claiming to be a model-tokenizer result. Protected T3/T4 runs replace
+        // this exact-count matrix with counts from countTokens for each model.
+        let cumulativePackets = [
+            String(repeating: "A", count: 600),
+            String(repeating: "A", count: 1_200),
+            String(repeating: "A", count: 1_800),
+        ]
+        let exactCounts = [300, 620, 900]
+        let maxContextTokens = 956
+        let exact = TokenBudgeter.chooseLargestFittingPrefix(
+            serializedPackets: cumulativePackets,
+            exactCounts: exactCounts,
+            maxContextTokens: maxContextTokens,
+            outputReserveTokens: 0
+        )
+        let fallback = TokenBudgeter.chooseLargestFittingPrefix(
+            serializedPackets: cumulativePackets,
+            maxContextTokens: maxContextTokens,
+            outputReserveTokens: 0
+        )
+        return ContextPackingBenchmark.observations(samples: [
+            ContextPackingBenchmarkSample(
+                usableInputTokens: exact.availableInputTokens,
+                exactPackedTokens: exact.selectedInputTokens,
+                fallbackEstimatedTokens: fallback.selectedInputTokens,
+                consideredResponsiveCandidates: exact.consideredItemCount,
+                omittedResponsiveCandidates: exact.omittedItemCount,
+                overflowAttempts: 1,
+                recoveredOverflows: 1,
+                silentOverflows: 0
+            ),
+        ])
     }
 
     private func spreadsheetHeaderObservations(
