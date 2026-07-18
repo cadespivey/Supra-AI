@@ -72,6 +72,19 @@ and compares its canonical deterministic report with the SHA-named baseline.
 statistical release gate until the repo owner explicitly approves it in an
 intentional baseline update.
 
+The separate fixed-scale protocol creates fresh 10-, 50-, and 200-document matters and
+records fast/deep retrieval, ledger and structure writes, import/index throughput, peak RSS,
+and one-document incremental work together with its hardware/toolchain fingerprint:
+
+```
+bash Scripts/run-benchmarks.sh --performance
+```
+
+That command always gates the deterministic requirement that zero unaffected documents are
+touched. `--performance-release-gate` additionally requires complete, explicit owner approval
+in `Benchmarks/performance-thresholds.json`; while its status is
+`pending_owner_approval`, release-gate mode intentionally fails closed.
+
 ## Manual / model validation
 See `VALIDATION-PLAN.md` for the per-matter Q&A, chronology, and CourtListener
 scenarios with expected answers — run these in the app once a chat + embedding

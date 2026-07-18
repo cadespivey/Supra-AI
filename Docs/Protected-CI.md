@@ -29,13 +29,22 @@ silently weaken the preventive gates. No workflow may fetch a prohibited public 
 
 Document-ingestion quality has a separate credential-free scheduled workflow,
 `.github/workflows/benchmarks.yml`, plus the pull-request
-`Document benchmark deterministic gates` job. Both run
-`Scripts/run-benchmarks.sh --verify-baseline` on `macos-15`. The script imports and
-indexes the synthetic benchmark, runs deterministic retrieval and matter-isolation probes,
-validates the baseline/threshold ledger, and fails if the canonical report drifts after
-removing only the run timestamp and current checkout SHA. Statistical threshold proposals
-remain non-gating until their `pending_owner_approval` entries are explicitly approved;
-the deterministic accounting and isolation values are still frozen at the baseline.
+`Document benchmark deterministic gates` job. Both run the SHA-frozen deterministic
+baseline and the fixed 10/50/200-document performance protocol on `macos-15`. The
+deterministic pass imports and indexes the synthetic corpus, exercises retrieval and
+matter-isolation probes, validates the baseline/threshold ledger, and fails if the canonical
+report drifts after removing only the run timestamp and current checkout SHA. The performance
+pass records fast/deep retrieval, exhaustive-ledger and structure-write p50/p95, import/index
+throughput, peak RSS, and one-document incremental rows/bytes/work. It immediately fails when
+incremental work touches any unaffected document.
+
+Statistical B-PERF bands remain `pending_owner_approval`. Pending runs capture measurements
+and enforce deterministic safety only; `Scripts/run-benchmarks.sh
+--performance-release-gate` fails closed until the repo owner records the memory ceiling and
+incremental wall-time band, approves the default 10% latency/throughput proposals, and names
+the approver/date. Once approved, comparisons are valid only when hardware identifier, macOS,
+Xcode, Swift, thermal state, and protocol exactly match the recorded baseline. GitHub-hosted
+runs therefore remain safety gates unless they match the approved release-candidate environment.
 
 ## Third-party Action pins and licenses
 

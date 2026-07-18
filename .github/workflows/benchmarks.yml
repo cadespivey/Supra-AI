@@ -10,9 +10,9 @@ permissions:
 
 jobs:
   deterministic-baseline:
-    name: Document benchmark baseline and drift
+    name: Document benchmark baseline, drift, and performance safety
     runs-on: macos-15
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -20,3 +20,5 @@ jobs:
           persist-credentials: false
       - name: Run deterministic benchmark and verify frozen baseline
         run: bash Scripts/run-benchmarks.sh --verify-baseline
+      - name: Run fixed-scale performance safety gates
+        run: bash Scripts/run-benchmarks.sh --performance

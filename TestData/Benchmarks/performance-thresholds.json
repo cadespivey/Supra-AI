@@ -1,0 +1,34 @@
+{
+  "approvalStatus": "pending_owner_approval",
+  "approvedAt": null,
+  "approvedBy": null,
+  "baseline": {
+    "documentsPerMinute": 5399.947080508554,
+    "environment": {
+      "hardwareIdentifier": "Mac16,7",
+      "operatingSystem": "Version 27.0 (Build 26A5378n)",
+      "protocolVersion": "document-performance-v1",
+      "swiftVersion": "swift-driver version: 1.167 Apple Swift version 6.4 (swiftlang-6.4.0.20.104 clang-2100.3.20.102)\nTarget: arm64-apple-macosx27.0.0",
+      "thermalState": "nominal",
+      "xcodeVersion": "Xcode 27.0\nBuild version 27A5194q"
+    },
+    "fastRetrievalP50Milliseconds": 24.902416684199125,
+    "fastRetrievalP95Milliseconds": 25.108749978244305,
+    "incrementalWallClockMilliseconds": 3.4375833347439766,
+    "ledgerWriteP50Milliseconds": 1.7332083079963923,
+    "ledgerWriteP95Milliseconds": 1.7687083454802632,
+    "mebibytesPerSecond": 0.25149518549319816,
+    "peakRSSMiB": 40.75,
+    "retrievalP50Milliseconds": 24.862124992068857,
+    "retrievalP95Milliseconds": 25.34041670151055,
+    "structureWriteP50Milliseconds": 1.0444166837260127,
+    "structureWriteP95Milliseconds": 1.1313333525322378
+  },
+  "baselinePath": "TestData/Benchmarks/performance-baseline-adc4a2da712d51dca7ab61bb3c37e8b2388e6303.json",
+  "incrementalWallClockRegressionFraction": null,
+  "latencyRegressionFraction": 0.1,
+  "peakRSSCeilingMiB": null,
+  "requireZeroUnaffectedDocumentsTouched": true,
+  "schemaVersion": 1,
+  "throughputRegressionFraction": 0.1
+}

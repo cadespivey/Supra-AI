@@ -114,9 +114,14 @@ if [[ -f "$benchmark_workflow" ]]; then
   grep -Eq '^[[:space:]]+schedule:' "$benchmark_workflow" || fail 'scheduled benchmark workflow has no schedule trigger'
   grep -Fq 'runs-on: macos-15' "$benchmark_workflow" || fail 'scheduled benchmark workflow must run on macos-15'
   grep -Fq 'Scripts/run-benchmarks.sh --verify-baseline' "$benchmark_workflow" || fail 'scheduled benchmark workflow omits deterministic baseline verification'
+  grep -Fq 'Scripts/run-benchmarks.sh --performance' "$benchmark_workflow" || fail 'scheduled benchmark workflow omits fixed-scale performance safety verification'
   if grep -Fq '${{ secrets.' "$benchmark_workflow"; then
     fail 'scheduled benchmark workflow must not consume credentials'
   fi
+fi
+
+if [[ -f "$macos_workflow" ]]; then
+  grep -Fq 'Scripts/run-benchmarks.sh --performance' "$macos_workflow" || fail 'protected macOS CI omits fixed-scale performance safety verification'
 fi
 
 while IFS=: read -r workflow line_number line; do
