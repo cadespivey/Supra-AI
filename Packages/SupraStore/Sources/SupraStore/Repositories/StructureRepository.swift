@@ -190,6 +190,13 @@ public final class StructureRepository: @unchecked Sendable {
             guard Set(edges.map(\.id)).count == edges.count else {
                 throw StructureRepositoryError.duplicateNodeIdentity("edge_id")
             }
+            var existingCreatedAtByID: [String: Date] = [:]
+            for edge in edges {
+                if let existing = try DocumentStructureEdgeRecord.fetchOne(db, key: edge.id),
+                   existing.matterID == matterID {
+                    existingCreatedAtByID[edge.id] = existing.createdAt
+                }
+            }
             for edge in edges {
                 for endpointID in [edge.fromNodeID, edge.toNodeID] {
                     let endpointMatterID = try String.fetchOne(
@@ -222,7 +229,11 @@ public final class StructureRepository: @unchecked Sendable {
                 arguments: StatementArguments(arguments)
             )
             for edge in edges.sorted(by: { $0.id < $1.id }) {
-                try edge.insert(db)
+                var replacement = edge
+                if let existingCreatedAt = existingCreatedAtByID[edge.id] {
+                    replacement.createdAt = existingCreatedAt
+                }
+                try replacement.insert(db)
             }
         }
     }
