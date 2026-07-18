@@ -29,7 +29,15 @@ final class DocumentChronologyTests: XCTestCase {
             ])
         })
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime, maxSources: 3)
-        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID()))
+        let result = try XCTUnwrapAsync(await chronology.generate(
+            scope: .wholeMatter,
+            format: .table,
+            modelID: ModelID(),
+            modelLineage: DocumentGenerationModelLineage(
+                modelRepository: "synthetic/chronology-runtime",
+                modelRevision: "chronology-revision-nondefault"
+            )
+        ))
 
         let expectedMarkdown = """
         > ⚠️ **DOCUMENT SUPPORT NEEDS REVIEW — DO NOT RELY.** Proposition document-proposition-1 came from an incompletely indexed scope. Generated from an incompletely indexed scope.
@@ -51,6 +59,15 @@ final class DocumentChronologyTests: XCTestCase {
         let expectedMessage = "Chronology covers 3 of 6 dated sources; omitted to fit the model's budget: deposition-calloway.txt, expert-report-metallurgy.txt, warranty-terms-mckernon.txt. Narrow the scope or date range for full coverage."
         XCTAssertEqual(result.markdown, expectedMarkdown, "ledger adoption must preserve chronology markdown byte-for-byte")
         XCTAssertEqual(chronology.message, expectedMessage, "ledger adoption must preserve the existing UI coverage string")
+        let version = try XCTUnwrap(store.structuredOutputs.fetchVersion(id: result.versionID))
+        let generationID = try XCTUnwrap(version.generationSessionID, "T-LIN-03: chronology versions carry generation lineage")
+        let generation = try XCTUnwrap(store.generation.fetchGenerationSession(generationID: generationID))
+        XCTAssertEqual(generation.modelRepository, "synthetic/chronology-runtime")
+        XCTAssertEqual(generation.modelRevision, "chronology-revision-nondefault")
+        XCTAssertEqual(generation.promptBuilderVersion, "document-chronology-v1")
+        XCTAssertEqual(version.promptBuilderVersion, "document-chronology-v1")
+        XCTAssertEqual(version.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+        XCTAssertTrue(generation.optionsJSON.contains("maxOutputTokens"))
 
         let runID = try XCTUnwrap(chronology.lastCorpusRunID)
         let run = try XCTUnwrap(store.corpusAnalysis.fetchRun(matterID: matter.id, id: runID))

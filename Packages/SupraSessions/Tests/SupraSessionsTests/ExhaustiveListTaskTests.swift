@@ -25,7 +25,8 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 title: "Every invoice reference",
                 query: "Extract every invoice reference.",
                 characterBudget: 1,
-                evaluationExpectedItemKeys: ["invoice-a", "invoice-b", "invoice-c"]
+                evaluationExpectedItemKeys: ["invoice-a", "invoice-b", "invoice-c"],
+                modelLineageJSON: #"{"model_repository":"synthetic/exhaustive-runtime","model_revision":"exhaustive-revision-nondefault"}"#
             )
         ) { input in
             let source = try XCTUnwrap(input.partition.sources.first)
@@ -87,6 +88,15 @@ final class ExhaustiveListTaskTests: XCTestCase {
         XCTAssertEqual(Set(outputSources.compactMap(\.revisionID)), Set(fixture.revisionIDs))
         XCTAssertTrue(result.version.contentMarkdown.contains("invoice-c"))
         XCTAssertTrue(try XCTUnwrap(persistedRun.reconciliationJSON).contains("invoice-c"))
+        let generationID = try XCTUnwrap(result.version.generationSessionID, "T-LIN-03: engine versions carry generation lineage")
+        let generation = try XCTUnwrap(store.generation.fetchGenerationSession(generationID: generationID))
+        XCTAssertEqual(generation.modelRepository, "synthetic/exhaustive-runtime")
+        XCTAssertEqual(generation.modelRevision, "exhaustive-revision-nondefault")
+        XCTAssertEqual(generation.promptBuilderVersion, "exhaustive-list-v1")
+        XCTAssertEqual(result.version.promptBuilderVersion, "exhaustive-list-v1")
+        XCTAssertEqual(result.version.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+        XCTAssertTrue(generation.prompt.contains("Extract every invoice reference."))
+        XCTAssertTrue(generation.optionsJSON.contains("character_budget"))
     }
 
     func testTENG10FailedPartitionPersistsIncompleteOutputWithNamedDocumentAndReason() async throws {

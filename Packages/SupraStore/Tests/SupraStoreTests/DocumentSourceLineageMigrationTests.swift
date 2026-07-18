@@ -36,7 +36,7 @@ final class DocumentSourceLineageMigrationTests: XCTestCase {
 
         try migrator.migrate(queue)
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v066_add_document_source_lineage")
+            XCTAssertEqual(try appliedMigrations(db).last, "v067_add_output_generation_lineage")
             XCTAssertEqual(Set(try db.columns(in: "document_source_sets").map(\.name)), Set([
                 "id", "matter_id", "structured_output_version_id", "status", "mode",
                 "scope_json", "retrieval_query", "retrieval_depth", "created_at",

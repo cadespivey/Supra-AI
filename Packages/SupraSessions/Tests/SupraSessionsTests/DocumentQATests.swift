@@ -110,7 +110,14 @@ final class DocumentQATests: XCTestCase {
         })
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: nil)
 
-        let generated = await qa.generate(question: "When was the agreement signed?", modelID: ModelID())
+        let generated = await qa.generate(
+            question: "When was the agreement signed?",
+            modelID: ModelID(),
+            modelLineage: DocumentGenerationModelLineage(
+                modelRepository: "synthetic/qa-runtime",
+                modelRevision: "qa-revision-nondefault"
+            )
+        )
         let result = try XCTUnwrap(generated)
         XCTAssertEqual(result.status, StructuredOutputStatus.complete.rawValue)
         XCTAssertEqual(result.citationLabels, ["S1"])
@@ -132,6 +139,16 @@ final class DocumentQATests: XCTestCase {
         XCTAssertNotNil(sourceSet.retrievalConfigJSON)
         XCTAssertNotNil(sourceSet.corpusSnapshotHash)
         XCTAssertNotNil(sourceSet.packingReportJSON)
+        let version = try XCTUnwrap(store.structuredOutputs.fetchVersion(id: result.versionID))
+        let generationID = try XCTUnwrap(version.generationSessionID, "T-LIN-03: QA versions carry generation lineage")
+        let generation = try XCTUnwrap(store.generation.fetchGenerationSession(generationID: generationID))
+        XCTAssertEqual(generation.modelRepository, "synthetic/qa-runtime")
+        XCTAssertEqual(generation.modelRevision, "qa-revision-nondefault")
+        XCTAssertEqual(generation.promptBuilderVersion, "document-qa-v1")
+        XCTAssertEqual(version.promptBuilderVersion, "document-qa-v1")
+        XCTAssertEqual(version.assuranceState, OutputAssuranceState.preliminary.rawValue)
+        XCTAssertTrue(generation.prompt.contains("When was the agreement signed?"))
+        XCTAssertTrue(generation.optionsJSON.contains("maxOutputTokens"))
     }
 
     func testTieredDepthPersistsOnSourceSetAndKeepsPreliminaryVersion() async throws {
