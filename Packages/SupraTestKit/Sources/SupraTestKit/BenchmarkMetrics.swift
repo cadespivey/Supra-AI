@@ -237,6 +237,47 @@ public enum BenchmarkMetrics {
         )
     }
 
+    public static func brierScore(
+        probabilities: [Double],
+        outcomes: [Bool]
+    ) -> BenchmarkResult {
+        precondition(probabilities.count == outcomes.count, "calibration observations must be paired")
+        guard !probabilities.isEmpty else { return .notApplicable("no calibration observations") }
+        precondition(probabilities.allSatisfy { (0...1).contains($0) }, "probabilities must be within 0...1")
+        let squaredError = zip(probabilities, outcomes).reduce(0.0) { partial, observation in
+            let expected = observation.1 ? 1.0 : 0.0
+            return partial + pow(observation.0 - expected, 2)
+        }
+        return .measured(value: squaredError / Double(probabilities.count), denominator: probabilities.count)
+    }
+
+    public static func expectedCalibrationError(
+        probabilities: [Double],
+        outcomes: [Bool],
+        binCount: Int
+    ) -> BenchmarkResult {
+        precondition(probabilities.count == outcomes.count, "calibration observations must be paired")
+        precondition(binCount > 0, "calibration bin count must be positive")
+        guard !probabilities.isEmpty else { return .notApplicable("no calibration observations") }
+        precondition(probabilities.allSatisfy { (0...1).contains($0) }, "probabilities must be within 0...1")
+
+        var bins = Array(repeating: (confidence: 0.0, correct: 0, count: 0), count: binCount)
+        for (probability, outcome) in zip(probabilities, outcomes) {
+            let index = min(binCount - 1, Int(probability * Double(binCount)))
+            bins[index].confidence += probability
+            bins[index].correct += outcome ? 1 : 0
+            bins[index].count += 1
+        }
+        let total = Double(probabilities.count)
+        let error = bins.reduce(0.0) { partial, bin in
+            guard bin.count > 0 else { return partial }
+            let meanConfidence = bin.confidence / Double(bin.count)
+            let accuracy = Double(bin.correct) / Double(bin.count)
+            return partial + abs(meanConfidence - accuracy) * Double(bin.count) / total
+        }
+        return .measured(value: error, denominator: probabilities.count)
+    }
+
     private static func wilson95(successes: Int, trials: Int) -> BenchmarkConfidenceInterval {
         let z = 1.959_963_984_540_054
         let n = Double(trials)

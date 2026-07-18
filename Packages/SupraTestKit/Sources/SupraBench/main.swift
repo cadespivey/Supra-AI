@@ -98,6 +98,7 @@ private enum BenchmarkCLIError: LocalizedError {
     case repositorySHANotFound
     case benchmarkSpecificationNotFound
     case recoveryFixtureFailed
+    case invalidOCRSelectionKey(String)
 
     var errorDescription: String? {
         switch self {
@@ -107,8 +108,30 @@ private enum BenchmarkCLIError: LocalizedError {
         case .repositorySHANotFound: return "could not resolve the repository SHA"
         case .benchmarkSpecificationNotFound: return "no benchmark-profile specification was found"
         case .recoveryFixtureFailed: return "could not establish the deterministic recovery fixture"
+        case .invalidOCRSelectionKey(let id): return "invalid OCR selection benchmark key: \(id)"
         }
     }
+}
+
+private struct OCRSelectionBenchmarkKeys: Decodable {
+    struct Candidate: Decodable {
+        var id: String
+        var origin: String
+        var text: String
+        var confidence: Double?
+        var boundingBoxesJSON: String?
+    }
+
+    struct Case: Decodable {
+        var id: String
+        var embedded: Candidate
+        var ocr: Candidate
+        var expectedSelectedOrigin: String
+        var expectedNeedsReview: Bool
+    }
+
+    var schemaVersion: Int
+    var cases: [Case]
 }
 
 private struct DeterministicCorpusWorkload: Sendable {
@@ -164,6 +187,7 @@ private struct DeterministicCorpusWorkload: Sendable {
             retrievedByTask[task.id] = result.sources
         }
         observations.append(contentsOf: retrievalObservations(tasks: tasks, retrievedByTask: retrievedByTask))
+        observations.append(contentsOf: try ocrSelectionObservations())
 
         let benchmarkDocumentIDs = Set(
             try store.documentLibrary.fetchDocuments(matterID: benchmarkMatter.id).map(\.id)
@@ -182,6 +206,85 @@ private struct DeterministicCorpusWorkload: Sendable {
         ))
         observations.append(contentsOf: try await recoveryObservations(temporaryRoot: temporaryRoot))
         return observations
+    }
+
+    private func ocrSelectionObservations() throws -> [BenchmarkObservation] {
+        let url = repositoryRoot.appendingPathComponent("TestData/Benchmarks/ocr-selection-keys.json")
+        let keys = try JSONDecoder().decode(OCRSelectionBenchmarkKeys.self, from: Data(contentsOf: url))
+        guard keys.schemaVersion == 1, !keys.cases.isEmpty else {
+            throw BenchmarkCLIError.invalidOCRSelectionKey("schema")
+        }
+
+        var correct = 0
+        var falseClean = 0
+        var probabilities: [Double] = []
+        var outcomes: [Bool] = []
+        for key in keys.cases {
+            guard let embeddedOrigin = OCRCandidateSelection.Origin(rawValue: key.embedded.origin),
+                  let ocrOrigin = OCRCandidateSelection.Origin(rawValue: key.ocr.origin) else {
+                throw BenchmarkCLIError.invalidOCRSelectionKey(key.id)
+            }
+            let decision = OCRCandidateSelection.select(
+                embedded: .init(
+                    id: key.embedded.id,
+                    origin: embeddedOrigin,
+                    text: key.embedded.text,
+                    confidence: key.embedded.confidence,
+                    boundingBoxesJSON: key.embedded.boundingBoxesJSON
+                ),
+                ocr: .init(
+                    id: key.ocr.id,
+                    origin: ocrOrigin,
+                    text: key.ocr.text,
+                    confidence: key.ocr.confidence,
+                    boundingBoxesJSON: key.ocr.boundingBoxesJSON
+                )
+            )
+            let isCorrect = decision.chosenOrigin.rawValue == key.expectedSelectedOrigin
+            if isCorrect { correct += 1 }
+            if key.expectedNeedsReview, !decision.needsReview { falseClean += 1 }
+            probabilities.append(decision.selectedConfidence)
+            outcomes.append(isCorrect)
+        }
+
+        return [
+            BenchmarkObservation(
+                metricID: "B-OCR-01",
+                name: "selection_accuracy",
+                unit: "rate",
+                result: BenchmarkMetrics.rate(
+                    numerator: correct,
+                    denominator: keys.cases.count,
+                    interval: .none
+                )
+            ),
+            BenchmarkObservation(
+                metricID: "B-OCR-02",
+                name: "brier_score",
+                unit: "score",
+                result: BenchmarkMetrics.brierScore(probabilities: probabilities, outcomes: outcomes)
+            ),
+            BenchmarkObservation(
+                metricID: "B-OCR-02",
+                name: "expected_calibration_error",
+                unit: "score",
+                result: BenchmarkMetrics.expectedCalibrationError(
+                    probabilities: probabilities,
+                    outcomes: outcomes,
+                    binCount: 5
+                )
+            ),
+            BenchmarkObservation(
+                metricID: "B-OCR-02",
+                name: "false_clean_count",
+                unit: "count",
+                result: .measured(
+                    value: Double(falseClean),
+                    numerator: falseClean,
+                    denominator: keys.cases.filter(\.expectedNeedsReview).count
+                )
+            ),
+        ]
     }
 
     @MainActor

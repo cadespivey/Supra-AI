@@ -988,10 +988,36 @@ public final class DocumentImportService: @unchecked Sendable {
         case .image:
             let ocrResult = try await ocr.recognizeImage(at: blobURL)
             candidates[0] = ocrResult
-            merged.parts = [ExtractedPart(
-                sourceKind: .image, text: ocrResult.text, pageIndex: 0, pageLabel: "1",
-                ocrConfidence: ocrResult.confidence, boundingBoxesJSON: ocrResult.boundingBoxesJSON
-            )]
+            let parserPart = result.parts.first ?? ExtractedPart(
+                sourceKind: .image,
+                text: "",
+                pageIndex: 0,
+                pageLabel: "1"
+            )
+            let decision = OCRCandidateSelection.select(
+                embedded: .init(
+                    id: "pending-parser-0",
+                    origin: .parser,
+                    text: parserPart.text,
+                    confidence: parserPart.ocrConfidence,
+                    boundingBoxesJSON: parserPart.boundingBoxesJSON
+                ),
+                ocr: .init(
+                    id: "pending-ocr-0",
+                    origin: .ocr,
+                    text: ocrResult.text,
+                    confidence: ocrResult.confidence,
+                    boundingBoxesJSON: ocrResult.boundingBoxesJSON
+                )
+            )
+            if decision.chosenOrigin == .ocr {
+                merged.parts = [ExtractedPart(
+                    sourceKind: .image, text: ocrResult.text, pageIndex: 0, pageLabel: "1",
+                    ocrConfidence: ocrResult.confidence, boundingBoxesJSON: ocrResult.boundingBoxesJSON
+                )]
+            } else {
+                merged.parts = [parserPart]
+            }
             merged.method = "vision-ocr-image"
             merged.needsOCR = false
         case .pdf:
@@ -1001,15 +1027,34 @@ public final class DocumentImportService: @unchecked Sendable {
             merged.parts = result.parts.enumerated().map { index, part in
                 var updated = part
                 let pageIndex = part.pageIndex ?? index
-                // Only the pages the extractor flagged for OCR are touched. Their
-                // confidence is recorded even when OCR recovered nothing (so the
-                // review gate can see it), but the OCR text only replaces the
-                // embedded text when it is actually longer.
+                // Only the pages the extractor flagged for OCR are touched. The
+                // pure v1 policy requires confidence plus comparative quality;
+                // length by itself can never replace embedded text.
                 if ocrTargets.contains(pageIndex), let ocrResult = pageResults[pageIndex] {
-                    updated.ocrConfidence = ocrResult.confidence
-                    if ocrResult.text.count > part.text.count {
+                    let decision = OCRCandidateSelection.select(
+                        embedded: .init(
+                            id: "pending-embedded-\(pageIndex)",
+                            origin: .embeddedPDF,
+                            text: part.text,
+                            confidence: part.ocrConfidence,
+                            boundingBoxesJSON: part.boundingBoxesJSON
+                        ),
+                        ocr: .init(
+                            id: "pending-ocr-\(pageIndex)",
+                            origin: .ocr,
+                            text: ocrResult.text,
+                            confidence: ocrResult.confidence,
+                            boundingBoxesJSON: ocrResult.boundingBoxesJSON
+                        )
+                    )
+                    if decision.chosenOrigin == .ocr {
                         updated.text = ocrResult.text
+                        updated.ocrConfidence = ocrResult.confidence
                         updated.boundingBoxesJSON = ocrResult.boundingBoxesJSON
+                    }
+                    if !part.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       !ocrResult.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        appendOCRSelectionWarning(decision, pageIndex: pageIndex, warnings: &merged.warnings)
                     }
                 }
                 return updated
@@ -1022,13 +1067,18 @@ public final class DocumentImportService: @unchecked Sendable {
         return OCRApplication(result: merged, candidates: candidates)
     }
 
-    // MARK: - Persistence
-
-    private struct V0RevisionSelectionDecision: Codable {
-        var candidateRevisionIDs: [String]
-        var chosenOrigin: String
-        var rule: String
+    private func appendOCRSelectionWarning(
+        _ decision: OCRCandidateSelection.Decision,
+        pageIndex: Int,
+        warnings: inout [String]
+    ) {
+        guard decision.needsReview else { return }
+        warnings.append(
+            "OCR candidate quality unresolved on page \(pageIndex + 1); review embedded and OCR text."
+        )
     }
+
+    // MARK: - Persistence
 
     private func persistExtraction(
         _ result: ExtractionResult,
@@ -1072,6 +1122,15 @@ public final class DocumentImportService: @unchecked Sendable {
             )
             var candidates = [parserRevision]
             var selectedRevision = parserRevision
+            var decision = OCRCandidateSelection.selectSingle(
+                OCRCandidateSelection.RevisionCandidate(
+                    id: parserRevision.id,
+                    origin: parserPart.sourceKind == .pdfPage ? .embeddedPDF : .parser,
+                    text: parserRevision.text,
+                    confidence: parserRevision.ocrConfidence,
+                    boundingBoxesJSON: parserRevision.boundingBoxesJSON
+                )
+            )
 
             let pageIndex = parserPart.pageIndex ?? index
             if let ocrCandidate = ocrCandidates[pageIndex] {
@@ -1088,20 +1147,32 @@ public final class DocumentImportService: @unchecked Sendable {
                     boundingBoxesJSON: ocrCandidate.boundingBoxesJSON
                 )
                 candidates.append(ocrRevision)
-                // M3-W1 records the shipping v0 decision without changing it.
-                // Images always materialize OCR; PDFs retain the longer-wins rule
-                // until M3-W2 replaces that policy with explainable scoring.
-                if parserPart.sourceKind == .image
-                    || (ocrCandidate.text.count > parserPart.text.count && part.text == ocrCandidate.text) {
-                    selectedRevision = ocrRevision
-                }
+                decision = OCRCandidateSelection.select(
+                    embedded: .init(
+                        id: parserRevision.id,
+                        origin: parserPart.sourceKind == .pdfPage ? .embeddedPDF : .parser,
+                        text: parserRevision.text,
+                        confidence: parserRevision.ocrConfidence,
+                        boundingBoxesJSON: parserRevision.boundingBoxesJSON
+                    ),
+                    ocr: .init(
+                        id: ocrRevision.id,
+                        origin: .ocr,
+                        text: ocrRevision.text,
+                        confidence: ocrRevision.ocrConfidence,
+                        boundingBoxesJSON: ocrRevision.boundingBoxesJSON
+                    )
+                )
+                selectedRevision = decision.selectedRevisionID == ocrRevision.id
+                    ? ocrRevision
+                    : parserRevision
             }
             revisions.append(contentsOf: candidates)
 
             let selectionKeyPayload = [
                 documentID,
                 String(index),
-                "policy-v0",
+                "policy-v1",
                 selectedRevision.derivationKey,
                 candidates.map(\.derivationKey).joined(separator: ","),
             ].joined(separator: "|")
@@ -1117,14 +1188,7 @@ public final class DocumentImportService: @unchecked Sendable {
             } else {
                 supersedesSelectionID = priorSelections.last?.id
             }
-            let decision = V0RevisionSelectionDecision(
-                candidateRevisionIDs: candidates.map(\.id),
-                chosenOrigin: selectedRevision.origin,
-                rule: candidates.count == 1 ? "parser_only_v0" : "longer_wins_v0"
-            )
-            let decisionEncoder = JSONEncoder()
-            decisionEncoder.outputFormatting = [.sortedKeys]
-            let decisionJSON = String(decoding: try decisionEncoder.encode(decision), as: UTF8.self)
+            let decisionJSON = try decision.canonicalJSON()
             selections.append(DocumentPartSelectionRecord(
                 id: "selection-\(DocumentStorage.sha256Hex(of: Data(selectionKeyPayload.utf8)))",
                 documentID: documentID,
@@ -1132,7 +1196,7 @@ public final class DocumentImportService: @unchecked Sendable {
                 selectedRevisionID: selectedRevision.id,
                 selectionKey: selectionKey,
                 selectedBy: "policy",
-                policyVersion: 0,
+                policyVersion: decision.policyVersion,
                 decisionJSON: decisionJSON,
                 supersedesSelectionID: supersedesSelectionID
             ))
@@ -1147,7 +1211,7 @@ public final class DocumentImportService: @unchecked Sendable {
         let checksum = DocumentStorage.sha256Hex(of: Data(result.combinedText.utf8))
 
         // OCR confidence summary + low-confidence review gating (plan §6.2).
-        let ocrConfidences = result.parts.compactMap(\.ocrConfidence)
+        let ocrConfidences = ocrCandidates.values.map(\.confidence)
         let meanOCR = ocrConfidences.isEmpty ? nil : ocrConfidences.reduce(0, +) / Double(ocrConfidences.count)
         let lowConfidence = (meanOCR.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false)
         let ocrSummary = meanOCR.map { String(format: "OCR mean confidence %.2f%@", $0, lowConfidence ? " (low)" : "") }
@@ -1159,6 +1223,9 @@ public final class DocumentImportService: @unchecked Sendable {
         let usableTextCount = result.combinedText.filter { !$0.isWhitespace }.count
         let insufficientOCRText = ocrApplied && usableTextCount < OCRPolicy.minimumUsableTextLength
         let convertedLossy = result.method == "converted_lossy"
+        let selectionNeedsReview = result.warnings.contains {
+            $0.contains("OCR candidate quality unresolved")
+        }
 
         var warnings = result.warnings
         if ocrApplied {
@@ -1188,7 +1255,7 @@ public final class DocumentImportService: @unchecked Sendable {
             status = .needsOCR
         } else if ocrApplied || !ocrConfidences.isEmpty {
             extractionStatus = .ocrComplete
-            status = (lowConfidence || insufficientOCRText) ? .needsReview : .indexing
+            status = (lowConfidence || insufficientOCRText || selectionNeedsReview) ? .needsReview : .indexing
         } else {
             extractionStatus = .extracted
             status = convertedLossy ? .needsReview : .indexing
