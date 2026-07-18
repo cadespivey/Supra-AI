@@ -280,7 +280,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 .init(
                     itemKey: "renewal",
                     value: "Agreement renews",
-                    evidence: [.primary],
+                    evidence: [],
                     contraryEvidence: [.primary]
                 ),
             ])
@@ -297,6 +297,9 @@ final class ExhaustiveListTaskTests: XCTestCase {
             "contrary review must remain independent from proposition support"
         )
         XCTAssertEqual(result.run.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+        let renewal = try XCTUnwrap(result.items.first { $0.itemKey == "renewal" })
+        XCTAssertEqual(Set(renewal.evidence.map(\.revisionID)), Set(supporting.revisionIDs))
+        XCTAssertEqual(Set(renewal.contraryEvidence.map(\.revisionID)), Set(contrary.revisionIDs))
         let sources = try store.documentSources.fetchSources(structuredOutputVersionID: result.version.id)
         XCTAssertEqual(
             Set(sources.compactMap(\.revisionID)),
