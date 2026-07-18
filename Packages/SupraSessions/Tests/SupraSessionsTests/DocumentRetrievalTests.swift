@@ -158,6 +158,77 @@ final class DocumentRetrievalTests: XCTestCase {
         )
     }
 
+    func testTRET04V2TopKUsesDocumentDiversityWithoutChangingV1Order() async throws {
+        // T-RET-04 expected RED: fine-grained v2 chunks spend both top-two
+        // slots on document A, reproducing the benchmark's Recall@8 loss.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic v2 top-K diversity")
+        let blobA = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "tret04-a",
+            byteSize: 1,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/tret04-a.txt"
+        )).blob
+        let blobB = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "tret04-b",
+            byteSize: 1,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/tret04-b.txt"
+        )).blob
+        let documentA = try makeDocument(
+            store, matter.id, blobA.id, nil, "a.txt",
+            "DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE alpha. "
+                + "DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE beta."
+        )
+        let documentB = try makeDocument(
+            store, matter.id, blobB.id, nil, "b.txt", "DIVERSITY-WIRE gamma."
+        )
+
+        func install(version: Int) throws {
+            try store.documentIndex.replaceChunks(documentID: documentA.id, chunks: [
+                DocumentChunkRecord(
+                    id: "a1-v\(version)", documentID: documentA.id,
+                    chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
+                    normalizedText: "DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE alpha"
+                ),
+                DocumentChunkRecord(
+                    id: "a2-v\(version)", documentID: documentA.id,
+                    chunkerVersion: version, chunkIndex: 1, sourceKind: "text",
+                    normalizedText: "DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE beta"
+                ),
+            ])
+            try store.documentIndex.replaceChunks(documentID: documentB.id, chunks: [
+                DocumentChunkRecord(
+                    id: "b1-v\(version)", documentID: documentB.id,
+                    chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
+                    normalizedText: "DIVERSITY-WIRE gamma"
+                ),
+            ])
+            try store.documentLibrary.updateIndexStatus(documentID: documentA.id, indexStatus: .textIndexed)
+            try store.documentLibrary.updateIndexStatus(documentID: documentB.id, indexStatus: .textIndexed)
+        }
+
+        try install(version: 2)
+        let v2 = try await DocumentRetrievalService(store: store).retrieve(
+            matterID: matter.id,
+            query: "DIVERSITY WIRE",
+            scope: .wholeMatter,
+            limit: 2
+        )
+        XCTAssertEqual(v2.sources.map(\.documentID), [documentA.id, documentB.id])
+        XCTAssertEqual(v2.sources.filter { $0.documentID == documentA.id }.count, 1)
+
+        try install(version: 1)
+        let v1 = try await DocumentRetrievalService(store: store).retrieve(
+            matterID: matter.id,
+            query: "DIVERSITY WIRE",
+            scope: .wholeMatter,
+            limit: 2
+        )
+        XCTAssertEqual(v1.sources.map(\.documentID), [documentA.id, documentA.id])
+        XCTAssertFalse(v1.sources.contains { $0.documentID == documentB.id })
+    }
+
     func testContextMetadataComposesTypeAndDate() {
         var doc = MatterDocumentRecord(
             matterID: "m", blobID: "b", folderID: nil, displayName: "lease.pdf",
