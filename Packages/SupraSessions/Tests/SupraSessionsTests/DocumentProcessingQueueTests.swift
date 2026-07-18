@@ -781,7 +781,7 @@ final class DocumentProcessingQueueTests: XCTestCase {
             modelLineageResolver: { _ in
                 DocumentGenerationModelLineage(
                     modelRepository: "synthetic/task-classifier",
-                    modelRevision: "task-classifier-revision-1"
+                    modelRevision: "classifier-task-revision-1"
                 )
             }
         )
