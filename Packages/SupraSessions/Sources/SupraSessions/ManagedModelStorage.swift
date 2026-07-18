@@ -8,6 +8,10 @@ import SupraDocuments
 public enum ManagedModelStorage {
     public static let manifestFileName = ".supra-model-manifest.json"
     static let downloadStateFileName = ".supra-model-download-state.json"
+    /// A single legacy filename emitted during the July 2026 local qualification
+    /// workflow. Recovery is deliberately exact: this is not a general search for
+    /// arbitrary JSON that could be promoted into load authority.
+    private static let recoverableMisnamedManifestFileName = " .json"
 
     public static func modelsDirectory(
         fileManager: FileManager = .default,
@@ -67,6 +71,59 @@ public enum ManagedModelStorage {
 
     public static func manifestURL(in modelDirectory: URL) -> URL {
         modelDirectory.appendingPathComponent(manifestFileName, isDirectory: false)
+    }
+
+    static func hasRecoverableMisnamedManifest(
+        in modelDirectory: URL,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        let canonicalURL = manifestURL(in: modelDirectory)
+        let candidateURL = modelDirectory.appendingPathComponent(
+            recoverableMisnamedManifestFileName,
+            isDirectory: false
+        )
+        return !fileManager.fileExists(atPath: canonicalURL.path)
+            && fileManager.fileExists(atPath: candidateURL.path)
+    }
+
+    /// Recovers only the known legacy filename after validating the candidate
+    /// manifest and re-hashing every artifact it authorizes. The canonical
+    /// manifest is written atomically, and the candidate is removed only after
+    /// the installed manifest is re-read successfully. Any mismatch leaves the
+    /// candidate in place and creates no load authority.
+    @discardableResult
+    static func repairMisnamedManifest(
+        in modelDirectory: URL,
+        fileManager: FileManager = .default
+    ) throws -> ModelArtifactManifest {
+        let canonicalURL = manifestURL(in: modelDirectory)
+        if fileManager.fileExists(atPath: canonicalURL.path) {
+            return try loadVerifiedManifest(at: modelDirectory)
+        }
+
+        let candidateURL = modelDirectory.appendingPathComponent(
+            recoverableMisnamedManifestFileName,
+            isDirectory: false
+        )
+        guard fileManager.fileExists(atPath: candidateURL.path) else {
+            throw ManagedModelIntegrityError.manifestMissing
+        }
+
+        let candidate = try readManifest(at: candidateURL)
+        try verifyFiles(in: modelDirectory, manifest: candidate)
+        try writeManifest(candidate, to: canonicalURL)
+
+        do {
+            let installed = try readManifest(at: canonicalURL)
+            guard installed == candidate else {
+                throw ManagedModelIntegrityError.manifestMismatch
+            }
+            try fileManager.removeItem(at: candidateURL)
+            return installed
+        } catch {
+            try? fileManager.removeItem(at: canonicalURL)
+            throw error
+        }
     }
 
     static func downloadStateURL(in modelDirectory: URL) -> URL {
