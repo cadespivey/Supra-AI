@@ -114,6 +114,27 @@ final class ChunkerV2Tests: XCTestCase {
         XCTAssertEqual(longChunks[1].text, response)
     }
 
+    func testLegalUnitsSupersedeOverlappingGenericAdapterParagraphs() {
+        let request = "Request No. 1: State the total."
+        let response = "Response No. 1: 742.19."
+        let text = request + "\n" + response
+        let nodes = [
+            node("generic-request", partID: "part", revisionID: "rev", kind: .paragraph, range: 0..<request.count),
+            node("generic-response", partID: "part", revisionID: "rev", kind: .paragraph, range: (request.count + 1)..<text.count),
+            node("request", partID: "part", revisionID: "rev", kind: .discoveryRequest, range: 0..<request.count),
+            node("response", partID: "part", revisionID: "rev", kind: .discoveryResponse, range: (request.count + 1)..<text.count),
+        ]
+        let chunks = DocumentChunker(version: 2).chunk(
+            parts: [ChunkPart(partID: "part", sourceKind: .text, text: text)],
+            nodes: nodes,
+            edges: [ChunkStructureEdge(fromNodeID: "response", toNodeID: "request", kind: .respondsTo)]
+        )
+
+        XCTAssertEqual(chunks.count, 1)
+        XCTAssertEqual(chunks[0].nodeID, "request")
+        XCTAssertEqual(chunks[0].text, text)
+    }
+
     func testV1FrozenParityRemainsByteExact() {
         // T-CHK-06 parity fixture: this passes before v2 and must remain unchanged.
         let longText = String(repeating: "A", count: 210)
@@ -134,6 +155,50 @@ final class ChunkerV2Tests: XCTestCase {
         XCTAssertEqual(chunks.map(\.tokenCount), [1, 1, 3])
         XCTAssertEqual(chunks.map(\.pageIndex), [4, 4, nil])
         XCTAssertEqual(chunks.map(\.sheetName), [nil, nil, "Aging"])
+    }
+
+    func testChunkerV2RuntimeStaysWithinOnePointFiveTimesV1() {
+        // M5-W1 performance gate: compare equal-sized natural units and output
+        // counts after prewarming both deterministic paths.
+        let segment = String(repeating: "Evidence sentence. ", count: 50)
+        var parts: [ChunkPart] = []
+        var nodes: [ChunkStructureNode] = []
+        for partIndex in 0..<40 {
+            let partID = "perf-part-\(partIndex)"
+            let revisionID = "perf-revision-\(partIndex)"
+            let text = String(repeating: segment, count: 12)
+            parts.append(ChunkPart(partID: partID, sourceKind: .text, text: text))
+            for unitIndex in 0..<12 {
+                let start = unitIndex * segment.count
+                nodes.append(ChunkStructureNode(
+                    nodeID: "perf-node-\(partIndex)-\(unitIndex)",
+                    partID: partID,
+                    revisionID: revisionID,
+                    ordinal: unitIndex,
+                    kind: .paragraph,
+                    charStart: start,
+                    charEnd: start + segment.count
+                ))
+            }
+        }
+        let v1 = DocumentChunker(version: 1, maxChars: segment.count, overlapChars: 0)
+        let v2 = DocumentChunker(version: 2, maxChars: segment.count, overlapChars: 0)
+        XCTAssertEqual(v1.chunk(parts: parts).count, v2.chunk(parts: parts, nodes: nodes, edges: []).count)
+
+        _ = v1.chunk(parts: parts)
+        _ = v2.chunk(parts: parts, nodes: nodes, edges: [])
+        let v1Start = ProcessInfo.processInfo.systemUptime
+        for _ in 0..<5 { _ = v1.chunk(parts: parts) }
+        let v1Elapsed = ProcessInfo.processInfo.systemUptime - v1Start
+        let v2Start = ProcessInfo.processInfo.systemUptime
+        for _ in 0..<5 { _ = v2.chunk(parts: parts, nodes: nodes, edges: []) }
+        let v2Elapsed = ProcessInfo.processInfo.systemUptime - v2Start
+
+        XCTAssertLessThanOrEqual(
+            v2Elapsed,
+            v1Elapsed * 1.5,
+            "v2=\(v2Elapsed)s v1=\(v1Elapsed)s ratio=\(v2Elapsed / v1Elapsed)"
+        )
     }
 
     private func node(

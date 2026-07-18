@@ -1350,6 +1350,29 @@ public enum SupraMigrator {
             )
         }
 
+        migrator.registerMigration("v063_add_chunk_structure_binding") { db in
+            // Existing chunks are v1 by definition. The additive defaults keep
+            // their bytes/text and locators untouched while v2 remains opt-in.
+            try db.alter(table: "document_chunks") { table in
+                table.add(column: "node_id", .text)
+                    .references("document_structure_nodes", onDelete: .setNull)
+                table.add(column: "unit_kind", .text)
+                table.add(column: "chunker_version", .integer)
+                    .notNull()
+                    .defaults(to: 1)
+            }
+            try db.create(
+                index: "idx_document_chunks_node",
+                on: "document_chunks",
+                columns: ["node_id", "chunk_index"]
+            )
+            try db.alter(table: "document_intelligence_settings") { table in
+                table.add(column: "chunker_version", .integer)
+                    .notNull()
+                    .defaults(to: 1)
+            }
+        }
+
         return migrator
     }
 

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SupraCore
 import SupraDocuments
@@ -9,12 +10,12 @@ import SupraStore
 /// (index status `stale`).
 public final class DocumentIndexingService: @unchecked Sendable {
     private let store: SupraStore
-    private let chunker: DocumentChunker
+    private let chunker: DocumentChunker?
     private let embedder: (any TextEmbedder)?
 
     public init(
         store: SupraStore,
-        chunker: DocumentChunker = DocumentChunker(),
+        chunker: DocumentChunker? = nil,
         embedder: (any TextEmbedder)? = nil
     ) {
         self.store = store
@@ -27,8 +28,12 @@ public final class DocumentIndexingService: @unchecked Sendable {
     @discardableResult
     public func indexDocument(documentID: String) async throws -> Int {
         let document = try store.documentLibrary.fetchDocument(id: documentID)
+        let selectedChunker = try chunker ?? DocumentChunker(
+            version: store.documentSettings.loadSettings().chunkerVersion
+        )
         let existingChunks = try store.documentIndex.fetchChunks(documentID: documentID)
         let canReuseTextIndex = !existingChunks.isEmpty
+            && existingChunks.allSatisfy { $0.chunkerVersion == selectedChunker.version }
             && (document?.indexStatus == DocumentIndexStatus.ready.rawValue
                 || document?.indexStatus == DocumentIndexStatus.textIndexed.rawValue)
 
@@ -67,17 +72,52 @@ public final class DocumentIndexingService: @unchecked Sendable {
                 boundingBoxesJSON: part.boundingBoxesJSON
             )
         }
-        let chunks = chunker.chunk(parts: chunkParts)
         let revisionIDsByPartID = Dictionary(
             uniqueKeysWithValues: parts.compactMap { part in
                 part.currentRevisionID.map { (part.id, $0) }
             }
         )
+        let partIDsByRevisionID = Dictionary(
+            uniqueKeysWithValues: revisionIDsByPartID.map { ($0.value, $0.key) }
+        )
+        let structureNodes = try store.documentStructure.fetchNodes(documentID: documentID)
+        let chunkNodes = structureNodes.compactMap { node -> ChunkStructureNode? in
+            guard let partID = partIDsByRevisionID[node.revisionID],
+                  let kind = DocumentStructureNodeKind(rawValue: node.kind) else { return nil }
+            return ChunkStructureNode(
+                nodeID: node.id,
+                parentNodeID: node.parentNodeID,
+                partID: partID,
+                revisionID: node.revisionID,
+                ordinal: node.ordinal,
+                kind: kind,
+                charStart: node.charStart,
+                charEnd: node.charEnd,
+                textContent: node.textContent
+            )
+        }
+        let documentNodeIDs = Set(chunkNodes.map(\.nodeID))
+        let chunkEdges = try store.documentStructure.fetchEdges(documentID: documentID).compactMap { edge -> ChunkStructureEdge? in
+            guard documentNodeIDs.contains(edge.fromNodeID),
+                  documentNodeIDs.contains(edge.toNodeID),
+                  let kind = DocumentStructureEdgeKind(rawValue: edge.kind) else { return nil }
+            return ChunkStructureEdge(fromNodeID: edge.fromNodeID, toNodeID: edge.toNodeID, kind: kind)
+        }
+        let chunks = selectedChunker.chunk(parts: chunkParts, nodes: chunkNodes, edges: chunkEdges)
         let records = chunks.map { chunk in
-            DocumentChunkRecord(
+            let revisionID = chunk.partID.flatMap { revisionIDsByPartID[$0] }
+            return DocumentChunkRecord(
+                id: deterministicChunkID(
+                    documentID: documentID,
+                    revisionID: revisionID,
+                    chunk: chunk
+                ),
                 documentID: documentID,
                 pagePartID: chunk.partID,
-                revisionID: chunk.partID.flatMap { revisionIDsByPartID[$0] },
+                revisionID: revisionID,
+                nodeID: chunk.nodeID,
+                unitKind: chunk.unitKind,
+                chunkerVersion: chunk.chunkerVersion,
                 chunkIndex: chunk.chunkIndex,
                 sourceKind: chunk.sourceKind.rawValue,
                 pageIndex: chunk.pageIndex,
@@ -110,6 +150,29 @@ public final class DocumentIndexingService: @unchecked Sendable {
         // clobbered back to ready.
         try store.documentLibrary.promoteStatus(documentID: documentID, to: .ready, whenCurrentIn: [.indexing, .embedding])
         return records.count
+    }
+
+    private func deterministicChunkID(
+        documentID: String,
+        revisionID: String?,
+        chunk: DocumentChunk
+    ) -> String {
+        // v1 keeps its historical row-identity behavior. V2 needs stable ids so
+        // retries can prove the exact graph/text projection is unchanged.
+        guard chunk.chunkerVersion == 2 else { return UUID().uuidString }
+        let identity = [
+            "chunk-v2",
+            documentID,
+            revisionID ?? "",
+            chunk.partID ?? "",
+            chunk.nodeID ?? "",
+            String(chunk.chunkIndex),
+            String(chunk.charStart),
+            String(chunk.charEnd),
+            chunk.text,
+        ].joined(separator: "\u{001f}")
+        let digest = SHA256.hash(data: Data(identity.utf8))
+        return "chunk-v2-" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Indexes every document in a matter that is extracted but not yet (fully)

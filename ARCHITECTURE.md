@@ -107,7 +107,7 @@ Managed model downloads are bound to a repository revision and verified manifest
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v062. Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v063. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -120,6 +120,10 @@ repository:
   structure nodes and matter-scoped edges. Formats without specialized adapters emit a
   deterministic document/part wrapper tree; pre-v062 documents acquire wrappers lazily
   on their next extraction or indexing pass rather than through fabricated backfill.
+- Chunker v2 is an internal, default-off rollout path that aligns retrieval chunks to
+  revision-bound structure nodes and preserves table headers and linked legal units as
+  context. Persisted chunks record their node, structural unit kind, and chunker version;
+  legacy v1 text and locators remain unchanged.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

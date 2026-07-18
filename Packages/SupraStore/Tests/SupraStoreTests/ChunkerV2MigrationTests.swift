@@ -51,9 +51,28 @@ final class ChunkerV2MigrationTests: XCTestCase {
         )
         let index = DocumentIndexRepository(writer: queue)
         try index.replaceParts(documentID: document.id, parts: [part])
-        try index.replaceChunks(documentID: document.id, chunks: [chunk])
         try queue.write { db in
-            try DocumentIntelligenceSettingsRecord(createdAt: fixedDate, updatedAt: fixedDate).insert(db)
+            // Insert through the exact v062 column surface. The current record
+            // model already knows v063 fields and intentionally cannot target an
+            // older schema through its synthesized INSERT.
+            try db.execute(
+                sql: """
+                INSERT INTO document_chunks (
+                    id, document_id, page_part_id, revision_id, chunk_index,
+                    source_kind, char_start, char_end, normalized_text,
+                    display_excerpt, token_count, created_at, updated_at
+                ) VALUES (?, ?, ?, NULL, 0, 'text', 0, 6, 'LEGACY', 'LEGACY', 1, ?, ?)
+                """,
+                arguments: [chunk.id, document.id, part.id, fixedDate, fixedDate]
+            )
+            try db.execute(
+                sql: "INSERT INTO document_chunk_fts (text, chunk_id, document_id) VALUES ('LEGACY', ?, ?)",
+                arguments: [chunk.id, document.id]
+            )
+            try db.execute(
+                sql: "INSERT INTO document_intelligence_settings (id, created_at, updated_at) VALUES ('default', ?, ?)",
+                arguments: [fixedDate, fixedDate]
+            )
         }
 
         let before = try legacyChunkBytes(queue, id: chunk.id)
