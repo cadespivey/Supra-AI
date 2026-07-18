@@ -252,6 +252,24 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         }
     }
 
+    func testSupraBenchMainAttributeUsesPortableSourceFilename() {
+        // T-BEN-PORT-01 expected RED: the executable still declares @main in
+        // main.swift, which hosted Swift rejects as simultaneous top-level code.
+        let sourceDirectory = repoRoot()
+            .appendingPathComponent("Packages/SupraTestKit/Sources/SupraBench", isDirectory: true)
+        let portableEntryPoint = sourceDirectory.appendingPathComponent("SupraBenchCommand.swift")
+        let implicitEntryPoint = sourceDirectory.appendingPathComponent("main.swift")
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: portableEntryPoint.path),
+            "the @main entry point must use a non-main.swift filename"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: implicitEntryPoint.path),
+            "main.swift cannot contain @main on every supported Swift toolchain"
+        )
+    }
+
     private func measuredValue(_ metricID: String, _ name: String, in report: BenchmarkReport) throws -> Double {
         let measurement = try measurement(metricID, name, in: report)
         XCTAssertEqual(measurement.status, .measured)
