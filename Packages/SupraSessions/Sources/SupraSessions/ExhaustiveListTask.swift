@@ -321,6 +321,10 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                         taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue
                     ))
                 )
+        let verificationResults = try supportResults(
+            items: reconciliation.items,
+            material: material
+        )
         let version = try store.structuredOutputs.createVersionWithSourceSetAtomically(
             structuredOutputID: outputID,
             newOutput: StructuredOutputRecord(
@@ -335,9 +339,9 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             contentMarkdown: markdown,
             verificationStatus: verificationStatus,
             verificationVersion: Self.verificationVersion,
-            verificationResults: try supportResults(
-                items: reconciliation.items,
-                material: material
+            verificationResults: verificationResults,
+            verificationDimensions: VerificationDimensionsMapper.dimensions(
+                verificationResults: verificationResults
             ),
             outputStatus: outputStatus,
             corpusAnalysisRunID: run.id,

@@ -1146,6 +1146,9 @@ public final class DocumentChronologyController: ObservableObject {
             verificationStatus: verificationStatus,
             verificationVersion: DocumentSupportVerifier.version,
             verificationResults: verificationResults,
+            verificationDimensions: VerificationDimensionsMapper.dimensions(
+                verificationResults: verificationResults
+            ),
             outputStatus: status,
             corpusAnalysisRunID: corpusAnalysisRunID,
             generationSessionID: generation.id,

@@ -1663,6 +1663,12 @@ public enum SupraMigrator {
                 """)
         }
 
+        migrator.registerMigration("v069_add_verification_dimensions") { db in
+            try db.alter(table: "structured_output_versions") { table in
+                table.add(column: "verification_dimensions_json", .text)
+            }
+        }
+
         return migrator
     }
 

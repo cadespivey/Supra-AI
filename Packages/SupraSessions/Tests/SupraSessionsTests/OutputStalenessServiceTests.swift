@@ -176,6 +176,7 @@ final class OutputStalenessServiceTests: XCTestCase {
             verificationStatus: .allSupported,
             verificationVersion: "support-v2",
             verificationResults: [try supportedResult()],
+            verificationDimensions: supportedDimensions(),
             promptBuilderVersion: "document-prompt-v2",
             assuranceState: .corpusComplete,
             outputStatus: .complete
@@ -282,6 +283,7 @@ final class OutputStalenessServiceTests: XCTestCase {
             verificationStatus: .allSupported,
             verificationVersion: "support-v1",
             verificationResults: [try supportedResult()],
+            verificationDimensions: supportedDimensions(),
             sourceSetID: sourceSet.id,
             promptBuilderVersion: "document-prompt-v1",
             assuranceState: assuranceState,
@@ -306,5 +308,14 @@ final class OutputStalenessServiceTests: XCTestCase {
             ],
             timestamp: Date(timeIntervalSinceReferenceDate: 67)
         )
+    }
+
+    private func supportedDimensions() -> VerificationDimensions {
+        .complete(overrides: [
+            .init(dimension: .propositionSupport, status: .satisfied),
+            .init(dimension: .citationResolution, status: .satisfied),
+            .init(dimension: .criticalValueFidelity, status: .satisfied),
+            .init(dimension: .lowConfidenceHandling, status: .satisfied),
+        ])
     }
 }

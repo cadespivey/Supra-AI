@@ -582,6 +582,12 @@ private struct DeterministicCorpusWorkload: Sendable {
             verificationStatus: .allSupported,
             verificationVersion: "lineage-support-v1",
             verificationResults: [result],
+            verificationDimensions: .complete(overrides: [
+                .init(dimension: .propositionSupport, status: .satisfied),
+                .init(dimension: .citationResolution, status: .satisfied),
+                .init(dimension: .criticalValueFidelity, status: .satisfied),
+                .init(dimension: .lowConfidenceHandling, status: .satisfied),
+            ]),
             sourceSetID: sourceSet.id,
             promptBuilderVersion: promptBuilderVersion,
             assuranceState: .propositionSupported,

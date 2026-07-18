@@ -108,6 +108,7 @@ final class OutputVerificationProvenanceTests: XCTestCase {
                 verificationStatus: .allSupported,
                 verificationVersion: "support-contract/1.0",
                 verificationResults: [try supportedResult()],
+                verificationDimensions: supportedDimensions(),
                 verifiedAt: Date(timeIntervalSince1970: 1_700_000_123),
                 sourceSetID: "missing-source-set",
                 outputStatus: .complete
@@ -151,6 +152,7 @@ final class OutputVerificationProvenanceTests: XCTestCase {
             verificationStatus: .allSupported,
             verificationVersion: "support-contract/1.0",
             verificationResults: [expectedResult],
+            verificationDimensions: supportedDimensions(),
             verifiedAt: verifiedAt,
             sourceSetID: sourceSet.id,
             outputStatus: .complete
@@ -194,6 +196,15 @@ final class OutputVerificationProvenanceTests: XCTestCase {
             ],
             timestamp: Date(timeIntervalSince1970: 1_700_000_123)
         )
+    }
+
+    private func supportedDimensions() -> VerificationDimensions {
+        .complete(overrides: [
+            .init(dimension: .propositionSupport, status: .satisfied),
+            .init(dimension: .citationResolution, status: .satisfied),
+            .init(dimension: .criticalValueFidelity, status: .satisfied),
+            .init(dimension: .lowConfidenceHandling, status: .satisfied),
+        ])
     }
 
     private func makeStore() throws -> SupraStore {

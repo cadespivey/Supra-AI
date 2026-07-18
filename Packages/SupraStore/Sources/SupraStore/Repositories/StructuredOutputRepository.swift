@@ -54,6 +54,7 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         verificationStatus: OutputVerificationStatus = .legacyUnverified,
         verificationVersion: String? = nil,
         verificationResults: [PropositionSupportResult]? = nil,
+        verificationDimensions: VerificationDimensions? = nil,
         verifiedAt: Date? = nil,
         sourceSetID: String? = nil,
         promptBuilderVersion: String? = nil,
@@ -65,11 +66,17 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         let presentSectionsJSON = try JSONCoding.encode(presentSections)
         let missingSectionsJSON = try JSONCoding.encode(missingSections)
         let verificationJSON = try verificationResults.map(JSONCoding.encode)
+        let verificationDimensionsJSON = try verificationDimensions.map(JSONCoding.encode)
         let normalizedVerificationVersion = verificationVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedPromptBuilderVersion = promptBuilderVersion?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedAssurance = assuranceState ?? Self.defaultAssurance(for: verificationStatus)
 
+        if verificationStatus != .legacyUnverified {
+            guard let verificationDimensions, verificationDimensions.isComplete else {
+                throw StructuredOutputRepositoryError.verificationDimensionsRequired
+            }
+        }
         if verificationStatus == .allSupported {
             guard let normalizedVerificationVersion, !normalizedVerificationVersion.isEmpty else {
                 throw StructuredOutputRepositoryError.verificationVersionRequired
@@ -79,6 +86,9 @@ public final class StructuredOutputRepository: @unchecked Sendable {
                   verificationResults.allSatisfy({ $0.status == .supported })
             else {
                 throw StructuredOutputRepositoryError.allSupportedResultRequired
+            }
+            guard verificationDimensions?.satisfies(required: Self.factoredSupportDimensions) == true else {
+                throw StructuredOutputRepositoryError.allSupportedDimensionsRequired
             }
         }
         if outputStatus == .complete {
@@ -111,6 +121,7 @@ public final class StructuredOutputRepository: @unchecked Sendable {
                 verificationStatus: verificationStatus.rawValue,
                 verificationVersion: normalizedVerificationVersion,
                 verificationJSON: verificationJSON,
+                verificationDimensionsJSON: verificationDimensionsJSON,
                 verifiedAt: resolvedVerifiedAt,
                 promptBuilderVersion: normalizedPromptBuilderVersion,
                 assuranceState: resolvedAssurance.rawValue,
@@ -182,6 +193,7 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         verificationStatus: OutputVerificationStatus,
         verificationVersion: String,
         verificationResults: [PropositionSupportResult],
+        verificationDimensions: VerificationDimensions? = nil,
         outputStatus: StructuredOutputStatus,
         corpusAnalysisRunID: String? = nil,
         generationSessionID: String? = nil,
@@ -190,6 +202,12 @@ public final class StructuredOutputRepository: @unchecked Sendable {
     ) throws -> StructuredOutputVersionRecord {
         let requiredSectionsJSON = try JSONCoding.encode([String]())
         let verificationJSON = try JSONCoding.encode(verificationResults)
+        if verificationStatus != .legacyUnverified {
+            guard let verificationDimensions, verificationDimensions.isComplete else {
+                throw StructuredOutputRepositoryError.verificationDimensionsRequired
+            }
+        }
+        let verificationDimensionsJSON = try verificationDimensions.map(JSONCoding.encode)
         let normalizedVerificationVersion = verificationVersion
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedPromptBuilderVersion = promptBuilderVersion?
@@ -203,6 +221,9 @@ public final class StructuredOutputRepository: @unchecked Sendable {
                   verificationResults.allSatisfy({ $0.status == .supported })
             else {
                 throw StructuredOutputRepositoryError.allSupportedResultRequired
+            }
+            guard verificationDimensions?.satisfies(required: Self.factoredSupportDimensions) == true else {
+                throw StructuredOutputRepositoryError.allSupportedDimensionsRequired
             }
         }
         if let newOutput {
@@ -294,6 +315,7 @@ public final class StructuredOutputRepository: @unchecked Sendable {
                 verificationStatus: verificationStatus.rawValue,
                 verificationVersion: normalizedVerificationVersion,
                 verificationJSON: verificationJSON,
+                verificationDimensionsJSON: verificationDimensionsJSON,
                 verifiedAt: now,
                 promptBuilderVersion: normalizedPromptBuilderVersion,
                 assuranceState: resolvedAssurance.rawValue,
@@ -622,6 +644,13 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         assuranceState == .propositionSupported || assuranceState == .corpusComplete
     }
 
+    private static let factoredSupportDimensions: Set<VerificationDimensionName> = [
+        .propositionSupport,
+        .citationResolution,
+        .criticalValueFidelity,
+        .lowConfidenceHandling,
+    ]
+
     private static func requireNonEmpty(_ value: String, fieldName: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -635,6 +664,8 @@ public enum StructuredOutputRepositoryError: Error, Equatable, Sendable {
     case requiredFieldMissing(String)
     case verificationVersionRequired
     case allSupportedResultRequired
+    case verificationDimensionsRequired
+    case allSupportedDimensionsRequired
     case completeStatusRequiresAllSupportedVerification
     case completeStatusRequiresSupportedAssurance
     case sourceSetUnavailable(String)

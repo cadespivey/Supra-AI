@@ -120,7 +120,7 @@ Managed model downloads are bound to a repository revision and verified manifest
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v068. Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v069. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -204,6 +204,15 @@ repository:
   assigned fabricated lineage; user-authored document tags are a separate domain and are not
   written by the classifier. Deterministic B-CLS metrics report macro F1, per-class recall,
   abstention precision/recall, and evidence validity.
+- The v069 schema stores a complete independent verification-dimension ledger on every newly
+  verified structured-output version. Proposition support, citation resolution, critical-value
+  fidelity, and low-confidence handling factor the existing deterministic verifier without
+  changing its aggregate outcome; the other named dimensions remain explicitly `not_run` until
+  their checks execute. Historical, absent, partial, or malformed ledgers fail closed to all
+  `not_run`, never fabricate success, and never rewrite legacy content or status. Task gates name
+  their required dimensions, so an unrelated `not_run` result is visible without being silently
+  treated as satisfied.
+  Every newly verified structured-output version persists a complete independent verification-dimension ledger; historical, absent, partial, or malformed ledgers fail closed to not run without changing legacy content or aggregate status.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

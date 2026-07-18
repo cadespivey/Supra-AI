@@ -34,6 +34,7 @@ public final class StructuredOutputController: ObservableObject {
         public let repairReason: String?
         public let verificationStatus: String
         public let verificationVersion: String?
+        public let verificationDimensions: [VerificationDimensionRow]
         public let verifiedAt: Date?
     }
 
@@ -168,6 +169,9 @@ public final class StructuredOutputController: ObservableObject {
                     repairReason: version.repairReason,
                     verificationStatus: version.verificationStatus,
                     verificationVersion: version.verificationVersion,
+                    verificationDimensions: VerificationDimensionPresenter.rows(
+                        from: version.verificationDimensions
+                    ),
                     verifiedAt: version.verifiedAt
                 )
             }
@@ -241,6 +245,7 @@ public final class StructuredOutputController: ObservableObject {
                 verificationStatus: verification.verificationStatus,
                 verificationVersion: DocumentSupportVerifier.version,
                 verificationResults: verification.results,
+                verificationDimensions: VerificationDimensionsMapper.dimensions(for: verification),
                 sourceSetID: sourceSetID,
                 outputStatus: verification.requiresReview || !missing.isEmpty ? .needsReview : .complete
             )
@@ -382,6 +387,7 @@ public final class StructuredOutputController: ObservableObject {
                 verificationStatus: verification?.verificationStatus ?? .legacyUnverified,
                 verificationVersion: verification.map { _ in DocumentSupportVerifier.version },
                 verificationResults: verification?.results,
+                verificationDimensions: verification.map(VerificationDimensionsMapper.dimensions),
                 sourceSetID: sourceSetID,
                 outputStatus: scope == nil ? nil : finalStatus
             )
@@ -618,6 +624,7 @@ public final class StructuredOutputController: ObservableObject {
                 verificationStatus: verification?.verificationStatus ?? .legacyUnverified,
                 verificationVersion: verification.map { _ in DocumentSupportVerifier.version },
                 verificationResults: verification?.results,
+                verificationDimensions: verification.map(VerificationDimensionsMapper.dimensions),
                 sourceSetID: sourceSetID,
                 outputStatus: priorSourceSet == nil ? nil : finalStatus,
                 makeActive: true

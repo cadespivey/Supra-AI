@@ -109,12 +109,13 @@ final class GenerationLineageMigrationTests: XCTestCase {
 
         try migrator.migrate(queue)
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v068_add_document_classification_lineage")
+            XCTAssertEqual(try appliedMigrations(db).last, "v069_add_verification_dimensions")
             XCTAssertEqual(Set(try db.columns(in: "structured_output_versions").map(\.name)), Set([
                 "id", "structured_output_id", "version_index", "parent_version_id",
                 "content_markdown", "required_sections_json", "present_sections_json",
                 "missing_sections_json", "repair_reason", "generation_session_id",
                 "verification_status", "verification_version", "verification_json",
+                "verification_dimensions_json",
                 "verified_at", "prompt_builder_version", "assurance_state", "stale_reason",
                 "created_at", "updated_at",
             ]))

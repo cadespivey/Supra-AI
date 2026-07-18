@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "syntheticDataDeclaration": "Every fixture contains deterministic synthetic records only; no user or production data is permitted.",
-  "currentMigration": "v068_add_document_classification_lineage",
+  "currentMigration": "v069_add_verification_dimensions",
   "supportedVersions": [
     "v1.4.1",
     "v1.5.2",

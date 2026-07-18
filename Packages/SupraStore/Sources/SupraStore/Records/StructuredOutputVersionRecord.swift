@@ -18,6 +18,7 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
     public var verificationStatus: String
     public var verificationVersion: String?
     public var verificationJSON: String?
+    public var verificationDimensionsJSON: String?
     public var verifiedAt: Date?
     public var promptBuilderVersion: String?
     public var assuranceState: String?
@@ -39,6 +40,7 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
         verificationStatus: String = OutputVerificationStatus.legacyUnverified.rawValue,
         verificationVersion: String? = nil,
         verificationJSON: String? = nil,
+        verificationDimensionsJSON: String? = nil,
         verifiedAt: Date? = nil,
         promptBuilderVersion: String? = nil,
         assuranceState: String? = nil,
@@ -59,6 +61,7 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
         self.verificationStatus = verificationStatus
         self.verificationVersion = verificationVersion
         self.verificationJSON = verificationJSON
+        self.verificationDimensionsJSON = verificationDimensionsJSON
         self.verifiedAt = verifiedAt
         self.promptBuilderVersion = promptBuilderVersion
         self.assuranceState = assuranceState
@@ -81,11 +84,26 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
         case verificationStatus = "verification_status"
         case verificationVersion = "verification_version"
         case verificationJSON = "verification_json"
+        case verificationDimensionsJSON = "verification_dimensions_json"
         case verifiedAt = "verified_at"
         case promptBuilderVersion = "prompt_builder_version"
         case assuranceState = "assurance_state"
         case staleReason = "stale_reason"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+    }
+
+    /// Historical, absent, partial, or malformed dimension data fails closed.
+    /// A legacy aggregate status is never promoted into fabricated dimension
+    /// success during migration or decoding.
+    public var verificationDimensions: VerificationDimensions {
+        guard let verificationDimensionsJSON,
+              let data = verificationDimensionsJSON.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(VerificationDimensions.self, from: data),
+              decoded.isComplete
+        else {
+            return .allNotRun
+        }
+        return decoded
     }
 }
