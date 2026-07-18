@@ -127,6 +127,10 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         XCTAssertEqual(falseNegatives.value, 0)
         XCTAssertEqual(falseNegatives.numerator, 0)
         XCTAssertEqual(falseNegatives.denominator, 2)
+        let falseSupport = try measurement("B-SUP-01", "support_false_accept_rate", in: baseline)
+        XCTAssertEqual(falseSupport.value, 0)
+        XCTAssertEqual(falseSupport.numerator, 0)
+        XCTAssertEqual(falseSupport.denominator, 4)
 
         XCTAssertEqual(try measuredValue("B-VER-01", "precision", in: baseline), 1)
         XCTAssertEqual(try measuredValue("B-VER-01", "recall", in: baseline), 1)
@@ -211,6 +215,7 @@ final class BenchmarkBaselineContractTests: XCTestCase {
             "Packages/SupraTestKit/Sources/SupraTestKit/ClassificationBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/DocumentRelationBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/LineageStalenessBenchmark.swift",
+            "Packages/SupraTestKit/Sources/SupraTestKit/SupportBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/BenchmarkMetrics.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/BenchmarkReport.swift",
             "TestData/Benchmarks/document-relation-keys.json",
