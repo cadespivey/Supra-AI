@@ -1,4 +1,26 @@
 {
+  "ambiguousFamilies": [
+    {
+      "fromFilename": "master-services-redline.docx",
+      "id": "master-services-unreviewed-redline",
+      "kind": "redline_of",
+      "toFilename": "master-services-executed.docx"
+    }
+  ],
+  "operativeStates": [
+    {
+      "filename": "master-services-draft.docx",
+      "state": "draft"
+    },
+    {
+      "filename": "master-services-executed.docx",
+      "state": "operative"
+    },
+    {
+      "filename": "master-services-superseded.docx",
+      "state": "superseded"
+    }
+  ],
   "relations": [
     {
       "fromFilename": "master-services-executed-copy.docx",

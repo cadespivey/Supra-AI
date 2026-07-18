@@ -53,6 +53,10 @@ They sharpen what already ships:
   active embedding model; switching models or saving corrected extracted text queues the
   normal background indexing workflow. Converter-version drift marks affected documents
   stale for explicit manual reprocessing instead of silently claiming current readiness.
+- **Document-relation review (implemented in source)** — deterministic duplicate/version
+  proposals remain non-operative until a user confirms or rejects them in an audited Documents
+  queue. Confirmed relations add explicit version-state metadata; unresolved in-scope relations
+  block clean comparison and negative-result assurance instead of silently choosing a document.
 - **Documents tab UX** — nested folder tree presentation and drag-between-folders (move/copy
   already exists at the controller/repository level; the v1 sidebar is a flat list).
 - **Guided Q&A in the UI** — manual source selection is supported in `DocumentQAController`

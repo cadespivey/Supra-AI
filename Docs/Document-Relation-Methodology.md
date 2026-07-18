@@ -38,6 +38,20 @@ Evidence JSON is canonical key-sorted JSON and includes algorithm/schema version
 
 Confidence is descriptive only. Neither exact equality nor a score of `1.0` confirms a relation, marks a document operative, or feeds confirmed-only consumers.
 
+## Audited review and downstream assurance
+
+The Documents toolbar exposes a matter-scoped relation review queue. Each item shows the immutable proposal evidence and structural-change counts before offering the exact `Confirm`, `Reject`, and `Override` actions. Confirm and reject are one-way transitions from `proposed`. Override first rejects the original proposal, creates a distinct user-authored proposal with its own evidence, and confirms that new row through the same transition.
+
+The repository writes the state transition and its `document_relation_reviewed` audit event in one transaction. The event records actor, time, old/new states, kind, endpoints, and the original evidence. A review also demotes any dependent structured output citing either endpoint to `needs_review`; historical output content is retained.
+
+Only confirmed relations can add version-state metadata to retrieval sources. Draft, operative, amendment, redline, and superseded labels therefore carry the literal `(confirmed)` qualifier. Proposed relations instead produce a named warning. For version-sensitive comparison and negative-check tasks, any proposed relation whose two endpoints are in scope blocks a clean result:
+
+- comparison assurance becomes `corpus_incomplete`;
+- a negative conclusion becomes `negative_blocked`;
+- the persisted reason names the relation ID, kind, and both documents.
+
+This is an assurance boundary, not a legal conclusion. The reviewer decides whether the evidence supports a relation; the software preserves that decision and prevents an unreviewed proposal from silently selecting an operative document.
+
 ## Verification and benchmark
 
 The test contract is split across:
@@ -45,6 +59,10 @@ The test contract is split across:
 - T-VER-04: stable draft/executed evidence and a cross-matter negative control;
 - T-VER-05: directed, acyclic amendment/supersession chains with missing-date ambiguity;
 - T-VER-06: exact changed/inserted/deleted structural units and locator round trips;
+- T-VER-07: unreviewed in-scope relations block version-sensitive clean assurance while preliminary retrieval warns;
+- T-VER-08: audited one-way review, distinct override proposals, confirmed-only metadata, and dependent-output invalidation;
+- T-UX-08: accessible evidence/diff review flow and exact confirm/reject/override actions;
 - B-VER-01: precision, recall, and F1 overall and by relation kind against `TestData/Benchmarks/document-relation-keys.json`.
+- B-VER-02: reviewed operative-state accuracy plus the blocked-when-unreviewed rate for owner-designated ambiguous families in the same key file.
 
-The checked-in key set is synthetic. Owner-approved quality bands remain governed by `TestData/Benchmarks/threshold-proposals.json` after a frozen deterministic baseline is recorded.
+The checked-in key set is synthetic. B-VER-02's deterministic safety gate requires every designated ambiguous family to block a clean result. The operative-state quality band and the legal-fidelity sign-off for designated ambiguous keys remain pending owner/reviewer approval in `TestData/Benchmarks/threshold-proposals.json`; deterministic matter isolation and false-clean failures cannot be waived by that review.

@@ -330,19 +330,27 @@ private struct DeterministicCorpusWorkload: Sendable {
             DocumentRelationBenchmarkKeys.self,
             from: Data(contentsOf: keyURL)
         )
-        guard keys.schemaVersion == 1, !keys.relations.isEmpty else {
+        guard keys.schemaVersion == 1,
+              !keys.relations.isEmpty,
+              !keys.operativeStates.isEmpty,
+              !keys.ambiguousFamilies.isEmpty else {
             throw BenchmarkCLIError.invalidDocumentRelationKey("schema")
         }
 
         let service = DocumentRelationProposalService(store: store)
         _ = try service.proposeExactAndNormalizedDuplicates(matterID: matterID)
         _ = try service.proposeVersionRelations(matterID: matterID)
-        let documents = Dictionary(uniqueKeysWithValues:
-            try store.documentLibrary.fetchDocuments(matterID: matterID).map { ($0.id, $0.displayName) }
+        let documentRecords = try store.documentLibrary.fetchDocuments(matterID: matterID)
+        let filenamesByDocumentID = Dictionary(
+            uniqueKeysWithValues: documentRecords.map { ($0.id, $0.displayName) }
         )
-        let predicted = try store.documentRelations.fetchAll(matterID: matterID).map { relation in
-            guard let from = documents[relation.fromDocumentID],
-                  let to = documents[relation.toDocumentID],
+        let documentIDsByFilename = Dictionary(
+            uniqueKeysWithValues: documentRecords.map { ($0.displayName, $0.id) }
+        )
+        let proposedRelations = try store.documentRelations.fetchAll(matterID: matterID)
+        let predicted = try proposedRelations.map { relation in
+            guard let from = filenamesByDocumentID[relation.fromDocumentID],
+                  let to = filenamesByDocumentID[relation.toDocumentID],
                   let kind = DocumentRelationKind(rawValue: relation.kind) else {
                 throw BenchmarkCLIError.invalidDocumentRelationKey(relation.relationKey)
             }
@@ -353,10 +361,89 @@ private struct DeterministicCorpusWorkload: Sendable {
                 symmetric: kind.isSymmetric
             )
         }
-        return DocumentRelationBenchmark.observations(
+        var observations = DocumentRelationBenchmark.observations(
             expected: keys.relations,
             predicted: predicted
         )
+
+        let ambiguousCanonicalIDs = Set(keys.ambiguousFamilies.map {
+            DocumentRelationBenchmarkKey(
+                fromFilename: $0.fromFilename,
+                toFilename: $0.toFilename,
+                kind: $0.kind,
+                symmetric: DocumentRelationKind(rawValue: $0.kind)?.isSymmetric ?? false
+            ).canonicalID
+        })
+        let expectedCanonicalIDs = Set(keys.relations.map(\.canonicalID))
+        for relation in proposedRelations {
+            guard let from = filenamesByDocumentID[relation.fromDocumentID],
+                  let to = filenamesByDocumentID[relation.toDocumentID],
+                  let kind = DocumentRelationKind(rawValue: relation.kind) else { continue }
+            let canonicalID = DocumentRelationBenchmarkKey(
+                fromFilename: from,
+                toFilename: to,
+                kind: kind.rawValue,
+                symmetric: kind.isSymmetric
+            ).canonicalID
+            guard expectedCanonicalIDs.contains(canonicalID),
+                  !ambiguousCanonicalIDs.contains(canonicalID) else { continue }
+            _ = try store.documentRelations.review(
+                matterID: matterID,
+                id: relation.id,
+                decision: .confirmed,
+                reviewedBy: "SupraBench",
+                reviewedAt: Date(timeIntervalSince1970: 0)
+            )
+        }
+
+        let reviewedRelations = try store.documentRelations.fetchAll(matterID: matterID)
+        let confirmedMetadata = DocumentRelationDownstreamPolicy.confirmedMetadataByDocumentID(
+            relations: reviewedRelations
+        )
+        let predictedOperativeStates: [DocumentOperativeStateBenchmarkKey] = confirmedMetadata.compactMap { entry in
+            let (documentID, metadata) = entry
+            guard let filename = filenamesByDocumentID[documentID],
+                  let state = operativeState(from: metadata) else { return nil }
+            return DocumentOperativeStateBenchmarkKey(filename: filename, state: state)
+        }
+        var blockedAmbiguousFamilyIDs: Set<String> = []
+        for ambiguous in keys.ambiguousFamilies {
+            guard let fromID = documentIDsByFilename[ambiguous.fromFilename],
+                  let toID = documentIDsByFilename[ambiguous.toFilename],
+                  let relation = reviewedRelations.first(where: {
+                      $0.fromDocumentID == fromID
+                          && $0.toDocumentID == toID
+                          && $0.kind == ambiguous.kind
+                  }) else { continue }
+            let reasons = DocumentRelationDownstreamPolicy.unreviewedReasons(
+                relations: [relation],
+                documents: documentRecords,
+                inScopeDocumentIDs: [fromID, toID]
+            )
+            if !reasons.isEmpty {
+                blockedAmbiguousFamilyIDs.insert(ambiguous.id)
+            }
+        }
+        observations.append(contentsOf: DocumentRelationReviewBenchmark.observations(
+            expectedOperativeStates: keys.operativeStates,
+            predictedOperativeStates: predictedOperativeStates,
+            expectedAmbiguousFamilyIDs: Set(keys.ambiguousFamilies.map(\.id)),
+            blockedAmbiguousFamilyIDs: blockedAmbiguousFamilyIDs
+        ))
+        return observations
+    }
+
+    private func operativeState(from confirmedMetadata: String) -> String? {
+        if confirmedMetadata.contains("Version state: superseded (confirmed)") {
+            return "superseded"
+        }
+        if confirmedMetadata.contains("Version state: draft (confirmed)") {
+            return "draft"
+        }
+        if confirmedMetadata.contains("Version state: operative") {
+            return "operative"
+        }
+        return nil
     }
 
     private func ocrSelectionObservations() throws -> [BenchmarkObservation] {

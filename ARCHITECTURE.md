@@ -155,9 +155,12 @@ repository:
   within one matter only. A second deterministic pass combines normalized three-token shingles with
   structure-node diffs to propose near-duplicate, draft, redline, amendment, and supersession edges;
   missing dates stay explicitly ambiguous. Symmetric kinds use a canonical sorted pair; directional
-  kinds preserve their arrow. Every automatic match remains `proposed` regardless of confidence, and
-  confirmed-only consumers therefore see nothing until the later audited review workflow makes a
-  decision. The weights, thresholds, evidence fields, and B-VER key set are frozen in
+  kinds preserve their arrow. Every automatic match remains `proposed` regardless of confidence.
+  The audited Documents review queue supports one-way confirm/reject decisions and distinct
+  user-authored overrides; each decision atomically records provenance and marks dependent outputs
+  `needs_review`. Confirmed relations alone add draft/operative/superseded retrieval metadata, while
+  proposed in-scope relations name themselves as blockers for clean comparison and negative-result
+  assurance. The weights, thresholds, review boundary, and B-VER key set are frozen in
   [the document relation methodology](Docs/Document-Relation-Methodology.md).
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
