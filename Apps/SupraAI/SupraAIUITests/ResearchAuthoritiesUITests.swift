@@ -114,6 +114,53 @@ final class DocumentCorrectionUITests: XCTestCase {
     }
 }
 
+/// T-UX-08 drives the review queue through exact accessibility controls against
+/// a hermetic draft/executed fixture.
+@MainActor
+final class DocumentRelationReviewUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testTUX08ReviewSurfaceShowsEvidenceAndClearsBlockerOnlyAfterReview() {
+        // T-UX-08 expected RED: the Documents tab has no relation review queue,
+        // evidence/diff surface, or confirm/reject/override accessibility actions.
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestDocumentRelations",
+            "-uiTestInitialMatterTab", "Documents",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+
+        let queue = app.buttons["relations.openReview"]
+        XCTAssertTrue(queue.waitForExistence(timeout: 20))
+        XCTAssertEqual(queue.value as? String, "1 unreviewed relation")
+        queue.click()
+
+        XCTAssertTrue(app.descendants(matching: .any)["relations.reviewSheet"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["relations.evidence"].exists)
+        XCTAssertTrue(app.staticTexts["relations.diff"].exists)
+        XCTAssertTrue(app.buttons["relations.confirm"].exists)
+        XCTAssertTrue(app.buttons["relations.reject"].exists)
+        XCTAssertTrue(app.buttons["relations.override"].exists)
+        XCTAssertTrue(app.staticTexts["relations.blocker"].exists)
+
+        app.buttons["relations.override"].click()
+        XCTAssertTrue(app.descendants(matching: .any)["relations.overrideSheet"].waitForExistence(timeout: 10))
+        app.buttons["relations.saveOverride"].click()
+
+        XCTAssertTrue(app.staticTexts["relations.auditConfirmation"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["relations.reviewComplete"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["relations.blocker"].exists)
+    }
+}
+
 /// End-to-end UI test driving the Research and Authorities tabs with mouse-style
 /// clicks and keyboard input — fully offline (no model or network). The app is
 /// launched with `-uiTestMode`, which opens a hermetic throwaway store seeded with

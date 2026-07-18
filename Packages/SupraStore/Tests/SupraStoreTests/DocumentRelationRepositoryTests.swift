@@ -122,6 +122,112 @@ final class DocumentRelationRepositoryTests: XCTestCase {
         XCTAssertTrue(try store.documentRelations.fetchConfirmed(matterID: matter.id).isEmpty)
     }
 
+    func testTVER08ReviewTransitionIsSingleUseAuditedAndInvalidatesCitingOutput() throws {
+        // T-VER-08 expected RED: relation review has no repository-owned transition,
+        // audit event, or dependent-output invalidation boundary.
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: "Synthetic audited relation review")
+        let draft = try seedDocument(
+            store, matterID: matter.id, id: "draft", blobID: "blob-draft", sha: "sha-draft"
+        )
+        let executed = try seedDocument(
+            store, matterID: matter.id, id: "executed", blobID: "blob-executed", sha: "sha-executed"
+        )
+        let evidence = #"{"schema_version":1,"signal":"synthetic_nondefault_draft"}"#
+        let proposal = try store.documentRelations.propose(
+            matterID: matter.id,
+            fromDocumentID: draft.id,
+            toDocumentID: executed.id,
+            kind: .draftOf,
+            evidenceJSON: evidence,
+            confidence: 0.81,
+            proposedBy: .system
+        )
+
+        let output = try store.structuredOutputs.createOutput(
+            matterID: matter.id,
+            title: "Synthetic operative-state output",
+            outputType: .documentQA,
+            status: .complete
+        )
+        let version = try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id,
+            contentMarkdown: "Synthetic version-sensitive answer.",
+            requiredSections: [],
+            presentSections: [],
+            missingSections: [],
+            verificationStatus: .legacyUnverified,
+            outputStatus: .needsReview
+        )
+        try store.structuredOutputs.updateStatus(outputID: output.id, status: .complete)
+        let sourceSet = try store.documentSources.createSourceSet(
+            matterID: matter.id,
+            mode: .autoSource
+        )
+        try store.documentSources.addOutputSource(DocumentOutputSourceRecord(
+            sourceSetID: sourceSet.id,
+            documentID: draft.id,
+            citationLabel: "S1",
+            excerpt: "synthetic draft evidence"
+        ), preserveUnknownRevision: true)
+        try store.documentSources.attachSourceSet(id: sourceSet.id, structuredOutputVersionID: version.id)
+
+        let reviewedAt = Date(timeIntervalSince1970: 1_777_777_777)
+        let rejected = try store.documentRelations.review(
+            matterID: matter.id,
+            id: proposal.id,
+            decision: .rejected,
+            reviewedBy: "Synthetic Reviewer",
+            reviewedAt: reviewedAt
+        )
+
+        XCTAssertEqual(rejected.reviewState, DocumentRelationReviewState.rejected.rawValue)
+        XCTAssertEqual(rejected.reviewedBy, "Synthetic Reviewer")
+        XCTAssertEqual(rejected.reviewedAt, reviewedAt)
+        XCTAssertEqual(rejected.evidenceJSON, evidence, "review must not rewrite immutable evidence")
+        XCTAssertEqual(rejected.proposedBy, DocumentRelationProposer.system.rawValue)
+        let events = try store.auditEvents.fetchEvents(
+            relatedTable: DocumentRelationRecord.databaseTableName,
+            relatedID: proposal.id,
+            eventType: "document_relation_reviewed"
+        )
+        let event = try XCTUnwrap(events.first)
+        XCTAssertEqual(event.actor, "Synthetic Reviewer")
+        XCTAssertEqual(event.timestamp, reviewedAt)
+        let metadata = try XCTUnwrap(event.metadataJSON?.data(using: .utf8))
+        let audit = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: metadata) as? [String: Any]
+        )
+        XCTAssertEqual(audit["old_review_state"] as? String, "proposed")
+        XCTAssertEqual(audit["new_review_state"] as? String, "rejected")
+        XCTAssertEqual(audit["evidence_json"] as? String, evidence)
+        XCTAssertEqual(
+            try store.structuredOutputs.fetchOutputs(matterID: matter.id).first?.status,
+            StructuredOutputStatus.needsReview.rawValue
+        )
+
+        XCTAssertThrowsError(try store.documentRelations.review(
+            matterID: matter.id,
+            id: proposal.id,
+            decision: .confirmed,
+            reviewedBy: "Second Synthetic Reviewer"
+        )) { error in
+            XCTAssertEqual(
+                error as? DocumentRelationRepositoryError,
+                .invalidReviewTransition(from: .rejected, to: .confirmed)
+            )
+        }
+        XCTAssertEqual(
+            try store.auditEvents.fetchEvents(
+                relatedTable: DocumentRelationRecord.databaseTableName,
+                relatedID: proposal.id,
+                eventType: "document_relation_reviewed"
+            ).count,
+            1,
+            "a refused second transition must not append a misleading audit row"
+        )
+    }
+
     @discardableResult
     private func seedDocument(
         _ store: SupraStore,
