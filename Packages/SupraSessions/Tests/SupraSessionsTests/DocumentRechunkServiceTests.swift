@@ -196,6 +196,53 @@ final class DocumentRechunkServiceTests: XCTestCase {
         )
     }
 
+    func testD06TreatsExtractedEmptyDocumentAsTerminalTextIndexed() async throws {
+        // D-06 live-rollout expected RED: an extracted document whose selected
+        // text is empty produces no chunks, so the coordinator currently reports
+        // it pending forever and refuses the otherwise complete default flip.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Empty extracted document")
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "d06-empty-extracted-document",
+            byteSize: 0,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/d06-empty-extracted-document.txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "empty.txt",
+            status: MatterDocumentStatus.ready.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            indexStatus: DocumentIndexStatus.ready.rawValue
+        ))
+        try store.documentIndex.replaceParts(documentID: document.id, parts: [
+            DocumentPagePartRecord(
+                documentID: document.id,
+                partIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                normalizedText: " \n\t ",
+                charCount: 4
+            ),
+        ])
+
+        let result = try await DocumentChunkerRolloutService(store: store).switchAllMatters(
+            to: 2,
+            actor: "test"
+        )
+
+        XCTAssertEqual(result.scheduledDocuments, 1)
+        XCTAssertEqual(result.reindexedDocuments, 1)
+        XCTAssertEqual(result.pendingDocuments, 0)
+        XCTAssertEqual(result.textIndexedDocuments, 1)
+        XCTAssertTrue(try store.documentIndex.fetchChunks(documentID: document.id).isEmpty)
+        XCTAssertEqual(
+            try store.documentLibrary.fetchDocument(id: document.id)?.indexStatus,
+            DocumentIndexStatus.textIndexed.rawValue
+        )
+        XCTAssertEqual(try store.documentSettings.loadSettings().chunkerVersion, 2)
+    }
+
     private func makeStore() throws -> SupraStore {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("DocumentRechunkService-\(UUID().uuidString)", isDirectory: true)
