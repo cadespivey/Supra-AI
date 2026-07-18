@@ -23,18 +23,55 @@ struct SupraBenchCommand {
             let specification = try benchmarkSpecification(in: root)
             let repositorySHA = try gitHead(in: root)
             let manifestSHA = SHA256.hash(data: manifestData).map { String(format: "%02x", $0) }.joined()
-            let workload = DeterministicCorpusWorkload(
-                repositoryRoot: root,
-                manifest: manifest,
-                specification: specification
-            )
-            let runner = BenchmarkRunner(
-                repositorySHA: repositorySHA,
-                corpusManifestSHA256: manifestSHA,
-                workload: { try await workload.run() }
-            )
-            let report = try await runner.runDeterministic()
-            var bytes = try report.canonicalJSON()
+            let encodedReport: Data
+            if arguments.contains("--compare-chunkers") {
+                let v1Result = try await DeterministicCorpusWorkload(
+                    repositoryRoot: root,
+                    manifest: manifest,
+                    specification: specification,
+                    chunkerVersion: 1
+                ).runWithDiagnostics()
+                let v2Result = try await DeterministicCorpusWorkload(
+                    repositoryRoot: root,
+                    manifest: manifest,
+                    specification: specification,
+                    chunkerVersion: 2
+                ).runWithDiagnostics()
+                let v1Report = try await benchmarkReport(
+                    repositorySHA: repositorySHA,
+                    manifestSHA: manifestSHA,
+                    observations: v1Result.observations
+                )
+                let v2Report = try await benchmarkReport(
+                    repositorySHA: repositorySHA,
+                    manifestSHA: manifestSHA,
+                    observations: v2Result.observations
+                )
+                let comparison = try ChunkerComparisonReport.make(
+                    repositorySHA: repositorySHA,
+                    corpusManifestSHA256: manifestSHA,
+                    generatedAt: v2Report.run.generatedAt,
+                    v1: v1Report,
+                    v2: v2Report,
+                    v1RetrievalSeconds: v1Result.retrievalSeconds,
+                    v2RetrievalSeconds: v2Result.retrievalSeconds
+                )
+                encodedReport = try comparison.canonicalJSON()
+            } else {
+                let workload = DeterministicCorpusWorkload(
+                    repositoryRoot: root,
+                    manifest: manifest,
+                    specification: specification
+                )
+                let runner = BenchmarkRunner(
+                    repositorySHA: repositorySHA,
+                    corpusManifestSHA256: manifestSHA,
+                    workload: { try await workload.run() }
+                )
+                let report = try await runner.runDeterministic()
+                encodedReport = try report.canonicalJSON()
+            }
+            var bytes = encodedReport
             bytes.append(0x0a)
             if let outputURL {
                 try bytes.write(to: outputURL, options: .atomic)
@@ -45,6 +82,18 @@ struct SupraBenchCommand {
             FileHandle.standardError.write(Data("SupraBench: \(error.localizedDescription)\n".utf8))
             exit(1)
         }
+    }
+
+    private static func benchmarkReport(
+        repositorySHA: String,
+        manifestSHA: String,
+        observations: [BenchmarkObservation]
+    ) async throws -> BenchmarkReport {
+        try await BenchmarkRunner(
+            repositorySHA: repositorySHA,
+            corpusManifestSHA256: manifestSHA,
+            workload: { observations }
+        ).runDeterministic()
     }
 
     private static func outputURL(from arguments: [String]) throws -> URL? {
@@ -102,7 +151,8 @@ private enum BenchmarkCLIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .usage: return "usage: swift run SupraBench --deterministic [--output path]"
+        case .usage:
+            return "usage: swift run SupraBench --deterministic [--compare-chunkers] [--output path]"
         case .missingOutputPath: return "--output requires a path"
         case .repositoryRootNotFound: return "could not locate the repository root"
         case .repositorySHANotFound: return "could not resolve the repository SHA"
@@ -138,8 +188,13 @@ private struct DeterministicCorpusWorkload: Sendable {
     let repositoryRoot: URL
     let manifest: BenchmarkFixtureManifest
     let specification: MatterSpec
+    var chunkerVersion: Int = 1
 
     func run() async throws -> [BenchmarkObservation] {
+        try await runWithDiagnostics().observations
+    }
+
+    func runWithDiagnostics() async throws -> DeterministicWorkloadResult {
         let fileManager = FileManager.default
         let temporaryRoot = fileManager.temporaryDirectory.appendingPathComponent(
             "SupraBench-\(UUID().uuidString)",
@@ -151,6 +206,7 @@ private struct DeterministicCorpusWorkload: Sendable {
         let storeDirectory = temporaryRoot.appendingPathComponent("store", isDirectory: true)
         try fileManager.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
         let store = try SupraStore(url: storeDirectory.appendingPathComponent("benchmark.sqlite"))
+        try store.documentSettings.updateSettings { $0.chunkerVersion = chunkerVersion }
         let storage = DocumentStorage(root: temporaryRoot.appendingPathComponent("storage", isDirectory: true))
         let embedder = DeterministicBagOfWordsEmbedder()
         let importer = DocumentImportService(store: store, storage: storage, ocr: VisionOCRService())
@@ -176,6 +232,7 @@ private struct DeterministicCorpusWorkload: Sendable {
         let retrieval = DocumentRetrievalService(store: store, embedder: embedder)
         let tasks = allTasks()
         var retrievedByTask: [String: [RetrievedSource]] = [:]
+        let retrievalStartedAt = ProcessInfo.processInfo.systemUptime
         for task in tasks {
             let result = try await retrieval.retrieve(
                 matterID: benchmarkMatter.id,
@@ -186,6 +243,7 @@ private struct DeterministicCorpusWorkload: Sendable {
             )
             retrievedByTask[task.id] = result.sources
         }
+        let retrievalSeconds = ProcessInfo.processInfo.systemUptime - retrievalStartedAt
         observations.append(contentsOf: retrievalObservations(tasks: tasks, retrievedByTask: retrievedByTask))
         observations.append(contentsOf: try ocrSelectionObservations())
         observations.append(contentsOf: try spreadsheetHeaderObservations(
@@ -209,7 +267,10 @@ private struct DeterministicCorpusWorkload: Sendable {
             )
         ))
         observations.append(contentsOf: try await recoveryObservations(temporaryRoot: temporaryRoot))
-        return observations
+        return DeterministicWorkloadResult(
+            observations: observations,
+            retrievalSeconds: max(retrievalSeconds, Double.leastNonzeroMagnitude)
+        )
     }
 
     private func spreadsheetHeaderObservations(
@@ -556,6 +617,11 @@ private struct DeterministicCorpusWorkload: Sendable {
                 + keys.negatives + keys.structures + keys.versions
         ).sorted { $0.id < $1.id }
     }
+}
+
+private struct DeterministicWorkloadResult: Sendable {
+    var observations: [BenchmarkObservation]
+    var retrievalSeconds: Double
 }
 
 private struct SpreadsheetCellPayload: Decodable {
