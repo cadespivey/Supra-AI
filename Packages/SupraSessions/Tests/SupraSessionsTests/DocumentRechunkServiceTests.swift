@@ -118,10 +118,14 @@ final class DocumentRechunkServiceTests: XCTestCase {
             rank: 0
         ))
 
-        let result = try await DocumentRechunkService(store: store).rechunkMatter(
-            matterID: matter.id,
-            targetVersion: 2
+        // D-06 expected RED: the approved default-rollout coordinator does not
+        // exist, so the flag cannot be switched together with a complete,
+        // reversible all-matter re-chunk.
+        let promoted = try await DocumentChunkerRolloutService(store: store).switchAllMatters(
+            to: 2,
+            actor: "test"
         )
+        let result = try XCTUnwrap(promoted.matterResults.first)
 
         XCTAssertEqual(result.scheduledDocuments, 1)
         XCTAssertEqual(result.reindexedDocuments, 1)
@@ -136,7 +140,60 @@ final class DocumentRechunkServiceTests: XCTestCase {
         XCTAssertEqual(historical.revisionID, revision.id)
         XCTAssertEqual(historical.locatorJSON, locatorJSON)
         XCTAssertEqual(historical.excerpt, "Target amount is 742.19.")
-        XCTAssertEqual(try store.documentSettings.loadSettings().chunkerVersion, 1, "D-06 must remain owner-gated")
+        XCTAssertEqual(try store.documentSettings.loadSettings().chunkerVersion, 2)
+
+        let rolledBack = try await DocumentChunkerRolloutService(store: store).switchAllMatters(
+            to: 1,
+            actor: "test"
+        )
+        XCTAssertEqual(rolledBack.matterResults.first?.scheduledDocuments, 1)
+        XCTAssertEqual(rolledBack.pendingDocuments, 0)
+        XCTAssertEqual(try store.documentSettings.loadSettings().chunkerVersion, 1)
+        XCTAssertTrue(
+            try store.documentIndex.fetchChunks(documentID: document.id)
+                .allSatisfy { $0.chunkerVersion == 1 }
+        )
+        let historicalAfterRollback = try XCTUnwrap(
+            try store.documentSources.fetchSource(id: "historical-source")
+        )
+        XCTAssertNil(historicalAfterRollback.chunkID)
+        XCTAssertEqual(historicalAfterRollback.revisionID, revision.id)
+        XCTAssertEqual(historicalAfterRollback.locatorJSON, locatorJSON)
+        XCTAssertEqual(historicalAfterRollback.excerpt, "Target amount is 742.19.")
+
+        let restored = try await DocumentChunkerRolloutService(store: store).switchAllMatters(
+            to: 2,
+            actor: "test"
+        )
+        XCTAssertEqual(restored.matterResults.first?.scheduledDocuments, 1)
+        XCTAssertEqual(restored.pendingDocuments, 0)
+        XCTAssertEqual(try store.documentSettings.loadSettings().chunkerVersion, 2)
+    }
+
+    func testD06ApprovedDefaultPromotesOnceAndPreservesExplicitRollback() async throws {
+        // D-06 expected RED: fresh settings still default to v1 and there is no
+        // one-time approval marker that distinguishes upgrade promotion from an
+        // operator's later explicit rollback.
+        XCTAssertEqual(DocumentIntelligenceSettingsRecord().chunkerVersion, 2)
+        let store = try makeStore()
+        try store.documentSettings.updateSettings { $0.chunkerVersion = 1 }
+        let rollout = DocumentChunkerRolloutService(store: store)
+
+        let promotion = try await rollout.promoteApprovedDefaultIfNeeded(actor: "test")
+
+        XCTAssertNotNil(promotion)
+        XCTAssertEqual(try store.documentSettings.loadSettings().chunkerVersion, 2)
+        _ = try await rollout.switchAllMatters(to: 1, actor: "test")
+        XCTAssertEqual(try store.documentSettings.loadSettings().chunkerVersion, 1)
+
+        let repeatedPromotion = try await rollout.promoteApprovedDefaultIfNeeded(actor: "test")
+
+        XCTAssertNil(repeatedPromotion)
+        XCTAssertEqual(
+            try store.documentSettings.loadSettings().chunkerVersion,
+            1,
+            "the one-time migration must not erase an explicit rollback"
+        )
     }
 
     private func makeStore() throws -> SupraStore {

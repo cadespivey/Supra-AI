@@ -2,6 +2,52 @@ import AppKit
 import CoreGraphics
 import XCTest
 
+/// D-06 proves the internal rollback control drives the same complete rollout
+/// coordinator used by the one-time approved promotion. UI-test mode uses a
+/// hermetic store with no user documents.
+@MainActor
+final class DocumentChunkerRolloutUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testD06DiagnosticsFlipsToV1AndRestoresV2() {
+        // D-06 expected RED: Diagnostics has no chunker version/readiness surface
+        // or accessible rollback control, so the required live flip/revert drill
+        // cannot be performed through the signed app.
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+
+        let diagnosticsRoute = app.staticTexts["Diagnostics"].firstMatch
+        XCTAssertTrue(diagnosticsRoute.waitForExistence(timeout: 20))
+        diagnosticsRoute.click()
+
+        func assertVersion(_ expected: String, timeout: TimeInterval = 20) {
+            let version = app.descendants(matching: .any)["diagnostics.chunker.version"]
+            XCTAssertTrue(version.waitForExistence(timeout: timeout))
+            let predicate = NSPredicate(format: "value == %@", expected)
+            let expectation = XCTNSPredicateExpectation(predicate: predicate, object: version)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed)
+        }
+
+        assertVersion("v2")
+        let switcher = app.buttons["diagnostics.chunker.switch"]
+        XCTAssertTrue(switcher.waitForExistence(timeout: 10))
+        switcher.click()
+        assertVersion("v1")
+        XCTAssertEqual(app.buttons["diagnostics.chunker.switch"].label, "Restore Chunker v2")
+        app.buttons["diagnostics.chunker.switch"].click()
+        assertVersion("v2")
+    }
+}
+
 /// T-OPS-02 drives the hermetic interrupted-import fixture through both user
 /// decisions. The production app seeds this state only under the explicit UI
 /// test launch flag, so real stores are never modified by the fixture.
