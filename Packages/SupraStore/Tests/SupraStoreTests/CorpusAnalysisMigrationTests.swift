@@ -16,7 +16,7 @@ final class CorpusAnalysisMigrationTests: XCTestCase {
         try migrator.migrate(queue)
 
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v064_create_corpus_analysis_ledger")
+            XCTAssertEqual(try appliedMigrations(db).last, "v065_create_document_relations")
             XCTAssertEqual(Set(try db.columns(in: "corpus_analysis_runs").map(\.name)), Set([
                 "id", "run_key", "matter_id", "task_kind", "scope_json",
                 "corpus_snapshot_json", "partition_strategy", "partition_strategy_version",

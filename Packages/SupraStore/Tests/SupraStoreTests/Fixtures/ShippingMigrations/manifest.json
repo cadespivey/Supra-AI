@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "syntheticDataDeclaration": "Every fixture contains deterministic synthetic records only; no user or production data is permitted.",
-  "currentMigration": "v064_create_corpus_analysis_ledger",
+  "currentMigration": "v065_create_document_relations",
   "supportedVersions": [
     "v1.4.1",
     "v1.5.2",
