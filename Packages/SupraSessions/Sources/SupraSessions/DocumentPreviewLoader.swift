@@ -3,6 +3,65 @@ import SupraCore
 import SupraDocuments
 import SupraStore
 
+/// Stable, display-safe projection of one persisted extraction-structure node.
+/// It intentionally carries node keys instead of database IDs so a live preview
+/// can be compared directly with adapter goldens and qualification fixtures.
+public struct DocumentStructurePreviewNode: Sendable, Identifiable, Equatable {
+    public var id: String
+    public var nodeKey: String
+    public var parentNodeKey: String?
+    public var depth: Int
+    public var ordinal: Int
+    public var kind: String
+    public var charStart: Int?
+    public var charEnd: Int?
+    public var textContent: String?
+    public var payloadJSON: String?
+
+    public init(
+        id: String,
+        nodeKey: String,
+        parentNodeKey: String?,
+        depth: Int,
+        ordinal: Int,
+        kind: String,
+        charStart: Int?,
+        charEnd: Int?,
+        textContent: String?,
+        payloadJSON: String?
+    ) {
+        self.id = id
+        self.nodeKey = nodeKey
+        self.parentNodeKey = parentNodeKey
+        self.depth = depth
+        self.ordinal = ordinal
+        self.kind = kind
+        self.charStart = charStart
+        self.charEnd = charEnd
+        self.textContent = textContent
+        self.payloadJSON = payloadJSON
+    }
+}
+
+/// Stable, display-safe projection of a persisted extraction relationship.
+public struct DocumentStructurePreviewEdge: Sendable, Identifiable, Equatable {
+    public var id: String
+    public var kind: String
+    public var fromNodeKey: String
+    public var toNodeKey: String
+
+    public init(id: String, kind: String, fromNodeKey: String, toNodeKey: String) {
+        self.id = id
+        self.kind = kind
+        self.fromNodeKey = fromNodeKey
+        self.toNodeKey = toNodeKey
+    }
+
+    public var display: String {
+        "\(kind): \(fromNodeKey) → \(toNodeKey)"
+    }
+}
+
 /// A resolved, renderable preview for a cited/searched source location
 /// (plan §11). The view layer turns this into a PDFKit/image/text preview.
 public struct DocumentPreviewModel: Sendable, Equatable {
@@ -35,6 +94,8 @@ public struct DocumentPreviewModel: Sendable, Equatable {
     /// preview was not opened from a persisted output citation.
     public var revisionNotice: String?
     public var kind: Kind
+    public var structureNodes: [DocumentStructurePreviewNode]
+    public var structureEdges: [DocumentStructurePreviewEdge]
 
     public init(
         documentName: String,
@@ -44,7 +105,9 @@ public struct DocumentPreviewModel: Sendable, Equatable {
         revisionOrigin: String? = nil,
         revisionCreatedAt: Date? = nil,
         revisionNotice: String? = nil,
-        kind: Kind
+        kind: Kind,
+        structureNodes: [DocumentStructurePreviewNode] = [],
+        structureEdges: [DocumentStructurePreviewEdge] = []
     ) {
         self.documentName = documentName
         self.locatorDisplay = locatorDisplay
@@ -54,6 +117,8 @@ public struct DocumentPreviewModel: Sendable, Equatable {
         self.revisionCreatedAt = revisionCreatedAt
         self.revisionNotice = revisionNotice
         self.kind = kind
+        self.structureNodes = structureNodes
+        self.structureEdges = structureEdges
     }
 }
 
@@ -92,6 +157,11 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
         }
         let warnings = Self.warnings(for: document)
         let parts = (try? store.documentIndex.fetchParts(documentID: documentID)) ?? []
+        let currentRevisionIDs = Set(parts.compactMap(\.currentRevisionID))
+        let structure = structurePreview(
+            documentID: documentID,
+            revisionIDs: currentRevisionIDs
+        )
         let part = Self.part(matching: locator, in: parts)
         let fallbackText = part?.normalizedText ?? parts.first?.normalizedText ?? ""
 
@@ -133,7 +203,9 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
             locatorDisplay: locator.displayString,
             warnings: warnings,
             revisionNotice: nil,
-            kind: kind
+            kind: kind,
+            structureNodes: structure.nodes,
+            structureEdges: structure.edges
         )
     }
 
@@ -183,6 +255,7 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
                 )
             )
         }
+        let structure = structurePreview(documentID: documentID, revisionIDs: [revisionID])
         return DocumentPreviewModel(
             documentName: document.displayName,
             locatorDisplay: locator.displayString,
@@ -195,7 +268,9 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
                 content: revision.text,
                 highlightStart: locator.charStart,
                 highlightEnd: locator.charEnd
-            )
+            ),
+            structureNodes: structure.nodes,
+            structureEdges: structure.edges
         )
     }
 
@@ -210,6 +285,98 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
             emailPartPath: first?.emailPartPath
         )
         return load(documentID: documentID, locator: locator)
+    }
+
+    private func structurePreview(
+        documentID: String,
+        revisionIDs: Set<String>
+    ) -> (nodes: [DocumentStructurePreviewNode], edges: [DocumentStructurePreviewEdge]) {
+        let fetchedNodes = (try? store.documentStructure.fetchNodes(documentID: documentID)) ?? []
+        let records = fetchedNodes.filter { revisionIDs.contains($0.revisionID) }
+        guard !records.isEmpty else { return ([], []) }
+
+        let byID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+        func siblingOrder(
+            _ lhs: DocumentStructureNodeRecord,
+            _ rhs: DocumentStructureNodeRecord
+        ) -> Bool {
+            if lhs.ordinal != rhs.ordinal { return lhs.ordinal < rhs.ordinal }
+            if lhs.nodeKey != rhs.nodeKey { return lhs.nodeKey < rhs.nodeKey }
+            return lhs.id < rhs.id
+        }
+
+        let childrenByParentID = Dictionary(
+            grouping: records.compactMap { record in
+                record.parentNodeID.map { ($0, record) }
+            },
+            by: \.0
+        ).mapValues { pairs in
+            pairs.map(\.1).sorted(by: siblingOrder)
+        }
+        let roots = records
+            .filter { record in
+                guard let parentID = record.parentNodeID else { return true }
+                return byID[parentID] == nil
+            }
+            .sorted(by: siblingOrder)
+        var visited = Set<String>()
+        var orderedRecords: [DocumentStructureNodeRecord] = []
+        func appendSubtree(_ record: DocumentStructureNodeRecord) {
+            guard visited.insert(record.id).inserted else { return }
+            orderedRecords.append(record)
+            for child in childrenByParentID[record.id] ?? [] {
+                appendSubtree(child)
+            }
+        }
+        for root in roots { appendSubtree(root) }
+        // Persisted trees are validated as acyclic and connected. Keeping a
+        // deterministic remainder pass makes revision-filtered projections safe
+        // even when their parent belongs to another selected part revision.
+        for record in records.sorted(by: siblingOrder) where !visited.contains(record.id) {
+            appendSubtree(record)
+        }
+
+        func depth(of record: DocumentStructureNodeRecord) -> Int {
+            var depth = 0
+            var parentID = record.parentNodeID
+            var visited: Set<String> = [record.id]
+            while let candidate = parentID,
+                  let parent = byID[candidate],
+                  visited.insert(candidate).inserted {
+                depth += 1
+                parentID = parent.parentNodeID
+            }
+            return depth
+        }
+
+        let nodes = orderedRecords.map { record in
+            DocumentStructurePreviewNode(
+                id: record.id,
+                nodeKey: record.nodeKey,
+                parentNodeKey: record.parentNodeID.flatMap { byID[$0]?.nodeKey },
+                depth: depth(of: record),
+                ordinal: record.ordinal,
+                kind: record.kind,
+                charStart: record.charStart,
+                charEnd: record.charEnd,
+                textContent: record.textContent,
+                payloadJSON: record.payloadJSON
+            )
+        }
+
+        let allowedNodeIDs = Set(records.map(\.id))
+        let edges = ((try? store.documentStructure.fetchEdges(documentID: documentID)) ?? [])
+            .filter { allowedNodeIDs.contains($0.fromNodeID) && allowedNodeIDs.contains($0.toNodeID) }
+            .compactMap { edge -> DocumentStructurePreviewEdge? in
+                guard let from = byID[edge.fromNodeID], let to = byID[edge.toNodeID] else { return nil }
+                return DocumentStructurePreviewEdge(
+                    id: edge.id,
+                    kind: edge.kind,
+                    fromNodeKey: from.nodeKey,
+                    toNodeKey: to.nodeKey
+                )
+            }
+        return (nodes, edges)
     }
 
     private static func part(matching locator: DocumentSourceLocator, in parts: [DocumentPagePartRecord]) -> DocumentPagePartRecord? {

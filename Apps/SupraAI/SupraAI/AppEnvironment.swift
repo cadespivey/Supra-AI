@@ -676,15 +676,98 @@ final class AppEnvironment: ObservableObject {
                         status: MatterDocumentStatus.ready.rawValue
                     )
                 )
+                let agreementText = "SECTION 3. The term of this Agreement is two (2) years from the Effective Date."
                 try store.documentIndex.replaceParts(documentID: document.id, parts: [
                     DocumentPagePartRecord(
                         documentID: document.id,
                         partIndex: 0,
                         sourceKind: DocumentSourceKind.text.rawValue,
-                        normalizedText: "SECTION 3. The term of this Agreement is two (2) years from the Effective Date.",
-                        charCount: 76
+                        normalizedText: agreementText,
+                        charCount: agreementText.count
                     )
                 ])
+                let revision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+                    documentID: document.id,
+                    partIndex: 0,
+                    derivationKey: "uitest-agreement-revision",
+                    origin: "parser",
+                    method: "synthetic",
+                    text: agreementText,
+                    charCount: agreementText.count
+                ))
+                _ = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
+                    documentID: document.id,
+                    partIndex: 0,
+                    selectedRevisionID: revision.id,
+                    selectionKey: "uitest-agreement-selection",
+                    selectedBy: "policy",
+                    policyVersion: 1,
+                    decisionJSON: #"{"selected":"synthetic"}"#
+                ))
+                let structureNodes = [
+                    DocumentStructureNodeRecord(
+                        id: "uitest-structure-root",
+                        documentID: document.id,
+                        revisionID: revision.id,
+                        nodeKey: "document",
+                        ordinal: 0,
+                        kind: "document"
+                    ),
+                    DocumentStructureNodeRecord(
+                        id: "uitest-structure-body",
+                        documentID: document.id,
+                        revisionID: revision.id,
+                        nodeKey: "body/paragraph/1",
+                        parentNodeID: "uitest-structure-root",
+                        ordinal: 0,
+                        kind: "paragraph",
+                        charStart: 0,
+                        charEnd: agreementText.count,
+                        payloadJSON: #"{"style":"Contract Body"}"#
+                    ),
+                    DocumentStructureNodeRecord(
+                        id: "uitest-structure-footnote",
+                        documentID: document.id,
+                        revisionID: revision.id,
+                        nodeKey: "footnote/1",
+                        parentNodeID: "uitest-structure-root",
+                        ordinal: 1,
+                        kind: "footnote",
+                        textContent: "Synthetic defined-term footnote",
+                        payloadJSON: #"{"noteID":"1"}"#
+                    ),
+                    DocumentStructureNodeRecord(
+                        id: "uitest-structure-comment",
+                        documentID: document.id,
+                        revisionID: revision.id,
+                        nodeKey: "comment/1",
+                        parentNodeID: "uitest-structure-root",
+                        ordinal: 2,
+                        kind: "comment",
+                        textContent: "Synthetic reviewer comment"
+                    ),
+                ]
+                try store.documentStructure.replaceStructure(
+                    documentID: document.id,
+                    revisionID: revision.id,
+                    nodes: structureNodes,
+                    edges: [
+                        DocumentStructureEdgeRecord(
+                            id: "uitest-structure-edge-footnote",
+                            matterID: matterID,
+                            fromNodeID: "uitest-structure-footnote",
+                            toNodeID: "uitest-structure-body",
+                            kind: "anchor_of"
+                        ),
+                        DocumentStructureEdgeRecord(
+                            id: "uitest-structure-edge-comment",
+                            matterID: matterID,
+                            fromNodeID: "uitest-structure-comment",
+                            toNodeID: "uitest-structure-body",
+                            kind: "anchor_of"
+                        ),
+                    ]
+                )
                 documentID = document.id
             }
 

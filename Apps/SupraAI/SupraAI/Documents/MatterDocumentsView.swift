@@ -1028,6 +1028,7 @@ struct DocumentChronologySheet: View {
 struct DocumentPreviewView: View {
     let model: DocumentPreviewModel
     let onClose: () -> Void
+    @State private var showingStructure = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1037,6 +1038,22 @@ struct DocumentPreviewView: View {
                     Text(model.locatorDisplay).font(.supraSubheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if !model.structureNodes.isEmpty {
+                    Button {
+                        showingStructure.toggle()
+                    } label: {
+                        Label(
+                            showingStructure ? "Show Document" : "Extraction Structure",
+                            systemImage: showingStructure
+                                ? "doc.text"
+                                : "point.3.connected.trianglepath.dotted"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help(showingStructure ? "Return to the document preview" : "Inspect extracted nodes and relationships")
+                    .accessibilityIdentifier("documentPreview.structureToggle")
+                }
                 Button("Done", action: onClose).keyboardShortcut(.defaultAction)
             }
             .padding()
@@ -1062,9 +1079,19 @@ struct DocumentPreviewView: View {
                 .accessibilityIdentifier("documentPreview.revisionNotice")
             }
             Divider()
-            body(for: model.kind)
+            Group {
+                if showingStructure {
+                    DocumentStructurePreviewView(
+                        nodes: model.structureNodes,
+                        edges: model.structureEdges
+                    )
+                } else {
+                    body(for: model.kind)
+                }
+            }
                 .frame(minWidth: 560, minHeight: 460)
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("documentPreview")
     }
 
@@ -1153,6 +1180,162 @@ struct DocumentPreviewView: View {
         }
         .padding(.horizontal).padding(.vertical, 8)
         .background(Color.yellow.opacity(0.12))
+    }
+}
+
+/// A deliberately compact inspection view for the persisted extraction graph.
+/// Legal-document structure is presented as a hierarchy first and relationships
+/// second: the same mental model as clauses/notes/anchors, without exposing raw
+/// database identifiers or displacing the ordinary document preview.
+struct DocumentStructurePreviewView: View {
+    let nodes: [DocumentStructurePreviewNode]
+    let edges: [DocumentStructurePreviewEdge]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Label("Extraction Structure", systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.supraSubheadline.weight(.semibold))
+                Spacer()
+                Text("\(nodes.count) nodes · \(edges.count) relationships")
+                    .font(.supraCaption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.accentColor.opacity(0.07))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("documentPreview.structureSummary")
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(nodes) { node in
+                        nodeRow(node)
+                        Divider().padding(.leading, 16 + indentation(for: node))
+                    }
+
+                    if !edges.isEmpty {
+                        Text("Relationships")
+                            .font(.supraSubheadline.weight(.semibold))
+                            .padding(.horizontal, 16)
+                            .padding(.top, 18)
+                            .padding(.bottom, 8)
+
+                        ForEach(edges) { edge in
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.caption)
+                                    .foregroundStyle(Color.accentColor)
+                                Text(prettyKind(edge.kind))
+                                    .font(.supraCaption.weight(.semibold))
+                                Text("\(edge.fromNodeKey) → \(edge.toNodeKey)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 6)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(edge.display)
+                            .accessibilityIdentifier(
+                                "documentPreview.structure.edge.\(edge.kind).\(edge.fromNodeKey).\(edge.toNodeKey)"
+                            )
+                        }
+                    }
+                }
+                .padding(.bottom, 16)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func nodeRow(_ node: DocumentStructurePreviewNode) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Capsule()
+                .fill(node.depth == 0 ? Color.accentColor : Color.accentColor.opacity(0.38))
+                .frame(width: 3, height: node.depth == 0 ? 34 : 24)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(prettyKind(node.kind))
+                        .font(.supraCaption.weight(.semibold))
+                        .foregroundStyle(node.depth == 0 ? Color.primary : Color.secondary)
+                    Text(node.nodeKey)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Spacer(minLength: 8)
+                    if let range = rangeText(node) {
+                        Text(range)
+                            .font(.supraCaption.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+
+                if let text = node.textContent, !text.isEmpty {
+                    Text(text)
+                        .font(.supraBody)
+                        .lineLimit(4)
+                        .textSelection(.enabled)
+                }
+
+                if let payload = node.payloadJSON, !payload.isEmpty {
+                    Text(prettyPayload(payload))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(6)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .padding(.leading, 16 + indentation(for: node))
+        .padding(.trailing, 16)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(node.depth == 0 ? Color.accentColor.opacity(0.035) : Color.clear)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(prettyKind(node.kind)): \(node.nodeKey)")
+        .accessibilityValue(accessibilityValue(node))
+        .accessibilityIdentifier("documentPreview.structure.node.\(node.nodeKey)")
+    }
+
+    private func indentation(for node: DocumentStructurePreviewNode) -> CGFloat {
+        CGFloat(min(node.depth, 8)) * 14
+    }
+
+    private func rangeText(_ node: DocumentStructurePreviewNode) -> String? {
+        guard let start = node.charStart, let end = node.charEnd else { return nil }
+        return "chars \(start)–\(end)"
+    }
+
+    private func prettyKind(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "_", with: " ")
+            .split(separator: " ")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    private func prettyPayload(_ raw: String) -> String {
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              JSONSerialization.isValidJSONObject(object),
+              let formatted = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
+              let string = String(data: formatted, encoding: .utf8) else { return raw }
+        return string
+    }
+
+    private func accessibilityValue(_ node: DocumentStructurePreviewNode) -> String {
+        [
+            node.textContent,
+            node.payloadJSON,
+            rangeText(node),
+            node.parentNodeKey.map { "Parent: \($0)" },
+        ]
+        .compactMap { $0 }
+        .joined(separator: ". ")
     }
 }
 
