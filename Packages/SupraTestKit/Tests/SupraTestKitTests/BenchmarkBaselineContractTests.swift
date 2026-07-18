@@ -21,6 +21,28 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         var proposal: String
     }
 
+    private struct OCRSelectionKeys: Decodable {
+        struct Candidate: Decodable {
+            var id: String
+            var origin: String
+            var text: String
+            var confidence: Double?
+            var boundingBoxesJSON: String?
+        }
+
+        struct Case: Decodable {
+            var id: String
+            var embedded: Candidate
+            var ocr: Candidate
+            var expectedSelectedOrigin: String
+            var expectedNeedsReview: Bool
+        }
+
+        var schemaVersion: Int
+        var syntheticDataDeclaration: String
+        var cases: [Case]
+    }
+
     func testFrozenBaselineMatchesCurrentHarnessFixturesAndThresholdLedger() throws {
         // T-BEN-05 expected RED: TestData/Benchmarks and its frozen baseline /
         // threshold-proposal manifest do not exist yet.
@@ -75,6 +97,36 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         XCTAssertEqual(try measuredValue("B-ISO-01", "cross_matter_leak_count", in: baseline), 0)
         XCTAssertEqual(try measuredValue("B-REC-01", "successful_recovery_rate", in: baseline), 1)
         XCTAssertEqual(try measuredValue("B-REC-01", "duplicate_work_rate", in: baseline), 0)
+
+        // B-OCR-01/B-OCR-02 expected RED: the frozen M2 baseline still reports
+        // both metrics n/a because policy-v1 benchmark observations do not exist.
+        XCTAssertEqual(try measuredValue("B-OCR-01", "selection_accuracy", in: baseline), 1)
+        XCTAssertEqual(try measuredValue("B-OCR-02", "false_clean_count", in: baseline), 0)
+        XCTAssertGreaterThanOrEqual(try measuredValue("B-OCR-02", "brier_score", in: baseline), 0)
+        XCTAssertLessThanOrEqual(try measuredValue("B-OCR-02", "brier_score", in: baseline), 1)
+        XCTAssertGreaterThanOrEqual(try measuredValue("B-OCR-02", "expected_calibration_error", in: baseline), 0)
+        XCTAssertLessThanOrEqual(try measuredValue("B-OCR-02", "expected_calibration_error", in: baseline), 1)
+    }
+
+    func testBOCRKeysAreSyntheticCompleteAndExerciseBothOutcomes() throws {
+        let keyURL = repoRoot().appendingPathComponent("TestData/Benchmarks/ocr-selection-keys.json")
+        let keys = try JSONDecoder().decode(OCRSelectionKeys.self, from: Data(contentsOf: keyURL))
+
+        XCTAssertEqual(keys.schemaVersion, 1)
+        XCTAssertTrue(keys.syntheticDataDeclaration.lowercased().contains("synthetic"))
+        XCTAssertGreaterThanOrEqual(keys.cases.count, 4)
+        XCTAssertEqual(Set(keys.cases.map(\.id)).count, keys.cases.count)
+        XCTAssertEqual(Set(keys.cases.map(\.expectedSelectedOrigin)), ["embedded_pdf", "ocr"])
+        XCTAssertTrue(keys.cases.contains { $0.expectedNeedsReview })
+        XCTAssertTrue(keys.cases.contains { !$0.expectedNeedsReview })
+        for key in keys.cases {
+            XCTAssertEqual(key.embedded.origin, "embedded_pdf")
+            XCTAssertEqual(key.ocr.origin, "ocr")
+            XCTAssertFalse(key.embedded.text.isEmpty)
+            XCTAssertFalse(key.ocr.text.isEmpty)
+            XCTAssertNotNil(key.ocr.confidence)
+            XCTAssertNotNil(key.ocr.boundingBoxesJSON)
+        }
     }
 
     private func measuredValue(_ metricID: String, _ name: String, in report: BenchmarkReport) throws -> Double {

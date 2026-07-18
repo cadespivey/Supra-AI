@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "syntheticDataDeclaration": "Every candidate is fictional synthetic benchmark text and contains no client data.",
+  "cases": [
+    {
+      "id": "longer-low-confidence-garbled",
+      "embedded": {
+        "id": "embedded-payment-term",
+        "origin": "embedded_pdf",
+        "text": "PAYMENT DUE 30 DAYS"
+      },
+      "ocr": {
+        "id": "ocr-longer-garbled",
+        "origin": "ocr",
+        "text": "@@@@ PAYMENT ??? DUE 30 DAYS ##### duplicated duplicated duplicated",
+        "confidence": 0.21,
+        "boundingBoxesJSON": "[{\"confidence\":0.12},{\"confidence\":0.18},{\"confidence\":0.21}]"
+      },
+      "expectedSelectedOrigin": "embedded_pdf",
+      "expectedNeedsReview": false
+    },
+    {
+      "id": "multi-criterion-quality-win",
+      "embedded": {
+        "id": "embedded-poor-quality",
+        "origin": "embedded_pdf",
+        "text": "%%%% datum datum datum"
+      },
+      "ocr": {
+        "id": "ocr-two-quality-wins",
+        "origin": "ocr",
+        "text": "Payment is due thirty days after receipt of the verified invoice.",
+        "confidence": 0.94,
+        "boundingBoxesJSON": "[{\"confidence\":0.93},{\"confidence\":0.95},{\"confidence\":0.94}]"
+      },
+      "expectedSelectedOrigin": "ocr",
+      "expectedNeedsReview": false
+    },
+    {
+      "id": "both-candidates-poor",
+      "embedded": {
+        "id": "embedded-sparse",
+        "origin": "embedded_pdf",
+        "text": "x"
+      },
+      "ocr": {
+        "id": "ocr-sparse-garbled",
+        "origin": "ocr",
+        "text": "## ?? @@",
+        "confidence": 0.19,
+        "boundingBoxesJSON": "[{\"confidence\":0.11},{\"confidence\":0.18}]"
+      },
+      "expectedSelectedOrigin": "embedded_pdf",
+      "expectedNeedsReview": true
+    },
+    {
+      "id": "sparse-embedded-high-quality-ocr",
+      "embedded": {
+        "id": "embedded-four-char-noise",
+        "origin": "embedded_pdf",
+        "text": "N0!S"
+      },
+      "ocr": {
+        "id": "ocr-high-quality",
+        "origin": "ocr",
+        "text": "The inspected premises show active water intrusion above Unit 2C. Repair should begin after written notice and verified access.",
+        "confidence": 0.97,
+        "boundingBoxesJSON": "[{\"confidence\":0.96},{\"confidence\":0.98},{\"confidence\":0.97}]"
+      },
+      "expectedSelectedOrigin": "ocr",
+      "expectedNeedsReview": false
+    }
+  ]
+}

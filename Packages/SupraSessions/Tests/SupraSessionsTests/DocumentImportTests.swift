@@ -248,6 +248,129 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertFalse(chunks.contains { $0.normalizedText.contains("EMBEDDED-A1") })
     }
 
+    func testTOCR01LongerLowConfidenceGarbledOCRCannotReplaceEmbeddedText() async throws {
+        // T-OCR-01 expected RED: policy v0 selects the longer OCR string even
+        // when confidence is below threshold and the candidate is garbled.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic longer-worse OCR")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/longer-worse-ocr.pdf")
+        try FileManager.default.createDirectory(
+            at: pdfURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let embeddedText = "PAYMENT DUE 30 DAYS"
+        let garbledOCR = "@@@@ PAYMENT ??? DUE 30 DAYS ##### duplicated duplicated duplicated"
+        try makePDF(at: pdfURL, pages: [.text(embeddedText)])
+
+        let extraction = ExtractionService(extractors: [
+            .pdf: PDFExtractor(lowTextPerPageThreshold: 1_000)
+        ])
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            extraction: extraction,
+            ocr: MockOCRService(pageResults: [
+                0: OCRTextResult(text: garbledOCR, confidence: 0.21)
+            ])
+        )
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let selectedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertEqual(selectedPart.normalizedText, embeddedText)
+        XCTAssertFalse(
+            selectedPart.normalizedText.contains("duplicated duplicated duplicated"),
+            "the exact longer garbled OCR value must be absent from the selected part"
+        )
+        let revisions = try store.documentRevisions.fetchRevisions(documentID: document.id, partIndex: 0)
+        XCTAssertEqual(revisions.first { $0.origin == "ocr" }?.text, garbledOCR)
+    }
+
+    func testTOCR03BothPoorCandidatesPersistAndRouteToSelectionReview() async throws {
+        // T-OCR-03 expected RED: both candidates persist after M3-W1, but the
+        // document has no comparative candidate-quality warning from policy v1.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic both-poor OCR")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/both-poor-ocr.pdf")
+        try FileManager.default.createDirectory(
+            at: pdfURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try makePDF(at: pdfURL, pages: [.text("x")])
+
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            extraction: ExtractionService(extractors: [
+                .pdf: PDFExtractor(lowTextPerPageThreshold: 1_000)
+            ]),
+            ocr: MockOCRService(pageResults: [
+                0: OCRTextResult(text: "## ?? @@", confidence: 0.19)
+            ])
+        )
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(document.status, MatterDocumentStatus.needsReview.rawValue)
+        let warningsJSON = try XCTUnwrap(document.extractionWarningsJSON)
+        let warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        XCTAssertTrue(
+            warnings.contains { $0.contains("OCR candidate quality unresolved") },
+            "the warning must identify comparative selection quality; got \(warnings)"
+        )
+        XCTAssertEqual(
+            try store.documentRevisions.fetchRevisions(documentID: document.id, partIndex: 0).count,
+            2
+        )
+    }
+
+    func testTOCR04HighConfidenceOCRWinsAndPersistsPolicyV1Decision() async throws {
+        // T-OCR-04 expected RED: longer-wins selects the OCR text, but the
+        // persisted decision is still policy v0 and contains no v1 scores.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic legitimate OCR win")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/high-quality-ocr.pdf")
+        try FileManager.default.createDirectory(
+            at: pdfURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try makePDF(at: pdfURL, pages: [.text("N0!S")])
+        let ocrText = "The inspected premises show active water intrusion above Unit 2C. "
+            + "Repair should begin after written notice and verified access."
+
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            extraction: ExtractionService(extractors: [
+                .pdf: PDFExtractor(lowTextPerPageThreshold: 1_000)
+            ]),
+            ocr: MockOCRService(pageResults: [
+                0: OCRTextResult(
+                    text: ocrText,
+                    confidence: 0.97,
+                    boundingBoxesJSON: #"[{"confidence":0.97},{"confidence":0.96}]"#
+                )
+            ])
+        )
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let selectedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertEqual(selectedPart.normalizedText, ocrText)
+        let selection = try XCTUnwrap(
+            store.documentRevisions.fetchSelections(documentID: document.id, partIndex: 0).last
+        )
+        XCTAssertEqual(selection.policyVersion, 1)
+        let decision = try JSONDecoder().decode(
+            OCRCandidateSelection.Decision.self,
+            from: Data(selection.decisionJSON.utf8)
+        )
+        XCTAssertEqual(decision.selectedRevisionID, selectedPart.currentRevisionID)
+        XCTAssertEqual(decision.chosenOrigin, .ocr)
+        XCTAssertFalse(decision.scores.isEmpty)
+        XCTAssertFalse(decision.needsReview)
+    }
+
     func testEmptyOCRLeavesDocumentInNeedsReview() async throws {
         // Expected RED: assertion failure — observed `extractionStatus == .extracted`
         // and `status == .indexing`; empty OCR output is laundered into a successful
