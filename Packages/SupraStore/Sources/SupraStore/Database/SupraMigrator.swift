@@ -1498,6 +1498,25 @@ public enum SupraMigrator {
             try backfillDocumentRelations(db)
         }
 
+        migrator.registerMigration("v066_add_document_source_lineage") { db in
+            try db.alter(table: "document_source_sets") { table in
+                table.add(column: "packing_report_json", .text)
+                table.add(column: "embedding_model_id", .text)
+                table.add(column: "embedding_model_revision", .text)
+                table.add(column: "chunker_version", .integer)
+                table.add(column: "retrieval_config_json", .text)
+                table.add(column: "corpus_snapshot_hash", .text)
+                table.add(column: "message_id", .text)
+                    .references("messages", onDelete: .setNull)
+            }
+            try db.create(
+                index: "idx_document_source_sets_message",
+                on: "document_source_sets",
+                columns: ["message_id"],
+                unique: true
+            )
+        }
+
         return migrator
     }
 

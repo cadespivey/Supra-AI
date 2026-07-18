@@ -8,6 +8,8 @@ public enum DocumentSourceRepositoryError: Error, LocalizedError, Equatable, Sen
     case sourceMatterMismatch(String)
     case chunkScopeMismatch(String)
     case revisionScopeMismatch(String)
+    case messageNotFound(String)
+    case messageMatterMismatch(String)
 
     public var errorDescription: String? {
         switch self {
@@ -21,6 +23,10 @@ public enum DocumentSourceRepositoryError: Error, LocalizedError, Equatable, Sen
             "Document chunk \(id) does not belong to the cited document."
         case .revisionScopeMismatch(let id):
             "Document revision \(id) does not belong to the cited document."
+        case .messageNotFound(let id):
+            "Message \(id) was not found."
+        case .messageMatterMismatch(let id):
+            "Message \(id) does not belong to a chat in the source set's matter."
         }
     }
 }
@@ -44,10 +50,34 @@ public final class DocumentSourceRepository: @unchecked Sendable {
         scopeJSON: String = "{}",
         retrievalQuery: String? = nil,
         retrievalDepth: String? = nil,
+        packingReportJSON: String? = nil,
+        embeddingModelID: String? = nil,
+        embeddingModelRevision: String? = nil,
+        chunkerVersion: Int? = nil,
+        retrievalConfigJSON: String? = nil,
+        corpusSnapshotHash: String? = nil,
+        messageID: String? = nil,
         structuredOutputVersionID: String? = nil,
         status: DocumentSourceSetStatus = .pending
     ) throws -> DocumentSourceSetRecord {
         try writer.write { db in
+            if let messageID {
+                guard let message = try MessageRecord.fetchOne(db, key: messageID) else {
+                    throw DocumentSourceRepositoryError.messageNotFound(messageID)
+                }
+                guard let chat = try ChatRecord.fetchOne(db, key: message.chatID),
+                      chat.scope == "matter",
+                      chat.matterID == matterID else {
+                    throw DocumentSourceRepositoryError.messageMatterMismatch(messageID)
+                }
+                if let existing = try DocumentSourceSetRecord.fetchOne(
+                    db,
+                    sql: "SELECT * FROM document_source_sets WHERE message_id = ?",
+                    arguments: [messageID]
+                ) {
+                    return existing
+                }
+            }
             let record = DocumentSourceSetRecord(
                 matterID: matterID,
                 structuredOutputVersionID: structuredOutputVersionID,
@@ -55,7 +85,14 @@ public final class DocumentSourceRepository: @unchecked Sendable {
                 mode: mode.rawValue,
                 scopeJSON: scopeJSON,
                 retrievalQuery: retrievalQuery,
-                retrievalDepth: retrievalDepth
+                retrievalDepth: retrievalDepth,
+                packingReportJSON: packingReportJSON,
+                embeddingModelID: embeddingModelID,
+                embeddingModelRevision: embeddingModelRevision,
+                chunkerVersion: chunkerVersion,
+                retrievalConfigJSON: retrievalConfigJSON,
+                corpusSnapshotHash: corpusSnapshotHash,
+                messageID: messageID
             )
             try record.insert(db)
             return record
@@ -99,6 +136,16 @@ public final class DocumentSourceRepository: @unchecked Sendable {
                 ORDER BY created_at DESC LIMIT 1
                 """,
                 arguments: [structuredOutputVersionID, DocumentSourceSetStatus.attached.rawValue]
+            )
+        }
+    }
+
+    public func fetchSourceSet(messageID: String) throws -> DocumentSourceSetRecord? {
+        try writer.read { db in
+            try DocumentSourceSetRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM document_source_sets WHERE message_id = ? LIMIT 1",
+                arguments: [messageID]
             )
         }
     }

@@ -253,11 +253,42 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             labels: material.labelByEvidence
         )
         let outputID = UUID().uuidString
+        let packingReport = DocumentSourceLineageBuilder.report(
+            summary: nil,
+            candidates: material.sources.enumerated().map { index, source in
+                let label = material.labelByEvidence[source.reference] ?? "E\(index + 1)"
+                return .init(
+                    sourceID: Self.evidenceSourceID(matterID: request.matterID, reference: source.reference),
+                    label: label,
+                    rank: index + 1,
+                    originalText: source.excerpt,
+                    packedText: source.excerpt
+                )
+            }
+        )
+        let lineage = try DocumentSourceLineageBuilder.make(
+            store: store,
+            matterID: request.matterID,
+            scope: RetrievalScope(documentIDs: request.scope.documentIDs),
+            configuration: DocumentRetrievalConfiguration(
+                mode: DocumentSourceSetMode.exhaustive.rawValue,
+                candidateLimit: engineResult.coverage.eligibleMemberCount,
+                packedLimit: material.sources.count,
+                characterBudget: request.characterBudget
+            ),
+            packingReport: packingReport
+        )
         let sourceSet = DocumentSourceSetRecord(
             matterID: request.matterID,
             mode: DocumentSourceSetMode.exhaustive.rawValue,
             scopeJSON: try Self.canonicalJSON(request.scope),
-            retrievalQuery: request.query
+            retrievalQuery: request.query,
+            packingReportJSON: lineage.packingReportJSON,
+            embeddingModelID: lineage.embeddingModelID,
+            embeddingModelRevision: lineage.embeddingModelRevision,
+            chunkerVersion: lineage.chunkerVersion,
+            retrievalConfigJSON: lineage.retrievalConfigJSON,
+            corpusSnapshotHash: lineage.corpusSnapshotHash
         )
         let outputSources = material.sources.enumerated().map { index, source in
             DocumentOutputSourceRecord(
@@ -302,6 +333,14 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             omissions: reconciliation.omissions,
             metrics: reconciliation.metrics
         )
+    }
+
+    private static func evidenceSourceID(
+        matterID: String,
+        reference: CorpusAnalysisEvidenceReference
+    ) -> String {
+        [matterID, reference.documentID, reference.revisionID, reference.locatorJSON]
+            .joined(separator: "/")
     }
 
     private static func prompt(

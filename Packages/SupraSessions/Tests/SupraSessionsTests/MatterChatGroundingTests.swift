@@ -488,15 +488,38 @@ final class MatterChatGroundingTests: XCTestCase {
         text: String
     ) async throws {
         let document = try insertDocument(store, matterID, folderID: nil, name: name)
-        try store.documentIndex.replaceParts(documentID: document.id, parts: [
-            DocumentPagePartRecord(
-                documentID: document.id,
-                partIndex: 0,
-                sourceKind: DocumentSourceKind.text.rawValue,
-                normalizedText: text,
-                charCount: text.count
-            )
-        ])
+        let revision = DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "synthetic-grounding-\(document.id)",
+            origin: "parser",
+            method: "synthetic",
+            text: text,
+            charCount: text.count
+        )
+        let selection = DocumentPartSelectionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "synthetic-grounding-selection-\(document.id)",
+            selectedBy: "system",
+            policyVersion: 1,
+            decisionJSON: #"{"rule":"synthetic_fixture"}"#
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [
+                DocumentPagePartRecord(
+                    documentID: document.id,
+                    partIndex: 0,
+                    sourceKind: DocumentSourceKind.text.rawValue,
+                    normalizedText: text,
+                    charCount: text.count
+                ),
+            ],
+            revisions: [revision],
+            selections: [selection]
+        )
         _ = try await DocumentIndexingService(store: store, embedder: nil).indexDocument(documentID: document.id)
     }
 

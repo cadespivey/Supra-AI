@@ -44,6 +44,10 @@ public struct TokenPackingReport: Codable, Equatable, Sendable {
     public var omissionReason: String?
     public var cannotPackReason: String?
     public var overflowRetryCount: Int
+    /// Token count for each cumulative serialized prefix considered by the
+    /// budgeter. Persisted candidate reports use adjacent deltas for per-item
+    /// accounting while retaining the authoritative whole-packet total.
+    public var cumulativeInputTokenCounts: [Int]
 
     public init(
         countMethod: TokenCountMethod,
@@ -54,7 +58,8 @@ public struct TokenPackingReport: Codable, Equatable, Sendable {
         omittedItemCount: Int,
         omissionReason: String? = nil,
         cannotPackReason: String? = nil,
-        overflowRetryCount: Int = 0
+        overflowRetryCount: Int = 0,
+        cumulativeInputTokenCounts: [Int] = []
     ) {
         self.countMethod = countMethod
         self.availableInputTokens = availableInputTokens
@@ -65,10 +70,145 @@ public struct TokenPackingReport: Codable, Equatable, Sendable {
         self.omissionReason = omissionReason
         self.cannotPackReason = cannotPackReason
         self.overflowRetryCount = overflowRetryCount
+        self.cumulativeInputTokenCounts = cumulativeInputTokenCounts
     }
 
     public var canPack: Bool {
         consideredItemCount == 0 || packedItemCount > 0
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        countMethod = try container.decode(TokenCountMethod.self, forKey: .countMethod)
+        availableInputTokens = try container.decode(Int.self, forKey: .availableInputTokens)
+        selectedInputTokens = try container.decode(Int.self, forKey: .selectedInputTokens)
+        consideredItemCount = try container.decode(Int.self, forKey: .consideredItemCount)
+        packedItemCount = try container.decode(Int.self, forKey: .packedItemCount)
+        omittedItemCount = try container.decode(Int.self, forKey: .omittedItemCount)
+        omissionReason = try container.decodeIfPresent(String.self, forKey: .omissionReason)
+        cannotPackReason = try container.decodeIfPresent(String.self, forKey: .cannotPackReason)
+        overflowRetryCount = try container.decodeIfPresent(Int.self, forKey: .overflowRetryCount) ?? 0
+        cumulativeInputTokenCounts = try container.decodeIfPresent(
+            [Int].self,
+            forKey: .cumulativeInputTokenCounts
+        ) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case countMethod
+        case availableInputTokens
+        case selectedInputTokens
+        case consideredItemCount
+        case packedItemCount
+        case omittedItemCount
+        case omissionReason
+        case cannotPackReason
+        case overflowRetryCount
+        case cumulativeInputTokenCounts
+    }
+}
+
+public enum DocumentPackingDisposition: String, Codable, Hashable, Sendable {
+    case considered
+    case packed
+    case truncated
+    case omitted
+    case deferred
+}
+
+/// Durable accounting for one candidate considered while assembling a grounded
+/// evidence packet. `originalTokenCount` is the candidate's contribution before
+/// any per-source truncation; `packedTokenCount` is zero when it did not enter
+/// the serialized packet.
+public struct DocumentPackingCandidate: Codable, Equatable, Sendable {
+    public var sourceID: String
+    public var label: String
+    public var rank: Int
+    public var disposition: DocumentPackingDisposition
+    public var reason: String
+    public var originalTokenCount: Int
+    public var packedTokenCount: Int
+
+    public init(
+        sourceID: String,
+        label: String,
+        rank: Int,
+        disposition: DocumentPackingDisposition,
+        reason: String,
+        originalTokenCount: Int,
+        packedTokenCount: Int
+    ) {
+        self.sourceID = sourceID
+        self.label = label
+        self.rank = rank
+        self.disposition = disposition
+        self.reason = reason
+        self.originalTokenCount = originalTokenCount
+        self.packedTokenCount = packedTokenCount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceID = "source_id"
+        case label
+        case rank
+        case disposition
+        case reason
+        case originalTokenCount = "original_token_count"
+        case packedTokenCount = "packed_token_count"
+    }
+}
+
+/// Canonical, queryable record of every candidate in a grounded packet. This is
+/// stored on `document_source_sets`; prompt text retains only the visible
+/// truncation marker needed by the verifier.
+public struct DocumentPackingReport: Codable, Equatable, Sendable {
+    public var schemaVersion: Int
+    public var countMethod: TokenCountMethod
+    public var availableInputTokens: Int
+    public var selectedInputTokens: Int
+    public var overflowRetryCount: Int
+    public var candidates: [DocumentPackingCandidate]
+
+    public init(
+        schemaVersion: Int = 1,
+        countMethod: TokenCountMethod,
+        availableInputTokens: Int,
+        selectedInputTokens: Int,
+        overflowRetryCount: Int = 0,
+        candidates: [DocumentPackingCandidate]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.countMethod = countMethod
+        self.availableInputTokens = availableInputTokens
+        self.selectedInputTokens = selectedInputTokens
+        self.overflowRetryCount = overflowRetryCount
+        self.candidates = candidates
+    }
+
+    public var packedSourceIDs: [String] {
+        candidates.compactMap { candidate in
+            switch candidate.disposition {
+            case .packed, .truncated:
+                candidate.sourceID
+            case .considered, .omitted, .deferred:
+                nil
+            }
+        }
+    }
+
+    public func canonicalJSON() throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(self), as: UTF8.self)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case countMethod = "count_method"
+        case availableInputTokens = "available_input_tokens"
+        case selectedInputTokens = "selected_input_tokens"
+        case overflowRetryCount = "overflow_retry_count"
+        case candidates
     }
 }
 
@@ -133,7 +273,8 @@ public enum TokenBudgeter {
             omissionReason: omittedCount > 0 ? "context_budget" : nil,
             cannotPackReason: serializedPackets.isEmpty || packedCount > 0
                 ? nil
-                : "required_packet_exceeds_context"
+                : "required_packet_exceeds_context",
+            cumulativeInputTokenCounts: counts
         )
     }
 }

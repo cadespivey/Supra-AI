@@ -154,6 +154,11 @@ struct GroundedChatContext: Sendable, Equatable {
     /// In-memory M8-W1 accounting. M8-W2 persists the candidate-level report
     /// with the message-linked source set.
     var packingReport: TokenPackingReport? = nil
+    /// Candidate-level report and exact retrieval inputs persisted with a
+    /// successful grounded turn's message-linked source set.
+    var sourceSetPackingReport: DocumentPackingReport? = nil
+    var sourceScope: RetrievalScope? = nil
+    var retrievalConfiguration: DocumentRetrievalConfiguration? = nil
 }
 
 /// A resolvable pointer behind an inline `[S#]` matter-document citation: enough to
@@ -161,6 +166,8 @@ struct GroundedChatContext: Sendable, Equatable {
 struct GroundedSourceRef: Sendable, Equatable {
     var label: String          // "S1", "S2", …
     var sourceID: String
+    var chunkID: String
+    var revisionID: String?
     var documentID: String
     var documentName: String
     var locator: DocumentSourceLocator
@@ -329,6 +336,8 @@ final class MatterChatDocumentGrounding {
             GroundedSourceRef(
                 label: "S\(index + 1)",
                 sourceID: "\(matterID)/\(retrieved.chunkID)",
+                chunkID: retrieved.chunkID,
+                revisionID: retrieved.revisionID,
                 documentID: retrieved.documentID,
                 documentName: retrieved.documentName,
                 locator: retrieved.locator,
@@ -371,6 +380,33 @@ final class MatterChatDocumentGrounding {
             options: options,
             runtimeClient: runtimeClient
         )
+        let sourceSetPackingReport = DocumentSourceLineageBuilder.report(
+            summary: packingReport,
+            candidates: sources.enumerated().map { index, source in
+                .init(
+                    sourceID: source.sourceID,
+                    label: source.label,
+                    rank: index,
+                    originalText: source.text,
+                    packedText: source.packedText
+                )
+            }
+        )
+        let retrievalConfiguration = DocumentRetrievalConfiguration(
+            mode: DocumentSourceSetMode.autoSource.rawValue,
+            depth: effectiveDepth.rawValue,
+            candidateLimit: effectiveDepth == .fast
+                ? Self.fastPackedSourceLimit
+                : DocumentRerank.candidatePoolSize,
+            packedLimit: effectiveDepth == .fast
+                ? Self.fastPackedSourceLimit
+                : Self.deepPackedSourceLimit,
+            maxPerDocument: DocumentRetrievalService.defaultMaxPerDocument,
+            semanticFloor: effectiveDepth == .fast
+                ? DocumentRetrievalService.fastMinSemanticSimilarity
+                : DocumentRetrievalService.defaultMinSemanticSimilarity,
+            rrfK: DocumentRetrievalService.rrfK
+        )
         if packingReport.packedItemCount < sources.count {
             sources = Array(sources.prefix(packingReport.packedItemCount))
             sourceRefs = Array(sourceRefs.prefix(packingReport.packedItemCount))
@@ -382,7 +418,10 @@ final class MatterChatDocumentGrounding {
                 trailer: nil,
                 scopeFullyIndexed: result?.readiness.isFullyReady ?? true,
                 depth: effectiveDepth,
-                packingReport: packingReport
+                packingReport: packingReport,
+                sourceSetPackingReport: sourceSetPackingReport,
+                sourceScope: scope,
+                retrievalConfiguration: retrievalConfiguration
             )
         }
 
@@ -397,7 +436,10 @@ final class MatterChatDocumentGrounding {
             sources: sourceRefs,
             scopeFullyIndexed: result?.readiness.isFullyReady ?? true,
             depth: effectiveDepth,
-            packingReport: packingReport
+            packingReport: packingReport,
+            sourceSetPackingReport: sourceSetPackingReport,
+            sourceScope: scope,
+            retrievalConfiguration: retrievalConfiguration
         )
     }
 

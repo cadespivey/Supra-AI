@@ -82,7 +82,7 @@ final class DocumentSourceLineageMigrationTests: XCTestCase {
             corpusSnapshotHash: "snapshot-nondefault",
             messageID: message.id
         )
-        XCTAssertEqual(sources.fetchSourceSet(messageID: message.id)?.id, created.id)
+        XCTAssertEqual(try sources.fetchSourceSet(messageID: message.id)?.id, created.id)
         XCTAssertEqual(created.messageID, message.id)
         XCTAssertEqual(created.chunkerVersion, 2)
 

@@ -16,6 +16,7 @@ public final class DocumentQAController: ObservableObject {
     @Published public private(set) var message: String?
     @Published public private(set) var lastResult: QAResult?
     @Published public private(set) var lastPackingReport: TokenPackingReport?
+    private var sourceSetPackingReport: DocumentPackingReport?
 
     public struct QAResult: Sendable, Equatable {
         public var outputID: String
@@ -97,6 +98,7 @@ public final class DocumentQAController: ObservableObject {
         isGenerating = true
         message = nil
         lastPackingReport = nil
+        sourceSetPackingReport = nil
         defer { isGenerating = false }
 
         let isGuided = (guidedChunkIDs?.isEmpty == false)
@@ -391,6 +393,7 @@ public final class DocumentQAController: ObservableObject {
         isGenerating = true
         message = nil
         lastPackingReport = nil
+        sourceSetPackingReport = nil
         defer { isGenerating = false }
         let isGuided = (guidedChunkIDs?.isEmpty == false)
         do {
@@ -480,9 +483,46 @@ public final class DocumentQAController: ObservableObject {
     /// transaction.
     private func prepareSourceSet(prepared: [PreparedSource], scope: RetrievalScope, question: String, mode: DocumentSourceSetMode, depth: RetrievalDepth) throws -> String {
         let scopeJSON = (try? JSONEncoder().encode(scope)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let report = sourceSetPackingReport ?? DocumentSourceLineageBuilder.report(
+            summary: lastPackingReport,
+            candidates: prepared.map { item in
+                .init(
+                    sourceID: item.source.sourceID,
+                    label: item.source.label,
+                    rank: item.rank,
+                    originalText: item.source.text,
+                    packedText: item.source.packedText
+                )
+            }
+        )
+        let isGuided = mode == .guided
+        let configuration = DocumentRetrievalConfiguration(
+            mode: mode.rawValue,
+            depth: depth.rawValue,
+            candidateLimit: isGuided ? prepared.count : (depth == .fast ? Self.fastCandidatePoolSize : Self.candidatePoolSize),
+            packedLimit: isGuided ? prepared.count : (depth == .fast ? Self.fastPackedSourceLimit : Self.packedSourceLimit),
+            maxPerDocument: isGuided ? nil : DocumentRetrievalService.defaultMaxPerDocument,
+            semanticFloor: isGuided ? nil : (depth == .fast
+                ? DocumentRetrievalService.fastMinSemanticSimilarity
+                : DocumentRetrievalService.defaultMinSemanticSimilarity),
+            rrfK: isGuided ? nil : DocumentRetrievalService.rrfK
+        )
+        let lineage = try DocumentSourceLineageBuilder.make(
+            store: store,
+            matterID: matterID,
+            scope: scope,
+            configuration: configuration,
+            packingReport: report
+        )
         let sourceSet = try store.documentSources.createSourceSet(
             matterID: matterID, mode: mode, scopeJSON: scopeJSON, retrievalQuery: question,
-            retrievalDepth: depth.rawValue
+            retrievalDepth: depth.rawValue,
+            packingReportJSON: lineage.packingReportJSON,
+            embeddingModelID: lineage.embeddingModelID,
+            embeddingModelRevision: lineage.embeddingModelRevision,
+            chunkerVersion: lineage.chunkerVersion,
+            retrievalConfigJSON: lineage.retrievalConfigJSON,
+            corpusSnapshotHash: lineage.corpusSnapshotHash
         )
         let rows = prepared.map { source in
             DocumentOutputSourceRecord(
@@ -559,6 +599,18 @@ public final class DocumentQAController: ObservableObject {
             mode: mode
         )
         do {
+            sourceSetPackingReport = DocumentSourceLineageBuilder.report(
+                summary: report,
+                candidates: prepared.map { item in
+                    .init(
+                        sourceID: item.source.sourceID,
+                        label: item.source.label,
+                        rank: item.rank,
+                        originalText: item.source.text,
+                        packedText: item.source.packedText
+                    )
+                }
+            )
             return BudgetedAnswer(
                 answer: try await collect(prompt: prompt, modelID: modelID, route: route),
                 prepared: selected
@@ -587,7 +639,20 @@ public final class DocumentQAController: ObservableObject {
         report.omittedItemCount = report.consideredItemCount - selected.count
         report.omissionReason = "context_overflow_retry"
         report.overflowRetryCount = 1
+        report.cumulativeInputTokenCounts = retryReport.cumulativeInputTokenCounts
         lastPackingReport = report
+        sourceSetPackingReport = DocumentSourceLineageBuilder.report(
+            summary: report,
+            candidates: prepared.map { item in
+                .init(
+                    sourceID: item.source.sourceID,
+                    label: item.source.label,
+                    rank: item.rank,
+                    originalText: item.source.text,
+                    packedText: item.source.packedText
+                )
+            }
+        )
 
         return BudgetedAnswer(
             answer: try await collect(prompt: prompt, modelID: modelID, route: route),

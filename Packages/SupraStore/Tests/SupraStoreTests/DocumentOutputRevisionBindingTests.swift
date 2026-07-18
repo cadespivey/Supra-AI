@@ -52,9 +52,19 @@ final class DocumentOutputRevisionBindingTests: XCTestCase {
             text: "REVISION-A repeated anchor",
             charCount: 26
         ))
-        let historicalSet = try sources.createSourceSet(matterID: matter.id, mode: .autoSource)
+        let historicalSetID = "historical-pre-lineage-set"
         let historicalID = "historical-pre-lineage-source"
         try queue.write { db in
+            // Use the v060 column contract directly: the current record type
+            // intentionally includes later nullable v066 lineage columns.
+            try db.execute(
+                sql: """
+                INSERT INTO document_source_sets (
+                    id, matter_id, status, mode, scope_json, created_at
+                ) VALUES (?, ?, 'pending', 'auto_source', '{}', ?)
+                """,
+                arguments: [historicalSetID, matter.id, Date()]
+            )
             try db.execute(
                 sql: """
                 INSERT INTO document_output_sources (
@@ -64,7 +74,7 @@ final class DocumentOutputRevisionBindingTests: XCTestCase {
                 """,
                 arguments: [
                     historicalID,
-                    historicalSet.id,
+                    historicalSetID,
                     document.id,
                     #"{"source_kind":"text","char_start":0,"char_end":10}"#,
                     "REVISION-A",

@@ -120,7 +120,7 @@ Managed model downloads are bound to a repository revision and verified manifest
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v065. Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v066. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -175,6 +175,16 @@ repository:
   proposed in-scope relations name themselves as blockers for clean comparison and negative-result
   assurance. The weights, thresholds, review boundary, and B-VER key set are frozen in
   [the document relation methodology](Docs/Document-Relation-Methodology.md).
+- Source packets created by document Q&A, grounded matter chat, chronology, and exhaustive
+  analysis carry v066 lineage on `document_source_sets`: stable embedding repository/revision,
+  selected chunker version, the exact retrieval caps/floors/RRF or task budget, and a SHA-256
+  snapshot over the scoped document IDs, cited revision IDs, and index states. A canonical
+  candidate report records every considered source as packed, truncated, omitted, or deferred,
+  with reasons and token counts; the prompt retains the visible truncation marker used by the
+  fail-closed verifier. Legacy rows remain explicitly NULL/unknown. Successful grounded chat
+  turns keep the same pending packet through a nullable unique `message_id` link, validated
+  against the owning matter; packed revision-bound source rows retain the verifier result JSON,
+  while unpromoted turns create no structured output.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

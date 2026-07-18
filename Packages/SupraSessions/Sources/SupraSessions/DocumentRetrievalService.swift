@@ -26,6 +26,7 @@ public struct RetrievalScope: Codable, Sendable, Equatable {
 /// (plan §7.4).
 public struct RetrievedSource: Sendable {
     public var chunkID: String
+    public var revisionID: String? = nil
     public var documentID: String
     public var documentName: String
     public var locator: DocumentSourceLocator
@@ -93,6 +94,9 @@ public enum RetrievalDepth: String, Sendable, Equatable {
 /// (optional) local semantic similarity, with folder/tag/date/document filters,
 /// duplicate collapse, and source diversity (plan §7.4).
 public final class DocumentRetrievalService: @unchecked Sendable {
+    static let defaultMaxPerDocument = 4
+    static let defaultMinSemanticSimilarity = 0.15
+    static let fastMinSemanticSimilarity = 0.25
     private let store: SupraStore
     private let embedder: (any TextEmbedder)?
     private let maxPerDocument: Int
@@ -144,7 +148,9 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     public func retrieve(matterID: String, query: String, scope: RetrievalScope, limit: Int = 12, depth: RetrievalDepth = .deep) async throws -> RetrievalResult {
         // The fast tier trades recall for precision: a higher semantic floor keeps
         // marginally-similar chunks out of the small preliminary packet (spec §3.1).
-        let semanticFloor = depth == .fast ? max(minSemanticSimilarity, 0.25) : minSemanticSimilarity
+        let semanticFloor = depth == .fast
+            ? max(minSemanticSimilarity, Self.fastMinSemanticSimilarity)
+            : minSemanticSimilarity
         let scopeIDs = try resolveScope(matterID: matterID, scope: scope)
         let readiness = try scopeReadiness(matterID: matterID, scope: scope)
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
@@ -243,6 +249,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             seenText[textKey] = sources.count
             sources.append(RetrievedSource(
                 chunkID: chunk.id,
+                revisionID: chunk.revisionID,
                 documentID: chunk.documentID,
                 documentName: nameByID[chunk.documentID] ?? "Document",
                 locator: locator,

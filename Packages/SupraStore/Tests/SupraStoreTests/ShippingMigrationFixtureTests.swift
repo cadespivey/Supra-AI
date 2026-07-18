@@ -115,7 +115,7 @@ final class ShippingMigrationFixtureTests: XCTestCase {
 
         try migrator.migrate(queue)
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v065_create_document_relations")
+            XCTAssertEqual(try appliedMigrations(db).last, "v066_add_document_source_lineage")
             XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_import_sources"), 0)
         }
     }

@@ -1009,12 +1009,41 @@ public final class DocumentChronologyController: ObservableObject {
     private func makeSourceSet(
         prepared: [PreparedSource],
         scope: RetrievalScope
-    ) -> (set: DocumentSourceSetRecord, sources: [DocumentOutputSourceRecord]) {
+    ) throws -> (set: DocumentSourceSetRecord, sources: [DocumentOutputSourceRecord]) {
         let scopeJSON = (try? JSONEncoder().encode(scope)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let packingReport = DocumentSourceLineageBuilder.report(
+            summary: nil,
+            candidates: prepared.map { item in
+                .init(
+                    sourceID: item.source.sourceID,
+                    label: item.source.label,
+                    rank: item.rank,
+                    originalText: item.source.text,
+                    packedText: item.source.packedText
+                )
+            }
+        )
+        let lineage = try DocumentSourceLineageBuilder.make(
+            store: store,
+            matterID: matterID,
+            scope: scope,
+            configuration: DocumentRetrievalConfiguration(
+                mode: DocumentSourceSetMode.chronology.rawValue,
+                candidateLimit: maxSources,
+                packedLimit: prepared.count
+            ),
+            packingReport: packingReport
+        )
         let sourceSet = DocumentSourceSetRecord(
             matterID: matterID,
             mode: DocumentSourceSetMode.chronology.rawValue,
-            scopeJSON: scopeJSON
+            scopeJSON: scopeJSON,
+            packingReportJSON: lineage.packingReportJSON,
+            embeddingModelID: lineage.embeddingModelID,
+            embeddingModelRevision: lineage.embeddingModelRevision,
+            chunkerVersion: lineage.chunkerVersion,
+            retrievalConfigJSON: lineage.retrievalConfigJSON,
+            corpusSnapshotHash: lineage.corpusSnapshotHash
         )
         let rows = prepared.map { source in
             DocumentOutputSourceRecord(
@@ -1051,7 +1080,7 @@ public final class DocumentChronologyController: ObservableObject {
                 status: StructuredOutputStatus.draft.rawValue
             )
             : nil
-        let sourceSet = makeSourceSet(prepared: prepared, scope: scope)
+        let sourceSet = try makeSourceSet(prepared: prepared, scope: scope)
         let version = try store.structuredOutputs.createVersionWithSourceSetAtomically(
             structuredOutputID: outputID,
             newOutput: newOutput,

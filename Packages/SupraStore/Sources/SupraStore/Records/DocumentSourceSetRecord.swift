@@ -17,6 +17,16 @@ public struct DocumentSourceSetRecord: Codable, FetchableRecord, PersistableReco
     /// Which retrieval tier produced this set — "fast" (preliminary, no rerank) or
     /// "deep" (wide pool + rerank). Nil for pre-tier rows (all were deep-equivalent).
     public var retrievalDepth: String?
+    /// Canonical `DocumentPackingReport` JSON. Nil is explicit legacy/unknown.
+    public var packingReportJSON: String?
+    public var embeddingModelID: String?
+    public var embeddingModelRevision: String?
+    public var chunkerVersion: Int?
+    public var retrievalConfigJSON: String?
+    public var corpusSnapshotHash: String?
+    /// Grounded-chat packet owner. Pending sets use this unique link until a
+    /// later promotion attaches the same set to a structured output version.
+    public var messageID: String?
     public var createdAt: Date
 
     public init(
@@ -28,6 +38,13 @@ public struct DocumentSourceSetRecord: Codable, FetchableRecord, PersistableReco
         scopeJSON: String = "{}",
         retrievalQuery: String? = nil,
         retrievalDepth: String? = nil,
+        packingReportJSON: String? = nil,
+        embeddingModelID: String? = nil,
+        embeddingModelRevision: String? = nil,
+        chunkerVersion: Int? = nil,
+        retrievalConfigJSON: String? = nil,
+        corpusSnapshotHash: String? = nil,
+        messageID: String? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -38,6 +55,13 @@ public struct DocumentSourceSetRecord: Codable, FetchableRecord, PersistableReco
         self.scopeJSON = scopeJSON
         self.retrievalQuery = retrievalQuery
         self.retrievalDepth = retrievalDepth
+        self.packingReportJSON = packingReportJSON
+        self.embeddingModelID = embeddingModelID
+        self.embeddingModelRevision = embeddingModelRevision
+        self.chunkerVersion = chunkerVersion
+        self.retrievalConfigJSON = retrievalConfigJSON
+        self.corpusSnapshotHash = corpusSnapshotHash
+        self.messageID = messageID
         self.createdAt = createdAt
     }
 
@@ -50,6 +74,13 @@ public struct DocumentSourceSetRecord: Codable, FetchableRecord, PersistableReco
         case scopeJSON = "scope_json"
         case retrievalQuery = "retrieval_query"
         case retrievalDepth = "retrieval_depth"
+        case packingReportJSON = "packing_report_json"
+        case embeddingModelID = "embedding_model_id"
+        case embeddingModelRevision = "embedding_model_revision"
+        case chunkerVersion = "chunker_version"
+        case retrievalConfigJSON = "retrieval_config_json"
+        case corpusSnapshotHash = "corpus_snapshot_hash"
+        case messageID = "message_id"
         case createdAt = "created_at"
     }
 }

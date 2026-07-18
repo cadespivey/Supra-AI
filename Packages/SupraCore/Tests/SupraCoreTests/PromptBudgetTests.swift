@@ -139,4 +139,11 @@ final class PromptBudgetTests: XCTestCase {
             #"{"available_input_tokens":700,"candidates":[{"disposition":"considered","label":"S0","original_token_count":25,"packed_token_count":0,"rank":0,"reason":"retrieval_candidate","source_id":"candidate-considered"},{"disposition":"packed","label":"S1","original_token_count":300,"packed_token_count":300,"rank":1,"reason":"within_context_budget","source_id":"candidate-packed"},{"disposition":"truncated","label":"S2","original_token_count":500,"packed_token_count":320,"rank":2,"reason":"per_source_character_limit","source_id":"candidate-truncated"},{"disposition":"omitted","label":"S3","original_token_count":410,"packed_token_count":0,"rank":3,"reason":"context_budget","source_id":"candidate-omitted"},{"disposition":"deferred","label":"S4","original_token_count":390,"packed_token_count":0,"rank":4,"reason":"overflow_retry","source_id":"candidate-deferred"}],"count_method":"exact","overflow_retry_count":1,"schema_version":1,"selected_input_tokens":620}"#
         )
     }
+
+    func testTokenPackingSummaryDecodesPreCandidateAccountingJSON() throws {
+        let legacy = #"{"availableInputTokens":700,"cannotPackReason":null,"consideredItemCount":3,"countMethod":"exact","omissionReason":"context_budget","omittedItemCount":1,"overflowRetryCount":0,"packedItemCount":2,"selectedInputTokens":620}"#
+        let report = try JSONDecoder().decode(TokenPackingReport.self, from: Data(legacy.utf8))
+        XCTAssertEqual(report.packedItemCount, 2)
+        XCTAssertEqual(report.cumulativeInputTokenCounts, [])
+    }
 }

@@ -831,6 +831,7 @@ public final class GlobalChatController: ObservableObject {
             var sawFirstToken = false
             var sawTerminal = false
             var finalMetrics: RuntimeMetrics?
+            var groundingVerification: DocumentSupportReport?
 
             generationEvents: for try await event in try runtimeClient.generate(request) {
                 switch event.type {
@@ -916,6 +917,7 @@ public final class GlobalChatController: ObservableObject {
                             },
                             scopeFullyIndexed: groundingScopeFullyIndexed
                         )
+                        groundingVerification = report
                         let banner = report.flatMap(Self.documentSupportBanner) ?? """
 
                         ---
@@ -934,6 +936,14 @@ public final class GlobalChatController: ObservableObject {
                         metrics: storedMetrics(from: finalMetrics)
                     )
                     logGenerationTiming(finalMetrics, generationID: session.id)
+                    if let grounded {
+                        try persistGroundedDocumentPacket(
+                            messageID: assistant.id,
+                            question: prompt,
+                            context: grounded,
+                            verification: groundingVerification
+                        )
+                    }
                     let citations = persistSourceCitations(
                         messageID: assistant.id,
                         answer: answerText,
@@ -3384,6 +3394,65 @@ public final class GlobalChatController: ObservableObject {
         guard !records.isEmpty else { return [] }
         try? store.chats.replaceCitations(messageID: messageID, records)
         return records.map(MessageCitation.init)
+    }
+
+    /// Persists the complete grounded packet, including candidates omitted from
+    /// the prompt, under the exact assistant message. Inline citations remain a
+    /// reader convenience; this pending source set is the durable promotion and
+    /// verification record.
+    private func persistGroundedDocumentPacket(
+        messageID: String,
+        question: String,
+        context: GroundedChatContext,
+        verification: DocumentSupportReport?
+    ) throws {
+        guard let matterID = scopedMatterID,
+              !context.sources.isEmpty,
+              let packingReport = context.sourceSetPackingReport,
+              let scope = context.sourceScope,
+              let configuration = context.retrievalConfiguration else { return }
+        let lineage = try DocumentSourceLineageBuilder.make(
+            store: store,
+            matterID: matterID,
+            scope: scope,
+            configuration: configuration,
+            packingReport: packingReport
+        )
+        let sourceSet = try store.documentSources.createSourceSet(
+            matterID: matterID,
+            mode: .autoSource,
+            scopeJSON: try Self.canonicalJSON(scope),
+            retrievalQuery: question,
+            retrievalDepth: context.depth.rawValue,
+            packingReportJSON: lineage.packingReportJSON,
+            embeddingModelID: lineage.embeddingModelID,
+            embeddingModelRevision: lineage.embeddingModelRevision,
+            chunkerVersion: lineage.chunkerVersion,
+            retrievalConfigJSON: lineage.retrievalConfigJSON,
+            corpusSnapshotHash: lineage.corpusSnapshotHash,
+            messageID: messageID
+        )
+        let verificationJSON = try Self.canonicalJSON(verification?.results ?? [])
+        let rows = context.sources.enumerated().map { index, source in
+            DocumentOutputSourceRecord(
+                sourceSetID: sourceSet.id,
+                documentID: source.documentID,
+                chunkID: source.chunkID,
+                revisionID: source.revisionID,
+                citationLabel: source.label,
+                locatorJSON: source.locator.encodedJSON(),
+                excerpt: source.excerpt,
+                rank: index,
+                warningsJSON: verificationJSON
+            )
+        }
+        try store.documentSources.addOutputSources(rows)
+    }
+
+    private static func canonicalJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
 
     /// The distinct `[A#]`/`[S#]` citation labels (no brackets) present in an answer.
