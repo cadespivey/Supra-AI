@@ -1289,6 +1289,67 @@ public enum SupraMigrator {
             )
         }
 
+        migrator.registerMigration("v062_create_document_structure") { db in
+            // Legacy documents deliberately receive no fabricated tree. Their
+            // wrapper is generated lazily on the next extraction/index pass.
+            try db.create(table: "document_structure_nodes") { table in
+                table.column("id", .text).primaryKey()
+                table.column("document_id", .text)
+                    .notNull()
+                    .references("matter_documents", onDelete: .cascade)
+                table.column("revision_id", .text)
+                    .notNull()
+                    .references("document_part_revisions", onDelete: .cascade)
+                table.column("node_key", .text).notNull()
+                table.column("parent_node_id", .text)
+                    .references("document_structure_nodes", onDelete: .cascade)
+                table.column("ordinal", .integer).notNull()
+                table.column("kind", .text).notNull()
+                table.column("char_start", .integer)
+                table.column("char_end", .integer)
+                table.column("text_content", .text)
+                table.column("payload_json", .text)
+                table.column("created_at", .datetime).notNull()
+            }
+            try db.create(
+                index: "idx_document_structure_nodes_key",
+                on: "document_structure_nodes",
+                columns: ["document_id", "revision_id", "node_key"],
+                unique: true
+            )
+            try db.create(
+                index: "idx_document_structure_nodes_parent",
+                on: "document_structure_nodes",
+                columns: ["document_id", "parent_node_id", "ordinal"]
+            )
+
+            try db.create(table: "document_structure_edges") { table in
+                table.column("id", .text).primaryKey()
+                table.column("matter_id", .text)
+                    .notNull()
+                    .references("matters", onDelete: .cascade)
+                table.column("from_node_id", .text)
+                    .notNull()
+                    .references("document_structure_nodes", onDelete: .cascade)
+                table.column("to_node_id", .text)
+                    .notNull()
+                    .references("document_structure_nodes", onDelete: .cascade)
+                table.column("kind", .text).notNull()
+                table.column("created_at", .datetime).notNull()
+            }
+            try db.create(
+                index: "idx_document_structure_edges_endpoints",
+                on: "document_structure_edges",
+                columns: ["from_node_id", "to_node_id", "kind"],
+                unique: true
+            )
+            try db.create(
+                index: "idx_document_structure_edges_matter",
+                on: "document_structure_edges",
+                columns: ["matter_id", "kind"]
+            )
+        }
+
         return migrator
     }
 
@@ -1307,6 +1368,8 @@ public enum SupraMigrator {
             "document_exports",
             "document_output_sources",
             "document_source_sets",
+            "document_structure_edges",
+            "document_structure_nodes",
             "document_processing_jobs",
             "document_import_sources",
             "document_import_batches",

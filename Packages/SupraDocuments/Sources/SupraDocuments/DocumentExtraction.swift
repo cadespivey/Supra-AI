@@ -56,6 +56,7 @@ public struct ExtractedAttachment: Sendable, Equatable {
 /// The deterministic result of extracting one document (plan §6.1).
 public struct ExtractionResult: Sendable, Equatable {
     public var parts: [ExtractedPart]
+    public var structure: ExtractedDocumentStructure
     public var method: String
     public var warnings: [String]
     /// True when the document has little/no embedded text and should be OCR'd
@@ -69,6 +70,7 @@ public struct ExtractionResult: Sendable, Equatable {
 
     public init(
         parts: [ExtractedPart],
+        structure: ExtractedDocumentStructure? = nil,
         method: String,
         warnings: [String] = [],
         needsOCR: Bool = false,
@@ -78,6 +80,7 @@ public struct ExtractionResult: Sendable, Equatable {
         metadataModifiedAt: Date? = nil
     ) {
         self.parts = parts
+        self.structure = structure ?? .wrapper(for: parts)
         self.method = method
         self.warnings = warnings
         self.needsOCR = needsOCR

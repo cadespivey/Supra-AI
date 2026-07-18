@@ -5,6 +5,8 @@ import XCTest
 
 @MainActor
 final class DocumentStructureTests: XCTestCase {
+    private static let fixedDate = Date(timeIntervalSinceReferenceDate: 9_876)
+
     func testTSTR01ReplaceIsAtomicIdempotentAndRejectsMalformedTrees() throws {
         // T-STR-01 expected RED: v062 structure records and StructureRepository
         // do not exist, so no atomic replace-all tree contract can be exercised.
@@ -16,7 +18,8 @@ final class DocumentStructureTests: XCTestCase {
             matterID: fixture.matter.id,
             fromNodeID: "node-body-alpha",
             toNodeID: "node-root-alpha",
-            kind: "references"
+            kind: "references",
+            createdAt: Self.fixedDate
         )]
 
         try store.documentStructure.replaceStructure(
@@ -90,7 +93,8 @@ final class DocumentStructureTests: XCTestCase {
                 revisionID: fixture.revision.id,
                 nodeKey: "document",
                 ordinal: 0,
-                kind: "document"
+                kind: "document",
+                createdAt: Self.fixedDate
             ),
             DocumentStructureNodeRecord(
                 id: "node-first-repeat",
@@ -101,7 +105,8 @@ final class DocumentStructureTests: XCTestCase {
                 ordinal: 0,
                 kind: "paragraph",
                 charStart: first.start,
-                charEnd: first.end
+                charEnd: first.end,
+                createdAt: Self.fixedDate
             ),
             DocumentStructureNodeRecord(
                 id: "node-second-repeat",
@@ -112,7 +117,8 @@ final class DocumentStructureTests: XCTestCase {
                 ordinal: 1,
                 kind: "paragraph",
                 charStart: second.start,
-                charEnd: second.end
+                charEnd: second.end,
+                createdAt: Self.fixedDate
             ),
             DocumentStructureNodeRecord(
                 id: "node-out-of-flow",
@@ -122,7 +128,8 @@ final class DocumentStructureTests: XCTestCase {
                 parentNodeID: "node-root-roundtrip",
                 ordinal: 2,
                 kind: "tracked_deletion",
-                textContent: "DELETED-NONDEFAULT"
+                textContent: "DELETED-NONDEFAULT",
+                createdAt: Self.fixedDate
             ),
         ]
         try store.documentStructure.replaceStructure(
@@ -252,7 +259,8 @@ final class DocumentStructureTests: XCTestCase {
                 revisionID: revisionID,
                 nodeKey: "document",
                 ordinal: 0,
-                kind: "document"
+                kind: "document",
+                createdAt: Self.fixedDate
             ),
             DocumentStructureNodeRecord(
                 id: "node-body-alpha",
@@ -263,7 +271,8 @@ final class DocumentStructureTests: XCTestCase {
                 ordinal: 0,
                 kind: "paragraph",
                 charStart: 0,
-                charEnd: 5
+                charEnd: 5,
+                createdAt: Self.fixedDate
             ),
         ]
     }
@@ -276,7 +285,7 @@ final class DocumentStructureTests: XCTestCase {
         let matter = try store.matters.createMatter(name: matterName)
         let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
             sha256: UUID().uuidString,
-            byteSize: Int64(text.utf8.count),
+            byteSize: text.utf8.count,
             originalExtension: "txt",
             managedRelativePath: "blobs/\(UUID().uuidString).txt"
         )).blob

@@ -869,6 +869,12 @@ public final class DocumentImportService: @unchecked Sendable {
             author: author.trimmingCharacters(in: .whitespacesAndNewlines),
             reason: reason.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+        let selectedParts = try store.documentIndex.fetchParts(documentID: documentID)
+        try persistStructure(
+            .wrapper(for: extractedParts(from: selectedParts)),
+            documentID: documentID,
+            selectedParts: selectedParts
+        )
         try store.documentLibrary.markTextEdited(documentID: documentID)
         if let matterID { reindexEnqueuer?(matterID) }
     }
@@ -1241,7 +1247,19 @@ public final class DocumentImportService: @unchecked Sendable {
             preserveSelectedUserEdits: preserveSelectedUserEdits
         )
 
-        let selectedText = try store.documentIndex.fetchParts(documentID: documentID)
+        let selectedParts = try store.documentIndex.fetchParts(documentID: documentID)
+        let structure = zip(result.parts, selectedParts).allSatisfy { extracted, selected in
+            extracted.text == selected.normalizedText
+        } && result.parts.count == selectedParts.count
+            ? result.structure
+            : .wrapper(for: extractedParts(from: selectedParts))
+        try persistStructure(
+            structure,
+            documentID: documentID,
+            selectedParts: selectedParts
+        )
+
+        let selectedText = selectedParts
             .map(\.normalizedText)
             .joined(separator: "\n\n")
         let checksum = DocumentStorage.sha256Hex(of: Data(selectedText.utf8))
@@ -1317,6 +1335,98 @@ public final class DocumentImportService: @unchecked Sendable {
             metadataModifiedAt: result.metadataModifiedAt
         )
         return selectionConflicts
+    }
+
+    private func persistStructure(
+        _ structure: ExtractedDocumentStructure,
+        documentID: String,
+        selectedParts: [DocumentPagePartRecord]
+    ) throws {
+        guard !structure.nodes.isEmpty else { return }
+        let partsByIndex = Dictionary(uniqueKeysWithValues: selectedParts.map { ($0.partIndex, $0) })
+        var nodeIDByKey: [String: String] = [:]
+        var revisionIDByKey: [String: String] = [:]
+        for node in structure.nodes {
+            guard nodeIDByKey[node.nodeKey] == nil else {
+                throw StructureRepositoryError.duplicateNodeIdentity(node.nodeKey)
+            }
+            guard let revisionID = partsByIndex[node.partIndex]?.currentRevisionID else {
+                throw StructureRepositoryError.revisionScopeMismatch("part/\(node.partIndex)")
+            }
+            let identity = [documentID, revisionID, node.nodeKey].joined(separator: "|")
+            nodeIDByKey[node.nodeKey] = "structure-\(DocumentStorage.sha256Hex(of: Data(identity.utf8)))"
+            revisionIDByKey[node.nodeKey] = revisionID
+        }
+
+        let records = try structure.nodes.map { node -> DocumentStructureNodeRecord in
+            guard let id = nodeIDByKey[node.nodeKey],
+                  let revisionID = revisionIDByKey[node.nodeKey] else {
+                throw StructureRepositoryError.nodeScopeMismatch(node.nodeKey)
+            }
+            let parentID: String?
+            if let parentKey = node.parentNodeKey {
+                guard let resolved = nodeIDByKey[parentKey] else {
+                    throw StructureRepositoryError.invalidParent(nodeID: node.nodeKey, parentID: parentKey)
+                }
+                parentID = resolved
+            } else {
+                parentID = nil
+            }
+            return DocumentStructureNodeRecord(
+                id: id,
+                documentID: documentID,
+                revisionID: revisionID,
+                nodeKey: node.nodeKey,
+                parentNodeID: parentID,
+                ordinal: node.ordinal,
+                kind: node.kind.rawValue,
+                charStart: node.charStart,
+                charEnd: node.charEnd,
+                textContent: node.textContent,
+                payloadJSON: node.payloadJSON
+            )
+        }
+        let matterID = try store.documentLibrary.fetchDocument(id: documentID)?.matterID
+        guard let matterID else {
+            throw StructureRepositoryError.documentNotFound(documentID)
+        }
+        let edges = try structure.edges.map { edge -> DocumentStructureEdgeRecord in
+            guard let fromID = nodeIDByKey[edge.fromNodeKey],
+                  let toID = nodeIDByKey[edge.toNodeKey] else {
+                throw StructureRepositoryError.edgeEndpointMissing("\(edge.fromNodeKey)->\(edge.toNodeKey)")
+            }
+            let identity = [documentID, fromID, toID, edge.kind.rawValue].joined(separator: "|")
+            return DocumentStructureEdgeRecord(
+                id: "structure-edge-\(DocumentStorage.sha256Hex(of: Data(identity.utf8)))",
+                matterID: matterID,
+                fromNodeID: fromID,
+                toNodeID: toID,
+                kind: edge.kind.rawValue
+            )
+        }
+        try store.documentStructure.replaceStructure(
+            documentID: documentID,
+            nodes: records,
+            edges: edges
+        )
+    }
+
+    private func extractedParts(
+        from selectedParts: [DocumentPagePartRecord]
+    ) -> [ExtractedPart] {
+        selectedParts.sorted { $0.partIndex < $1.partIndex }.map { part in
+            ExtractedPart(
+                sourceKind: DocumentSourceKind(rawValue: part.sourceKind) ?? .text,
+                text: part.normalizedText,
+                pageIndex: part.pageIndex,
+                pageLabel: part.pageLabel,
+                sheetName: part.sheetName,
+                cellRange: part.cellRange,
+                emailPartPath: part.emailPartPath,
+                ocrConfidence: part.ocrConfidence,
+                boundingBoxesJSON: part.boundingBoxesJSON
+            )
+        }
     }
 
     private func makeMachineRevision(
