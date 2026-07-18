@@ -12,16 +12,25 @@ struct SupraBenchCommand {
     static func main() async {
         do {
             let arguments = Array(CommandLine.arguments.dropFirst())
-            guard arguments.contains("--deterministic") else {
-                throw BenchmarkCLIError.usage
+            if arguments.contains("--check-performance") {
+                try checkPerformance(arguments: arguments)
+                return
             }
             let outputURL = try outputURL(from: arguments)
             let root = try repositoryRoot()
+            let repositorySHA = try gitHead(in: root)
+            if arguments.contains("--performance") {
+                let report = try await FixedPerformanceWorkload(repositorySHA: repositorySHA).run()
+                try write(try report.canonicalJSON(), to: outputURL)
+                return
+            }
+            guard arguments.contains("--deterministic") else {
+                throw BenchmarkCLIError.usage
+            }
             let manifestURL = root.appendingPathComponent("TestData/benchmark-manifest.json")
             let manifestData = try Data(contentsOf: manifestURL)
             let manifest = try JSONDecoder().decode(BenchmarkFixtureManifest.self, from: manifestData)
             let specification = try benchmarkSpecification(in: root)
-            let repositorySHA = try gitHead(in: root)
             let manifestSHA = SHA256.hash(data: manifestData).map { String(format: "%02x", $0) }.joined()
             let encodedReport: Data
             if arguments.contains("--compare-chunkers") {
@@ -71,17 +80,54 @@ struct SupraBenchCommand {
                 let report = try await runner.runDeterministic()
                 encodedReport = try report.canonicalJSON()
             }
-            var bytes = encodedReport
-            bytes.append(0x0a)
-            if let outputURL {
-                try bytes.write(to: outputURL, options: .atomic)
-            } else {
-                try FileHandle.standardOutput.write(contentsOf: bytes)
-            }
+            try write(encodedReport, to: outputURL)
         } catch {
             FileHandle.standardError.write(Data("SupraBench: \(error.localizedDescription)\n".utf8))
             exit(1)
         }
+    }
+
+    private static func checkPerformance(arguments: [String]) throws {
+        let reportURL = try requiredURL(after: "--report", in: arguments)
+        let thresholdsURL = try requiredURL(after: "--thresholds", in: arguments)
+        let decoder = JSONDecoder()
+        let report = try decoder.decode(
+            FixedPerformanceReport.self,
+            from: Data(contentsOf: reportURL)
+        )
+        let thresholds = try decoder.decode(
+            PerformanceThresholdManifest.self,
+            from: Data(contentsOf: thresholdsURL)
+        )
+        let evaluation = PerformanceReleaseGate.evaluate(
+            report: report,
+            thresholds: thresholds,
+            requireApprovedStatisticalThresholds: arguments.contains("--require-owner-approval")
+        )
+        guard evaluation.violations.isEmpty else {
+            throw BenchmarkCLIError.performanceGateFailed(evaluation.violations)
+        }
+        try FileHandle.standardOutput.write(contentsOf: Data(
+            "Performance gates passed.\n".utf8
+        ))
+    }
+
+    private static func write(_ report: Data, to outputURL: URL?) throws {
+        var bytes = report
+        bytes.append(0x0a)
+        if let outputURL {
+            try bytes.write(to: outputURL, options: .atomic)
+        } else {
+            try FileHandle.standardOutput.write(contentsOf: bytes)
+        }
+    }
+
+    private static func requiredURL(after flag: String, in arguments: [String]) throws -> URL {
+        guard let index = arguments.firstIndex(of: flag),
+              arguments.indices.contains(index + 1) else {
+            throw BenchmarkCLIError.missingRequiredPath(flag)
+        }
+        return URL(fileURLWithPath: arguments[index + 1])
     }
 
     private static func benchmarkReport(
@@ -146,6 +192,8 @@ private enum BenchmarkCLIError: LocalizedError {
     case repositoryRootNotFound
     case repositorySHANotFound
     case benchmarkSpecificationNotFound
+    case missingRequiredPath(String)
+    case performanceGateFailed([PerformanceGateViolation])
     case recoveryFixtureFailed
     case invalidOCRSelectionKey(String)
     case invalidDocumentRelationKey(String)
@@ -153,11 +201,14 @@ private enum BenchmarkCLIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "usage: swift run SupraBench --deterministic [--compare-chunkers] [--output path]"
+            return "usage: swift run SupraBench (--deterministic [--compare-chunkers] | --performance) [--output path]; or --check-performance --report path --thresholds path [--require-owner-approval]"
         case .missingOutputPath: return "--output requires a path"
         case .repositoryRootNotFound: return "could not locate the repository root"
         case .repositorySHANotFound: return "could not resolve the repository SHA"
         case .benchmarkSpecificationNotFound: return "no benchmark-profile specification was found"
+        case .missingRequiredPath(let flag): return "\(flag) requires a path"
+        case .performanceGateFailed(let violations):
+            return violations.map { "\($0.metricID): \($0.detail)" }.joined(separator: "\n")
         case .recoveryFixtureFailed: return "could not establish the deterministic recovery fixture"
         case .invalidOCRSelectionKey(let id): return "invalid OCR selection benchmark key: \(id)"
         case .invalidDocumentRelationKey(let detail): return "invalid document relation benchmark key: \(detail)"
