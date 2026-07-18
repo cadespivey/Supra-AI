@@ -548,9 +548,20 @@ final class DocumentProcessingQueueTests: XCTestCase {
 
         // A classifier scripted to return a valid taxonomy JSON (a NON-default tag) for every generation.
         let stub = StubRuntimeClient { request in
-            .events([
+            let marker = "[SAMPLE revision_id="
+            let markerStart = request.prompt.range(of: marker)!.upperBound
+            let revisionID = String(request.prompt[markerStart...].prefix { $0 != " " })
+            let markerEnd = request.prompt[markerStart...].firstIndex(of: "\n")!
+            let sampleStart = request.prompt.index(after: markerEnd)
+            let sampleEnd = request.prompt.range(of: "\n[/SAMPLE]", range: sampleStart..<request.prompt.endIndex)!.lowerBound
+            let excerpt = String(request.prompt[sampleStart..<sampleEnd].prefix(20))
+            let response = """
+            {"primary_tag":"contracts_and_agreements","confidence":0.91,
+             "evidence_spans":[{"revision_id":"\(revisionID)","char_start":0,"char_end":\(excerpt.count),"excerpt":"\(excerpt)"}]}
+            """
+            return .events([
                 .event(request, 1, .generationStarted),
-                .event(request, 2, .token, token: #"{"primary_tag":"contracts_and_agreements","confidence":0.91}"#),
+                .event(request, 2, .token, token: response),
                 .event(request, 3, .generationCompleted, metrics: RuntimeMetrics(generatedTokenCount: 12))
             ])
         }
@@ -717,7 +728,18 @@ final class DocumentProcessingQueueTests: XCTestCase {
         let library = ModelLibrary(store: store, runtimeClient: stub)
         _ = try library.addModel(displayName: "Local Task Model", path: "/tmp/task-model", bookmarkData: nil)
         library.refresh()
-        return DocumentClassificationService(store: store, modelLibrary: library, runtimeClient: stub, role: .drafting)
+        return DocumentClassificationService(
+            store: store,
+            modelLibrary: library,
+            runtimeClient: stub,
+            role: .drafting,
+            modelLineageResolver: { _ in
+                DocumentGenerationModelLineage(
+                    modelRepository: "synthetic/task-classifier",
+                    modelRevision: "task-classifier-revision-1"
+                )
+            }
+        )
     }
 
     private func write(_ path: String, _ contents: String) throws {

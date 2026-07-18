@@ -385,7 +385,9 @@ public final class MatterDocumentsController: ObservableObject {
     public func classification(forDocument documentID: String) -> DocumentClassification? {
         guard let json = documents.first(where: { $0.id == documentID })?.classificationMetadataJSON,
               let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(DocumentClassification.self, from: data)
+        guard let classification = try? JSONDecoder().decode(DocumentClassification.self, from: data),
+              !classification.abstained else { return nil }
+        return classification
     }
 
     public func toggleTag(_ tagID: String, on documentID: String) {

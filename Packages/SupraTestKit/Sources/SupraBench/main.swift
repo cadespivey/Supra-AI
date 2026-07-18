@@ -258,6 +258,7 @@ private struct DeterministicCorpusWorkload: Sendable {
         ))
         observations.append(contentsOf: try lineageStalenessObservations(store: store))
         observations.append(contentsOf: contextPackingObservations())
+        observations.append(contentsOf: classificationObservations())
 
         let benchmarkDocumentIDs = Set(
             try store.documentLibrary.fetchDocuments(matterID: benchmarkMatter.id).map(\.id)
@@ -280,6 +281,65 @@ private struct DeterministicCorpusWorkload: Sendable {
             observations: observations,
             retrievalSeconds: max(retrievalSeconds, Double.leastNonzeroMagnitude)
         )
+    }
+
+    /// Deterministic safety/metric wire for M9. It drives the shipping structural
+    /// sampler with a late sentinel and then scores known classifications,
+    /// calibrated abstention, and exact-span validation without a live model.
+    private func classificationObservations() -> [BenchmarkObservation] {
+        let sentinel = "TAIL_SENTINEL_FINANCIAL_RECORDS"
+        let text = String(repeating: "P", count: 13_900)
+            + sentinel
+            + String(repeating: "T", count: 1_900)
+        let revision = DocumentPartRevisionRecord(
+            id: "benchmark-classification-tail-revision",
+            documentID: "benchmark-classification-tail-document",
+            partIndex: 0,
+            derivationKey: "benchmark-classification-tail",
+            origin: "benchmark",
+            method: "synthetic",
+            text: text,
+            charCount: text.count
+        )
+        let sampledTail = DocumentClassificationSampler.samples(
+            revisions: [revision],
+            characterBudget: 12_000
+        ).contains { $0.reason == "part_tail" && $0.text.contains(sentinel) }
+
+        return ClassificationBenchmark.observations(cases: [
+            .init(
+                expectedCategory: "financial_records",
+                predictedCategory: sampledTail ? "financial_records" : "correspondence",
+                shouldAbstain: false,
+                didAbstain: false,
+                emittedEvidenceSpanCount: 1,
+                validEvidenceSpanCount: sampledTail ? 1 : 0
+            ),
+            .init(
+                expectedCategory: "correspondence",
+                predictedCategory: "correspondence",
+                shouldAbstain: false,
+                didAbstain: false,
+                emittedEvidenceSpanCount: 1,
+                validEvidenceSpanCount: 1
+            ),
+            .init(
+                expectedCategory: "correspondence",
+                predictedCategory: nil,
+                shouldAbstain: true,
+                didAbstain: true,
+                emittedEvidenceSpanCount: 0,
+                validEvidenceSpanCount: 0
+            ),
+            .init(
+                expectedCategory: "financial_records",
+                predictedCategory: "financial_records",
+                shouldAbstain: false,
+                didAbstain: false,
+                emittedEvidenceSpanCount: 1,
+                validEvidenceSpanCount: 1
+            ),
+        ])
     }
 
     private func lineageStalenessObservations(store: SupraStore) throws -> [BenchmarkObservation] {

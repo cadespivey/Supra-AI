@@ -120,7 +120,7 @@ Managed model downloads are bound to a repository revision and verified manifest
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v067. Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v068. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -194,6 +194,16 @@ repository:
   active output to `needs_review`. A clean assurance can be restored only by appending a new
   verified version. The deterministic B-LIN dependency matrix requires both stale-detection
   precision and recall to remain 1.0.
+- Document classification uses deterministic head-and-tail sampling for every current part
+  within a fixed character budget instead of taking only the document prefix. Each completed
+  attempt appends a v068 `document_classifications` row that binds the exact input revision IDs
+  and checksum to stable model repository/revision, prompt and sampler versions, calibration,
+  categories, warnings, and validated evidence spans. Completed document classification attempts append exact revision, model, prompt, sampler, calibration, abstention, and validated evidence lineage; uncertain or ungrounded results expose no primary category and classification never writes user tags. Low-confidence or invalid-evidence model
+  output is retained as an explicit abstention with no presented primary category. The legacy
+  mutable JSON remains a latest-value compatibility projection, while historical JSON is never
+  assigned fabricated lineage; user-authored document tags are a separate domain and are not
+  written by the classifier. Deterministic B-CLS metrics report macro F1, per-class recall,
+  abstention precision/recall, and evidence validity.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

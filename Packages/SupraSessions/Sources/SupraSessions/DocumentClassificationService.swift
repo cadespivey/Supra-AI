@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SupraCore
 import SupraRuntimeClient
@@ -10,10 +11,10 @@ import SupraStore
 /// stored as the document's classification metadata — used for retrieval,
 /// filtering, and privilege review, and surfaced as an editable suggestion chip.
 ///
-/// Best-effort by design. A document the model can't classify — no model loaded,
-/// too little text, an unparseable answer, or a generation error — is left
-/// *unclassified* (metadata stays nil) so a later pass can retry it, and the
-/// surrounding import never fails. Only a successful classification is persisted.
+/// Best-effort by design. Transient failures remain retryable; successful model
+/// calls append complete input/model/prompt/sampling/evidence lineage. Uncertain
+/// or ungrounded outputs persist as explicit abstentions with no visible primary
+/// category instead of silently presenting a guess.
 ///
 /// `@MainActor`: the caller (`DocumentProcessingQueue`) and `ModelLibrary` are both
 /// main-actor isolated, so this keeps the model load + store writes on one actor
@@ -24,17 +25,26 @@ public final class DocumentClassificationService {
     private let modelLibrary: ModelLibrary
     private let runtimeClient: any RuntimeClientProtocol
     private let role: ModelRole
+    private let abstentionFloor: Double
+    private let modelLineageResolver: ((ModelID) -> DocumentGenerationModelLineage?)?
+
+    public static let promptVersion = "document-classification-v2"
+    public static let calibrationVersion = "document-classification-calibration-v2"
 
     public init(
         store: SupraStore,
         modelLibrary: ModelLibrary,
         runtimeClient: any RuntimeClientProtocol,
-        role: ModelRole = .drafting
+        role: ModelRole = .drafting,
+        abstentionFloor: Double = 0.5,
+        modelLineageResolver: ((ModelID) -> DocumentGenerationModelLineage?)? = nil
     ) {
         self.store = store
         self.modelLibrary = modelLibrary
         self.runtimeClient = runtimeClient
         self.role = role
+        self.abstentionFloor = min(max(abstentionFloor, 0), 1)
+        self.modelLineageResolver = modelLineageResolver
     }
 
     /// Classifies every not-yet-classified, extracted document in a matter and
@@ -74,8 +84,15 @@ public final class DocumentClassificationService {
     /// the document unclassified (nil) so a later pass can retry. Swallows its own
     /// errors so it is safe to call in a loop.
     @discardableResult
-    func classifyDocument(_ document: MatterDocumentRecord, modelID: ModelID) async -> Bool {
-        let text = combinedText(documentID: document.id)
+    func classifyDocument(
+        _ document: MatterDocumentRecord,
+        modelID: ModelID,
+        modelLineage: DocumentGenerationModelLineage? = nil,
+        classificationKey: String = "classification:\(UUID().uuidString)"
+    ) async -> Bool {
+        let revisions = currentRevisions(documentID: document.id)
+        let text = revisions.map(\.text).joined(separator: "\n\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.count >= Self.minimumTextLength else {
             // Too little usable text to classify — leave unclassified (retryable if
             // OCR or an edit later adds text) rather than storing a sticky result.
@@ -87,13 +104,28 @@ public final class DocumentClassificationService {
             return false
         }
 
-        let truncated = text.count > Self.maxClassificationCharacters
+        guard let stableLineage = modelLineage
+                ?? modelLineageResolver?(modelID)
+                ?? modelLibrary.generationLineage(for: modelID) else {
+            _ = try? store.auditEvents.recordEvent(
+                eventType: "document_classification_failed", actor: "system",
+                summary: "Could not classify \(document.displayName): stable model repository and revision are unavailable.",
+                relatedTable: "matter_documents", relatedID: document.id
+            )
+            return false
+        }
+
+        let samples = DocumentClassificationSampler.samples(
+            revisions: revisions,
+            structureNodes: (try? store.documentStructure.fetchNodes(documentID: document.id)) ?? [],
+            characterBudget: Self.maxClassificationCharacters
+        )
+        guard !samples.isEmpty else { return false }
+
         let request = GenerateRequest(
             generationID: GenerationID(),
             modelID: modelID,
-            prompt: DocumentClassificationPrompt.userContent(
-                fileName: document.displayName, text: text, maxCharacters: Self.maxClassificationCharacters
-            ),
+            prompt: DocumentClassificationPrompt.userContent(fileName: document.displayName, samples: samples),
             systemPrompt: DocumentClassificationPrompt.system(),
             options: GenerationOptions(
                 preset: .extractive,
@@ -119,11 +151,13 @@ public final class DocumentClassificationService {
                 )
                 return false
             }
-            var classification = decoded.normalized()
-            if truncated {
-                classification.warnings.append("Only the first \(Self.maxClassificationCharacters) characters were classified; the document is longer.")
-            }
-            return store(classification, for: document)
+            return persist(
+                decoded,
+                for: document,
+                revisions: revisions,
+                modelLineage: stableLineage,
+                classificationKey: classificationKey
+            )
         } catch {
             // A runtime/generation failure is non-fatal — leave the document
             // unclassified (retryable) and log the reason.
@@ -138,15 +172,85 @@ public final class DocumentClassificationService {
 
     // MARK: - Persistence
 
-    /// Persists a classification as the document's metadata. Returns false (and
-    /// logs) if encoding or the write fails, so callers don't over-report success.
+    /// Validates evidence and calibration, then atomically appends the lineage row
+    /// and updates the compatible latest-value JSON projection.
     @discardableResult
-    private func store(_ classification: DocumentClassification, for document: MatterDocumentRecord) -> Bool {
-        guard let data = try? JSONEncoder().encode(classification),
-              let json = String(data: data, encoding: .utf8)
+    private func persist(
+        _ rawClassification: DocumentClassification,
+        for document: MatterDocumentRecord,
+        revisions: [DocumentPartRevisionRecord],
+        modelLineage: DocumentGenerationModelLineage,
+        classificationKey: String
+    ) -> Bool {
+        let rawSuggestedCategory = rawClassification.primaryTag
+        let confidence = DocumentClassificationConfidence(
+            rawConfidence: rawClassification.confidence,
+            abstentionFloor: abstentionFloor,
+            rawSuggestedPrimaryCategory: rawSuggestedCategory
+        )
+        let validEvidence = validatedEvidence(rawClassification.evidenceSpans, revisions: revisions)
+        var classification = rawClassification.normalized()
+        var abstentionReason: String?
+        if !(0...1).contains(rawClassification.confidence) {
+            abstentionReason = "The model returned confidence outside the required 0...1 range."
+        } else if DocumentCategory.from(rawTag: rawSuggestedCategory) == nil {
+            abstentionReason = "The model returned a primary category outside the approved taxonomy."
+        } else if rawClassification.confidence < abstentionFloor {
+            abstentionReason = "Raw confidence \(Self.render(rawClassification.confidence)) is below the calibrated abstention floor \(Self.render(abstentionFloor))."
+        } else if validEvidence == nil || rawClassification.evidenceSpans.isEmpty {
+            abstentionReason = "The model did not provide exact revision-bound evidence for the suggested category."
+        }
+        let abstained = abstentionReason != nil
+        let persistedEvidence = validEvidence ?? []
+        if let abstentionReason {
+            classification.abstained = true
+            classification.primaryTag = ""
+            classification.secondaryTags = []
+            classification.evidenceSpans = persistedEvidence
+            if !classification.warnings.contains(abstentionReason) {
+                classification.warnings.append(abstentionReason)
+            }
+        } else {
+            classification.abstained = false
+            classification.evidenceSpans = persistedEvidence
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let projectionData = try? encoder.encode(classification),
+              let projectionJSON = String(data: projectionData, encoding: .utf8),
+              let revisionIDsJSON = Self.encodeJSON(revisions.map(\.id)),
+              let secondaryJSON = Self.encodeJSON(abstained ? [] : classification.secondaryCategories.map(\.rawValue)),
+              let confidenceJSON = Self.encodeJSON(confidence),
+              let evidenceJSON = Self.encodeJSON(persistedEvidence),
+              let warningsJSON = Self.encodeJSON(classification.warnings)
         else { return false }
+
+        let record = DocumentClassificationRecord(
+            matterID: document.matterID,
+            documentID: document.id,
+            classificationKey: classificationKey,
+            inputRevisionIDsJSON: revisionIDsJSON,
+            inputChecksum: Self.inputChecksum(revisions),
+            modelRepository: modelLineage.modelRepository,
+            modelRevision: modelLineage.modelRevision,
+            promptVersion: Self.promptVersion,
+            samplingStrategy: DocumentClassificationSampler.strategy,
+            samplingVersion: DocumentClassificationSampler.version,
+            primaryCategory: abstained ? nil : classification.primaryCategory.rawValue,
+            secondaryCategoriesJSON: secondaryJSON,
+            confidenceJSON: confidenceJSON,
+            calibrationVersion: Self.calibrationVersion,
+            abstained: abstained,
+            abstentionReason: abstentionReason,
+            evidenceSpansJSON: evidenceJSON,
+            warningsJSON: warningsJSON
+        )
         do {
-            try store.documentLibrary.updateClassification(documentID: document.id, classificationMetadataJSON: json)
+            try store.documentClassifications.appendAndProjectLegacy(
+                record,
+                legacyProjectionJSON: projectionJSON
+            )
             return true
         } catch {
             _ = try? store.auditEvents.recordEvent(
@@ -167,9 +271,59 @@ public final class DocumentClassificationService {
         }
     }
 
-    private func combinedText(documentID: String) -> String {
-        let parts = (try? store.documentIndex.fetchParts(documentID: documentID)) ?? []
-        return parts.map(\.normalizedText).joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    private func currentRevisions(documentID: String) -> [DocumentPartRevisionRecord] {
+        guard let parts = try? store.documentIndex.fetchParts(documentID: documentID) else { return [] }
+        var revisions: [DocumentPartRevisionRecord] = []
+        for part in parts.sorted(by: { $0.partIndex < $1.partIndex }) {
+            guard let revisionID = part.currentRevisionID,
+                  let revision = try? store.documentRevisions.fetchRevision(id: revisionID),
+                  revision.documentID == documentID,
+                  revision.partIndex == part.partIndex else {
+                return []
+            }
+            revisions.append(revision)
+        }
+        return revisions
+    }
+
+    private func validatedEvidence(
+        _ spans: [DocumentClassificationEvidenceSpan],
+        revisions: [DocumentPartRevisionRecord]
+    ) -> [DocumentClassificationEvidenceSpan]? {
+        let byID = Dictionary(uniqueKeysWithValues: revisions.map { ($0.id, $0) })
+        for span in spans {
+            guard let revision = byID[span.revisionID],
+                  span.charStart >= 0,
+                  span.charEnd > span.charStart,
+                  span.charEnd <= revision.text.count else { return nil }
+            let start = revision.text.index(revision.text.startIndex, offsetBy: span.charStart)
+            let end = revision.text.index(revision.text.startIndex, offsetBy: span.charEnd)
+            guard String(revision.text[start..<end]) == span.excerpt else { return nil }
+        }
+        return spans
+    }
+
+    nonisolated private static func inputChecksum(_ revisions: [DocumentPartRevisionRecord]) -> String {
+        var hasher = SHA256()
+        for revision in revisions {
+            hasher.update(data: Data(revision.id.utf8))
+            hasher.update(data: Data([0]))
+            hasher.update(data: Data(String(revision.partIndex).utf8))
+            hasher.update(data: Data([0]))
+            hasher.update(data: Data(revision.text.utf8))
+            hasher.update(data: Data([0xff]))
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    nonisolated private static func encodeJSON<T: Encodable>(_ value: T) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return (try? encoder.encode(value)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    nonisolated private static func render(_ value: Double) -> String {
+        String(format: "%.2f", value)
     }
 
     /// Whether a document is eligible for (re)classification: extracted / OCR-complete /

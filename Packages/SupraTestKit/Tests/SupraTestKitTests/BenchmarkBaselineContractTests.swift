@@ -97,6 +97,12 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         XCTAssertEqual(try measuredValue("B-ISO-01", "cross_matter_leak_count", in: baseline), 0)
         XCTAssertEqual(try measuredValue("B-LIN-01", "stale_detection_precision", in: baseline), 1)
         XCTAssertEqual(try measuredValue("B-LIN-01", "stale_detection_recall", in: baseline), 1)
+        XCTAssertEqual(try measuredValue("B-CLS-01", "macro_f1", in: baseline), 1)
+        XCTAssertEqual(try measuredValue("B-CLS-01", "recall_correspondence", in: baseline), 1)
+        XCTAssertEqual(try measuredValue("B-CLS-01", "recall_financial_records", in: baseline), 1)
+        XCTAssertEqual(try measuredValue("B-CLS-02", "abstention_precision", in: baseline), 1)
+        XCTAssertEqual(try measuredValue("B-CLS-02", "abstention_recall", in: baseline), 1)
+        XCTAssertEqual(try measuredValue("B-CLS-02", "evidence_validity_rate", in: baseline), 1)
         XCTAssertEqual(try measuredValue("B-REC-01", "successful_recovery_rate", in: baseline), 1)
         XCTAssertEqual(try measuredValue("B-REC-01", "duplicate_work_rate", in: baseline), 0)
         let successfulRecovery = try measurement("B-REC-01", "successful_recovery_rate", in: baseline)
@@ -202,6 +208,7 @@ final class BenchmarkBaselineContractTests: XCTestCase {
             "Packages/SupraTestKit/Package.swift",
             "Packages/SupraTestKit/Sources/SupraBench/main.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/ContextPackingBenchmark.swift",
+            "Packages/SupraTestKit/Sources/SupraTestKit/ClassificationBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/DocumentRelationBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/LineageStalenessBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/BenchmarkMetrics.swift",

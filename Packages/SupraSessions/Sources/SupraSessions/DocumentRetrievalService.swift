@@ -336,7 +336,8 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         var parts: [String] = []
         if let json = document.classificationMetadataJSON,
            let data = json.data(using: .utf8),
-           let classification = try? JSONDecoder().decode(DocumentClassification.self, from: data) {
+           let classification = try? JSONDecoder().decode(DocumentClassification.self, from: data),
+           !classification.abstained {
             parts.append(classification.primaryCategory.displayName)
         }
         if let date = document.metadataModifiedAt ?? document.metadataCreatedAt {

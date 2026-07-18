@@ -1,4 +1,5 @@
 import Foundation
+import SupraStore
 
 /// The approved document-classification taxonomy (1.3.2). Each case's raw value is
 /// the exact tag string the model must emit; the assistant assigns one primary tag
@@ -138,6 +139,8 @@ public struct DocumentClassification: Codable, Sendable, Equatable {
     public var detectedPartiesOrEntities: [String]
     public var detectedJurisdiction: String?
     public var warnings: [String]
+    public var evidenceSpans: [DocumentClassificationEvidenceSpan]
+    public var abstained: Bool
 
     enum CodingKeys: String, CodingKey {
         case primaryTag = "primary_tag"
@@ -153,6 +156,8 @@ public struct DocumentClassification: Codable, Sendable, Equatable {
         case detectedPartiesOrEntities = "detected_parties_or_entities"
         case detectedJurisdiction = "detected_jurisdiction"
         case warnings
+        case evidenceSpans = "evidence_spans"
+        case abstained
     }
 
     public init(
@@ -168,7 +173,9 @@ public struct DocumentClassification: Codable, Sendable, Equatable {
         detectedDocumentDate: String? = nil,
         detectedPartiesOrEntities: [String] = [],
         detectedJurisdiction: String? = nil,
-        warnings: [String] = []
+        warnings: [String] = [],
+        evidenceSpans: [DocumentClassificationEvidenceSpan] = [],
+        abstained: Bool = false
     ) {
         self.primaryTag = primaryTag
         self.secondaryTags = secondaryTags
@@ -183,6 +190,8 @@ public struct DocumentClassification: Codable, Sendable, Equatable {
         self.detectedPartiesOrEntities = detectedPartiesOrEntities
         self.detectedJurisdiction = detectedJurisdiction
         self.warnings = warnings
+        self.evidenceSpans = evidenceSpans
+        self.abstained = abstained
     }
 
     // Tolerant decoding — the model may omit fields; default them.
@@ -201,6 +210,8 @@ public struct DocumentClassification: Codable, Sendable, Equatable {
         detectedPartiesOrEntities = (try? c.decode([String].self, forKey: .detectedPartiesOrEntities)) ?? []
         detectedJurisdiction = try? c.decodeIfPresent(String.self, forKey: .detectedJurisdiction)
         warnings = (try? c.decode([String].self, forKey: .warnings)) ?? []
+        evidenceSpans = (try? c.decode([DocumentClassificationEvidenceSpan].self, forKey: .evidenceSpans)) ?? []
+        abstained = (try? c.decode(Bool.self, forKey: .abstained)) ?? false
     }
 
     /// The validated primary category (falls back to unknown/mixed).
@@ -225,6 +236,12 @@ public struct DocumentClassification: Codable, Sendable, Equatable {
     /// when confidence is low (per the spec's < 0.50 rule).
     public func normalized() -> DocumentClassification {
         var result = self
+        if result.abstained {
+            result.primaryTag = ""
+            result.secondaryTags = []
+            result.confidence = min(max(confidence, 0), 1)
+            return result
+        }
         result.primaryTag = primaryCategory.rawValue
         result.secondaryTags = secondaryCategories.map(\.rawValue)
         result.confidence = min(max(confidence, 0), 1)
@@ -232,6 +249,180 @@ public struct DocumentClassification: Codable, Sendable, Equatable {
         // ours unless the model already flagged the uncertainty itself.
         if result.confidence < 0.5 && !result.warnings.contains(where: { $0.localizedCaseInsensitiveContains("confidence") }) {
             result.warnings.insert("Low-confidence classification; review the suggested category.", at: 0)
+        }
+        return result
+    }
+}
+
+/// A model-emitted evidence locator bound to one immutable extracted revision.
+/// Character offsets use Swift `String` character positions and are validated
+/// against the exact excerpt before a classification can be presented.
+public struct DocumentClassificationEvidenceSpan: Codable, Sendable, Equatable {
+    public var revisionID: String
+    public var charStart: Int
+    public var charEnd: Int
+    public var excerpt: String
+
+    public init(revisionID: String, charStart: Int, charEnd: Int, excerpt: String) {
+        self.revisionID = revisionID
+        self.charStart = charStart
+        self.charEnd = charEnd
+        self.excerpt = excerpt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case revisionID = "revision_id"
+        case charStart = "char_start"
+        case charEnd = "char_end"
+        case excerpt
+    }
+}
+
+/// Stored calibration inputs retain the raw model suggestion even when the
+/// service abstains and deliberately exposes no primary category.
+public struct DocumentClassificationConfidence: Codable, Sendable, Equatable {
+    public var rawConfidence: Double
+    public var abstentionFloor: Double
+    public var rawSuggestedPrimaryCategory: String
+
+    public init(rawConfidence: Double, abstentionFloor: Double, rawSuggestedPrimaryCategory: String) {
+        self.rawConfidence = rawConfidence
+        self.abstentionFloor = abstentionFloor
+        self.rawSuggestedPrimaryCategory = rawSuggestedPrimaryCategory
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case rawConfidence = "raw_confidence"
+        case abstentionFloor = "abstention_floor"
+        case rawSuggestedPrimaryCategory = "raw_suggested_primary_category"
+    }
+}
+
+public struct DocumentClassificationSample: Sendable, Equatable {
+    public var revisionID: String
+    public var partIndex: Int
+    public var charStart: Int
+    public var charEnd: Int
+    public var reason: String
+    public var text: String
+
+    public init(
+        revisionID: String,
+        partIndex: Int,
+        charStart: Int,
+        charEnd: Int,
+        reason: String,
+        text: String
+    ) {
+        self.revisionID = revisionID
+        self.partIndex = partIndex
+        self.charStart = charStart
+        self.charEnd = charEnd
+        self.reason = reason
+        self.text = text
+    }
+}
+
+/// Deterministic structural sampler. Every current part is represented, while
+/// long parts contribute both their head and tail so late category evidence is
+/// not silently excluded by a prefix-only prompt.
+public enum DocumentClassificationSampler {
+    public static let strategy = "head_tail_per_part"
+    public static let version = 2
+
+    public static func samples(
+        revisions: [DocumentPartRevisionRecord],
+        structureNodes: [DocumentStructureNodeRecord] = [],
+        characterBudget: Int = 12_000
+    ) -> [DocumentClassificationSample] {
+        let ordered = revisions.sorted {
+            if $0.partIndex != $1.partIndex { return $0.partIndex < $1.partIndex }
+            return $0.id < $1.id
+        }
+        guard characterBudget > 0, !ordered.isEmpty else { return [] }
+
+        let revisionsByID = Dictionary(uniqueKeysWithValues: ordered.map { ($0.id, $0) })
+        let headings = structureNodes.filter { node in
+            guard node.kind == "heading",
+                  let start = node.charStart,
+                  let end = node.charEnd,
+                  let revision = revisionsByID[node.revisionID] else { return false }
+            return start >= 0 && end > start && end <= revision.text.count
+        }.sorted {
+            if $0.revisionID != $1.revisionID { return $0.revisionID < $1.revisionID }
+            if $0.ordinal != $1.ordinal { return $0.ordinal < $1.ordinal }
+            return $0.id < $1.id
+        }
+        let headingCharacterCount = headings.reduce(0) { partial, node in
+            partial + ((node.charEnd ?? 0) - (node.charStart ?? 0))
+        }
+        let headingBudget = min(characterBudget / 4, headingCharacterCount)
+        let baseBudget = characterBudget - headingBudget
+        let perPartBudget = max(1, baseBudget / ordered.count)
+        var remaining = baseBudget
+        var result: [DocumentClassificationSample] = []
+        for (offset, revision) in ordered.enumerated() {
+            guard remaining > 0 else { break }
+            let partsRemaining = ordered.count - offset
+            let allocation = min(remaining, min(max(1, remaining / partsRemaining), perPartBudget))
+            let textCount = revision.text.count
+            if textCount <= allocation {
+                result.append(.init(
+                    revisionID: revision.id,
+                    partIndex: revision.partIndex,
+                    charStart: 0,
+                    charEnd: textCount,
+                    reason: "whole_part",
+                    text: revision.text
+                ))
+                remaining -= textCount
+                continue
+            }
+
+            let headCount = allocation / 2
+            let tailCount = allocation - headCount
+            let head = String(revision.text.prefix(headCount))
+            let tail = String(revision.text.suffix(tailCount))
+            result.append(.init(
+                revisionID: revision.id,
+                partIndex: revision.partIndex,
+                charStart: 0,
+                charEnd: head.count,
+                reason: "part_head",
+                text: head
+            ))
+            result.append(.init(
+                revisionID: revision.id,
+                partIndex: revision.partIndex,
+                charStart: textCount - tail.count,
+                charEnd: textCount,
+                reason: "part_tail",
+                text: tail
+            ))
+            remaining -= head.count + tail.count
+        }
+
+        var remainingHeadingBudget = headingBudget
+        for (offset, node) in headings.enumerated() {
+            guard remainingHeadingBudget > 0,
+                  let revision = revisionsByID[node.revisionID],
+                  let startOffset = node.charStart,
+                  let endOffset = node.charEnd else { continue }
+            let headingsRemaining = headings.count - offset
+            let allocation = max(1, remainingHeadingBudget / headingsRemaining)
+            let sampleEndOffset = min(endOffset, startOffset + allocation)
+            let start = revision.text.index(revision.text.startIndex, offsetBy: startOffset)
+            let end = revision.text.index(revision.text.startIndex, offsetBy: sampleEndOffset)
+            let text = String(revision.text[start..<end])
+            result.append(.init(
+                revisionID: revision.id,
+                partIndex: revision.partIndex,
+                charStart: startOffset,
+                charEnd: sampleEndOffset,
+                reason: "heading",
+                text: text
+            ))
+            remainingHeadingBudget -= text.count
         }
         return result
     }
@@ -278,6 +469,7 @@ public enum DocumentClassificationPrompt {
           "detected_document_date": "YYYY-MM-DD or null",
           "detected_parties_or_entities": ["string"],
           "detected_jurisdiction": "string or null",
+          "evidence_spans": [{"revision_id":"string","char_start":0,"char_end":1,"excerpt":"exact source text"}],
           "warnings": ["Any uncertainty, OCR problems, mixed-document issues, or caveats."]
         }
 
@@ -300,6 +492,27 @@ public enum DocumentClassificationPrompt {
         --- END DOCUMENT TEXT ---
 
         Return only the JSON object.
+        """
+    }
+
+    /// Structural-sample prompt with explicit revision and absolute character
+    /// coordinates so emitted evidence can be checked without fuzzy matching.
+    public static func userContent(fileName: String, samples: [DocumentClassificationSample]) -> String {
+        let body = samples.map { sample in
+            """
+            [SAMPLE revision_id=\(sample.revisionID) part_index=\(sample.partIndex) char_start=\(sample.charStart) char_end=\(sample.charEnd) reason=\(sample.reason)]
+            \(sample.text)
+            [/SAMPLE]
+            """
+        }.joined(separator: "\n\n")
+        return """
+        Classify the following document. Filename: \(fileName)
+
+        --- STRUCTURAL DOCUMENT SAMPLES ---
+        \(body)
+        --- END STRUCTURAL DOCUMENT SAMPLES ---
+
+        Cite at least one exact evidence_spans entry from the immutable revision text. Character offsets are absolute within the named revision, not relative to the sample. Return only the JSON object.
         """
     }
 }

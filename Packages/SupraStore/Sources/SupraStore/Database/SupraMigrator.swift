@@ -1614,6 +1614,55 @@ public enum SupraMigrator {
                 """)
         }
 
+        migrator.registerMigration("v068_add_document_classification_lineage") { db in
+            // Legacy `matter_documents.classification_metadata_json` remains the
+            // compatible latest-value projection. Historical rows are not
+            // backfilled because the mutable JSON has no trustworthy input,
+            // model, prompt, sampling, or evidence lineage to recover.
+            try db.create(table: "document_classifications") { table in
+                table.column("id", .text).primaryKey()
+                table.column("matter_id", .text).notNull()
+                    .references("matters", onDelete: .cascade)
+                table.column("document_id", .text).notNull()
+                    .references("matter_documents", onDelete: .cascade)
+                table.column("classification_key", .text).notNull()
+                table.column("input_revision_ids_json", .text).notNull()
+                table.column("input_checksum", .text).notNull()
+                table.column("model_repository", .text).notNull()
+                table.column("model_revision", .text).notNull()
+                table.column("prompt_version", .text).notNull()
+                table.column("sampling_strategy", .text).notNull()
+                table.column("sampling_version", .integer).notNull()
+                table.column("primary_category", .text)
+                table.column("secondary_categories_json", .text).notNull()
+                table.column("confidence_json", .text).notNull()
+                table.column("calibration_version", .text).notNull()
+                table.column("abstained", .boolean).notNull()
+                table.column("abstention_reason", .text)
+                table.column("evidence_spans_json", .text).notNull()
+                table.column("warnings_json", .text).notNull()
+                table.column("created_at", .datetime).notNull()
+            }
+            try db.create(
+                index: "idx_document_classifications_identity",
+                on: "document_classifications",
+                columns: ["matter_id", "document_id", "classification_key"],
+                unique: true
+            )
+            try db.create(
+                index: "idx_document_classifications_latest",
+                on: "document_classifications",
+                columns: ["matter_id", "document_id", "created_at", "id"]
+            )
+            try db.execute(sql: """
+                CREATE TRIGGER document_classifications_immutable_update
+                BEFORE UPDATE ON document_classifications
+                BEGIN
+                    SELECT RAISE(ABORT, 'document classifications are append-only');
+                END
+                """)
+        }
+
         return migrator
     }
 
@@ -1788,6 +1837,7 @@ public enum SupraMigrator {
             "matter_billing_profiles",
             // Milestone 3 document intelligence tables: drop children before parents.
             "document_exports",
+            "document_classifications",
             "document_relations",
             "corpus_analysis_partitions",
             "corpus_analysis_runs",
