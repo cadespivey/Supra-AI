@@ -116,6 +116,27 @@ final class PerformanceBenchmarkTests: XCTestCase {
         XCTAssertTrue(release.violations.allSatisfy { $0.detail.contains("owner approval") })
     }
 
+    func testApprovedGateRejectsUnlikeFixedHardwareOrToolchainMetadata() throws {
+        // B-PERF-01/02/03 expected RED: the measured baseline values do not retain
+        // their fixed hardware/toolchain identity, so unlike runs compare as if
+        // they used the release-candidate protocol.
+        let baseline = try report(run: .fixture)
+        let thresholds = PerformanceThresholdManifest.approvedFixture(from: baseline)
+        var unlikeRun = PerformanceRunMetadata.fixture
+        unlikeRun.hardwareIdentifier = "different-mac"
+        unlikeRun.xcodeVersion = "different-xcode"
+        let measured = try report(run: unlikeRun)
+
+        XCTAssertEqual(
+            PerformanceReleaseGate.evaluate(
+                report: measured,
+                thresholds: thresholds,
+                requireApprovedStatisticalThresholds: true
+            ).violations.map(\.metricID),
+            ["B-PERF-01", "B-PERF-02", "B-PERF-03"]
+        )
+    }
+
     private func report(
         retrievalP50: Double = 50,
         retrievalP95: Double = 100,
@@ -123,11 +144,12 @@ final class PerformanceBenchmarkTests: XCTestCase {
         mebibytesPerSecond: Double = 2,
         peakRSSMiB: Double = 700,
         incrementalMilliseconds: Double = 20,
-        unaffectedDocumentsTouched: Int = 0
+        unaffectedDocumentsTouched: Int = 0,
+        run: PerformanceRunMetadata = .fixture
     ) throws -> FixedPerformanceReport {
         FixedPerformanceReport(
             schemaVersion: 1,
-            run: PerformanceRunMetadata.fixture,
+            run: run,
             scales: [try PerformanceScaleMeasurement(
                 documentCount: 200,
                 inputBytes: 200 * 1_048_576,
