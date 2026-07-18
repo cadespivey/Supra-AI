@@ -64,6 +64,63 @@ final class DocumentProcessingQueueTests: XCTestCase {
         XCTAssertEqual(queue.resumableJobs.map(\.id), [job.id])
     }
 
+    func testTACC06QueuedImportPersistsSelectionBeforePumpAndBecomesResumableAfterRelaunch() throws {
+        // T-ACC-06 queued-window expected RED: enqueueImport stores URLs only in
+        // pendingSources. Before the asynchronous pump gets a turn the batch has
+        // zero source rows, and bootstrap cannot offer a bookmark-backed resume.
+        try prepareSources()
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic queued authorization")
+        let selectedURL = sourceRoot.appendingPathComponent("A/agreement.txt")
+
+        var originalQueue: DocumentProcessingQueue? = makeQueue(
+            store: store,
+            notifier: RecordingNotifier()
+        )
+        let jobID = try XCTUnwrap(originalQueue?.enqueueImport(
+            matterID: matter.id,
+            sources: [selectedURL]
+        ))
+        let batchID = try XCTUnwrap(store.documentJobs.fetchJob(id: jobID)?.importBatchID)
+        let selected = try XCTUnwrap(store.documentJobs.fetchSources(batchID: batchID).first)
+        XCTAssertEqual(selected.sourceKey, "selection:0")
+        XCTAssertEqual(selected.sourceDisplayPath, "agreement.txt")
+        XCTAssertEqual(selected.state, DocumentImportSourceState.selected.rawValue)
+        XCTAssertNotNil(selected.sourceBookmark)
+
+        // Drop the first process-local queue before its Task receives an actor
+        // turn, reproducing a quit while this import is still FIFO-queued.
+        originalQueue = nil
+        let relaunchedQueue = makeQueue(store: store, notifier: RecordingNotifier())
+        relaunchedQueue.bootstrap()
+
+        let interrupted = try XCTUnwrap(store.documentJobs.fetchSources(batchID: batchID).first)
+        XCTAssertEqual(interrupted.state, DocumentImportSourceState.interrupted.rawValue)
+        XCTAssertNotNil(interrupted.sourceBookmark)
+        XCTAssertEqual(relaunchedQueue.resumableJobs.map(\.id), [jobID])
+        XCTAssertEqual(relaunchedQueue.resumableImports.map(\.message), [
+            "Import interrupted — 1 of 1 files not yet imported"
+        ])
+    }
+
+    func testBootstrapFailsLegacyQueuedImportThatHasNoPersistedSourceAuthority() throws {
+        // Expected RED: bootstrap reconciles the empty batch but leaves its
+        // import job queued forever, even though no source URL or bookmark can
+        // exist after relaunch.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic legacy queued import")
+        let batch = try store.documentJobs.createBatch(matterID: matter.id)
+        let job = try store.documentJobs.enqueueJob(matterID: matter.id, importBatchID: batch.id)
+
+        let queue = makeQueue(store: store, notifier: RecordingNotifier())
+        queue.bootstrap()
+
+        let reconciled = try XCTUnwrap(store.documentJobs.fetchJob(id: job.id))
+        XCTAssertEqual(reconciled.status, DocumentProcessingJobStatus.failed.rawValue)
+        XCTAssertEqual(reconciled.errorSummary, "source_authorization_unavailable")
+        XCTAssertFalse(queue.queuedJobs.contains { $0.id == job.id })
+    }
+
     func testTACC05BootstrapFinalizesOrphanedBatchWithLedgerBackedReportIdempotently() throws {
         // T-ACC-05 expected RED: bootstrap leaves the batch processing and has no ledger-backed report.
         let store = try makeStore()
