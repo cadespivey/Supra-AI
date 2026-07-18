@@ -148,6 +148,7 @@ private enum BenchmarkCLIError: LocalizedError {
     case benchmarkSpecificationNotFound
     case recoveryFixtureFailed
     case invalidOCRSelectionKey(String)
+    case invalidDocumentRelationKey(String)
 
     var errorDescription: String? {
         switch self {
@@ -159,6 +160,7 @@ private enum BenchmarkCLIError: LocalizedError {
         case .benchmarkSpecificationNotFound: return "no benchmark-profile specification was found"
         case .recoveryFixtureFailed: return "could not establish the deterministic recovery fixture"
         case .invalidOCRSelectionKey(let id): return "invalid OCR selection benchmark key: \(id)"
+        case .invalidDocumentRelationKey(let detail): return "invalid document relation benchmark key: \(detail)"
         }
     }
 }
@@ -250,6 +252,10 @@ private struct DeterministicCorpusWorkload: Sendable {
             store: store,
             matterID: benchmarkMatter.id
         ))
+        observations.append(contentsOf: try documentRelationObservations(
+            store: store,
+            matterID: benchmarkMatter.id
+        ))
 
         let benchmarkDocumentIDs = Set(
             try store.documentLibrary.fetchDocuments(matterID: benchmarkMatter.id).map(\.id)
@@ -311,6 +317,46 @@ private struct DeterministicCorpusWorkload: Sendable {
         }
 
         return SpreadsheetHeaderBenchmark.observations(expected: expected, predicted: predicted)
+    }
+
+    private func documentRelationObservations(
+        store: SupraStore,
+        matterID: String
+    ) throws -> [BenchmarkObservation] {
+        let keyURL = repositoryRoot.appendingPathComponent(
+            "TestData/Benchmarks/document-relation-keys.json"
+        )
+        let keys = try JSONDecoder().decode(
+            DocumentRelationBenchmarkKeys.self,
+            from: Data(contentsOf: keyURL)
+        )
+        guard keys.schemaVersion == 1, !keys.relations.isEmpty else {
+            throw BenchmarkCLIError.invalidDocumentRelationKey("schema")
+        }
+
+        let service = DocumentRelationProposalService(store: store)
+        _ = try service.proposeExactAndNormalizedDuplicates(matterID: matterID)
+        _ = try service.proposeVersionRelations(matterID: matterID)
+        let documents = Dictionary(uniqueKeysWithValues:
+            try store.documentLibrary.fetchDocuments(matterID: matterID).map { ($0.id, $0.displayName) }
+        )
+        let predicted = try store.documentRelations.fetchAll(matterID: matterID).map { relation in
+            guard let from = documents[relation.fromDocumentID],
+                  let to = documents[relation.toDocumentID],
+                  let kind = DocumentRelationKind(rawValue: relation.kind) else {
+                throw BenchmarkCLIError.invalidDocumentRelationKey(relation.relationKey)
+            }
+            return DocumentRelationBenchmarkKey(
+                fromFilename: from,
+                toFilename: to,
+                kind: kind.rawValue,
+                symmetric: kind.isSymmetric
+            )
+        }
+        return DocumentRelationBenchmark.observations(
+            expected: keys.relations,
+            predicted: predicted
+        )
     }
 
     private func ocrSelectionObservations() throws -> [BenchmarkObservation] {

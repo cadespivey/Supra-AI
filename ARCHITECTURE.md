@@ -152,9 +152,13 @@ repository:
   in later work orders.
 - Document-version intelligence begins with the v065 `document_relations` table. Exact shared-blob
   pairs and complete normalized-text digest pairs are backfilled and reproposed deterministically
-  within one matter only. Symmetric kinds use a canonical sorted pair; directional kinds preserve
-  their arrow. Every automatic match remains `proposed` regardless of confidence, and confirmed-only
-  consumers therefore see nothing until the later audited review workflow makes a decision.
+  within one matter only. A second deterministic pass combines normalized three-token shingles with
+  structure-node diffs to propose near-duplicate, draft, redline, amendment, and supersession edges;
+  missing dates stay explicitly ambiguous. Symmetric kinds use a canonical sorted pair; directional
+  kinds preserve their arrow. Every automatic match remains `proposed` regardless of confidence, and
+  confirmed-only consumers therefore see nothing until the later audited review workflow makes a
+  decision. The weights, thresholds, evidence fields, and B-VER key set are frozen in
+  [the document relation methodology](Docs/Document-Relation-Methodology.md).
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

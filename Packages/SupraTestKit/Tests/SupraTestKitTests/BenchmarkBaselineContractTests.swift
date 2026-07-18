@@ -170,8 +170,10 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         let paths = [
             "Packages/SupraTestKit/Package.swift",
             "Packages/SupraTestKit/Sources/SupraBench/main.swift",
+            "Packages/SupraTestKit/Sources/SupraTestKit/DocumentRelationBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/BenchmarkMetrics.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/BenchmarkReport.swift",
+            "TestData/Benchmarks/document-relation-keys.json",
         ]
         var bytes = Data()
         for path in paths.sorted() {

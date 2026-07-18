@@ -1,0 +1,35 @@
+{
+  "relations": [
+    {
+      "fromFilename": "master-services-executed-copy.docx",
+      "kind": "exact_duplicate",
+      "symmetric": true,
+      "toFilename": "master-services-executed.docx"
+    },
+    {
+      "fromFilename": "master-services-draft.docx",
+      "kind": "draft_of",
+      "symmetric": false,
+      "toFilename": "master-services-executed.docx"
+    },
+    {
+      "fromFilename": "amendment-01.docx",
+      "kind": "amendment_of",
+      "symmetric": false,
+      "toFilename": "master-services-executed.docx"
+    },
+    {
+      "fromFilename": "master-services-redline.docx",
+      "kind": "redline_of",
+      "symmetric": false,
+      "toFilename": "master-services-executed.docx"
+    },
+    {
+      "fromFilename": "master-services-executed.docx",
+      "kind": "supersedes",
+      "symmetric": false,
+      "toFilename": "master-services-superseded.docx"
+    }
+  ],
+  "schemaVersion": 1
+}

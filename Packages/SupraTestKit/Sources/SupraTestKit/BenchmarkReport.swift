@@ -34,7 +34,7 @@ public enum BenchmarkMetricCatalog {
         .init(id: "B-STR-01", title: "Structure accuracy", unavailableReason: "structure nodes do not exist before M4"),
         .init(id: "B-SUP-01", title: "Support false accepts", unavailableReason: "support observation unavailable"),
         .init(id: "B-TAB-01", title: "Table header association", unavailableReason: "header graph does not exist before M4"),
-        .init(id: "B-VER-01", title: "Document relation accuracy", unavailableReason: "relation engine does not exist before M7"),
+        .init(id: "B-VER-01", title: "Document relation accuracy", unavailableReason: "relation observation unavailable"),
         .init(id: "B-VER-02", title: "Operative state accuracy", unavailableReason: "relation review workflow does not exist before M7"),
     ]
 }
