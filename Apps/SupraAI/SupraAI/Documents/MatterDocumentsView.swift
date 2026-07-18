@@ -347,6 +347,7 @@ struct MatterDocumentsView: View {
                 .fill(isSelected ? Color.accentColor.opacity(0.12) : .clear)
         )
         .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
         // Double-click opens the file in the default app (suppressed while 2+ files are
         // ticked for a batch action); a single click selects the row to reveal its
         // actions; dragging it onto a folder moves it.
@@ -362,7 +363,10 @@ struct MatterDocumentsView: View {
     @ViewBuilder
     private func rowActions(_ doc: MatterDocumentRecord) -> some View {
         Button { showPreview(doc) } label: { Image(systemName: "eye") }
-            .buttonStyle(.plain).help("Preview")
+            .buttonStyle(.plain)
+            .help("Preview")
+            .accessibilityLabel("Preview \(doc.displayName)")
+            .accessibilityIdentifier("documents.preview")
         Button { openInDefaultApp(doc) } label: { Image(systemName: "arrow.up.forward.app") }
             .buttonStyle(.plain).help("Open & edit in your default app")
         Button {
