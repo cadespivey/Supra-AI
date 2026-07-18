@@ -10,6 +10,133 @@ import XCTest
 @MainActor
 final class DocumentChronologyTests: XCTestCase {
 
+    func testTENG13ChronologyPersistsCoverageAndPassAuditWithoutChangingVisibleOutput() async throws {
+        // Expected RED: DocumentChronologyController has no lastCorpusRunID and
+        // the existing private orchestration never persists a chronology corpus
+        // run, coverage denominator, dropped-source ledger, or per-pass audit.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic chronology parity")
+        try await indexDoc(store, matter.id, nil, "amended-complaint.txt", "McKernon Motors amended complaint filed 2023-11-02.")
+        try await indexDoc(store, matter.id, nil, "brake-failure-analysis.txt", "Brake failure analysis dated 2023-11-05.")
+        try await indexDoc(store, matter.id, nil, "correspondence-liberty-rail.txt", "Correspondence with Liberty Rail on 2023-11-09.")
+        try await indexDoc(store, matter.id, nil, "deposition-calloway.txt", "Deposition of Calloway taken 2023-11-14.")
+        try await indexDoc(store, matter.id, nil, "expert-report-metallurgy.txt", "Metallurgy expert report dated 2023-11-20.")
+        try await indexDoc(store, matter.id, nil, "warranty-terms-mckernon.txt", "Warranty terms executed 2023-11-27.")
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "| Date | Event | Source |\n| 2023-11-02 | Complaint filed [S1] | [S1] |"),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime, maxSources: 3)
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID()))
+
+        let expectedMarkdown = """
+        > ⚠️ **DOCUMENT SUPPORT NEEDS REVIEW — DO NOT RELY.** Proposition document-proposition-1 came from an incompletely indexed scope. Generated from an incompletely indexed scope.
+
+        > ⚠️ **CHRONOLOGY NEEDS REVIEW — DO NOT RELY.** One or more extraction passes omitted source labels; their dated facts may be uncovered.
+
+        | Date | Event | Source |
+        |---|---|---|
+        | 2023-11-02 | Complaint filed [S1] | [S1] |
+
+        ## Sources
+        - **[S1]** amended-complaint.txt — chars 0–51
+          > McKernon Motors amended complaint filed 2023-11-02.
+        - **[S2]** brake-failure-analysis.txt — chars 0–40
+          > Brake failure analysis dated 2023-11-05.
+        - **[S3]** correspondence-liberty-rail.txt — chars 0–47
+          > Correspondence with Liberty Rail on 2023-11-09.
+        """
+        let expectedMessage = "Chronology covers 3 of 6 dated sources; omitted to fit the model's budget: deposition-calloway.txt, expert-report-metallurgy.txt, warranty-terms-mckernon.txt. Narrow the scope or date range for full coverage."
+        XCTAssertEqual(result.markdown, expectedMarkdown, "ledger adoption must preserve chronology markdown byte-for-byte")
+        XCTAssertEqual(chronology.message, expectedMessage, "ledger adoption must preserve the existing UI coverage string")
+
+        let runID = try XCTUnwrap(chronology.lastCorpusRunID)
+        let run = try XCTUnwrap(store.corpusAnalysis.fetchRun(matterID: matter.id, id: runID))
+        XCTAssertEqual(run.taskKind, CorpusAnalysisTaskKind.chronology.rawValue)
+        XCTAssertEqual(run.status, CorpusAnalysisRunStatus.persisted.rawValue)
+        XCTAssertEqual(run.structuredOutputVersionID, result.versionID)
+        XCTAssertEqual(run.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+
+        let coverage = try JSONDecoder().decode(
+            CorpusAnalysisCoverage.self,
+            from: Data(try XCTUnwrap(run.coverageJSON).utf8)
+        )
+        XCTAssertEqual(coverage.snapshotMemberCount, 6)
+        XCTAssertEqual(coverage.eligibleMemberCount, 3)
+        XCTAssertEqual(coverage.excludedMemberCount, 3)
+        XCTAssertEqual(coverage.partitionCount, 3)
+        XCTAssertEqual(coverage.succeededPartitionCount, 3)
+        XCTAssertEqual(coverage.pendingPartitionCount, 0)
+        XCTAssertEqual(coverage.balanceErrorCount, 0)
+
+        let ledger = try JSONDecoder().decode(
+            ChronologyLedgerReconciliationTestRecord.self,
+            from: Data(try XCTUnwrap(run.reconciliationJSON).utf8)
+        )
+        XCTAssertEqual(ledger.droppedCount, 3)
+        XCTAssertEqual(
+            ledger.omittedDocumentNames,
+            ["deposition-calloway.txt", "expert-report-metallurgy.txt", "warranty-terms-mckernon.txt"]
+        )
+        XCTAssertEqual(ledger.passes.count, 1)
+        XCTAssertEqual(ledger.passes[0].sourceLabels, ["S1", "S2", "S3"])
+        XCTAssertTrue(ledger.passes[0].coverageGap)
+    }
+
+    func testTENG14ChronologyCancelDiscardsOutputAndBalancesCancelledRunLedger() async throws {
+        // Expected RED: cancellation currently discards output rows but creates
+        // no durable run or partition ledger, so lastCorpusRunID is unavailable
+        // and no cancelled/succeeded terminal accounting can be asserted.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic chronology cancellation")
+        try await seedBrakeFilings(store, matter.id, count: 20)
+        let secondPassStarted = expectation(description: "second chronology pass began streaming")
+        let chronology = DocumentChronologyController(
+            matterID: matter.id,
+            store: store,
+            runtimeClient: HangingSecondCallRuntimeClient(secondCallStarted: secondPassStarted)
+        )
+
+        let generation = Task {
+            await chronology.generate(
+                scope: .wholeMatter,
+                format: .table,
+                modelID: ModelID(),
+                route: Self.tinyBatchRoute()
+            )
+        }
+        await fulfillment(of: [secondPassStarted], timeout: 5)
+        let runID = try XCTUnwrap(chronology.lastCorpusRunID)
+        chronology.cancel()
+        let result = await generation.value
+
+        XCTAssertNil(result)
+        XCTAssertEqual(chronology.message, "Chronology generation was cancelled.")
+        XCTAssertTrue(try store.structuredOutputs.fetchOutputs(matterID: matter.id).isEmpty)
+        XCTAssertTrue(try store.documentSources.fetchSourceSets(matterID: matter.id).isEmpty)
+
+        let run = try XCTUnwrap(store.corpusAnalysis.fetchRun(matterID: matter.id, id: runID))
+        XCTAssertEqual(run.status, CorpusAnalysisRunStatus.cancelled.rawValue)
+        XCTAssertNil(run.structuredOutputVersionID)
+        let coverage = try JSONDecoder().decode(
+            CorpusAnalysisCoverage.self,
+            from: Data(try XCTUnwrap(run.coverageJSON).utf8)
+        )
+        XCTAssertEqual(coverage.pendingPartitionCount, 0)
+        XCTAssertEqual(coverage.terminalPartitionCount, coverage.partitionCount)
+        XCTAssertGreaterThan(coverage.succeededPartitionCount, 0)
+        XCTAssertGreaterThan(coverage.cancelledPartitionCount, 0)
+        XCTAssertEqual(coverage.balanceErrorCount, 0)
+
+        let partitions = try store.corpusAnalysis.fetchPartitions(matterID: matter.id, runID: runID)
+        XCTAssertFalse(partitions.isEmpty)
+        XCTAssertTrue(partitions.allSatisfy {
+            $0.disposition != CorpusAnalysisPartitionDisposition.pending.rawValue
+        })
+    }
+
     func testTableChronologyUsesScopeOnlyDatedFactsWithCitations() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
@@ -1161,6 +1288,28 @@ final class DocumentChronologyTests: XCTestCase {
 
 /// Thread-safe capture of every prompt the controller sends, for call-count and
 /// per-batch label assertions.
+private struct ChronologyLedgerReconciliationTestRecord: Decodable {
+    struct Pass: Decodable {
+        var sourceLabels: [String]
+        var coverageGap: Bool
+
+        private enum CodingKeys: String, CodingKey {
+            case sourceLabels = "source_labels"
+            case coverageGap = "coverage_gap"
+        }
+    }
+
+    var droppedCount: Int
+    var omittedDocumentNames: [String]
+    var passes: [Pass]
+
+    private enum CodingKeys: String, CodingKey {
+        case droppedCount = "dropped_count"
+        case omittedDocumentNames = "omitted_document_names"
+        case passes
+    }
+}
+
 private final class PromptLog: @unchecked Sendable {
     private let lock = NSLock()
     private var _prompts: [String] = []
