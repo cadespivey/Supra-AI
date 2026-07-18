@@ -206,6 +206,15 @@ final class DocumentPreviewTests: XCTestCase {
             text: bodyText,
             charCount: bodyText.count
         ))
+        _ = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "structure-preview-selection",
+            selectedBy: "policy",
+            policyVersion: 1,
+            decisionJSON: #"{"selected":"current"}"#
+        ))
         let nodes = [
             DocumentStructureNodeRecord(
                 id: "structure-node-root",
@@ -248,6 +257,26 @@ final class DocumentPreviewTests: XCTestCase {
                 kind: "comment",
                 textContent: "Synthetic reviewer comment"
             ),
+            DocumentStructureNodeRecord(
+                id: "structure-node-section",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "section/1",
+                parentNodeID: "structure-node-root",
+                ordinal: 3,
+                kind: "section"
+            ),
+            DocumentStructureNodeRecord(
+                id: "structure-node-section-paragraph",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "section/1/paragraph/1",
+                parentNodeID: "structure-node-section",
+                ordinal: 0,
+                kind: "paragraph",
+                charStart: 0,
+                charEnd: bodyText.count
+            ),
         ]
         try store.documentStructure.replaceStructure(
             documentID: document.id,
@@ -271,6 +300,34 @@ final class DocumentPreviewTests: XCTestCase {
             ]
         )
 
+        // A persisted but unselected candidate must not leak into the ordinary
+        // document preview. T-UX-09 is a current-structure inspector, while
+        // output-source previews remain explicitly revision-bound.
+        let unselectedRevision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "structure-preview-unselected",
+            origin: "ocr",
+            method: "synthetic",
+            text: bodyText,
+            charCount: bodyText.count
+        ))
+        try store.documentStructure.replaceStructure(
+            documentID: document.id,
+            revisionID: unselectedRevision.id,
+            nodes: [
+                DocumentStructureNodeRecord(
+                    id: "structure-node-unselected-root",
+                    documentID: document.id,
+                    revisionID: unselectedRevision.id,
+                    nodeKey: "unselected-document",
+                    ordinal: 0,
+                    kind: "document"
+                ),
+            ],
+            edges: []
+        )
+
         let model = DocumentPreviewLoader(
             store: store,
             storage: DocumentStorage(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
@@ -278,6 +335,7 @@ final class DocumentPreviewTests: XCTestCase {
 
         XCTAssertEqual(model.structureNodes.map(\.nodeKey), [
             "document", "body/paragraph/1", "footnote/1", "comment/1",
+            "section/1", "section/1/paragraph/1",
         ])
         let body = try XCTUnwrap(model.structureNodes.first(where: { $0.nodeKey == "body/paragraph/1" }))
         XCTAssertEqual(body.parentNodeKey, "document")
