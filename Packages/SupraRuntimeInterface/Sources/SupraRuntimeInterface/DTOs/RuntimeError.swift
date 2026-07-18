@@ -1,6 +1,6 @@
 import Foundation
 
-public struct RuntimeError: Codable, Sendable {
+public struct RuntimeError: Codable, Equatable, Sendable {
     public let category: String
     public let message: String
     public let technicalDetails: String?

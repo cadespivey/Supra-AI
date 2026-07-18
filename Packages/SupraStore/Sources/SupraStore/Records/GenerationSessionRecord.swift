@@ -6,10 +6,13 @@ public struct GenerationSessionRecord: Codable, FetchableRecord, PersistableReco
     public static let databaseTableName = "generation_sessions"
 
     public var id: String
-    public var chatID: String
-    public var messageID: String
+    public var chatID: String?
+    public var messageID: String?
     public var variantID: String?
     public var modelID: String?
+    public var modelRepository: String?
+    public var modelRevision: String?
+    public var promptBuilderVersion: String?
     public var prompt: String
     public var systemPrompt: String?
     public var optionsJSON: String
@@ -31,10 +34,13 @@ public struct GenerationSessionRecord: Codable, FetchableRecord, PersistableReco
 
     public init(
         id: String = UUID().uuidString,
-        chatID: String,
-        messageID: String,
+        chatID: String? = nil,
+        messageID: String? = nil,
         variantID: String? = nil,
         modelID: String? = nil,
+        modelRepository: String? = nil,
+        modelRevision: String? = nil,
+        promptBuilderVersion: String? = nil,
         prompt: String,
         systemPrompt: String? = nil,
         optionsJSON: String,
@@ -59,6 +65,9 @@ public struct GenerationSessionRecord: Codable, FetchableRecord, PersistableReco
         self.messageID = messageID
         self.variantID = variantID
         self.modelID = modelID
+        self.modelRepository = modelRepository
+        self.modelRevision = modelRevision
+        self.promptBuilderVersion = promptBuilderVersion
         self.prompt = prompt
         self.systemPrompt = systemPrompt
         self.optionsJSON = optionsJSON
@@ -85,6 +94,9 @@ public struct GenerationSessionRecord: Codable, FetchableRecord, PersistableReco
         case messageID = "message_id"
         case variantID = "variant_id"
         case modelID = "model_id"
+        case modelRepository = "model_repository"
+        case modelRevision = "model_revision"
+        case promptBuilderVersion = "prompt_builder_version"
         case prompt
         case systemPrompt = "system_prompt"
         case optionsJSON = "options_json"

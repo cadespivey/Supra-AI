@@ -166,6 +166,7 @@ cd Packages/SupraSessions && swift test
   opinion downloads, model metadata/artifact downloads, and Sparkle update checks/downloads when
   enabled; [SECURITY.md](SECURITY.md) records their credential and payload limits.
 - Citation coverage means a citation label resolves to retained source material; proposition verification separately requires each material claim to be supported, and neither check is a citator or good-law opinion.
+- Saved output, grounded chat, chronology, and export surfaces render one shared seven-state assurance vocabulary; export is permitted only for proposition-supported or corpus-complete artifacts, and exports embed the state. A grounded matter-chat answer can be saved to Outputs with its exact retained source packet, verification, and assurance state; chat messages themselves never expose export.
 - Privileged query terms are represented by per-install HMAC pseudonyms in request logs and diagnostics by default. They are not anonymous; Diagnostics can remove all stored query markers.
 
 ## License

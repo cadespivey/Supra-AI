@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "baselinePath": "TestData/Benchmarks/baseline-932622be28ea784fb37881ce1aea5e0cbb337f15.json",
+  "harnessSHA256": "882ca1cdc548d068ce39f31b0066b6a00b3ea4137e291112d3a33efca3c5cb43",
+  "decisions": [
+    {
+      "metricID": "B-ACC-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Source-accounting accuracy must equal 1.0 and balance errors must equal 0."
+    },
+    {
+      "metricID": "B-CHR-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Set a noninferiority band against the first chronology-emitting baseline."
+    },
+    {
+      "metricID": "B-CHR-02",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Require source coverage 1.0; set ordering band after the first emitting baseline."
+    },
+    {
+      "metricID": "B-CLS-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Set macro-F1 and per-class recall bands after a recorded live-model baseline."
+    },
+    {
+      "metricID": "B-CLS-02",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Require evidence validity 1.0; set abstention band after the first emitting baseline."
+    },
+    {
+      "metricID": "B-CMP-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Completeness false-claim rate must equal 0."
+    },
+    {
+      "metricID": "B-CTX-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Allow no accepted overflow; set utilization and estimate-error bands after exact-token baseline."
+    },
+    {
+      "metricID": "B-CTX-02",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Silent overflow count must equal 0 and supported overflow recovery must equal 1.0."
+    },
+    {
+      "metricID": "B-EXT-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Set per-format CER bands after normalized extraction goldens emit."
+    },
+    {
+      "metricID": "B-EXT-02",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Set typed-field precision, recall, and F1 bands after the first emitting baseline."
+    },
+    {
+      "metricID": "B-ISO-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Cross-matter leak count must equal 0."
+    },
+    {
+      "metricID": "B-LIN-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Stale-detection precision and recall must both equal 1.0."
+    },
+    {
+      "metricID": "B-LOC-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Revision-and-locator round-trip accuracy must equal 1.0 once golden locators emit."
+    },
+    {
+      "metricID": "B-LST-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Complete claims require recall 1.0 on safety fixtures; set quality band after engine baseline."
+    },
+    {
+      "metricID": "B-NEG-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Deterministic negative false-accept rate must equal 0."
+    },
+    {
+      "metricID": "B-OCR-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Longer-worse adversarial selection accuracy must equal 1.0; set corpus band after baseline."
+    },
+    {
+      "metricID": "B-OCR-02",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Low-confidence false-clean count must equal 0; set calibration band after baseline."
+    },
+    {
+      "metricID": "B-PERF-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Use a plus-or-minus 10 percent p50 and p95 regression budget on fixed hardware."
+    },
+    {
+      "metricID": "B-PERF-02",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Use a plus-or-minus 10 percent throughput budget; set memory ceiling after fixed-hardware baseline."
+    },
+    {
+      "metricID": "B-PERF-03",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Unaffected-document work must equal 0; set wall-time and touched-row bands after baseline."
+    },
+    {
+      "metricID": "B-REC-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Terminal recovery accounting must equal 1.0; set duplicate-work ceiling after durable-ledger baseline."
+    },
+    {
+      "metricID": "B-RET-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Require v2 noninferiority to the frozen v1 Recall-at-8, Recall-at-12, and Recall-at-40 values."
+    },
+    {
+      "metricID": "B-RET-02",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Set the required full-evidence-set improvement over the frozen 0.625 baseline before the v2 flip."
+    },
+    {
+      "metricID": "B-STR-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Set node-and-edge precision, recall, and F1 bands after structure nodes emit."
+    },
+    {
+      "metricID": "B-SUP-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Deterministic support false-accept rate must equal 0."
+    },
+    {
+      "metricID": "B-TAB-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Core table-header association accuracy must equal 1.0; set expansion band after baseline."
+    },
+    {
+      "metricID": "B-VER-01",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "The deterministic baseline emits 1.0 precision and recall overall and by kind; owner approval is required before adopting quality bands."
+    },
+    {
+      "metricID": "B-VER-02",
+      "owner": "repo_owner",
+      "approvalStatus": "pending_owner_approval",
+      "proposal": "Ambiguous unreviewed cases must be blocked at rate 1.0; the deterministic reviewed-state baseline is 1.0, with its adoption pending owner and legal-fidelity review."
+    }
+  ]
+}

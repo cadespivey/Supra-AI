@@ -186,6 +186,49 @@ public final class GlobalChatController: ObservableObject {
         }
     }
 
+    /// The per-message artifact policy intentionally has no export case. A chat
+    /// answer must first cross the atomic Outputs promotion boundary; export then
+    /// follows the ordinary output assurance gate.
+    public func availableArtifactActions(messageID: String) -> [ChatMessageArtifactAction] {
+        guard case .matter = scope,
+              let message = messages.first(where: { $0.id == messageID }),
+              message.role == .assistant,
+              message.status == .completed,
+              let sourceSet = try? store.documentSources.fetchSourceSet(messageID: messageID),
+              sourceSet.status == DocumentSourceSetStatus.pending.rawValue,
+              sourceSet.structuredOutputVersionID == nil else {
+            return []
+        }
+        return [.saveToOutputs]
+    }
+
+    /// Saves one grounded answer and its exact persisted packet to Outputs. The
+    /// store transaction guarantees retryable all-or-nothing behavior.
+    @discardableResult
+    public func saveToOutputs(messageID: String) -> String? {
+        guard case let .matter(matterID) = scope,
+              let chatID = selectedChatID,
+              let message = messages.first(where: { $0.id == messageID }),
+              availableArtifactActions(messageID: messageID).contains(.saveToOutputs) else {
+            errorMessage = ChatOutputPromotionError.messageUnavailable.localizedDescription
+            return nil
+        }
+        do {
+            let outputID = try StructuredOutputController.promoteGroundedMessage(
+                store: store,
+                matterID: matterID,
+                chatID: chatID,
+                message: message
+            )
+            errorMessage = nil
+            reloadMessages()
+            return outputID
+        } catch {
+            errorMessage = "Saving this answer to Outputs failed without changing the chat packet: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     @discardableResult
     public func createChat(title: String = "New Chat") throws -> ChatSummary {
         let record: ChatRecord
@@ -236,6 +279,7 @@ public final class GlobalChatController: ObservableObject {
             if message.role == .assistant, !message.isStreaming {
                 let citations = (try? store.chats.fetchCitations(messageID: message.id)) ?? []
                 message.citations = citations.map(MessageCitation.init)
+                message.assuranceState = groundedAssurance(messageID: message.id)
             }
             return message
         }
@@ -734,7 +778,12 @@ public final class GlobalChatController: ObservableObject {
             // Gated on a loaded model so a no-model send doesn't pay for retrieval it
             // will discard at the guard below.
             let grounded: GroundedChatContext? = (attachments.isEmpty && modelID != nil)
-                ? await documentGrounding?.groundedContext(forQuestion: prompt, depth: documentDepth, modelID: modelID)
+                ? await documentGrounding?.groundedContext(
+                    forQuestion: prompt,
+                    depth: documentDepth,
+                    modelID: modelID,
+                    options: options
+                )
                 : nil
 
             if grounded == nil, let route, route.usesOneShotLegalWorkflow {
@@ -797,6 +846,22 @@ public final class GlobalChatController: ObservableObject {
 
             reloadMessages()
 
+            if grounded?.packingReport?.canPack == false {
+                try store.chats.appendToken(
+                    to: variant.id,
+                    token: Self.groundedContextOverflowRefusal
+                )
+                try store.chats.completeVariant(variant.id)
+                try store.generation.completeGeneration(generationID: session.id)
+                updateMessage(
+                    id: assistant.id,
+                    content: Self.groundedContextOverflowRefusal,
+                    status: .completed
+                )
+                reloadMessages()
+                return
+            }
+
             let request = GenerateRequest(
                 generationID: generationID,
                 modelID: modelID,
@@ -810,12 +875,18 @@ public final class GlobalChatController: ObservableObject {
             var sawFirstToken = false
             var sawTerminal = false
             var finalMetrics: RuntimeMetrics?
+            var groundingVerification: DocumentSupportReport?
 
-            for try await event in try runtimeClient.generate(request) {
+            generationEvents: for try await event in try runtimeClient.generate(request) {
                 switch event.type {
                 case .token:
                     guard let token = event.tokenText else { break }
-                    try store.chats.appendToken(to: variant.id, token: token)
+                    // Grounded tokens stay transient until the terminal metrics
+                    // prove the packet did not overflow. This lets the refusal
+                    // replace discarded model output instead of following it.
+                    if grounded == nil {
+                        try store.chats.appendToken(to: variant.id, token: token)
+                    }
                     if !sawFirstToken {
                         sawFirstToken = true
                         try? store.generation.markFirstToken(generationID: session.id)
@@ -829,6 +900,21 @@ public final class GlobalChatController: ObservableObject {
                 case .generationCompleted:
                     sawTerminal = true
                     finalMetrics = event.metrics ?? finalMetrics
+                    if grounded != nil, finalMetrics?.contextOverflowed == true {
+                        streamedContent = Self.groundedContextOverflowRefusal
+                        try store.chats.appendToken(to: variant.id, token: streamedContent)
+                        try store.chats.completeVariant(variant.id)
+                        try store.generation.completeGeneration(
+                            generationID: session.id,
+                            metrics: storedMetrics(from: finalMetrics)
+                        )
+                        logGenerationTiming(finalMetrics, generationID: session.id)
+                        updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                        break generationEvents
+                    }
+                    if grounded != nil, !streamedContent.isEmpty {
+                        try store.chats.appendToken(to: variant.id, token: streamedContent)
+                    }
                     // The runtime dropped oldest turns to fit the window — tell the
                     // user (persist it too) rather than silently losing context.
                     if finalMetrics?.contextTrimmed == true {
@@ -875,6 +961,7 @@ public final class GlobalChatController: ObservableObject {
                             },
                             scopeFullyIndexed: groundingScopeFullyIndexed
                         )
+                        groundingVerification = report
                         let banner = report.flatMap(Self.documentSupportBanner) ?? """
 
                         ---
@@ -893,6 +980,21 @@ public final class GlobalChatController: ObservableObject {
                         metrics: storedMetrics(from: finalMetrics)
                     )
                     logGenerationTiming(finalMetrics, generationID: session.id)
+                    if let grounded {
+                        try persistGroundedDocumentPacket(
+                            messageID: assistant.id,
+                            question: prompt,
+                            context: grounded,
+                            verification: groundingVerification
+                        )
+                        updateMessageAssurance(
+                            id: assistant.id,
+                            state: Self.groundedAssurance(
+                                depth: grounded.depth,
+                                verificationStatus: groundingVerification?.verificationStatus
+                            )
+                        )
+                    }
                     let citations = persistSourceCitations(
                         messageID: assistant.id,
                         answer: answerText,
@@ -1634,6 +1736,8 @@ public final class GlobalChatController: ObservableObject {
     /// window, so the user knows earlier messages were not in view for this reply
     /// rather than silently losing that context.
     static let contextTrimmedNotice = "\n\n---\n_Note: this conversation exceeded the model's context window, so the earliest messages were dropped from view for this reply. Start a new chat to reset the context._"
+
+    static let groundedContextOverflowRefusal = "I can’t provide a source-grounded answer because the complete instruction and evidence packet does not fit this model’s context window. Use fewer sources or a model with a larger context window, then try again."
 
     /// A hard verification failure: a fabricated/unsupported citation or quotation,
     /// or — when the route requires jurisdiction — a jurisdiction mismatch.
@@ -3221,6 +3325,38 @@ public final class GlobalChatController: ObservableObject {
         messages[index].citations = citations
     }
 
+    private func updateMessageAssurance(id: String, state: OutputAssuranceState) {
+        guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        messages[index].assuranceState = state
+    }
+
+    private func groundedAssurance(messageID: String) -> OutputAssuranceState? {
+        guard let sourceSet = try? store.documentSources.fetchSourceSet(messageID: messageID) else {
+            return nil
+        }
+        if sourceSet.retrievalDepth == RetrievalDepth.fast.rawValue {
+            return .preliminary
+        }
+        let rows = (try? store.documentSources.fetchSources(sourceSetID: sourceSet.id)) ?? []
+        let results = rows.compactMap(\.warningsJSON).compactMap { json in
+            try? JSONDecoder().decode([PropositionSupportResult].self, from: Data(json.utf8))
+        }.first
+        let status: OutputVerificationStatus? = if let results, !results.isEmpty {
+            results.allSatisfy { $0.status == .supported } ? .allSupported : .needsReview
+        } else {
+            nil
+        }
+        return Self.groundedAssurance(depth: .deep, verificationStatus: status)
+    }
+
+    private nonisolated static func groundedAssurance(
+        depth: RetrievalDepth,
+        verificationStatus: OutputVerificationStatus?
+    ) -> OutputAssuranceState {
+        if depth == .fast { return .preliminary }
+        return verificationStatus == .allSupported ? .propositionSupported : .supportNeedsReview
+    }
+
     // MARK: - Authority reader ([A#], spec §2.5)
 
     /// Everything the in-app opinion reader shows before the text loads: the case
@@ -3341,6 +3477,65 @@ public final class GlobalChatController: ObservableObject {
         guard !records.isEmpty else { return [] }
         try? store.chats.replaceCitations(messageID: messageID, records)
         return records.map(MessageCitation.init)
+    }
+
+    /// Persists the complete grounded packet, including candidates omitted from
+    /// the prompt, under the exact assistant message. Inline citations remain a
+    /// reader convenience; this pending source set is the durable promotion and
+    /// verification record.
+    private func persistGroundedDocumentPacket(
+        messageID: String,
+        question: String,
+        context: GroundedChatContext,
+        verification: DocumentSupportReport?
+    ) throws {
+        guard let matterID = scopedMatterID,
+              !context.sources.isEmpty,
+              let packingReport = context.sourceSetPackingReport,
+              let scope = context.sourceScope,
+              let configuration = context.retrievalConfiguration else { return }
+        let lineage = try DocumentSourceLineageBuilder.make(
+            store: store,
+            matterID: matterID,
+            scope: scope,
+            configuration: configuration,
+            packingReport: packingReport
+        )
+        let sourceSet = try store.documentSources.createSourceSet(
+            matterID: matterID,
+            mode: .autoSource,
+            scopeJSON: try Self.canonicalJSON(scope),
+            retrievalQuery: question,
+            retrievalDepth: context.depth.rawValue,
+            packingReportJSON: lineage.packingReportJSON,
+            embeddingModelID: lineage.embeddingModelID,
+            embeddingModelRevision: lineage.embeddingModelRevision,
+            chunkerVersion: lineage.chunkerVersion,
+            retrievalConfigJSON: lineage.retrievalConfigJSON,
+            corpusSnapshotHash: lineage.corpusSnapshotHash,
+            messageID: messageID
+        )
+        let verificationJSON = try Self.canonicalJSON(verification?.results ?? [])
+        let rows = context.sources.enumerated().map { index, source in
+            DocumentOutputSourceRecord(
+                sourceSetID: sourceSet.id,
+                documentID: source.documentID,
+                chunkID: source.chunkID,
+                revisionID: source.revisionID,
+                citationLabel: source.label,
+                locatorJSON: source.locator.encodedJSON(),
+                excerpt: source.excerpt,
+                rank: index,
+                warningsJSON: verificationJSON
+            )
+        }
+        try store.documentSources.addOutputSources(rows)
+    }
+
+    private static func canonicalJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
 
     /// The distinct `[A#]`/`[S#]` citation labels (no brackets) present in an answer.

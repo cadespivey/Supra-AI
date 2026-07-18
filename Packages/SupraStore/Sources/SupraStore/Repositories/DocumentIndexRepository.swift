@@ -178,6 +178,31 @@ public final class DocumentIndexRepository: @unchecked Sendable {
         }
     }
 
+    /// True only when the document has at least one current chunk and every
+    /// current chunk has a vector for the requested embedding model. A single
+    /// old-model vector or a partial new-model write is never semantic-ready.
+    public func hasCompleteEmbeddings(documentID: String, embeddingModelID: String) throws -> Bool {
+        try writer.read { db in
+            let chunkCount = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM document_chunks WHERE document_id = ?",
+                arguments: [documentID]
+            ) ?? 0
+            guard chunkCount > 0 else { return false }
+            let embeddedChunkCount = try Int.fetchOne(
+                db,
+                sql: """
+                SELECT COUNT(DISTINCT e.chunk_id)
+                FROM document_chunk_embeddings e
+                JOIN document_chunks c ON c.id = e.chunk_id
+                WHERE c.document_id = ? AND e.embedding_model_id = ?
+                """,
+                arguments: [documentID, embeddingModelID]
+            ) ?? 0
+            return embeddedChunkCount == chunkCount
+        }
+    }
+
     /// All embeddings for a matter under a model, for app-side cosine retrieval.
     public func fetchEmbeddings(matterID: String, embeddingModelID: String) throws -> [DocumentChunkEmbeddingRecord] {
         try writer.read { db in

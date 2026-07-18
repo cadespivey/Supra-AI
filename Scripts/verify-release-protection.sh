@@ -92,7 +92,7 @@ fi
 
 macos_workflow="${repo_root}/.github/workflows/macos-ci.yml"
 if [[ -f "$macos_workflow" ]]; then
-  for job in inventory swift-packages app-build app-smoke migration-fixtures website security dependency-review; do
+  for job in inventory swift-packages app-build app-smoke migration-fixtures document-benchmarks website security dependency-review; do
     grep -Eq "^  ${job}:" "$macos_workflow" || fail "required main protection job is missing: ${job}"
   done
 fi

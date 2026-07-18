@@ -32,6 +32,7 @@ public final class DocumentExportService: @unchecked Sendable {
     public enum ExportError: Error, LocalizedError {
         case outputNotFound
         case noActiveVersion
+        case assuranceBlocked(String)
         case completionRecordingFailed(String)
         case partialFailure(recording: String, compensation: String)
 
@@ -39,6 +40,8 @@ public final class DocumentExportService: @unchecked Sendable {
             switch self {
             case .outputNotFound: "The output to export was not found."
             case .noActiveVersion: "The output has no active version to export."
+            case let .assuranceBlocked(state):
+                "The output cannot be exported while its assurance state is \(state)."
             case let .completionRecordingFailed(detail):
                 "The export was not recorded and the file change was rolled back: \(detail)"
             case let .partialFailure(recording, compensation):
@@ -57,6 +60,16 @@ public final class DocumentExportService: @unchecked Sendable {
         let versions = try store.structuredOutputs.fetchVersions(structuredOutputID: structuredOutputID)
         guard let activeVersion = versions.first(where: { $0.id == output.activeVersionID }) ?? versions.first else {
             throw ExportError.noActiveVersion
+        }
+        let verificationStatus = OutputVerificationStatus(rawValue: activeVersion.verificationStatus)
+            ?? .legacyUnverified
+        let assurance = OutputAssurancePresentation.state(
+            rawValue: activeVersion.assuranceState,
+            verificationStatus: verificationStatus
+        )
+        guard verificationStatus == .allSupported,
+              OutputAssurancePresentation.isExportEligible(assurance) else {
+            throw ExportError.assuranceBlocked(OutputAssurancePresentation.text(for: assurance))
         }
 
         let payload = try makePayload(output: output, version: activeVersion, matterID: matterID)
@@ -132,6 +145,12 @@ public final class DocumentExportService: @unchecked Sendable {
                 warnings: warnings.joined(separator: "; ")
             )
         }
+        let verificationStatus = OutputVerificationStatus(rawValue: version.verificationStatus)
+            ?? .legacyUnverified
+        let assurance = OutputAssurancePresentation.state(
+            rawValue: version.assuranceState,
+            verificationStatus: verificationStatus
+        )
         return DocumentExportPayload(
             title: output.title,
             // The saved version markdown already embeds a "## Sources" appendix
@@ -139,7 +158,7 @@ public final class DocumentExportService: @unchecked Sendable {
             // appendix from the structured `sources` rows, so strip the embedded
             // one to avoid duplicating it in Markdown/PDF/DOCX.
             contentMarkdown: rows.isEmpty ? version.contentMarkdown : Self.stripEmbeddedAppendix(version.contentMarkdown),
-            reviewWarning: Self.reviewWarning,
+            reviewWarning: "Assurance: \(OutputAssurancePresentation.text(for: assurance))\n\n\(Self.reviewWarning)",
             sources: rows
         )
     }

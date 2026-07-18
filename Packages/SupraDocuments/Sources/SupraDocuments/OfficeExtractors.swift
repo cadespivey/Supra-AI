@@ -144,13 +144,26 @@ public struct WordExtractor: DocumentExtractor {
     public func extract(fileURL: URL) async throws -> ExtractionResult {
         let ext = fileURL.pathExtension.lowercased()
         if ext == "doc" {
-            let text = try await AppKitDocumentText.text(from: fileURL, type: .docFormat, policy: policy)
+            let text = try await AppKitDocumentText.text(
+                from: fileURL,
+                type: legacyWordDocumentType(at: fileURL),
+                policy: policy
+            )
             try policy.validateDecodedText(text)
             let part = ExtractedPart(sourceKind: .convertedDocument, text: TextNormalization.normalize(text))
-            return ExtractionResult(parts: [part], method: "nsattributedstring-doc")
+            return ExtractionResult(
+                parts: [part],
+                method: "converted_lossy",
+                warnings: [SupportedDocumentTypes.legacyDOCLossyWarning]
+            )
         }
 
-        guard let documentXML = try ZipArchiveReader.entryData(in: fileURL, path: "word/document.xml", policy: policy) else {
+        let archive = try ZipArchiveReader.validatedArchive(at: fileURL, policy: policy)
+        guard let documentXML = try ZipArchiveReader.entryData(
+            in: archive,
+            path: "word/document.xml",
+            policy: policy
+        ) else {
             throw ExtractionError.malformed("Missing word/document.xml.")
         }
         try policy.validateXMLData(documentXML)
@@ -160,8 +173,26 @@ public struct WordExtractor: DocumentExtractor {
         guard parser.parse() else {
             throw ExtractionError.malformed("Could not parse word/document.xml.")
         }
-        let part = ExtractedPart(sourceKind: .convertedDocument, text: TextNormalization.normalize(collector.text))
-        return ExtractionResult(parts: [part], method: "ooxml-word")
+        let normalizedText = TextNormalization.normalize(collector.text)
+        let (structure, warnings) = try WordStructureAdapter(archive: archive, policy: policy)
+            .extract(documentXML: documentXML, normalizedBodyText: normalizedText)
+        let part = ExtractedPart(sourceKind: .convertedDocument, text: normalizedText)
+        return ExtractionResult(
+            parts: [part],
+            structure: structure,
+            method: "ooxml-word",
+            warnings: warnings
+        )
+    }
+
+    /// A number of legacy Word exports are RTF containers carrying a `.doc`
+    /// suffix. Select AppKit's decoder from a bounded prefix; true OLE `.doc`
+    /// files continue through `.docFormat`.
+    private func legacyWordDocumentType(at url: URL) -> NSAttributedString.DocumentType {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return .docFormat }
+        defer { try? handle.close() }
+        let prefix = (try? handle.read(upToCount: 16)) ?? Data()
+        return prefix.starts(with: Data("{\\rtf".utf8)) ? .rtf : .docFormat
     }
 }
 

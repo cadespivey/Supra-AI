@@ -151,6 +151,14 @@ struct GroundedChatContext: Sendable, Equatable {
     /// the controller offers "search all documents" (spec §3.2). Inventory/no-match
     /// contexts are `.deep` (there is no deeper tier for them).
     var depth: RetrievalDepth = .deep
+    /// In-memory M8-W1 accounting. M8-W2 persists the candidate-level report
+    /// with the message-linked source set.
+    var packingReport: TokenPackingReport? = nil
+    /// Candidate-level report and exact retrieval inputs persisted with a
+    /// successful grounded turn's message-linked source set.
+    var sourceSetPackingReport: DocumentPackingReport? = nil
+    var sourceScope: RetrievalScope? = nil
+    var retrievalConfiguration: DocumentRetrievalConfiguration? = nil
 }
 
 /// A resolvable pointer behind an inline `[S#]` matter-document citation: enough to
@@ -158,6 +166,8 @@ struct GroundedChatContext: Sendable, Equatable {
 struct GroundedSourceRef: Sendable, Equatable {
     var label: String          // "S1", "S2", …
     var sourceID: String
+    var chunkID: String
+    var revisionID: String?
     var documentID: String
     var documentName: String
     var locator: DocumentSourceLocator
@@ -211,7 +221,8 @@ final class MatterChatDocumentGrounding {
     func groundedContext(
         forQuestion question: String,
         depth: RetrievalDepth = .fast,
-        modelID: ModelID? = nil
+        modelID: ModelID? = nil,
+        options: GenerationOptions = GenerationOptions()
     ) async -> GroundedChatContext? {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -224,7 +235,12 @@ final class MatterChatDocumentGrounding {
             return inventoryContext(question: trimmed, folders: folders, folderHint: folderHint)
         case let .content(folderHint):
             return await contentContext(
-                question: trimmed, folders: folders, folderHint: folderHint, depth: depth, modelID: modelID
+                question: trimmed,
+                folders: folders,
+                folderHint: folderHint,
+                depth: depth,
+                modelID: modelID,
+                options: options
             )
         }
     }
@@ -265,7 +281,8 @@ final class MatterChatDocumentGrounding {
         folders: [DocumentFolderRecord],
         folderHint: String?,
         depth: RetrievalDepth,
-        modelID: ModelID?
+        modelID: ModelID?,
+        options: GenerationOptions
     ) async -> GroundedChatContext {
         let folder = resolveFolder(folders: folders, folderHint: folderHint)
 
@@ -307,23 +324,20 @@ final class MatterChatDocumentGrounding {
         if effectiveDepth == .deep {
             retrieved = await rerankedDeepSelection(retrieved, question: question, modelID: modelID)
         }
-        let sources: [GroundingSource] = retrieved.enumerated().map { index, retrieved in
+        var sources: [GroundingSource] = retrieved.enumerated().map { index, retrieved in
             let low = retrieved.ocrConfidence.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false
-            return GroundingSource(
+            return retrieved.groundingSource(
                 sourceID: "\(matterID)/\(retrieved.chunkID)",
                 label: "S\(index + 1)",
-                documentName: retrieved.documentName,
-                locatorDisplay: retrieved.locator.displayString,
-                text: retrieved.text,
-                excerpt: retrieved.excerpt,
-                lowConfidence: low,
-                metadata: retrieved.metadata
+                lowConfidence: low
             )
         }
-        let sourceRefs: [GroundedSourceRef] = retrieved.enumerated().map { index, retrieved in
+        var sourceRefs: [GroundedSourceRef] = retrieved.enumerated().map { index, retrieved in
             GroundedSourceRef(
                 label: "S\(index + 1)",
                 sourceID: "\(matterID)/\(retrieved.chunkID)",
+                chunkID: retrieved.chunkID,
+                revisionID: retrieved.revisionID,
                 documentID: retrieved.documentID,
                 documentName: retrieved.documentName,
                 locator: retrieved.locator,
@@ -341,21 +355,91 @@ final class MatterChatDocumentGrounding {
             )
         }
 
-        var prompt = DocumentQAPromptBuilder.buildQAPrompt(question: question, sources: sources, mode: .short)
-        if let readiness = result?.readiness, !readiness.isFullyReady {
-            prompt = "(Note: only \(readiness.readyDocuments) of \(readiness.totalDocuments) documents in scope are "
-                + "indexed so far; content from the rest may be missing.)\n\n" + prompt
+        let systemPrompt = groundedSystemPrompt()
+        let readiness = result?.readiness
+        func prompt(for selectedSources: [GroundingSource]) -> String {
+            var prompt = DocumentQAPromptBuilder.buildQAPrompt(
+                question: question,
+                sources: selectedSources,
+                mode: .short
+            )
+            if let readiness, !readiness.isFullyReady {
+                prompt = "(Note: only \(readiness.readyDocuments) of \(readiness.totalDocuments) documents in scope are "
+                    + "indexed so far; content from the rest may be missing.)\n\n" + prompt
+            }
+            return prompt
         }
+        let packetPrompts = sources.indices.map { upperBound in
+            prompt(for: Array(sources.prefix(upperBound + 1)))
+        }
+        let packingReport = await RuntimeTokenBudgeting.report(
+            serializedPackets: packetPrompts.map {
+                RuntimeTokenBudgeting.serializedPacket(systemPrompt: systemPrompt, prompt: $0)
+            },
+            modelID: modelID,
+            options: options,
+            runtimeClient: runtimeClient
+        )
+        let sourceSetPackingReport = DocumentSourceLineageBuilder.report(
+            summary: packingReport,
+            candidates: sources.enumerated().map { index, source in
+                .init(
+                    sourceID: source.sourceID,
+                    label: source.label,
+                    rank: index,
+                    originalText: source.text,
+                    packedText: source.packedText
+                )
+            }
+        )
+        let retrievalConfiguration = DocumentRetrievalConfiguration(
+            mode: DocumentSourceSetMode.autoSource.rawValue,
+            depth: effectiveDepth.rawValue,
+            candidateLimit: effectiveDepth == .fast
+                ? Self.fastPackedSourceLimit
+                : DocumentRerank.candidatePoolSize,
+            packedLimit: effectiveDepth == .fast
+                ? Self.fastPackedSourceLimit
+                : Self.deepPackedSourceLimit,
+            maxPerDocument: DocumentRetrievalService.defaultMaxPerDocument,
+            semanticFloor: effectiveDepth == .fast
+                ? DocumentRetrievalService.fastMinSemanticSimilarity
+                : DocumentRetrievalService.defaultMinSemanticSimilarity,
+            rrfK: DocumentRetrievalService.rrfK
+        )
+        if packingReport.packedItemCount < sources.count {
+            sources = Array(sources.prefix(packingReport.packedItemCount))
+            sourceRefs = Array(sourceRefs.prefix(packingReport.packedItemCount))
+        }
+        guard packingReport.canPack else {
+            return GroundedChatContext(
+                modelPrompt: "",
+                systemPrompt: systemPrompt,
+                trailer: nil,
+                scopeFullyIndexed: result?.readiness.isFullyReady ?? true,
+                depth: effectiveDepth,
+                packingReport: packingReport,
+                sourceSetPackingReport: sourceSetPackingReport,
+                sourceScope: scope,
+                retrievalConfiguration: retrievalConfiguration
+            )
+        }
+
+        let prompt = prompt(for: sources)
 
         // No source excerpts appended to the answer text: the clickable inline `[S#]`
         // markers plus the subtle sources list under the message carry the citations
         // now, so the verbose excerpt block would just duplicate them.
         return GroundedChatContext(
-            modelPrompt: prompt, systemPrompt: groundedSystemPrompt(), trailer: nil,
+            modelPrompt: prompt, systemPrompt: systemPrompt, trailer: nil,
             sourceTexts: sources.map(\.text),
             sources: sourceRefs,
             scopeFullyIndexed: result?.readiness.isFullyReady ?? true,
-            depth: effectiveDepth
+            depth: effectiveDepth,
+            packingReport: packingReport,
+            sourceSetPackingReport: sourceSetPackingReport,
+            sourceScope: scope,
+            retrievalConfiguration: retrievalConfiguration
         )
     }
 

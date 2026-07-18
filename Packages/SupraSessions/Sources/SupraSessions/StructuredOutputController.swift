@@ -7,6 +7,27 @@ import SupraRuntimeClient
 import SupraRuntimeInterface
 import SupraStore
 
+public enum ChatMessageArtifactAction: String, Equatable, Sendable {
+    case saveToOutputs = "save_to_outputs"
+}
+
+public enum ChatOutputPromotionError: Error, LocalizedError, Equatable, Sendable {
+    case messageUnavailable
+    case packetUnavailable
+    case verificationUnavailable
+
+    public var errorDescription: String? {
+        switch self {
+        case .messageUnavailable:
+            "Only a completed grounded assistant message can be saved to Outputs."
+        case .packetUnavailable:
+            "The grounded source packet is missing, already attached, or unavailable."
+        case .verificationUnavailable:
+            "The grounded answer's persisted verification record is unavailable or inconsistent."
+        }
+    }
+}
+
 /// Generates structured legal outputs for a matter (spec §12.4): builds the
 /// type's prompt, runs it through the local model, detects present/missing
 /// sections deterministically, and stores the output + version 1 + audit.
@@ -18,6 +39,8 @@ public final class StructuredOutputController: ObservableObject {
         public let title: String
         public let outputType: String
         public let status: String
+        public let assuranceState: OutputAssuranceState
+        public let assuranceText: String
         public let missingCount: Int
         public let createdAt: Date
         public let updatedAt: Date
@@ -34,7 +57,10 @@ public final class StructuredOutputController: ObservableObject {
         public let repairReason: String?
         public let verificationStatus: String
         public let verificationVersion: String?
+        public let verificationDimensions: [VerificationDimensionRow]
         public let verifiedAt: Date?
+        public let assuranceState: OutputAssuranceState
+        public let assuranceText: String
     }
 
     @Published public private(set) var outputs: [OutputItem] = []
@@ -59,6 +85,111 @@ public final class StructuredOutputController: ObservableObject {
         self.retrieval = DocumentRetrievalService(store: store, embedder: embedder)
         self.matterID = matterID
         self.defaultSystemPrompt = defaultSystemPrompt
+    }
+
+    /// Converts one completed grounded chat answer into an ordinary document-Q&A
+    /// output. The store owns the atomic boundary; this layer reconstructs the
+    /// exact persisted verification and assurance contract from the message packet.
+    @discardableResult
+    public static func promoteGroundedMessage(
+        store: SupraStore,
+        matterID: String,
+        chatID: String,
+        message: ChatMessage
+    ) throws -> String {
+        guard message.role == .assistant,
+              message.status == .completed,
+              !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ChatOutputPromotionError.messageUnavailable
+        }
+        guard let sourceSet = try store.documentSources.fetchSourceSet(messageID: message.id),
+              sourceSet.matterID == matterID,
+              sourceSet.messageID == message.id,
+              sourceSet.status == DocumentSourceSetStatus.pending.rawValue,
+              sourceSet.structuredOutputVersionID == nil else {
+            throw ChatOutputPromotionError.packetUnavailable
+        }
+        let rows = try store.documentSources.fetchSources(sourceSetID: sourceSet.id)
+        guard !rows.isEmpty else { throw ChatOutputPromotionError.packetUnavailable }
+        let persistedPayloads = Set(rows.compactMap(\.warningsJSON))
+        guard persistedPayloads.count == 1,
+              rows.allSatisfy({ $0.warningsJSON != nil }),
+              let verificationJSON = persistedPayloads.first,
+              let data = verificationJSON.data(using: .utf8),
+              let verificationResults = try? JSONDecoder().decode(
+                  [PropositionSupportResult].self,
+                  from: data
+              ),
+              !verificationResults.isEmpty else {
+            throw ChatOutputPromotionError.verificationUnavailable
+        }
+
+        let verificationStatus: OutputVerificationStatus = verificationResults
+            .allSatisfy { $0.status == .supported } ? .allSupported : .needsReview
+        let assurance: OutputAssuranceState = if sourceSet.retrievalDepth == RetrievalDepth.fast.rawValue {
+            .preliminary
+        } else if verificationStatus == .allSupported {
+            .propositionSupported
+        } else {
+            .supportNeedsReview
+        }
+        let answer = ReasoningContent.answer(from: message.content)
+        let content: String
+        if OutputAssurancePresentation.isExportEligible(assurance) {
+            content = answer
+        } else {
+            content = """
+            > ⚠️ **\(OutputAssurancePresentation.text(for: assurance))** This saved chat answer remains review-gated and unavailable for export.
+
+            \(answer)
+            """
+        }
+        let dimensions = VerificationDimensionsMapper.dimensions(
+            verificationResults: verificationResults,
+            usedLabels: CitationCoverage.usedLabels(in: answer)
+        )
+        let outputID = UUID().uuidString
+        let now = Date()
+        let titleFragment = answer
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map { String($0.prefix(72)) }
+            ?? "Grounded answer"
+        let output = StructuredOutputRecord(
+            id: outputID,
+            matterID: matterID,
+            chatID: chatID,
+            title: "Saved chat answer — \(titleFragment)",
+            outputType: StructuredOutputType.documentQA.rawValue,
+            status: StructuredOutputStatus.draft.rawValue,
+            createdAt: now,
+            updatedAt: now
+        )
+        let outputStatus: StructuredOutputStatus = verificationStatus == .allSupported
+            && OutputAssurancePresentation.isExportEligible(assurance)
+            ? .complete
+            : .needsReview
+        _ = try store.structuredOutputs.promoteChatMessageAtomically(
+            newOutput: output,
+            messageID: message.id,
+            sourceSetID: sourceSet.id,
+            contentMarkdown: content,
+            verificationStatus: verificationStatus,
+            verificationVersion: DocumentSupportVerifier.version,
+            verificationResults: verificationResults,
+            verificationDimensions: dimensions,
+            outputStatus: outputStatus,
+            assuranceState: assurance
+        )
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID,
+            eventType: "chat_answer_promoted",
+            actor: "user",
+            summary: "Saved a grounded chat answer to Outputs",
+            relatedTable: "structured_outputs",
+            relatedID: outputID
+        )
+        return outputID
     }
 
     // MARK: - Document grounding (spec §12.4)
@@ -112,15 +243,23 @@ public final class StructuredOutputController: ObservableObject {
         }
     }
 
+    /// Opens a retained output source against the revision recorded when the
+    /// output was generated, rather than substituting current document text.
+    public func previewSource(id: String) -> DocumentPreviewModel? {
+        guard let source = try? store.documentSources.fetchSource(id: id) else { return nil }
+        return DocumentPreviewLoader(store: store).load(outputSource: source)
+    }
+
     /// Exports an output's active version to the given format, returning the
     /// written file URL (plan §10.2). Applies to document Q&A/chronology outputs
     /// and any structured output.
     public func exportOutput(outputID: String, format: DocumentExportFormat) -> URL? {
         guard let record = outputRecord(outputID),
               let active = activeVersion(for: record),
-              active.verificationStatus == OutputVerificationStatus.allSupported.rawValue
+              active.verificationStatus == OutputVerificationStatus.allSupported.rawValue,
+              OutputAssurancePresentation.isExportEligible(Self.assurance(for: active))
         else {
-            message = "Reverify this output from retained sources or regenerate it from fresh sources before export."
+            message = "This output's assurance state does not permit export. Reverify or regenerate it from fresh sources."
             return nil
         }
         do {
@@ -133,11 +272,14 @@ public final class StructuredOutputController: ObservableObject {
 
     public func loadOutputs() {
         outputs = ((try? store.structuredOutputs.fetchOutputs(matterID: matterID)) ?? []).map { record in
-            OutputItem(
+            let assurance = activeVersion(for: record).map(Self.assurance(for:)) ?? .supportNeedsReview
+            return OutputItem(
                 id: record.id,
                 title: record.title,
                 outputType: record.outputType,
                 status: record.status,
+                assuranceState: assurance,
+                assuranceText: OutputAssurancePresentation.text(for: assurance),
                 missingCount: missingCount(for: record),
                 createdAt: record.createdAt,
                 updatedAt: record.updatedAt,
@@ -152,7 +294,8 @@ public final class StructuredOutputController: ObservableObject {
         return ((try? store.structuredOutputs.fetchVersions(structuredOutputID: outputID)) ?? [])
             .sorted { $0.versionIndex < $1.versionIndex }
             .map { version in
-                VersionItem(
+                let assurance = Self.assurance(for: version)
+                return VersionItem(
                     id: version.id,
                     index: version.versionIndex,
                     isActive: version.id == record.activeVersionID,
@@ -161,9 +304,24 @@ public final class StructuredOutputController: ObservableObject {
                     repairReason: version.repairReason,
                     verificationStatus: version.verificationStatus,
                     verificationVersion: version.verificationVersion,
-                    verifiedAt: version.verifiedAt
+                    verificationDimensions: VerificationDimensionPresenter.rows(
+                        from: version.verificationDimensions
+                    ),
+                    verifiedAt: version.verifiedAt,
+                    assuranceState: assurance,
+                    assuranceText: OutputAssurancePresentation.text(for: assurance)
                 )
             }
+    }
+
+    private nonisolated static func assurance(
+        for version: StructuredOutputVersionRecord
+    ) -> OutputAssuranceState {
+        OutputAssurancePresentation.state(
+            rawValue: version.assuranceState,
+            verificationStatus: OutputVerificationStatus(rawValue: version.verificationStatus)
+                ?? .legacyUnverified
+        )
     }
 
     /// True when the active version predates the proposition-support contract.
@@ -234,6 +392,7 @@ public final class StructuredOutputController: ObservableObject {
                 verificationStatus: verification.verificationStatus,
                 verificationVersion: DocumentSupportVerifier.version,
                 verificationResults: verification.results,
+                verificationDimensions: VerificationDimensionsMapper.dimensions(for: verification),
                 sourceSetID: sourceSetID,
                 outputStatus: verification.requiresReview || !missing.isEmpty ? .needsReview : .complete
             )
@@ -375,6 +534,7 @@ public final class StructuredOutputController: ObservableObject {
                 verificationStatus: verification?.verificationStatus ?? .legacyUnverified,
                 verificationVersion: verification.map { _ in DocumentSupportVerifier.version },
                 verificationResults: verification?.results,
+                verificationDimensions: verification.map(VerificationDimensionsMapper.dimensions),
                 sourceSetID: sourceSetID,
                 outputStatus: scope == nil ? nil : finalStatus
             )
@@ -458,15 +618,10 @@ public final class StructuredOutputController: ObservableObject {
 
     private func groundingSource(for item: PreparedDocSource) -> GroundingSource {
         let lowConfidence = item.source.ocrConfidence.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false
-        return GroundingSource(
+        return item.source.groundingSource(
             sourceID: "\(matterID)/\(item.source.chunkID)",
             label: item.label,
-            documentName: item.source.documentName,
-            locatorDisplay: item.source.locator.displayString,
-            text: item.source.text,
-            excerpt: item.source.excerpt,
-            lowConfidence: lowConfidence,
-            metadata: item.source.metadata
+            lowConfidence: lowConfidence
         )
     }
 
@@ -616,6 +771,7 @@ public final class StructuredOutputController: ObservableObject {
                 verificationStatus: verification?.verificationStatus ?? .legacyUnverified,
                 verificationVersion: verification.map { _ in DocumentSupportVerifier.version },
                 verificationResults: verification?.results,
+                verificationDimensions: verification.map(VerificationDimensionsMapper.dimensions),
                 sourceSetID: sourceSetID,
                 outputStatus: priorSourceSet == nil ? nil : finalStatus,
                 makeActive: true
@@ -706,13 +862,14 @@ public final class StructuredOutputController: ObservableObject {
                 sourceSetID: clone.id,
                 documentID: row.documentID,
                 chunkID: row.chunkID,
+                revisionID: row.revisionID,
                 citationLabel: row.citationLabel,
                 locatorJSON: row.locatorJSON,
                 excerpt: row.excerpt,
                 rank: row.rank,
                 warningsJSON: row.warningsJSON
             )
-        })
+        }, preserveUnknownRevision: true)
         return clone.id
     }
 

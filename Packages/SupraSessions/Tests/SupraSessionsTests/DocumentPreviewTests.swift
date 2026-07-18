@@ -53,6 +53,305 @@ final class DocumentPreviewTests: XCTestCase {
         if case .unavailable = model.kind {} else { XCTFail("expected unavailable") }
     }
 
+    func testTREV06CitationPreviewResolvesRecordedRevisionAndLabelsLegacyUnknown() throws {
+        // T-REV-06 expected RED: output-source rows have no revision binding and
+        // DocumentPreviewLoader always substitutes the part's current text.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic revision preview")
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "revision-preview-sha",
+            byteSize: 1,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/revision-preview.txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "revision-preview.txt"
+        ))
+        let part = DocumentPagePartRecord(
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: "REVISION-A repeated anchor",
+            charCount: 26
+        )
+        try store.documentIndex.replaceParts(documentID: document.id, parts: [part])
+        let revisionA = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "preview-revision-a",
+            origin: "parser",
+            method: "synthetic",
+            text: "REVISION-A repeated anchor",
+            charCount: 26
+        ))
+        _ = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revisionA.id,
+            selectionKey: "preview-selection-a",
+            selectedBy: "policy",
+            policyVersion: 1,
+            decisionJSON: #"{"selected":"A"}"#
+        ))
+        let locator = DocumentSourceLocator(
+            sourceKind: .text,
+            charStart: 0,
+            charEnd: 10
+        )
+        let sourceSet = try store.documentSources.createSourceSet(matterID: matter.id, mode: .autoSource)
+        let boundSource = DocumentOutputSourceRecord(
+            sourceSetID: sourceSet.id,
+            documentID: document.id,
+            revisionID: revisionA.id,
+            citationLabel: "S1",
+            locatorJSON: locator.encodedJSON(),
+            excerpt: "REVISION-A",
+            rank: 0
+        )
+        try store.documentSources.addOutputSource(boundSource)
+
+        let revisionB = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "preview-revision-b",
+            origin: "user_edit",
+            method: "manual",
+            text: "REVISION-B repeated anchor",
+            charCount: 26,
+            author: "Synthetic Reviewer",
+            reason: "Correction",
+            supersedesRevisionID: revisionA.id
+        ))
+        _ = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revisionB.id,
+            selectionKey: "preview-selection-b",
+            selectedBy: "user",
+            policyVersion: 1,
+            decisionJSON: #"{"selected":"B"}"#
+        ))
+
+        let loader = DocumentPreviewLoader(
+            store: store,
+            storage: DocumentStorage(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        )
+        let recorded = loader.load(outputSource: boundSource)
+        XCTAssertEqual(recorded.revisionID, revisionA.id)
+        XCTAssertEqual(recorded.revisionOrigin, "parser")
+        XCTAssertEqual(
+            try XCTUnwrap(recorded.revisionCreatedAt).timeIntervalSince1970,
+            revisionA.createdAt.timeIntervalSince1970,
+            accuracy: 0.001
+        )
+        XCTAssertNotNil(recorded.revisionNotice)
+        XCTAssertTrue(recorded.revisionNotice?.contains("parser") == true)
+        if case let .text(content, start, end) = recorded.kind {
+            XCTAssertEqual(content, "REVISION-A repeated anchor")
+            XCTAssertEqual(start, 0)
+            XCTAssertEqual(end, 10)
+            XCTAssertFalse(content.contains("REVISION-B"))
+        } else {
+            XCTFail("expected revision-bound text preview, got \(recorded.kind)")
+        }
+
+        let legacySource = DocumentOutputSourceRecord(
+            sourceSetID: sourceSet.id,
+            documentID: document.id,
+            revisionID: nil,
+            citationLabel: "S2",
+            locatorJSON: locator.encodedJSON(),
+            excerpt: "historical excerpt",
+            rank: 1
+        )
+        let legacy = loader.load(outputSource: legacySource)
+        XCTAssertNil(legacy.revisionID)
+        XCTAssertEqual(legacy.revisionNotice, "revision unknown (pre-lineage)")
+    }
+
+    func testTUX09PreviewCarriesInspectableHierarchyPayloadAndRelationships() throws {
+        // T-UX-09 expected RED: DocumentPreviewModel has no structure node or
+        // relationship projection, so the app cannot inspect persisted adapter output.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic structure preview")
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "structure-preview-sha",
+            byteSize: 1,
+            originalExtension: "docx",
+            managedRelativePath: "blobs/structure-preview.docx"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "structure-preview.docx"
+        ))
+        let bodyText = "The defined term appears in the agreement."
+        try store.documentIndex.replaceParts(documentID: document.id, parts: [
+            DocumentPagePartRecord(
+                documentID: document.id,
+                partIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                normalizedText: bodyText,
+                charCount: bodyText.count
+            )
+        ])
+        let revision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "structure-preview-revision",
+            origin: "parser",
+            method: "docx",
+            text: bodyText,
+            charCount: bodyText.count
+        ))
+        _ = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "structure-preview-selection",
+            selectedBy: "policy",
+            policyVersion: 1,
+            decisionJSON: #"{"selected":"current"}"#
+        ))
+        let nodes = [
+            DocumentStructureNodeRecord(
+                id: "structure-node-root",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "document",
+                ordinal: 0,
+                kind: "document"
+            ),
+            DocumentStructureNodeRecord(
+                id: "structure-node-body",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "body/paragraph/1",
+                parentNodeID: "structure-node-root",
+                ordinal: 0,
+                kind: "paragraph",
+                charStart: 0,
+                charEnd: bodyText.count,
+                payloadJSON: #"{"style":"Body Text"}"#
+            ),
+            DocumentStructureNodeRecord(
+                id: "structure-node-footnote",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "footnote/1",
+                parentNodeID: "structure-node-root",
+                ordinal: 1,
+                kind: "footnote",
+                textContent: "Synthetic footnote text",
+                payloadJSON: #"{"noteID":"1"}"#
+            ),
+            DocumentStructureNodeRecord(
+                id: "structure-node-comment",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "comment/1",
+                parentNodeID: "structure-node-root",
+                ordinal: 2,
+                kind: "comment",
+                textContent: "Synthetic reviewer comment"
+            ),
+            DocumentStructureNodeRecord(
+                id: "structure-node-section",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "section/1",
+                parentNodeID: "structure-node-root",
+                ordinal: 3,
+                kind: "section"
+            ),
+            DocumentStructureNodeRecord(
+                id: "structure-node-section-paragraph",
+                documentID: document.id,
+                revisionID: revision.id,
+                nodeKey: "section/1/paragraph/1",
+                parentNodeID: "structure-node-section",
+                ordinal: 0,
+                kind: "paragraph",
+                charStart: 0,
+                charEnd: bodyText.count
+            ),
+        ]
+        try store.documentStructure.replaceStructure(
+            documentID: document.id,
+            revisionID: revision.id,
+            nodes: nodes,
+            edges: [
+                DocumentStructureEdgeRecord(
+                    id: "structure-edge-footnote",
+                    matterID: matter.id,
+                    fromNodeID: "structure-node-footnote",
+                    toNodeID: "structure-node-body",
+                    kind: "anchor_of"
+                ),
+                DocumentStructureEdgeRecord(
+                    id: "structure-edge-comment",
+                    matterID: matter.id,
+                    fromNodeID: "structure-node-comment",
+                    toNodeID: "structure-node-body",
+                    kind: "anchor_of"
+                ),
+            ]
+        )
+
+        // A persisted but unselected candidate must not leak into the ordinary
+        // document preview. T-UX-09 is a current-structure inspector, while
+        // output-source previews remain explicitly revision-bound.
+        let unselectedRevision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "structure-preview-unselected",
+            origin: "ocr",
+            method: "synthetic",
+            text: bodyText,
+            charCount: bodyText.count
+        ))
+        try store.documentStructure.replaceStructure(
+            documentID: document.id,
+            revisionID: unselectedRevision.id,
+            nodes: [
+                DocumentStructureNodeRecord(
+                    id: "structure-node-unselected-root",
+                    documentID: document.id,
+                    revisionID: unselectedRevision.id,
+                    nodeKey: "unselected-document",
+                    ordinal: 0,
+                    kind: "document"
+                ),
+            ],
+            edges: []
+        )
+
+        let model = DocumentPreviewLoader(
+            store: store,
+            storage: DocumentStorage(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        ).loadDocument(documentID: document.id)
+
+        XCTAssertEqual(model.structureNodes.map(\.nodeKey), [
+            "document", "body/paragraph/1", "footnote/1", "comment/1",
+            "section/1", "section/1/paragraph/1",
+        ])
+        let body = try XCTUnwrap(model.structureNodes.first(where: { $0.nodeKey == "body/paragraph/1" }))
+        XCTAssertEqual(body.parentNodeKey, "document")
+        XCTAssertEqual(body.depth, 1)
+        XCTAssertEqual(body.charStart, 0)
+        XCTAssertEqual(body.charEnd, bodyText.count)
+        XCTAssertEqual(body.payloadJSON, #"{"style":"Body Text"}"#)
+        let footnote = try XCTUnwrap(model.structureNodes.first(where: { $0.nodeKey == "footnote/1" }))
+        XCTAssertEqual(footnote.textContent, "Synthetic footnote text")
+        XCTAssertEqual(footnote.payloadJSON, #"{"noteID":"1"}"#)
+        XCTAssertEqual(model.structureEdges.map(\.display), [
+            "anchor_of: footnote/1 → body/paragraph/1",
+            "anchor_of: comment/1 → body/paragraph/1",
+        ])
+    }
+
     private func makeStore() throws -> SupraStore {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("PreviewStore-\(UUID().uuidString)", isDirectory: true)

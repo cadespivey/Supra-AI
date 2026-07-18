@@ -10,6 +10,10 @@ public struct DocumentChunkRecord: Codable, FetchableRecord, PersistableRecord, 
     public var id: String
     public var documentID: String
     public var pagePartID: String?
+    public var revisionID: String?
+    public var nodeID: String?
+    public var unitKind: String?
+    public var chunkerVersion: Int
     public var chunkIndex: Int
     public var sourceKind: String
     public var pageIndex: Int?
@@ -31,6 +35,10 @@ public struct DocumentChunkRecord: Codable, FetchableRecord, PersistableRecord, 
         id: String = UUID().uuidString,
         documentID: String,
         pagePartID: String? = nil,
+        revisionID: String? = nil,
+        nodeID: String? = nil,
+        unitKind: String? = nil,
+        chunkerVersion: Int = 1,
         chunkIndex: Int,
         sourceKind: String,
         pageIndex: Int? = nil,
@@ -51,6 +59,10 @@ public struct DocumentChunkRecord: Codable, FetchableRecord, PersistableRecord, 
         self.id = id
         self.documentID = documentID
         self.pagePartID = pagePartID
+        self.revisionID = revisionID
+        self.nodeID = nodeID
+        self.unitKind = unitKind
+        self.chunkerVersion = chunkerVersion
         self.chunkIndex = chunkIndex
         self.sourceKind = sourceKind
         self.pageIndex = pageIndex
@@ -73,6 +85,10 @@ public struct DocumentChunkRecord: Codable, FetchableRecord, PersistableRecord, 
         case id
         case documentID = "document_id"
         case pagePartID = "page_part_id"
+        case revisionID = "revision_id"
+        case nodeID = "node_id"
+        case unitKind = "unit_kind"
+        case chunkerVersion = "chunker_version"
         case chunkIndex = "chunk_index"
         case sourceKind = "source_kind"
         case pageIndex = "page_index"

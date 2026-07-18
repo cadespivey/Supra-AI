@@ -35,6 +35,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     private let notifier: any DocumentNotifying
     private let storage: DocumentStorage
     private let capabilitiesProvider: @Sendable () -> DocumentToolchainCapabilities
+    private var reindexEnqueuer: (@MainActor @Sendable (String) -> Void)?
 
     public init(
         store: SupraStore,
@@ -153,7 +154,11 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     @discardableResult
     public func refreshToolchain() -> DocumentToolchainCapabilities {
         let capabilities = capabilitiesProvider()
+        let priorVersion = settings.converterToolchainVersion
         toolchain = capabilities
+        if let priorVersion, priorVersion != capabilities.version {
+            markConverterLineageStale(from: priorVersion, to: capabilities.version)
+        }
         let json = try? JSONEncoder().encode(capabilities)
         settings = (try? store.documentSettings.updateSettings { settings in
             settings.converterToolchainVersion = capabilities.version
@@ -176,6 +181,15 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
 
     // MARK: - Actions
 
+    /// Connects model-selection changes to the app-wide FIFO queue. Kept as a
+    /// post-init seam because the queue owns the import service while the setup
+    /// controller must exist first during app composition.
+    public func setReindexEnqueuer(
+        _ enqueuer: @escaping @MainActor @Sendable (String) -> Void
+    ) {
+        reindexEnqueuer = enqueuer
+    }
+
     /// Creates the managed storage layout and records initialization.
     public func initializeStorage() {
         do {
@@ -195,10 +209,31 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     }
 
     public func selectEmbeddingModel(id: String) {
+        let previousID = settings.selectedEmbeddingModelID
+        let previousModel = previousID.flatMap { try? store.documentSettings.fetchEmbeddingModel(id: $0) }
+        let nextModel = try? store.documentSettings.fetchEmbeddingModel(id: id)
         try? store.documentSettings.selectEmbeddingModel(id: id)
         try? store.documentSettings.invalidateSetup(reason: "embedding model changed")
         reloadSettings()
         reloadLocalState()
+        guard previousID != id else { return }
+        if let previousModel, let nextModel {
+            do {
+                let service = OutputStalenessService(store: store)
+                for matter in try store.matters.fetchMatters() {
+                    _ = try service.embeddingModelChanged(
+                        matterID: matter.id,
+                        fromModelID: previousModel.repoID,
+                        fromRevision: previousModel.revision ?? "unresolved",
+                        toModelID: nextModel.repoID,
+                        toRevision: nextModel.revision ?? "unresolved"
+                    )
+                }
+            } catch {
+                message = "The embedding model changed, but dependent output status could not be refreshed: \(error.localizedDescription)"
+            }
+        }
+        enqueueMattersMissingEmbeddings(modelID: id)
     }
 
     /// Selects an embedding model and immediately verifies it loads. Used by the
@@ -213,7 +248,12 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     /// refreshes the cached list (so it appears in "Select for use") and verifies
     /// the freshly-selected model in the background.
     public func handleEmbeddingModelDownloaded() {
+        let previousID = settings.selectedEmbeddingModelID
+        reloadSettings()
         reloadLocalState()
+        if let selectedID = settings.selectedEmbeddingModelID, selectedID != previousID {
+            enqueueMattersMissingEmbeddings(modelID: selectedID)
+        }
         Task { await testLoadEmbeddingModel() }
     }
 
@@ -388,6 +428,54 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    private func enqueueMattersMissingEmbeddings(modelID: String) {
+        guard let reindexEnqueuer else { return }
+        let matters = (try? store.matters.fetchMatters()) ?? []
+        for matter in matters {
+            let documents = (try? store.documentLibrary.fetchDocuments(matterID: matter.id)) ?? []
+            let needsModel = documents.contains { document in
+                let extractionDone = document.extractionStatus == DocumentExtractionStatus.extracted.rawValue
+                    || document.extractionStatus == DocumentExtractionStatus.ocrComplete.rawValue
+                    || document.extractionStatus == DocumentExtractionStatus.edited.rawValue
+                guard extractionDone,
+                      document.deletedAt == nil,
+                      document.status != MatterDocumentStatus.failed.rawValue else { return false }
+                return (try? store.documentIndex.hasCompleteEmbeddings(
+                    documentID: document.id,
+                    embeddingModelID: modelID
+                )) != true
+            }
+            if needsModel { reindexEnqueuer(matter.id) }
+        }
+    }
+
+    private func markConverterLineageStale(from priorVersion: String, to currentVersion: String) {
+        let matters = (try? store.matters.fetchMatters()) ?? []
+        for matter in matters {
+            let documents = (try? store.documentLibrary.fetchDocuments(matterID: matter.id)) ?? []
+            for document in documents {
+                let extractionDone = document.extractionStatus == DocumentExtractionStatus.extracted.rawValue
+                    || document.extractionStatus == DocumentExtractionStatus.ocrComplete.rawValue
+                    || document.extractionStatus == DocumentExtractionStatus.edited.rawValue
+                guard extractionDone,
+                      document.status != MatterDocumentStatus.failed.rawValue,
+                      document.deletedAt == nil else { continue }
+                let documentVersion = DocumentToolchain.stampedVersion(from: document.extractionMethod)
+                    ?? priorVersion
+                guard documentVersion != currentVersion else { continue }
+                try? store.documentLibrary.updateIndexStatus(documentID: document.id, indexStatus: .stale)
+                _ = try? store.auditEvents.recordEvent(
+                    matterID: matter.id,
+                    eventType: "document_converter_lineage_stale",
+                    actor: "system",
+                    summary: "Converter toolchain changed from \(documentVersion) to \(currentVersion); document requires manual reprocessing.",
+                    relatedTable: "matter_documents",
+                    relatedID: document.id
+                )
+            }
+        }
+    }
 
     private func reloadSettings() {
         settings = (try? store.documentSettings.loadSettings()) ?? settings

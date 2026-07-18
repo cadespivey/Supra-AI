@@ -330,6 +330,83 @@ final class ManagedModelIntegrityTests: XCTestCase {
         XCTAssertTrue(context.runtime.loadRequests.isEmpty)
     }
 
+    func testACR_MODEL_validMisnamedManifestRepairsWithoutRedownloading() throws {
+        // Expected RED: ManagedModelStorage has no integrity-checked recovery path
+        // for the known legacy ` .json` filename, so a complete model must be
+        // re-downloaded even when every artifact already matches its manifest.
+        let directory = tempDir()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let payloads = validPayloads()
+        for (relativePath, data) in payloads {
+            try data.write(to: directory.appendingPathComponent(relativePath))
+        }
+        let manifest = makeManifest(repoID: repoID, revision: revisionA, payloads: payloads)
+        let candidate = directory.appendingPathComponent(" .json")
+        try ManagedModelStorage.writeManifest(manifest, to: candidate)
+
+        XCTAssertTrue(ManagedModelStorage.hasRecoverableMisnamedManifest(in: directory))
+        let repaired = try ManagedModelStorage.repairMisnamedManifest(in: directory)
+
+        XCTAssertEqual(repaired, manifest.canonicalized())
+        XCTAssertEqual(try ManagedModelStorage.loadVerifiedManifest(at: directory), manifest.canonicalized())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: candidate.path))
+    }
+
+    func testACR_MODEL_misnamedManifestRepairFailsClosedOnArtifactMismatch() throws {
+        // Expected RED: the missing repair path cannot prove that a corrupt shard
+        // leaves both the candidate and the absent canonical manifest untouched.
+        let directory = tempDir()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let payloads = validPayloads()
+        for (relativePath, data) in payloads {
+            try data.write(to: directory.appendingPathComponent(relativePath))
+        }
+        let manifest = makeManifest(repoID: repoID, revision: revisionA, payloads: payloads)
+        let candidate = directory.appendingPathComponent(" .json")
+        try ManagedModelStorage.writeManifest(manifest, to: candidate)
+        try Data(repeating: 0x00, count: payloads["model.safetensors"]!.count)
+            .write(to: directory.appendingPathComponent("model.safetensors"))
+
+        XCTAssertThrowsError(try ManagedModelStorage.repairMisnamedManifest(in: directory))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: candidate.path))
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: ManagedModelStorage.manifestURL(in: directory).path
+            )
+        )
+    }
+
+    @MainActor
+    func testACR_MODEL_managedLoadRepairsKnownMisnameBeforeRuntimeRequest() async throws {
+        // Expected RED: the load boundary still rejects a missing canonical
+        // manifest instead of invoking the verified recovery path, so the
+        // otherwise complete model never reaches the runtime.
+        let context = try makeContext()
+        let directory = context.modelDirectory(repoID: repoID)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let payloads = validPayloads()
+        for (relativePath, data) in payloads {
+            try data.write(to: directory.appendingPathComponent(relativePath))
+        }
+        let manifest = makeManifest(repoID: repoID, revision: revisionA, payloads: payloads)
+        let candidate = directory.appendingPathComponent(" .json")
+        try ManagedModelStorage.writeManifest(manifest, to: candidate)
+        let model = try context.library.addModel(
+            displayName: "Recoverable model",
+            path: directory.path,
+            bookmarkData: nil
+        )
+
+        await context.library.activateAndLoad(modelID: model.id)
+
+        guard case .loaded = context.library.loadState else {
+            return XCTFail("verified recovery should continue into the runtime load")
+        }
+        XCTAssertEqual(context.runtime.loadRequests.count, 1)
+        XCTAssertEqual(try ManagedModelStorage.loadVerifiedManifest(at: directory), manifest.canonicalized())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: candidate.path))
+    }
+
     private func validPayloads(includingTokenizer: Bool = false) -> [String: Data] {
         var payloads = [
             "config.json": Data(#"{"model_type":"qwen2"}"#.utf8),

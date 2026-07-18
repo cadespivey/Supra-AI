@@ -72,6 +72,7 @@ public enum StructuredOutputType: String, Codable, CaseIterable, Hashable, Senda
     // Milestone 3: document intelligence outputs.
     case documentQA = "document_qa"
     case documentQAMemo = "document_qa_memo"
+    case documentExhaustiveList = "document_exhaustive_list"
     case factChronologyTable = "fact_chronology_table"
     case factChronologyNarrative = "fact_chronology_narrative"
 
@@ -80,7 +81,8 @@ public enum StructuredOutputType: String, Codable, CaseIterable, Hashable, Senda
     /// contract system used for the other output types.
     public var isDocumentOutput: Bool {
         switch self {
-        case .documentQA, .documentQAMemo, .factChronologyTable, .factChronologyNarrative:
+        case .documentQA, .documentQAMemo, .documentExhaustiveList,
+             .factChronologyTable, .factChronologyNarrative:
             true
         case .legalIssueSpotting, .researchPlan, .caseResultSummary, .ruleSynthesis,
              .argumentOutline, .draftingSkeleton:
@@ -98,7 +100,8 @@ public enum StructuredOutputType: String, Codable, CaseIterable, Hashable, Senda
         case .caseResultSummary, .ruleSynthesis, .argumentOutline, .researchPlan:
             true
         case .legalIssueSpotting, .draftingSkeleton,
-             .documentQA, .documentQAMemo, .factChronologyTable, .factChronologyNarrative:
+             .documentQA, .documentQAMemo, .documentExhaustiveList,
+             .factChronologyTable, .factChronologyNarrative:
             false
         }
     }

@@ -6,6 +6,12 @@ import UniformTypeIdentifiers
 /// `DocumentSourceKind` and an extraction family. Unsupported files are not
 /// silently skipped — they are recorded in the import report as `unsupported`.
 public enum SupportedDocumentTypes {
+    public static let legacyXLSGuidance =
+        "Legacy .xls files are not imported. Export the file as .xlsx and try again."
+    public static let legacyMSGGuidance =
+        "Outlook .msg files are not imported. Export the message as .eml and try again."
+    public static let legacyDOCLossyWarning =
+        "converted_lossy: Legacy .doc conversion can lose tables, numbering, and layout. Convert the file to .docx or PDF and review the extracted text."
 
     /// The extraction family that handles a given input format. Drives which
     /// adapter (Apple framework vs. bundled tool) processes the file.
@@ -74,6 +80,17 @@ public enum SupportedDocumentTypes {
 
     public static func isSupported(_ url: URL) -> Bool {
         format(for: url) != nil
+    }
+
+    /// Legacy formats intentionally shown by the picker so the app can give an
+    /// accountable conversion disposition instead of silently hiding them.
+    /// They are rejected by the import orchestrator before managed storage.
+    public static func unsupportedByPolicyReason(for url: URL) -> String? {
+        switch url.pathExtension.lowercased() {
+        case "xls": legacyXLSGuidance
+        case "msg": legacyMSGGuidance
+        default: nil
+        }
     }
 
     /// The UTTypes accepted by file/folder import pickers.

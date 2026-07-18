@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "syntheticDataDeclaration": "Every fixture contains deterministic synthetic records only; no user or production data is permitted.",
-  "currentMigration": "v058_add_document_job_kind",
+  "currentMigration": "v069_add_verification_dimensions",
   "supportedVersions": [
     "v1.4.1",
     "v1.5.2",
@@ -98,6 +98,13 @@
         "v055_add_output_verification_provenance",
         "v056_add_document_blob_integrity"
       ]
+    },
+    "v058": {
+      "extends": "v056",
+      "identifiers": [
+        "v057_add_remediation_recovery_queue",
+        "v058_add_document_job_kind"
+      ]
     }
   },
   "fixtures": [
@@ -173,12 +180,12 @@
     },
     {
       "seedVersion": "latest-minus-one",
-      "sourceRef": "63cf63f32a78aa76eb2edd13ab5a53119fcc7616",
-      "sourceCommitSHA": "63cf63f32a78aa76eb2edd13ab5a53119fcc7616",
+      "sourceRef": "260f6f5a48046476ce6ef4f2b598ac4dd43c2525",
+      "sourceCommitSHA": "260f6f5a48046476ce6ef4f2b598ac4dd43c2525",
       "fileName": "latest-minus-one.sqlite.gz",
-      "compressedSHA256": "02e7ddee3e2e955858ae97bef82bd466cb55a9f7c435f9ac5ccd05891243b103",
-      "databaseSHA256": "e1897158e662d931af849a2dd5884dc4372bdcbd4424082791e19506a11deccf",
-      "migrationCatalog": "v056",
+      "compressedSHA256": "c3347cc48571523276590a2087442292906aa183faebb07b7fcb0d23aec46ebb",
+      "databaseSHA256": "68b249858c4063b16b809aa56a57f6e5a4311354cef3e87165491fb20600b0c5",
+      "migrationCatalog": "v058",
       "syntheticData": true
     }
   ]

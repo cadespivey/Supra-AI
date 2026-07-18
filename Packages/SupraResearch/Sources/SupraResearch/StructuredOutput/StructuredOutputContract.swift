@@ -22,7 +22,8 @@ public enum StructuredOutputContracts {
     /// outputs, which are not generated through this template system.
     public static func contract(for type: StructuredOutputType) -> StructuredOutputContract? {
         switch type {
-        case .documentQA, .documentQAMemo, .factChronologyTable, .factChronologyNarrative:
+        case .documentQA, .documentQAMemo, .documentExhaustiveList,
+             .factChronologyTable, .factChronologyNarrative:
             nil
         case .legalIssueSpotting:
             StructuredOutputContract(

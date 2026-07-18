@@ -68,6 +68,11 @@ final class AppEnvironment: ObservableObject {
         pendingCount: 0,
         pendingByKind: [:]
     )
+    /// D-06's persisted internal flag, exposed in Diagnostics for the required
+    /// operational rollback/rebuild drill.
+    @Published private(set) var documentChunkerVersion = DocumentChunkerRolloutService.approvedDefaultVersion
+    @Published private(set) var documentChunkerStatusMessage = "Chunker v2 is the approved default."
+    @Published private(set) var isChangingDocumentChunker = false
 
     /// App-settings key recording when first-run onboarding was completed/skipped.
     private static let onboardingCompletedKey = "onboarding.completedAt"
@@ -100,6 +105,7 @@ final class AppEnvironment: ObservableObject {
     let documentQueue: DocumentProcessingQueue
 
     private let runtimeStatusController: RuntimeStatusController
+    private let runtimeClient: RuntimeClient
     /// Fires a classification-only pass for the selected matter whenever a model
     /// finishes loading, so documents imported while no model was available get
     /// classified once one is ready (the queue de-dupes and no-ops when nothing is
@@ -118,6 +124,7 @@ final class AppEnvironment: ObservableObject {
         self.usingFallbackStore = storeResult.isFallback
         self.databaseRecoveryState = storeResult.recoveryState
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
+        self.runtimeClient = runtimeClient
         self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
             store: store,
@@ -198,9 +205,10 @@ final class AppEnvironment: ObservableObject {
         self.embeddingDownloadController.onModelRegistered = { [weak documentSetup] in
             documentSetup?.handleEmbeddingModelDownloaded()
         }
+        let importService = DocumentImportService(store: store)
         let queue = DocumentProcessingQueue(
             store: store,
-            importService: DocumentImportService(store: store),
+            importService: importService,
             makeIndexingService: {
                 // Build a fresh indexing service per job using the currently
                 // selected embedding model (if any).
@@ -214,6 +222,12 @@ final class AppEnvironment: ObservableObject {
                 store: store, modelLibrary: modelLibrary, runtimeClient: runtimeClient
             )
         )
+        documentSetup.setReindexEnqueuer { [weak queue] matterID in
+            _ = queue?.enqueueReindex(matterID: matterID)
+        }
+        importService.setReindexEnqueuer { [weak queue] matterID in
+            _ = queue?.enqueueReindex(matterID: matterID)
+        }
         self.documentQueue = queue
         self.mattersController = MattersController(
             store: store,
@@ -283,6 +297,14 @@ final class AppEnvironment: ObservableObject {
         modelLibrary.reconcileLoadedModel(runtimeStatusController.loadedModelID)
         autoLoadStartupModelIfNeeded()
         await documentSetupController.refreshAll()
+        documentChunkerVersion = (try? store.documentSettings.loadSettings().chunkerVersion)
+            ?? DocumentChunkerRolloutService.approvedDefaultVersion
+        // D-06: upgrade existing stores exactly once after setup is readable but
+        // before the interrupted-job queue resumes. The marker survives an
+        // explicit later rollback, so bootstrap never silently overrides it.
+        if !Self.isUITestMode, !Self.isDemoMode, !usingFallbackStore {
+            await promoteApprovedDocumentChunkerDefaultIfNeeded()
+        }
         // Warm the embedding model now that its selection/verification is known. It
         // lives in a separate runtime slot from the chat model, so this never evicts
         // the chat model — and it removes the first-use wait on Document Q&A, semantic
@@ -303,6 +325,52 @@ final class AppEnvironment: ObservableObject {
         // Start Sparkle: scheduled background checks + silent download, surfacing a
         // single "Install and Relaunch" prompt. Skipped in UI tests.
         if !Self.isUITestMode, !Self.isDemoMode { sparkleUpdater.start() }
+    }
+
+    func switchDocumentChunker(to targetVersion: Int) async {
+        guard !isChangingDocumentChunker else { return }
+        isChangingDocumentChunker = true
+        documentChunkerStatusMessage = "Rebuilding documents with chunker v\(targetVersion)…"
+        defer { isChangingDocumentChunker = false }
+
+        do {
+            let result = try await makeDocumentChunkerRolloutService().switchAllMatters(
+                to: targetVersion,
+                actor: "user"
+            )
+            documentChunkerVersion = targetVersion
+            documentChunkerStatusMessage = chunkerCompletionMessage(result)
+        } catch {
+            documentChunkerVersion = (try? store.documentSettings.loadSettings().chunkerVersion)
+                ?? documentChunkerVersion
+            documentChunkerStatusMessage = error.localizedDescription
+        }
+    }
+
+    private func promoteApprovedDocumentChunkerDefaultIfNeeded() async {
+        isChangingDocumentChunker = true
+        defer { isChangingDocumentChunker = false }
+        do {
+            if let result = try await makeDocumentChunkerRolloutService()
+                .promoteApprovedDefaultIfNeeded(actor: "system — approved by Cade Spivey") {
+                documentChunkerStatusMessage = chunkerCompletionMessage(result)
+            }
+            documentChunkerVersion = try store.documentSettings.loadSettings().chunkerVersion
+        } catch {
+            documentChunkerVersion = (try? store.documentSettings.loadSettings().chunkerVersion)
+                ?? documentChunkerVersion
+            documentChunkerStatusMessage = "Approved chunker migration paused: \(error.localizedDescription)"
+        }
+    }
+
+    private func makeDocumentChunkerRolloutService() -> DocumentChunkerRolloutService {
+        let selectedModel = try? store.documentSettings.fetchSelectedEmbeddingModel()
+        let embedder = selectedModel.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+        return DocumentChunkerRolloutService(store: store, embedder: embedder)
+    }
+
+    private func chunkerCompletionMessage(_ result: DocumentChunkerRolloutResult) -> String {
+        "Chunker v\(result.targetVersion) rebuilt \(result.reindexedDocuments) document(s): \(result.readyDocuments) ready, \(result.textIndexedDocuments) text-indexed, 0 pending."
     }
 
     /// Records that first-run onboarding was completed or skipped and dismisses it.
@@ -371,6 +439,215 @@ final class AppEnvironment: ObservableObject {
         }
         seedUITestCitationsChatIfNeeded()
         seedUITestRemediationWarningsIfNeeded()
+        seedUITestImportFailureIfNeeded()
+        seedUITestInterruptedImportIfNeeded()
+        seedUITestDocumentCorrectionIfNeeded()
+        seedUITestDocumentRelationsIfNeeded()
+    }
+
+    /// Seeds one completed encrypted-source rejection for the T-OPS-07 warning
+    /// contract. The report and source row contain only synthetic fixture data.
+    private func seedUITestImportFailureIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestImportFailure"),
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            let marker = "SupraAI UI-test actionable import failure"
+            guard !(try store.documentJobs.fetchBatches(matterID: matterID)).contains(where: {
+                $0.sourceRootDisplay == marker
+            }) else { return }
+
+            let displayName = "privileged-locked.pdf"
+            let guidance = "Password-protected or encrypted files cannot be imported. Remove encryption from a copy and try again."
+            let batch = try store.documentJobs.createBatch(
+                matterID: matterID,
+                sourceRootDisplay: marker
+            )
+            let source = try store.documentJobs.recordDiscovered(
+                batchID: batch.id,
+                matterID: matterID,
+                sourceKey: "selection:0",
+                sourceDisplayPath: displayName
+            )
+            _ = try store.documentJobs.markState(
+                sourceID: source.id,
+                state: .rejected,
+                rejectionCode: "encrypted_source",
+                reason: guidance
+            )
+            let reportJSON = """
+            {"items":[{"displayName":"\(displayName)","sourceDisplayPath":"\(displayName)","disposition":"rejected","reason":"\(guidance)","rejectionCode":"encrypted_source"}],"counts":{"rejected":1}}
+            """
+            try store.documentJobs.updateBatchProgress(
+                id: batch.id,
+                discoveredCount: 1,
+                importedCount: 0,
+                failedCount: 1
+            )
+            try store.documentJobs.finalizeBatch(
+                id: batch.id,
+                status: .completeWithFailures,
+                reportJSON: reportJSON
+            )
+        } catch {
+            assertionFailure("Could not seed actionable import failure fixture: \(error)")
+        }
+    }
+
+    /// Seeds one proposal-only draft/executed family for the T-UX-08 review flow.
+    /// The relation evidence includes non-default diff counts so the UI test proves
+    /// the immutable evidence surface is wired, not a generic placeholder.
+    private func seedUITestDocumentRelationsIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestDocumentRelations"),
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            guard (try store.documentRelations.fetchAll(matterID: matterID)).isEmpty else { return }
+            func insert(_ id: String, name: String) throws -> MatterDocumentRecord {
+                let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                    id: "uitest-relation-blob-\(id)",
+                    sha256: "uitest-relation-sha-\(id)",
+                    byteSize: 24,
+                    originalExtension: "txt",
+                    managedRelativePath: "uitest/\(name)"
+                )).blob
+                return try store.documentLibrary.insertDocument(MatterDocumentRecord(
+                    id: "uitest-relation-\(id)",
+                    matterID: matterID,
+                    blobID: blob.id,
+                    displayName: name,
+                    status: MatterDocumentStatus.ready.rawValue,
+                    extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                    indexStatus: DocumentIndexStatus.ready.rawValue
+                ))
+            }
+            let draft = try insert("draft", name: "Atlas Agreement Draft.txt")
+            let executed = try insert("executed", name: "Atlas Agreement Executed.txt")
+            _ = try store.documentRelations.propose(
+                matterID: matterID,
+                fromDocumentID: draft.id,
+                toDocumentID: executed.id,
+                kind: .draftOf,
+                evidenceJSON: #"{"schema_version":1,"role_signal":"draft_to_executed","combined_similarity":0.84,"changed_units":2,"inserted_units":1,"deleted_units":0}"#,
+                confidence: 0.84,
+                proposedBy: .system
+            )
+        } catch {
+            assertionFailure("Could not seed relation review accessibility fixture: \(error)")
+        }
+    }
+
+    /// Seeds one revision-backed text part only for T-UX-07. The fixture lives in
+    /// the throwaway UI-test database and never touches the user's document store.
+    private func seedUITestDocumentCorrectionIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestDocumentCorrection"),
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            guard !(try store.documentLibrary.fetchDocuments(matterID: matterID)).contains(where: {
+                $0.displayName == "Correction Fixture.txt"
+            }) else { return }
+            let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                sha256: "uitest-correction-fixture-sha",
+                byteSize: 0,
+                originalExtension: "txt",
+                managedRelativePath: "uitest/Correction Fixture.txt"
+            )).blob
+            let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+                matterID: matterID,
+                blobID: blob.id,
+                displayName: "Correction Fixture.txt",
+                status: MatterDocumentStatus.ready.rawValue,
+                extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                indexStatus: DocumentIndexStatus.ready.rawValue,
+                extractionMethod: "synthetic@toolchain:uitest"
+            ))
+            let part = DocumentPagePartRecord(
+                documentID: document.id,
+                partIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                normalizedText: "ORIGINAL-ALPHA",
+                charCount: 14
+            )
+            try store.documentIndex.replaceParts(documentID: document.id, parts: [part])
+            let revision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+                documentID: document.id,
+                partIndex: 0,
+                derivationKey: "uitest-correction-original",
+                origin: "parser",
+                method: "synthetic",
+                text: "ORIGINAL-ALPHA",
+                charCount: 14
+            ))
+            _ = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
+                documentID: document.id,
+                partIndex: 0,
+                selectedRevisionID: revision.id,
+                selectionKey: "uitest-correction-selection",
+                selectedBy: "policy",
+                policyVersion: 1,
+                decisionJSON: #"{"rule":"synthetic_ui_fixture"}"#
+            ))
+        } catch {
+            assertionFailure("Could not seed correction accessibility fixture: \(error)")
+        }
+    }
+
+    /// Creates a five-source, three-complete/two-interrupted import only for the
+    /// dedicated recovery UI tests. The backing files and store are both
+    /// hermetic throwaways selected by `-uiTestMode`.
+    private func seedUITestInterruptedImportIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestInterruptedImport"),
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            let marker = "SupraAI UI-test interrupted import"
+            guard !(try store.documentJobs.fetchBatches(matterID: matterID)).contains(where: {
+                $0.sourceRootDisplay == marker
+            }) else { return }
+
+            let fixtureRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "SupraAI-UITest-Interrupted-\(ProcessInfo.processInfo.processIdentifier)",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+            let batch = try store.documentJobs.createBatch(
+                matterID: matterID,
+                sourceRootDisplay: marker
+            )
+            for index in 1...5 {
+                let name = "Resume Fixture \(index).txt"
+                let url = fixtureRoot.appendingPathComponent(name)
+                let bookmark: Data?
+                if index > 3 {
+                    try Data("Synthetic resumable UI fixture \(index).".utf8).write(to: url, options: .atomic)
+                    bookmark = try url.bookmarkData(
+                        options: [],
+                        includingResourceValuesForKeys: nil,
+                        relativeTo: nil
+                    )
+                } else {
+                    bookmark = nil
+                }
+                let source = try store.documentJobs.recordDiscovered(
+                    batchID: batch.id,
+                    matterID: matterID,
+                    sourceKey: "selection:\(index - 1)",
+                    sourceDisplayPath: name,
+                    sourceBookmark: bookmark,
+                    state: .selected
+                )
+                if index <= 3 {
+                    _ = try store.documentJobs.markState(sourceID: source.id, state: .admitted)
+                }
+            }
+            try store.documentJobs.updateBatchProgress(
+                id: batch.id,
+                discoveredCount: 5,
+                importedCount: 3,
+                failedCount: 0
+            )
+            _ = try store.documentJobs.enqueueJob(matterID: matterID, importBatchID: batch.id)
+            _ = try store.documentJobs.activateNextJobIfIdle()
+        } catch {
+            assertionFailure("Could not seed interrupted import accessibility fixture: \(error)")
+        }
     }
 
     /// Seeds explicit legacy-state fixtures only for the remediation accessibility
@@ -460,15 +737,98 @@ final class AppEnvironment: ObservableObject {
                         status: MatterDocumentStatus.ready.rawValue
                     )
                 )
+                let agreementText = "SECTION 3. The term of this Agreement is two (2) years from the Effective Date."
                 try store.documentIndex.replaceParts(documentID: document.id, parts: [
                     DocumentPagePartRecord(
                         documentID: document.id,
                         partIndex: 0,
                         sourceKind: DocumentSourceKind.text.rawValue,
-                        normalizedText: "SECTION 3. The term of this Agreement is two (2) years from the Effective Date.",
-                        charCount: 76
+                        normalizedText: agreementText,
+                        charCount: agreementText.count
                     )
                 ])
+                let revision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+                    documentID: document.id,
+                    partIndex: 0,
+                    derivationKey: "uitest-agreement-revision",
+                    origin: "parser",
+                    method: "synthetic",
+                    text: agreementText,
+                    charCount: agreementText.count
+                ))
+                _ = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
+                    documentID: document.id,
+                    partIndex: 0,
+                    selectedRevisionID: revision.id,
+                    selectionKey: "uitest-agreement-selection",
+                    selectedBy: "policy",
+                    policyVersion: 1,
+                    decisionJSON: #"{"selected":"synthetic"}"#
+                ))
+                let structureNodes = [
+                    DocumentStructureNodeRecord(
+                        id: "uitest-structure-root",
+                        documentID: document.id,
+                        revisionID: revision.id,
+                        nodeKey: "document",
+                        ordinal: 0,
+                        kind: "document"
+                    ),
+                    DocumentStructureNodeRecord(
+                        id: "uitest-structure-body",
+                        documentID: document.id,
+                        revisionID: revision.id,
+                        nodeKey: "body/paragraph/1",
+                        parentNodeID: "uitest-structure-root",
+                        ordinal: 0,
+                        kind: "paragraph",
+                        charStart: 0,
+                        charEnd: agreementText.count,
+                        payloadJSON: #"{"style":"Contract Body"}"#
+                    ),
+                    DocumentStructureNodeRecord(
+                        id: "uitest-structure-footnote",
+                        documentID: document.id,
+                        revisionID: revision.id,
+                        nodeKey: "footnote/1",
+                        parentNodeID: "uitest-structure-root",
+                        ordinal: 1,
+                        kind: "footnote",
+                        textContent: "Synthetic defined-term footnote",
+                        payloadJSON: #"{"noteID":"1"}"#
+                    ),
+                    DocumentStructureNodeRecord(
+                        id: "uitest-structure-comment",
+                        documentID: document.id,
+                        revisionID: revision.id,
+                        nodeKey: "comment/1",
+                        parentNodeID: "uitest-structure-root",
+                        ordinal: 2,
+                        kind: "comment",
+                        textContent: "Synthetic reviewer comment"
+                    ),
+                ]
+                try store.documentStructure.replaceStructure(
+                    documentID: document.id,
+                    revisionID: revision.id,
+                    nodes: structureNodes,
+                    edges: [
+                        DocumentStructureEdgeRecord(
+                            id: "uitest-structure-edge-footnote",
+                            matterID: matterID,
+                            fromNodeID: "uitest-structure-footnote",
+                            toNodeID: "uitest-structure-body",
+                            kind: "anchor_of"
+                        ),
+                        DocumentStructureEdgeRecord(
+                            id: "uitest-structure-edge-comment",
+                            matterID: matterID,
+                            fromNodeID: "uitest-structure-comment",
+                            toNodeID: "uitest-structure-body",
+                            kind: "anchor_of"
+                        ),
+                    ]
+                )
                 documentID = document.id
             }
 

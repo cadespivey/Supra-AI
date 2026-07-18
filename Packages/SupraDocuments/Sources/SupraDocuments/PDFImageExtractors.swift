@@ -67,6 +67,11 @@ public struct PDFExtractor: DocumentExtractor {
         let attributes = document.documentAttributes
         return ExtractionResult(
             parts: parts,
+            structure: PDFStructureAdapter.structure(
+                for: document,
+                parts: parts,
+                ocrPageIndices: ocrPageIndices
+            ),
             method: "pdfkit",
             warnings: warnings,
             needsOCR: needsOCR,

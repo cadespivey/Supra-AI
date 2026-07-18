@@ -25,6 +25,7 @@ public enum ImportTraversalStage: String, Sendable {
 }
 
 public typealias ImportTraversalFaultInjector = @Sendable (ImportTraversalStage, URL) throws -> Void
+public typealias ImportSourceStateObserver = @Sendable (DocumentImportSourceRecord) throws -> Void
 
 /// The final import report stored on the batch (plan §5.1).
 public struct DocumentImportReport: Codable, Sendable {
@@ -41,6 +42,7 @@ public struct DocumentImportReport: Codable, Sendable {
         items.filter {
             $0.disposition == DocumentImportDisposition.imported.rawValue
                 || $0.disposition == DocumentImportDisposition.duplicateBlobReused.rawValue
+                || $0.disposition == DocumentImportSourceState.admitted.rawValue
         }.count
     }
     public var failedCount: Int {
@@ -48,6 +50,11 @@ public struct DocumentImportReport: Codable, Sendable {
             $0.disposition == DocumentImportDisposition.extractionFailed.rawValue
                 || $0.disposition == DocumentImportDisposition.unsupported.rawValue
                 || $0.disposition == DocumentImportDisposition.ocrFailed.rawValue
+                || $0.disposition == DocumentImportSourceState.rejected.rawValue
+                || $0.disposition == DocumentImportSourceState.unsupportedByPolicy.rawValue
+                || $0.disposition == DocumentImportSourceState.failed.rawValue
+                || $0.disposition == DocumentImportSourceState.cancelled.rawValue
+                || $0.disposition == DocumentImportSourceState.interrupted.rawValue
         }.count
     }
 }
@@ -67,6 +74,8 @@ public final class DocumentImportService: @unchecked Sendable {
     private let importPolicy: ImportPolicy
     private let ocr: (any DocumentOCRService)?
     private let traversalFaultInjector: ImportTraversalFaultInjector
+    private let sourceStateObserver: ImportSourceStateObserver
+    @MainActor private var reindexEnqueuer: (@MainActor @Sendable (String) -> Void)?
 
     public init(
         store: SupraStore,
@@ -74,7 +83,8 @@ public final class DocumentImportService: @unchecked Sendable {
         extraction: ExtractionService? = nil,
         importPolicy: ImportPolicy = .default,
         ocr: (any DocumentOCRService)? = VisionOCRService(),
-        traversalFaultInjector: @escaping ImportTraversalFaultInjector = { _, _ in }
+        traversalFaultInjector: @escaping ImportTraversalFaultInjector = { _, _ in },
+        sourceStateObserver: @escaping ImportSourceStateObserver = { _ in }
     ) {
         self.store = store
         self.storage = storage
@@ -82,6 +92,7 @@ public final class DocumentImportService: @unchecked Sendable {
         self.importPolicy = importPolicy
         self.ocr = ocr
         self.traversalFaultInjector = traversalFaultInjector
+        self.sourceStateObserver = sourceStateObserver
     }
 
     public struct ImportOutcome: Sendable {
@@ -100,19 +111,41 @@ public final class DocumentImportService: @unchecked Sendable {
         batchID: String? = nil
     ) async throws -> ImportOutcome {
         try storage.initializeStorage()
-        let batch = try resolveBatch(matterID: matterID, batchID: batchID, sources: sources)
+        let batch = try resolveBatch(
+            matterID: matterID,
+            batchID: batchID,
+            sources: sources,
+            targetFolderID: targetFolderID
+        )
 
         var report = DocumentImportReport()
         var folderCache: [String: String?] = [:]  // managed relative dir path -> folder id
         let ledger = ImportBudgetLedger(policy: importPolicy)
 
-        for source in sources {
+        for (selectionIndex, source) in sources.enumerated() {
             // User-picked / dropped files are security-scoped under the App
             // Sandbox. Imports run asynchronously on the processing queue — long
             // after the picker callback — so we must (re)open scope here or every
             // read fails. App-owned/temp URLs return false and need no scope.
             let scoped = source.startAccessingSecurityScopedResource()
             defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+            let bookmarkOptions: URL.BookmarkCreationOptions = scoped
+                ? [.withSecurityScope, .securityScopeAllowOnlyReadAccess]
+                : []
+            let bookmark = try? source.bookmarkData(
+                options: bookmarkOptions,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+            let sourceKey = "selection:\(selectionIndex)"
+            let sourceRow = try recordSource(
+                batchID: batch.id,
+                matterID: matterID,
+                sourceKey: sourceKey,
+                sourceDisplayPath: source.lastPathComponent,
+                sourceBookmark: bookmark,
+                state: .selected
+            )
             do {
                 let root = try PinnedImportRoot(url: source)
                 try traversalFaultInjector(.afterRootPinned, source)
@@ -127,6 +160,8 @@ public final class DocumentImportService: @unchecked Sendable {
                     visited: &visited,
                     matterID: matterID,
                     batchID: batch.id,
+                    sourceID: sourceRow.id,
+                    sourceKey: sourceKey,
                     currentFolderID: targetFolderID,
                     rootFolderID: targetFolderID,
                     folderCache: &folderCache,
@@ -135,21 +170,26 @@ public final class DocumentImportService: @unchecked Sendable {
             } catch is CancellationError {
                 throw CancellationError()
             } catch let violation as ImportPolicyViolation {
-                Self.appendPolicyRejection(
+                try recordPolicyRejection(
                     violation,
                     url: source,
                     sourceDisplayPath: source.lastPathComponent,
+                    sourceID: sourceRow.id,
                     report: &report
                 )
             } catch {
-                report.items.append(DocumentImportReportItem(
+                try recordFailure(
+                    error,
                     displayName: source.lastPathComponent,
                     sourceDisplayPath: source.lastPathComponent,
-                    disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                    reason: "Unreadable: \(error.localizedDescription)"
-                ))
+                    sourceID: sourceRow.id,
+                    report: &report
+                )
             }
         }
+
+        relinkEmailThreads(matterID: matterID)
+        relinkLegalStructures(matterID: matterID)
 
         report.counts = Self.tallyCounts(report.items)
         let status: DocumentImportBatchStatus = report.failedCount > 0 ? .completeWithFailures : .complete
@@ -172,6 +212,124 @@ public final class DocumentImportService: @unchecked Sendable {
         return ImportOutcome(batchID: batch.id, report: report)
     }
 
+    /// Resumes a post-v059 batch exclusively from its persisted source ledger.
+    /// Already-terminal rows are skipped; top-level interrupted rows reopen their
+    /// bookmarks and re-enter at copying. A missing target or authorization is a
+    /// per-source terminal failure, never a silent fallback to the matter root.
+    @discardableResult
+    public func resumeBatch(batchID: String, matterID: String) async throws -> ImportOutcome {
+        try storage.initializeStorage()
+        guard let batch = try store.documentJobs.fetchBatch(id: batchID), batch.matterID == matterID else {
+            throw DocumentJobRepositoryError.batchMatterMismatch(batchID: batchID, matterID: matterID)
+        }
+        let initialRows = try store.documentJobs.fetchSources(batchID: batchID)
+        guard !initialRows.isEmpty else {
+            return ImportOutcome(batchID: batchID, report: DocumentImportReport())
+        }
+
+        let unfinished = initialRows.filter { !$0.isTerminal }
+        let targetFolderID: String?
+        if batch.targetFolderRequested {
+            if let requestedID = batch.targetFolderID,
+               let folder = try store.documentLibrary.fetchFolder(id: requestedID),
+               folder.matterID == matterID,
+               folder.deletedAt == nil {
+                targetFolderID = requestedID
+            } else {
+                for source in unfinished {
+                    try transitionSource(source.id, to: .failed, reason: "target_folder_unavailable")
+                }
+                return try finalizeLedgerBatch(batchID: batchID, matterID: matterID)
+            }
+        } else {
+            targetFolderID = nil
+        }
+
+        var folderCache: [String: String?] = [:]
+        let ledger = ImportBudgetLedger(policy: importPolicy)
+        var compatibilityReport = DocumentImportReport()
+        for source in unfinished where source.parentSourceID == nil {
+            guard let url = Self.resolveSourceBookmark(source.sourceBookmark) else {
+                try transitionSource(source.id, to: .failed, reason: "bookmark_unresolvable")
+                continue
+            }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                try transitionSource(source.id, to: .copying)
+                let root = try PinnedImportRoot(url: url)
+                try traversalFaultInjector(.afterRootPinned, url)
+                try root.verifyUnchanged()
+                var visited = Set<FileIdentity>()
+                try await importEntry(
+                    at: url,
+                    relativePath: source.sourceDisplayPath,
+                    depth: 0,
+                    root: root,
+                    ledger: ledger,
+                    visited: &visited,
+                    matterID: matterID,
+                    batchID: batchID,
+                    sourceID: source.id,
+                    sourceKey: source.sourceKey,
+                    currentFolderID: targetFolderID,
+                    rootFolderID: targetFolderID,
+                    folderCache: &folderCache,
+                    report: &compatibilityReport,
+                    sourceAlreadyCopying: true
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let violation as ImportPolicyViolation {
+                try recordPolicyRejection(
+                    violation,
+                    url: url,
+                    sourceDisplayPath: source.sourceDisplayPath,
+                    sourceID: source.id,
+                    report: &compatibilityReport
+                )
+            } catch {
+                try recordFailure(
+                    error,
+                    displayName: url.lastPathComponent,
+                    sourceDisplayPath: source.sourceDisplayPath,
+                    sourceID: source.id,
+                    report: &compatibilityReport
+                )
+            }
+        }
+
+        // Any nonterminal child that could not be rediscovered from its selected
+        // root must be explicit rather than silently omitted from final accounting.
+        for source in try store.documentJobs.unfinishedSources(batchID: batchID) {
+            try transitionSource(source.id, to: .failed, reason: "bookmark_unresolvable")
+        }
+        return try finalizeLedgerBatch(batchID: batchID, matterID: matterID)
+    }
+
+    /// Finalizes a paused import after the user chooses Discard. Succeeded rows
+    /// remain untouched; every re-entrant row becomes cancelled and releases its
+    /// bookmark in the same transaction as its state transition.
+    @discardableResult
+    public func discardBatch(batchID: String, matterID: String) throws -> DocumentImportReport {
+        guard let batch = try store.documentJobs.fetchBatch(id: batchID), batch.matterID == matterID else {
+            throw DocumentJobRepositoryError.batchMatterMismatch(batchID: batchID, matterID: matterID)
+        }
+        for source in try store.documentJobs.unfinishedSources(batchID: batchID) {
+            try transitionSource(source.id, to: .cancelled, reason: "Import discarded by user.")
+        }
+        let report = try ledgerReport(batchID: batchID)
+        try store.documentJobs.updateBatchProgress(
+            id: batchID,
+            discoveredCount: report.discoveredCount,
+            importedCount: report.importedCount,
+            failedCount: report.failedCount
+        )
+        let reportJSON = try JSONEncoder.encodeToString(report)
+        try store.documentJobs.finalizeBatch(id: batchID, status: .cancelled, reportJSON: reportJSON)
+        return report
+    }
+
     // MARK: - Discovery / recursion
 
     private func importEntry(
@@ -183,10 +341,13 @@ public final class DocumentImportService: @unchecked Sendable {
         visited: inout Set<FileIdentity>,
         matterID: String,
         batchID: String,
+        sourceID: String,
+        sourceKey: String,
         currentFolderID: String?,
         rootFolderID: String?,
         folderCache: inout [String: String?],
-        report: inout DocumentImportReport
+        report: inout DocumentImportReport,
+        sourceAlreadyCopying: Bool = false
     ) async throws {
         try Task.checkCancellation()
         guard depth <= importPolicy.maxTreeDepth else {
@@ -205,6 +366,10 @@ public final class DocumentImportService: @unchecked Sendable {
         }
 
         if metadata.isDirectory {
+            if !sourceAlreadyCopying {
+                try transitionSource(sourceID, to: .validated)
+                try transitionSource(sourceID, to: .copying)
+            }
             let folderID = try folder(
                 forRelativeDir: relativePath,
                 matterID: matterID,
@@ -213,12 +378,41 @@ public final class DocumentImportService: @unchecked Sendable {
             )
             let contents = try FileManager.default.contentsOfDirectory(
                 at: url,
-                includingPropertiesForKeys: [.isAliasFileKey, .isSymbolicLinkKey, .fileResourceIdentifierKey],
-                options: [.skipsHiddenFiles]
+                includingPropertiesForKeys: [
+                    .isAliasFileKey,
+                    .isHiddenKey,
+                    .isSymbolicLinkKey,
+                    .fileResourceIdentifierKey,
+                ],
+                options: []
             )
             for child in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 let childPath = "\(relativePath)/\(child.lastPathComponent)"
+                let childKey = "\(sourceKey)/\(child.lastPathComponent)"
+                let childRow = try recordSource(
+                    batchID: batchID,
+                    matterID: matterID,
+                    sourceKey: childKey,
+                    sourceDisplayPath: childPath,
+                    parentSourceID: sourceID
+                )
+                if childRow.isTerminal { continue }
+                let isHidden = child.lastPathComponent.hasPrefix(".")
+                    || (try? child.resourceValues(forKeys: [.isHiddenKey]).isHidden) == true
+                if isHidden {
+                    try transitionSource(
+                        childRow.id,
+                        to: .excludedHidden,
+                        reason: "Hidden import source excluded by policy."
+                    )
+                    continue
+                }
                 do {
+                    let childAlreadyCopying = childRow.sourceState == .interrupted
+                        || childRow.sourceState == .copying
+                    if childRow.sourceState == .interrupted {
+                        try transitionSource(childRow.id, to: .copying)
+                    }
                     try await importEntry(
                         at: child,
                         relativePath: childPath,
@@ -228,29 +422,35 @@ public final class DocumentImportService: @unchecked Sendable {
                         visited: &visited,
                         matterID: matterID,
                         batchID: batchID,
+                        sourceID: childRow.id,
+                        sourceKey: childKey,
                         currentFolderID: folderID,
                         rootFolderID: rootFolderID,
                         folderCache: &folderCache,
-                        report: &report
+                        report: &report,
+                        sourceAlreadyCopying: childAlreadyCopying
                     )
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let violation as ImportPolicyViolation {
-                    Self.appendPolicyRejection(
+                    try recordPolicyRejection(
                         violation,
                         url: child,
                         sourceDisplayPath: childPath,
+                        sourceID: childRow.id,
                         report: &report
                     )
                 } catch {
-                    report.items.append(DocumentImportReportItem(
+                    try recordFailure(
+                        error,
                         displayName: child.lastPathComponent,
                         sourceDisplayPath: childPath,
-                        disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                        reason: "Unreadable: \(error.localizedDescription)"
-                    ))
+                        sourceID: childRow.id,
+                        report: &report
+                    )
                 }
             }
+            try transitionSource(sourceID, to: .containerCompleted)
             return
         }
 
@@ -260,12 +460,18 @@ public final class DocumentImportService: @unchecked Sendable {
         try importPolicy.validateSource(at: url)
         try ledger.consumeSource(byteSize: metadata.byteSize)
         try traversalFaultInjector(.afterCandidateValidated, url)
+        if !sourceAlreadyCopying {
+            try transitionSource(sourceID, to: .validated)
+            try transitionSource(sourceID, to: .copying)
+        }
         _ = try await importFile(
             at: url,
             folderID: currentFolderID,
             sourceDisplayPath: relativePath,
             matterID: matterID,
             batchID: batchID,
+            sourceID: sourceID,
+            sourceKey: sourceKey,
             pinnedSourceValidator: {
                 let current = try root.validateCandidate(url)
                 guard current.identity == metadata.identity,
@@ -291,6 +497,8 @@ public final class DocumentImportService: @unchecked Sendable {
         sourceDisplayPath: String,
         matterID: String,
         batchID: String,
+        sourceID: String,
+        sourceKey: String,
         parentDocumentID: String? = nil,
         attachmentDepth: Int = 0,
         pinnedSourceValidator: (@Sendable () throws -> Void)? = nil,
@@ -302,43 +510,59 @@ public final class DocumentImportService: @unchecked Sendable {
 
         do {
             try pinnedSourceValidator?()
+            if let reason = SupportedDocumentTypes.unsupportedByPolicyReason(for: url) {
+                try recordUnsupportedByPolicy(
+                    reason: reason,
+                    displayName: displayName,
+                    sourceDisplayPath: sourceDisplayPath,
+                    sourceID: sourceID,
+                    parentDocumentID: parentDocumentID,
+                    report: &report
+                )
+                return nil
+            }
             if let format {
                 _ = try DocumentTypeDetector.validate(fileURL: url, expected: format, policy: importPolicy)
             }
             try pinnedSourceValidator?()
         } catch let violation as ImportPolicyViolation {
-            Self.appendPolicyRejection(
+            try recordPolicyRejection(
                 violation,
                 url: url,
                 sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceID,
                 parentDocumentID: parentDocumentID,
                 report: &report
             )
             return nil
         } catch {
-            report.items.append(DocumentImportReportItem(
+            try recordFailure(
+                error,
                 displayName: displayName,
                 sourceDisplayPath: sourceDisplayPath,
-                disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                reason: "Unreadable: \(error.localizedDescription)",
-                parentDocumentID: parentDocumentID
-            ))
+                sourceID: sourceID,
+                parentDocumentID: parentDocumentID,
+                report: &report
+            )
             return nil
         }
 
-        // Copy + dedup the blob even for unsupported files so the instance can be
-        // shown and managed; mark unsupported in the report.
+        // Unknown formats retain the legacy managed-instance behavior. Explicit
+        // policy formats (.xls/.msg) returned above before blob installation.
         let managedBlob: ManagedImportedBlob
         do {
             managedBlob = try ingestBlob(at: url)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            report.items.append(DocumentImportReportItem(
-                displayName: displayName, sourceDisplayPath: sourceDisplayPath,
-                disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                reason: "Unreadable: \(error.localizedDescription)", parentDocumentID: parentDocumentID
-            ))
+            try recordFailure(
+                error,
+                displayName: displayName,
+                sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceID,
+                parentDocumentID: parentDocumentID,
+                report: &report
+            )
             return nil
         }
         let blob = managedBlob.record
@@ -365,6 +589,13 @@ public final class DocumentImportService: @unchecked Sendable {
                 disposition: DocumentImportDisposition.unsupported.rawValue,
                 reason: "Unsupported file type.", documentID: unsupported.id, parentDocumentID: parentDocumentID
             ))
+            try transitionSource(
+                sourceID,
+                to: .unsupportedByPolicy,
+                reason: "Unsupported file type.",
+                documentID: unsupported.id,
+                blobSHA256: blob.sha256
+            )
             return unsupported.id
         }
 
@@ -372,11 +603,19 @@ public final class DocumentImportService: @unchecked Sendable {
 
         // Extract, then OCR if needed.
         do {
-            var result = try await extraction.extract(fileURL: managedBlob.verifiedURL)
+            let parserResult = try await extraction.extract(fileURL: managedBlob.verifiedURL)
+            var result = parserResult
+            var ocrCandidates: [Int: OCRTextResult] = [:]
             var ocrApplied = false
             if result.needsOCR, ocr != nil, let format {
                 do {
-                    result = try await applyOCR(to: result, blobURL: managedBlob.verifiedURL, family: format.family)
+                    let application = try await applyOCR(
+                        to: result,
+                        blobURL: managedBlob.verifiedURL,
+                        family: format.family
+                    )
+                    result = application.result
+                    ocrCandidates = application.candidates
                     ocrApplied = true
                     _ = try? store.auditEvents.recordEvent(
                         matterID: matterID, eventType: "document_ocr_completed", actor: "system",
@@ -391,7 +630,13 @@ public final class DocumentImportService: @unchecked Sendable {
                 }
             }
             try ledger.consumeDecoded(result)
-            try persistExtraction(result, documentID: document.id, ocrApplied: ocrApplied)
+            _ = try persistExtraction(
+                result,
+                parserResult: parserResult,
+                ocrCandidates: ocrCandidates,
+                documentID: document.id,
+                ocrApplied: ocrApplied
+            )
             let disposition: DocumentImportDisposition
             if result.needsOCR {
                 disposition = .ocrNeeded
@@ -406,10 +651,12 @@ public final class DocumentImportService: @unchecked Sendable {
                 documentID: document.id, parentDocumentID: parentDocumentID
             ))
             // Expand email attachments as child documents.
-            for attachment in result.attachments {
+            for (attachmentIndex, attachment) in result.attachments.enumerated() {
                 try await importAttachment(
                     attachment,
                     parentDocument: document,
+                    parentSourceID: sourceID,
+                    sourceKey: "\(sourceKey)/attachment:\(attachmentIndex)",
                     folderID: folderID,
                     matterID: matterID,
                     batchID: batchID,
@@ -418,15 +665,22 @@ public final class DocumentImportService: @unchecked Sendable {
                     report: &report
                 )
             }
+            try transitionSource(
+                sourceID,
+                to: .admitted,
+                documentID: document.id,
+                blobSHA256: blob.sha256
+            )
         } catch is CancellationError {
             rollbackRejectedDocument(document.id)
             throw CancellationError()
         } catch let violation as ImportPolicyViolation {
             rollbackRejectedDocument(document.id)
-            Self.appendPolicyRejection(
+            try recordPolicyRejection(
                 violation,
                 url: url,
                 sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceID,
                 parentDocumentID: parentDocumentID,
                 report: &report
             )
@@ -434,10 +688,11 @@ public final class DocumentImportService: @unchecked Sendable {
         } catch let error as ExtractionError {
             if case .policyViolation(let violation) = error {
                 rollbackRejectedDocument(document.id)
-                Self.appendPolicyRejection(
+                try recordPolicyRejection(
                     violation,
                     url: url,
                     sourceDisplayPath: sourceDisplayPath,
+                    sourceID: sourceID,
                     parentDocumentID: parentDocumentID,
                     report: &report
                 )
@@ -454,6 +709,13 @@ public final class DocumentImportService: @unchecked Sendable {
                 disposition: disposition.rawValue,
                 reason: error.localizedDescription, documentID: document.id, parentDocumentID: parentDocumentID
             ))
+            try transitionSource(
+                sourceID,
+                to: disposition == .unsupported ? .unsupportedByPolicy : .failed,
+                reason: error.localizedDescription,
+                documentID: document.id,
+                blobSHA256: blob.sha256
+            )
         } catch {
             try store.documentLibrary.updateStatus(documentID: document.id, status: .failed)
             try? markExtractionFailed(documentID: document.id, error: error)
@@ -462,6 +724,13 @@ public final class DocumentImportService: @unchecked Sendable {
                 disposition: DocumentImportDisposition.extractionFailed.rawValue,
                 reason: error.localizedDescription, documentID: document.id, parentDocumentID: parentDocumentID
             ))
+            try transitionSource(
+                sourceID,
+                to: .failed,
+                reason: error.localizedDescription,
+                documentID: document.id,
+                blobSHA256: blob.sha256
+            )
         }
         return document.id
     }
@@ -480,6 +749,8 @@ public final class DocumentImportService: @unchecked Sendable {
     private func importAttachment(
         _ attachment: ExtractedAttachment,
         parentDocument: MatterDocumentRecord,
+        parentSourceID: String,
+        sourceKey: String,
         folderID: String?,
         matterID: String,
         batchID: String,
@@ -488,18 +759,28 @@ public final class DocumentImportService: @unchecked Sendable {
         report: inout DocumentImportReport
     ) async throws {
         let sourceDisplayPath = "\(parentDocument.sourceDisplayPath ?? parentDocument.displayName) ▸ \(attachment.fileName)"
+        let sourceRow = try recordSource(
+            batchID: batchID,
+            matterID: matterID,
+            sourceKey: sourceKey,
+            sourceDisplayPath: sourceDisplayPath,
+            parentSourceID: parentSourceID
+        )
         do {
             try ledger.consumeAttachment(byteSize: attachment.data.count, depth: attachmentDepth)
         } catch let violation as ImportPolicyViolation {
-            Self.appendPolicyRejection(
+            try recordPolicyRejection(
                 violation,
                 displayName: attachment.fileName,
                 sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceRow.id,
                 parentDocumentID: parentDocument.id,
                 report: &report
             )
             return
         }
+        try transitionSource(sourceRow.id, to: .validated)
+        try transitionSource(sourceRow.id, to: .copying)
         // Write the attachment bytes to a unique temp directory keeping the
         // original filename, so the path-based import pipeline (copy/dedup/extract)
         // handles it and the child document keeps the attachment's display name.
@@ -511,23 +792,29 @@ public final class DocumentImportService: @unchecked Sendable {
         let tempURL = tempDir.appendingPathComponent(safeName)
         let containedDir = tempDir.resolvingSymlinksInPath().path
         guard tempURL.resolvingSymlinksInPath().path.hasPrefix(containedDir + "/") else {
-            report.items.append(DocumentImportReportItem(
-                displayName: attachment.fileName, sourceDisplayPath: sourceDisplayPath,
-                disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                reason: "Rejected an attachment with an unsafe filename.", parentDocumentID: parentDocument.id,
-                rejectionCode: ImportPolicyViolation.Code.unsafeArchivePath.rawValue
-            ))
+            try recordPolicyRejection(
+                ImportPolicyViolation(.unsafeArchivePath, "Rejected an attachment with an unsafe filename."),
+                displayName: attachment.fileName,
+                sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceRow.id,
+                parentDocumentID: parentDocument.id,
+                report: &report
+            )
             return
         }
         do {
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             try attachment.data.write(to: tempURL)
         } catch {
-            report.items.append(DocumentImportReportItem(
-                displayName: attachment.fileName, sourceDisplayPath: sourceDisplayPath,
-                disposition: DocumentImportDisposition.extractionFailed.rawValue,
-                reason: "Could not write attachment.", parentDocumentID: parentDocument.id
-            ))
+            try recordFailure(
+                error,
+                displayName: attachment.fileName,
+                sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceRow.id,
+                parentDocumentID: parentDocument.id,
+                reason: "Could not write attachment.",
+                report: &report
+            )
             return
         }
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -539,6 +826,8 @@ public final class DocumentImportService: @unchecked Sendable {
             sourceDisplayPath: sourceDisplayPath,
             matterID: matterID,
             batchID: batchID,
+            sourceID: sourceRow.id,
+            sourceKey: sourceKey,
             parentDocumentID: parentDocument.id,
             attachmentDepth: attachmentDepth,
             ledger: ledger,
@@ -555,12 +844,52 @@ public final class DocumentImportService: @unchecked Sendable {
 
     // MARK: - Editable extracted text
 
-    /// Applies a user edit to one extracted part's text and marks the document
-    /// edited + index-stale so a later indexing pass re-chunks/re-embeds it
-    /// (plan §6.2). The OCR/extraction text is the editable source of truth.
-    public func updateExtractedText(documentID: String, partID: String, text: String) throws {
-        try store.documentIndex.updatePartText(partID: partID, text: TextNormalization.normalize(text))
+    /// Connects saved text corrections to the app-wide FIFO queue. This is
+    /// composed after queue construction to avoid a service/queue init cycle.
+    @MainActor
+    public func setReindexEnqueuer(
+        _ enqueuer: @escaping @MainActor @Sendable (String) -> Void
+    ) {
+        reindexEnqueuer = enqueuer
+    }
+
+    /// Appends a user-edit revision and selection, then marks the document edited
+    /// + index-stale so the queue re-chunks/re-embeds the selected correction.
+    /// The original extraction remains immutable and queryable.
+    @MainActor
+    public func updateExtractedText(
+        documentID: String,
+        partID: String,
+        text: String,
+        author: String = "Local user",
+        reason: String = "User correction"
+    ) throws {
+        let matterID = try store.documentLibrary.fetchDocument(id: documentID)?.matterID
+        let priorRevisionID = try store.documentIndex.fetchParts(documentID: documentID)
+            .first(where: { $0.id == partID })?.currentRevisionID
+        let revision = try store.documentRevisions.appendUserEdit(
+            documentID: documentID,
+            partID: partID,
+            text: TextNormalization.normalize(text),
+            author: author.trimmingCharacters(in: .whitespacesAndNewlines),
+            reason: reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        if let matterID, let priorRevisionID {
+            _ = try OutputStalenessService(store: store).sourceRevisionChanged(
+                matterID: matterID,
+                documentID: documentID,
+                fromRevisionID: priorRevisionID,
+                toRevisionID: revision.id
+            )
+        }
+        let selectedParts = try store.documentIndex.fetchParts(documentID: documentID)
+        try persistStructure(
+            .wrapper(for: extractedParts(from: selectedParts)),
+            documentID: documentID,
+            selectedParts: selectedParts
+        )
         try store.documentLibrary.markTextEdited(documentID: documentID)
+        if let matterID { reindexEnqueuer?(matterID) }
     }
 
     // MARK: - Reprocess (re-extract from the managed blob)
@@ -606,6 +935,17 @@ public final class DocumentImportService: @unchecked Sendable {
             expectedSHA256: blob.sha256,
             expectedByteSize: blob.byteSize
         )
+        _ = try OutputStalenessService(store: store).documentReprocessed(
+            matterID: document.matterID,
+            documentID: documentID
+        )
+        let hadSelectedUserEdit = try store.documentIndex.fetchParts(documentID: documentID).contains { part in
+            guard let revisionID = part.currentRevisionID,
+                  let revision = try? store.documentRevisions.fetchRevision(id: revisionID) else {
+                return false
+            }
+            return revision.origin == "user_edit"
+        }
 
         // Clear any stale classification FIRST, unconditionally, before re-extraction —
         // the old category no longer applies until the document is re-classified. This
@@ -615,17 +955,30 @@ public final class DocumentImportService: @unchecked Sendable {
         guard let format = SupportedDocumentTypes.format(for: verifiedURL) else {
             // No supported extractor — re-mark failed cleanly with no leaked parts
             // (mirrors importFile's unsupported path), and do not throw.
-            try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
-            try markExtractionFailed(documentID: documentID, error: ExtractionError.unsupportedFormat(verifiedURL.pathExtension))
+            let error = ExtractionError.unsupportedFormat(verifiedURL.pathExtension)
+            if hadSelectedUserEdit {
+                try markReprocessFailurePreservingUserEdit(document: document, error: error)
+            } else {
+                try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
+                try markExtractionFailed(documentID: documentID, error: error)
+            }
             return
         }
 
         do {
-            var result = try await extraction.extract(fileURL: verifiedURL)
+            let parserResult = try await extraction.extract(fileURL: verifiedURL)
+            var result = parserResult
+            var ocrCandidates: [Int: OCRTextResult] = [:]
             var ocrApplied = false
             if result.needsOCR, ocr != nil {
                 do {
-                    result = try await applyOCR(to: result, blobURL: verifiedURL, family: format.family)
+                    let application = try await applyOCR(
+                        to: result,
+                        blobURL: verifiedURL,
+                        family: format.family
+                    )
+                    result = application.result
+                    ocrCandidates = application.candidates
                     ocrApplied = true
                     _ = try? store.auditEvents.recordEvent(
                         matterID: document.matterID, eventType: "document_ocr_completed", actor: "system",
@@ -639,23 +992,71 @@ public final class DocumentImportService: @unchecked Sendable {
                     throw error
                 }
             }
-            try persistExtraction(result, documentID: documentID, ocrApplied: ocrApplied)
+            let selectionConflicts = try persistExtraction(
+                result,
+                parserResult: parserResult,
+                ocrCandidates: ocrCandidates,
+                documentID: documentID,
+                ocrApplied: ocrApplied,
+                preserveSelectedUserEdits: true
+            )
+            relinkEmailThreads(matterID: document.matterID)
+            relinkLegalStructures(matterID: document.matterID)
             try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .stale)
             _ = try? store.auditEvents.recordEvent(
                 matterID: document.matterID, eventType: "document_reprocessed", actor: "user",
-                summary: "Re-extracted \(document.displayName) from its managed copy",
+                summary: selectionConflicts.isEmpty
+                    ? "Re-extracted \(document.displayName) from its managed copy"
+                    : "Re-extracted \(document.displayName); retained user corrections pending selection review",
                 relatedTable: "matter_documents", relatedID: documentID
             )
         } catch {
             // A re-extraction that fails again re-marks the instance .failed cleanly and
             // clears any parts (markExtractionFailed only zeroes the count). The failure
             // is swallowed so a re-mark is a normal outcome for the caller.
-            try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
-            try markExtractionFailed(documentID: documentID, error: error)
+            if hadSelectedUserEdit {
+                try markReprocessFailurePreservingUserEdit(document: document, error: error)
+            } else {
+                try? store.documentIndex.replaceParts(documentID: documentID, parts: [])
+                try markExtractionFailed(documentID: documentID, error: error)
+            }
+        }
+    }
+
+    private func relinkEmailThreads(matterID: String) {
+        do {
+            _ = try DocumentEmailThreadLinker(store: store).relink(matterID: matterID)
+        } catch {
+            _ = try? store.auditEvents.recordEvent(
+                matterID: matterID,
+                eventType: "document_email_thread_link_failed",
+                actor: "system",
+                summary: "Email thread linking failed: \(error.localizedDescription)",
+                relatedTable: "document_structure_edges"
+            )
+        }
+    }
+
+    private func relinkLegalStructures(matterID: String) {
+        do {
+            _ = try DocumentLegalStructureLinker(store: store).relink(matterID: matterID)
+        } catch {
+            _ = try? store.auditEvents.recordEvent(
+                matterID: matterID,
+                eventType: "document_legal_structure_link_failed",
+                actor: "system",
+                summary: "Legal structure linking failed: \(error.localizedDescription)",
+                relatedTable: "document_structure_edges"
+            )
         }
     }
 
     // MARK: - OCR
+
+    private struct OCRApplication {
+        var result: ExtractionResult
+        var candidates: [Int: OCRTextResult]
+    }
 
     /// Runs OCR over a document that lacks embedded text and merges the results
     /// into the extraction (plan §6.2). Confidence flows to the page parts.
@@ -663,50 +1064,124 @@ public final class DocumentImportService: @unchecked Sendable {
         to result: ExtractionResult,
         blobURL: URL,
         family: SupportedDocumentTypes.ExtractionFamily
-    ) async throws -> ExtractionResult {
-        guard let ocr else { return result }
+    ) async throws -> OCRApplication {
+        guard let ocr else { return OCRApplication(result: result, candidates: [:]) }
         var merged = result
+        var candidates: [Int: OCRTextResult] = [:]
         switch family {
         case .image:
             let ocrResult = try await ocr.recognizeImage(at: blobURL)
-            merged.parts = [ExtractedPart(
-                sourceKind: .image, text: ocrResult.text, pageIndex: 0, pageLabel: "1",
-                ocrConfidence: ocrResult.confidence, boundingBoxesJSON: ocrResult.boundingBoxesJSON
-            )]
+            candidates[0] = ocrResult
+            let parserPart = result.parts.first ?? ExtractedPart(
+                sourceKind: .image,
+                text: "",
+                pageIndex: 0,
+                pageLabel: "1"
+            )
+            let decision = OCRCandidateSelection.select(
+                embedded: .init(
+                    id: "pending-parser-0",
+                    origin: .parser,
+                    text: parserPart.text,
+                    confidence: parserPart.ocrConfidence,
+                    boundingBoxesJSON: parserPart.boundingBoxesJSON
+                ),
+                ocr: .init(
+                    id: "pending-ocr-0",
+                    origin: .ocr,
+                    text: ocrResult.text,
+                    confidence: ocrResult.confidence,
+                    boundingBoxesJSON: ocrResult.boundingBoxesJSON
+                )
+            )
+            if decision.chosenOrigin == .ocr {
+                merged.parts = [ExtractedPart(
+                    sourceKind: .image, text: ocrResult.text, pageIndex: 0, pageLabel: "1",
+                    ocrConfidence: ocrResult.confidence, boundingBoxesJSON: ocrResult.boundingBoxesJSON
+                )]
+            } else {
+                merged.parts = [parserPart]
+            }
             merged.method = "vision-ocr-image"
             merged.needsOCR = false
         case .pdf:
             let pageResults = try await ocr.recognizePDFPages(at: blobURL, pageIndices: result.ocrPageIndices)
+            candidates = pageResults
             let ocrTargets = Set(result.ocrPageIndices)
             merged.parts = result.parts.enumerated().map { index, part in
                 var updated = part
                 let pageIndex = part.pageIndex ?? index
-                // Only the pages the extractor flagged for OCR are touched. Their
-                // confidence is recorded even when OCR recovered nothing (so the
-                // review gate can see it), but the OCR text only replaces the
-                // embedded text when it is actually longer.
+                // Only the pages the extractor flagged for OCR are touched. The
+                // pure v1 policy requires confidence plus comparative quality;
+                // length by itself can never replace embedded text.
                 if ocrTargets.contains(pageIndex), let ocrResult = pageResults[pageIndex] {
-                    updated.ocrConfidence = ocrResult.confidence
-                    if ocrResult.text.count > part.text.count {
+                    let decision = OCRCandidateSelection.select(
+                        embedded: .init(
+                            id: "pending-embedded-\(pageIndex)",
+                            origin: .embeddedPDF,
+                            text: part.text,
+                            confidence: part.ocrConfidence,
+                            boundingBoxesJSON: part.boundingBoxesJSON
+                        ),
+                        ocr: .init(
+                            id: "pending-ocr-\(pageIndex)",
+                            origin: .ocr,
+                            text: ocrResult.text,
+                            confidence: ocrResult.confidence,
+                            boundingBoxesJSON: ocrResult.boundingBoxesJSON
+                        )
+                    )
+                    if decision.chosenOrigin == .ocr {
                         updated.text = ocrResult.text
+                        updated.ocrConfidence = ocrResult.confidence
                         updated.boundingBoxesJSON = ocrResult.boundingBoxesJSON
+                    }
+                    if !part.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       !ocrResult.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        appendOCRSelectionWarning(decision, pageIndex: pageIndex, warnings: &merged.warnings)
                     }
                 }
                 return updated
             }
             merged.method = result.method + "+ocr"
             merged.needsOCR = false
+            merged.structure = PDFStructureAdapter.reflow(result.structure, for: merged.parts)
         default:
             break
         }
-        return merged
+        return OCRApplication(result: merged, candidates: candidates)
+    }
+
+    private func appendOCRSelectionWarning(
+        _ decision: OCRCandidateSelection.Decision,
+        pageIndex: Int,
+        warnings: inout [String]
+    ) {
+        guard decision.needsReview else { return }
+        warnings.append(
+            "OCR candidate quality unresolved on page \(pageIndex + 1); review embedded and OCR text."
+        )
     }
 
     // MARK: - Persistence
 
-    private func persistExtraction(_ result: ExtractionResult, documentID: String, ocrApplied: Bool = false) throws {
-        let parts = result.parts.enumerated().map { index, part in
-            DocumentPagePartRecord(
+    private func persistExtraction(
+        _ result: ExtractionResult,
+        parserResult: ExtractionResult,
+        ocrCandidates: [Int: OCRTextResult],
+        documentID: String,
+        ocrApplied: Bool = false,
+        preserveSelectedUserEdits: Bool = false
+    ) throws -> Set<Int> {
+        var parts: [DocumentPagePartRecord] = []
+        var revisions: [DocumentPartRevisionRecord] = []
+        var selections: [DocumentPartSelectionRecord] = []
+
+        for (index, part) in result.parts.enumerated() {
+            let parserPart = parserResult.parts.indices.contains(index)
+                ? parserResult.parts[index]
+                : part
+            parts.append(DocumentPagePartRecord(
                 documentID: documentID,
                 partIndex: index,
                 sourceKind: part.sourceKind.rawValue,
@@ -719,14 +1194,133 @@ public final class DocumentImportService: @unchecked Sendable {
                 charCount: part.text.count,
                 ocrConfidence: part.ocrConfidence,
                 boundingBoxesJSON: part.boundingBoxesJSON
-            )
-        }
-        try store.documentIndex.replaceParts(documentID: documentID, parts: parts)
+            ))
 
-        let checksum = DocumentStorage.sha256Hex(of: Data(result.combinedText.utf8))
+            let parserOrigin = parserPart.sourceKind == .pdfPage ? "embedded_pdf" : "parser"
+            let parserRevision = try makeMachineRevision(
+                documentID: documentID,
+                partIndex: index,
+                origin: parserOrigin,
+                method: parserResult.method,
+                text: parserPart.text,
+                ocrConfidence: parserPart.ocrConfidence,
+                boundingBoxesJSON: parserPart.boundingBoxesJSON
+            )
+            var candidates = [parserRevision]
+            var selectedRevision = parserRevision
+            var decision = OCRCandidateSelection.selectSingle(
+                OCRCandidateSelection.RevisionCandidate(
+                    id: parserRevision.id,
+                    origin: parserPart.sourceKind == .pdfPage ? .embeddedPDF : .parser,
+                    text: parserRevision.text,
+                    confidence: parserRevision.ocrConfidence,
+                    boundingBoxesJSON: parserRevision.boundingBoxesJSON
+                )
+            )
+
+            let pageIndex = parserPart.pageIndex ?? index
+            if let ocrCandidate = ocrCandidates[pageIndex] {
+                let ocrMethod = parserPart.sourceKind == .pdfPage
+                    ? "vision-ocr-pdf"
+                    : "vision-ocr-image"
+                let ocrRevision = try makeMachineRevision(
+                    documentID: documentID,
+                    partIndex: index,
+                    origin: "ocr",
+                    method: ocrMethod,
+                    text: ocrCandidate.text,
+                    ocrConfidence: ocrCandidate.confidence,
+                    boundingBoxesJSON: ocrCandidate.boundingBoxesJSON
+                )
+                candidates.append(ocrRevision)
+                decision = OCRCandidateSelection.select(
+                    embedded: .init(
+                        id: parserRevision.id,
+                        origin: parserPart.sourceKind == .pdfPage ? .embeddedPDF : .parser,
+                        text: parserRevision.text,
+                        confidence: parserRevision.ocrConfidence,
+                        boundingBoxesJSON: parserRevision.boundingBoxesJSON
+                    ),
+                    ocr: .init(
+                        id: ocrRevision.id,
+                        origin: .ocr,
+                        text: ocrRevision.text,
+                        confidence: ocrRevision.ocrConfidence,
+                        boundingBoxesJSON: ocrRevision.boundingBoxesJSON
+                    )
+                )
+                selectedRevision = decision.selectedRevisionID == ocrRevision.id
+                    ? ocrRevision
+                    : parserRevision
+            }
+            revisions.append(contentsOf: candidates)
+
+            let selectionKeyPayload = [
+                documentID,
+                String(index),
+                "policy-v1",
+                selectedRevision.derivationKey,
+                candidates.map(\.derivationKey).joined(separator: ","),
+            ].joined(separator: "|")
+            let selectionKey = DocumentStorage.sha256Hex(of: Data(selectionKeyPayload.utf8))
+            let priorSelections = try store.documentRevisions.fetchSelections(
+                documentID: documentID,
+                partIndex: index
+            )
+            let existingSelection = priorSelections.first { $0.selectionKey == selectionKey }
+            let supersedesSelectionID: String?
+            if let existingSelection {
+                supersedesSelectionID = existingSelection.supersedesSelectionID
+            } else {
+                supersedesSelectionID = priorSelections.last?.id
+            }
+            let decisionJSON = try decision.canonicalJSON()
+            selections.append(DocumentPartSelectionRecord(
+                id: "selection-\(DocumentStorage.sha256Hex(of: Data(selectionKeyPayload.utf8)))",
+                documentID: documentID,
+                partIndex: index,
+                selectedRevisionID: selectedRevision.id,
+                selectionKey: selectionKey,
+                selectedBy: "policy",
+                policyVersion: decision.policyVersion,
+                decisionJSON: decisionJSON,
+                supersedesSelectionID: supersedesSelectionID
+            ))
+        }
+        let selectionConflicts = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: documentID,
+            parts: parts,
+            revisions: revisions,
+            selections: selections,
+            preserveSelectedUserEdits: preserveSelectedUserEdits
+        )
+
+        let selectedParts = try store.documentIndex.fetchParts(documentID: documentID)
+        let selectedExtractedParts = extractedParts(from: selectedParts)
+        let selectedMatchesExtraction = zip(result.parts, selectedParts).allSatisfy { extracted, selected in
+            extracted.text == selected.normalizedText
+        } && result.parts.count == selectedParts.count
+        let structure: ExtractedDocumentStructure
+        if selectedMatchesExtraction {
+            structure = result.structure
+        } else if selectedExtractedParts.allSatisfy({ $0.sourceKind == .pdfPage }) {
+            structure = PDFStructureAdapter.reflow(result.structure, for: selectedExtractedParts)
+        } else {
+            structure = .wrapper(for: selectedExtractedParts)
+        }
+        try persistStructure(
+            structure,
+            documentID: documentID,
+            selectedParts: selectedParts
+        )
+
+        let selectedText = selectedParts
+            .map(\.normalizedText)
+            .joined(separator: "\n\n")
+        let checksum = DocumentStorage.sha256Hex(of: Data(selectedText.utf8))
 
         // OCR confidence summary + low-confidence review gating (plan §6.2).
-        let ocrConfidences = result.parts.compactMap(\.ocrConfidence)
+        let ocrConfidences = ocrCandidates.values.map(\.confidence)
         let meanOCR = ocrConfidences.isEmpty ? nil : ocrConfidences.reduce(0, +) / Double(ocrConfidences.count)
         let lowConfidence = (meanOCR.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false)
         let ocrSummary = meanOCR.map { String(format: "OCR mean confidence %.2f%@", $0, lowConfidence ? " (low)" : "") }
@@ -737,8 +1331,17 @@ public final class DocumentImportService: @unchecked Sendable {
         // confidences at all) is still caught (plan §6.2, §8.4).
         let usableTextCount = result.combinedText.filter { !$0.isWhitespace }.count
         let insufficientOCRText = ocrApplied && usableTextCount < OCRPolicy.minimumUsableTextLength
+        let convertedLossy = result.method == "converted_lossy"
+        let selectionNeedsReview = result.warnings.contains {
+            $0.contains("OCR candidate quality unresolved")
+        }
 
         var warnings = result.warnings
+        if !selectionConflicts.isEmpty {
+            warnings.append(
+                "Selection conflict: reprocessing produced new extraction candidates, but retained the selected user correction. Review the revision history before changing the selection."
+            )
+        }
         if ocrApplied {
             // OCR has now run, so the extractor's pre-OCR advisories would
             // recommend work that already happened — drop them and record one
@@ -766,23 +1369,166 @@ public final class DocumentImportService: @unchecked Sendable {
             status = .needsOCR
         } else if ocrApplied || !ocrConfidences.isEmpty {
             extractionStatus = .ocrComplete
-            status = (lowConfidence || insufficientOCRText) ? .needsReview : .indexing
+            status = (lowConfidence || insufficientOCRText || selectionNeedsReview || !selectionConflicts.isEmpty)
+                ? .needsReview
+                : .indexing
         } else {
             extractionStatus = .extracted
-            status = .indexing
+            status = (convertedLossy || !selectionConflicts.isEmpty) ? .needsReview : .indexing
         }
 
         try store.documentLibrary.updateExtraction(
             documentID: documentID,
             status: status,
             extractionStatus: extractionStatus,
-            method: result.method,
+            method: DocumentToolchain.stamp(extractionMethod: result.method),
             checksum: checksum,
             pagePartCount: parts.count,
             ocrConfidenceSummary: ocrSummary,
             warningsJSON: warningsJSON,
             metadataCreatedAt: result.metadataCreatedAt,
             metadataModifiedAt: result.metadataModifiedAt
+        )
+        return selectionConflicts
+    }
+
+    private func persistStructure(
+        _ structure: ExtractedDocumentStructure,
+        documentID: String,
+        selectedParts: [DocumentPagePartRecord]
+    ) throws {
+        guard !structure.nodes.isEmpty else { return }
+        let partsByIndex = Dictionary(uniqueKeysWithValues: selectedParts.map { ($0.partIndex, $0) })
+        var nodeIDByKey: [String: String] = [:]
+        var revisionIDByKey: [String: String] = [:]
+        for node in structure.nodes {
+            guard nodeIDByKey[node.nodeKey] == nil else {
+                throw StructureRepositoryError.duplicateNodeIdentity(node.nodeKey)
+            }
+            guard let revisionID = partsByIndex[node.partIndex]?.currentRevisionID else {
+                throw StructureRepositoryError.revisionScopeMismatch("part/\(node.partIndex)")
+            }
+            let identity = [documentID, revisionID, node.nodeKey].joined(separator: "|")
+            nodeIDByKey[node.nodeKey] = "structure-\(DocumentStorage.sha256Hex(of: Data(identity.utf8)))"
+            revisionIDByKey[node.nodeKey] = revisionID
+        }
+
+        let records = try structure.nodes.map { node -> DocumentStructureNodeRecord in
+            guard let id = nodeIDByKey[node.nodeKey],
+                  let revisionID = revisionIDByKey[node.nodeKey] else {
+                throw StructureRepositoryError.nodeScopeMismatch(node.nodeKey)
+            }
+            let parentID: String?
+            if let parentKey = node.parentNodeKey {
+                guard let resolved = nodeIDByKey[parentKey] else {
+                    throw StructureRepositoryError.invalidParent(nodeID: node.nodeKey, parentID: parentKey)
+                }
+                parentID = resolved
+            } else {
+                parentID = nil
+            }
+            return DocumentStructureNodeRecord(
+                id: id,
+                documentID: documentID,
+                revisionID: revisionID,
+                nodeKey: node.nodeKey,
+                parentNodeID: parentID,
+                ordinal: node.ordinal,
+                kind: node.kind.rawValue,
+                charStart: node.charStart,
+                charEnd: node.charEnd,
+                textContent: node.textContent,
+                payloadJSON: node.payloadJSON
+            )
+        }
+        let matterID = try store.documentLibrary.fetchDocument(id: documentID)?.matterID
+        guard let matterID else {
+            throw StructureRepositoryError.documentNotFound(documentID)
+        }
+        let edges = try structure.edges.map { edge -> DocumentStructureEdgeRecord in
+            guard let fromID = nodeIDByKey[edge.fromNodeKey],
+                  let toID = nodeIDByKey[edge.toNodeKey] else {
+                throw StructureRepositoryError.edgeEndpointMissing("\(edge.fromNodeKey)->\(edge.toNodeKey)")
+            }
+            let identity = [documentID, fromID, toID, edge.kind.rawValue].joined(separator: "|")
+            return DocumentStructureEdgeRecord(
+                id: "structure-edge-\(DocumentStorage.sha256Hex(of: Data(identity.utf8)))",
+                matterID: matterID,
+                fromNodeID: fromID,
+                toNodeID: toID,
+                kind: edge.kind.rawValue
+            )
+        }
+        try store.documentStructure.replaceStructure(
+            documentID: documentID,
+            nodes: records,
+            edges: edges
+        )
+    }
+
+    private func extractedParts(
+        from selectedParts: [DocumentPagePartRecord]
+    ) -> [ExtractedPart] {
+        selectedParts.sorted { $0.partIndex < $1.partIndex }.map { part in
+            ExtractedPart(
+                sourceKind: DocumentSourceKind(rawValue: part.sourceKind) ?? .text,
+                text: part.normalizedText,
+                pageIndex: part.pageIndex,
+                pageLabel: part.pageLabel,
+                sheetName: part.sheetName,
+                cellRange: part.cellRange,
+                emailPartPath: part.emailPartPath,
+                ocrConfidence: part.ocrConfidence,
+                boundingBoxesJSON: part.boundingBoxesJSON
+            )
+        }
+    }
+
+    private func makeMachineRevision(
+        documentID: String,
+        partIndex: Int,
+        origin: String,
+        method: String,
+        text: String,
+        ocrConfidence: Double?,
+        boundingBoxesJSON: String?
+    ) throws -> DocumentPartRevisionRecord {
+        let contentDigest = DocumentStorage.sha256Hex(of: Data(text.utf8))
+        let derivationPayload = [
+            documentID,
+            String(partIndex),
+            origin,
+            method,
+            DocumentToolchain.version,
+            contentDigest,
+        ].joined(separator: "|")
+        let derivationKey = DocumentStorage.sha256Hex(of: Data(derivationPayload.utf8))
+        let existing = try store.documentRevisions.fetchRevisions(
+            documentID: documentID,
+            partIndex: partIndex
+        )
+        let existingSameKey = existing.first { $0.derivationKey == derivationKey }
+        let supersedesRevisionID: String?
+        if let existingSameKey {
+            supersedesRevisionID = existingSameKey.supersedesRevisionID
+        } else {
+            supersedesRevisionID = existing.last {
+                $0.origin == origin && $0.derivationKey != derivationKey
+            }?.id
+        }
+        return DocumentPartRevisionRecord(
+            id: "revision-\(DocumentStorage.sha256Hex(of: Data(derivationPayload.utf8)))",
+            documentID: documentID,
+            partIndex: partIndex,
+            derivationKey: derivationKey,
+            origin: origin,
+            method: method,
+            text: text,
+            charCount: text.count,
+            ocrConfidence: ocrConfidence,
+            boundingBoxesJSON: boundingBoxesJSON,
+            toolchainVersion: DocumentToolchain.version,
+            supersedesRevisionID: supersedesRevisionID
         )
     }
 
@@ -797,6 +1543,35 @@ public final class DocumentImportService: @unchecked Sendable {
             pagePartCount: 0,
             errorsJSON: json
         )
+    }
+
+    private func markReprocessFailurePreservingUserEdit(
+        document: MatterDocumentRecord,
+        error: Error
+    ) throws {
+        var warnings: [String] = []
+        if let json = document.extractionWarningsJSON,
+           let data = json.data(using: .utf8),
+           let existing = try? JSONDecoder().decode([String].self, from: data) {
+            warnings = existing
+        }
+        warnings.append(
+            "Reprocessing failed; the selected user correction was retained. Review the extraction before changing the selection."
+        )
+        try store.documentLibrary.updateExtraction(
+            documentID: document.id,
+            status: .needsReview,
+            extractionStatus: .edited,
+            method: document.extractionMethod ?? "manual",
+            checksum: document.extractedTextChecksum,
+            pagePartCount: try store.documentIndex.fetchParts(documentID: document.id).count,
+            ocrConfidenceSummary: document.ocrConfidenceSummary,
+            warningsJSON: try JSONEncoder.encodeToString(warnings),
+            errorsJSON: try JSONEncoder.encodeToString([error.localizedDescription]),
+            metadataCreatedAt: document.metadataCreatedAt,
+            metadataModifiedAt: document.metadataModifiedAt
+        )
+        try store.documentLibrary.updateIndexStatus(documentID: document.id, indexStatus: .stale)
     }
 
     private struct ManagedImportedBlob {
@@ -958,44 +1733,206 @@ public final class DocumentImportService: @unchecked Sendable {
         return parentID
     }
 
-    private func resolveBatch(matterID: String, batchID: String?, sources: [URL]) throws -> DocumentImportBatchRecord {
+    private func resolveBatch(
+        matterID: String,
+        batchID: String?,
+        sources: [URL],
+        targetFolderID: String?
+    ) throws -> DocumentImportBatchRecord {
         if let batchID, let existing = try store.documentJobs.fetchBatch(id: batchID) {
+            guard existing.matterID == matterID else {
+                throw DocumentJobRepositoryError.batchMatterMismatch(batchID: batchID, matterID: matterID)
+            }
+            guard existing.targetFolderRequested == (targetFolderID != nil),
+                  existing.targetFolderID == targetFolderID else {
+                throw DocumentJobRepositoryError.invalidTargetFolderIntent
+            }
             return existing
         }
         let rootName = sources.first?.deletingLastPathComponent().lastPathComponent
-        return try store.documentJobs.createBatch(matterID: matterID, sourceRootDisplay: rootName)
+        return try store.documentJobs.createBatch(
+            matterID: matterID,
+            sourceRootDisplay: rootName,
+            targetFolderID: targetFolderID,
+            targetFolderRequested: targetFolderID != nil
+        )
     }
 
-    private static func appendPolicyRejection(
+    private func finalizeLedgerBatch(batchID: String, matterID: String) throws -> ImportOutcome {
+        let report = try ledgerReport(batchID: batchID)
+        let status: DocumentImportBatchStatus = report.failedCount > 0 ? .completeWithFailures : .complete
+        try store.documentJobs.updateBatchProgress(
+            id: batchID,
+            discoveredCount: report.discoveredCount,
+            importedCount: report.importedCount,
+            failedCount: report.failedCount
+        )
+        let reportJSON = try JSONEncoder.encodeToString(report)
+        try store.documentJobs.finalizeBatch(id: batchID, status: status, reportJSON: reportJSON)
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID,
+            eventType: report.failedCount > 0 ? "document_import_completed_with_failures" : "document_import_completed",
+            actor: "system",
+            summary: "Resumed import completed for \(report.importedCount)/\(report.discoveredCount) sources",
+            relatedTable: "document_import_batches",
+            relatedID: batchID
+        )
+        return ImportOutcome(batchID: batchID, report: report)
+    }
+
+    private func ledgerReport(batchID: String) throws -> DocumentImportReport {
+        let sources = try store.documentJobs.fetchSources(batchID: batchID)
+        let items = sources.map { source in
+            DocumentImportReportItem(
+                displayName: NSString(string: source.sourceDisplayPath).lastPathComponent,
+                sourceDisplayPath: source.sourceDisplayPath,
+                disposition: source.state,
+                reason: source.reason,
+                documentID: source.documentID,
+                parentDocumentID: nil,
+                rejectionCode: source.rejectionCode
+            )
+        }
+        return DocumentImportReport(items: items, counts: Self.tallyCounts(items))
+    }
+
+    private static func resolveSourceBookmark(_ bookmark: Data?) -> URL? {
+        guard let bookmark else { return nil }
+        for options: URL.BookmarkResolutionOptions in [[.withSecurityScope], []] {
+            var stale = false
+            if let url = try? URL(
+                resolvingBookmarkData: bookmark,
+                options: options,
+                relativeTo: nil,
+                bookmarkDataIsStale: &stale
+            ), !stale, FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    @discardableResult
+    private func recordSource(
+        batchID: String,
+        matterID: String,
+        sourceKey: String,
+        sourceDisplayPath: String,
+        sourceBookmark: Data? = nil,
+        parentSourceID: String? = nil,
+        state: DocumentImportSourceState = .discovered
+    ) throws -> DocumentImportSourceRecord {
+        let row = try store.documentJobs.recordDiscovered(
+            batchID: batchID,
+            matterID: matterID,
+            sourceKey: sourceKey,
+            sourceDisplayPath: sourceDisplayPath,
+            sourceBookmark: sourceBookmark,
+            parentSourceID: parentSourceID,
+            state: state
+        )
+        try sourceStateObserver(row)
+        return row
+    }
+
+    @discardableResult
+    private func transitionSource(
+        _ sourceID: String,
+        to state: DocumentImportSourceState,
+        rejectionCode: String? = nil,
+        reason: String? = nil,
+        documentID: String? = nil,
+        blobSHA256: String? = nil
+    ) throws -> DocumentImportSourceRecord {
+        let row = try store.documentJobs.markState(
+            sourceID: sourceID,
+            state: state,
+            rejectionCode: rejectionCode,
+            reason: reason,
+            documentID: documentID,
+            blobSHA256: blobSHA256
+        )
+        try sourceStateObserver(row)
+        return row
+    }
+
+    private func recordPolicyRejection(
         _ violation: ImportPolicyViolation,
         url: URL,
         sourceDisplayPath: String,
+        sourceID: String,
         parentDocumentID: String? = nil,
         report: inout DocumentImportReport
-    ) {
-        appendPolicyRejection(
+    ) throws {
+        try recordPolicyRejection(
             violation,
             displayName: url.lastPathComponent,
             sourceDisplayPath: sourceDisplayPath,
+            sourceID: sourceID,
             parentDocumentID: parentDocumentID,
             report: &report
         )
     }
 
-    private static func appendPolicyRejection(
+    private func recordPolicyRejection(
         _ violation: ImportPolicyViolation,
         displayName: String,
         sourceDisplayPath: String,
+        sourceID: String,
         parentDocumentID: String? = nil,
         report: inout DocumentImportReport
-    ) {
+    ) throws {
+        try transitionSource(
+            sourceID,
+            to: .rejected,
+            rejectionCode: violation.code.rawValue,
+            reason: violation.localizedDescription
+        )
+        report.items.append(DocumentImportReportItem(
+            displayName: displayName,
+            sourceDisplayPath: sourceDisplayPath,
+            disposition: DocumentImportSourceState.rejected.rawValue,
+            reason: violation.localizedDescription,
+            parentDocumentID: parentDocumentID,
+            rejectionCode: violation.code.rawValue
+        ))
+    }
+
+    private func recordUnsupportedByPolicy(
+        reason: String,
+        displayName: String,
+        sourceDisplayPath: String,
+        sourceID: String,
+        parentDocumentID: String? = nil,
+        report: inout DocumentImportReport
+    ) throws {
+        try transitionSource(sourceID, to: .unsupportedByPolicy, reason: reason)
+        report.items.append(DocumentImportReportItem(
+            displayName: displayName,
+            sourceDisplayPath: sourceDisplayPath,
+            disposition: DocumentImportSourceState.unsupportedByPolicy.rawValue,
+            reason: reason,
+            parentDocumentID: parentDocumentID
+        ))
+    }
+
+    private func recordFailure(
+        _ error: Error,
+        displayName: String,
+        sourceDisplayPath: String,
+        sourceID: String,
+        parentDocumentID: String? = nil,
+        reason: String? = nil,
+        report: inout DocumentImportReport
+    ) throws {
+        let persistedReason = reason ?? "Unreadable: \(error.localizedDescription)"
+        try transitionSource(sourceID, to: .failed, reason: persistedReason)
         report.items.append(DocumentImportReportItem(
             displayName: displayName,
             sourceDisplayPath: sourceDisplayPath,
             disposition: DocumentImportDisposition.extractionFailed.rawValue,
-            reason: violation.localizedDescription,
-            parentDocumentID: parentDocumentID,
-            rejectionCode: violation.code.rawValue
+            reason: persistedReason,
+            parentDocumentID: parentDocumentID
         ))
     }
 

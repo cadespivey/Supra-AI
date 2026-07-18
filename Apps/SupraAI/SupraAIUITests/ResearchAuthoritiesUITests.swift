@@ -2,6 +2,266 @@ import AppKit
 import CoreGraphics
 import XCTest
 
+/// D-06 proves the internal rollback control drives the same complete rollout
+/// coordinator used by the one-time approved promotion. UI-test mode uses a
+/// hermetic store with no user documents.
+@MainActor
+final class DocumentChunkerRolloutUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testD06DiagnosticsFlipsToV1AndRestoresV2() {
+        // D-06 expected RED: Diagnostics has no chunker version/readiness surface
+        // or accessible rollback control, so the required live flip/revert drill
+        // cannot be performed through the signed app.
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+
+        let diagnosticsRoute = app.staticTexts["Diagnostics"].firstMatch
+        XCTAssertTrue(diagnosticsRoute.waitForExistence(timeout: 20))
+        diagnosticsRoute.click()
+
+        func assertVersion(_ expected: String, timeout: TimeInterval = 20) {
+            let version = app.staticTexts["diagnostics.chunker.version"]
+            XCTAssertTrue(version.waitForExistence(timeout: timeout))
+            let predicate = NSPredicate(format: "value == %@", expected)
+            let expectation = XCTNSPredicateExpectation(predicate: predicate, object: version)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed)
+        }
+
+        assertVersion("v2")
+        let switcher = app.buttons["diagnostics.chunker.switch"]
+        XCTAssertTrue(switcher.waitForExistence(timeout: 10))
+        // D-06 expected RED: the Form button currently exposes only its
+        // text-sized hit target, so assistive automation that resolves the
+        // containing row cannot activate the rollback control.
+        XCTAssertGreaterThanOrEqual(
+            switcher.frame.width,
+            app.windows.firstMatch.frame.width * 0.5,
+            "The destructive-safe chunker switch must expose a full-row hit target"
+        )
+        switcher.click()
+        assertVersion("v1")
+        XCTAssertEqual(app.buttons["diagnostics.chunker.switch"].label, "Restore Chunker v2")
+        app.buttons["diagnostics.chunker.switch"].click()
+        assertVersion("v2")
+    }
+}
+
+/// T-OPS-02 drives the hermetic interrupted-import fixture through both user
+/// decisions. The production app seeds this state only under the explicit UI
+/// test launch flag, so real stores are never modified by the fixture.
+@MainActor
+final class DocumentImportRecoveryUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testInterruptedImportBannerExposesExactCopyAndDiscard() {
+        // T-OPS-02 expected RED: no seeded interrupted import or documents.resumeBanner exists.
+        let app = launchInterruptedImportApp()
+        let banner = app.descendants(matching: .any)["documents.resumeBanner"]
+        XCTAssertTrue(banner.waitForExistence(timeout: 20), "Interrupted import banner did not appear")
+        XCTAssertEqual(banner.label, "Import interrupted")
+        let message = app.staticTexts["documents.resumeMessage"]
+        XCTAssertTrue(message.exists)
+        XCTAssertEqual(message.value as? String, "Import interrupted — 2 of 5 files not yet imported")
+        XCTAssertTrue(app.buttons["documents.resumeAction"].exists)
+        let discard = app.buttons["documents.discardAction"]
+        XCTAssertTrue(discard.exists)
+        discard.click()
+        XCTAssertTrue(banner.waitForNonExistence(timeout: 10), "Discard must remove the resume banner")
+    }
+
+    func testInterruptedImportResumeDispatchesOnceAndFinishesBothFiles() {
+        // T-OPS-02 expected RED: the Documents tab has no persisted-source Resume action.
+        let app = launchInterruptedImportApp()
+        let banner = app.descendants(matching: .any)["documents.resumeBanner"]
+        XCTAssertTrue(banner.waitForExistence(timeout: 20), "Interrupted import banner did not appear")
+        let resume = app.buttons["documents.resumeAction"]
+        XCTAssertTrue(resume.exists)
+        resume.click()
+        XCTAssertTrue(banner.waitForNonExistence(timeout: 10), "Resume must dispatch and remove the paused banner")
+        XCTAssertTrue(app.staticTexts["Resume Fixture 4.txt"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["Resume Fixture 5.txt"].waitForExistence(timeout: 20))
+    }
+
+    private func launchInterruptedImportApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestInterruptedImport",
+            "-uiTestInitialMatterTab", "Documents",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        return app
+    }
+}
+
+/// T-OPS-07 proves a completed policy rejection remains actionable in the
+/// Documents surface instead of being reduced to an aggregate Audit event.
+@MainActor
+final class DocumentImportFailureDetailUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testTOPS07LockedSourceShowsFilenameCodeAndRecoveryGuidance() {
+        // T-OPS-07 expected RED: the queue drops per-file metadata and the banner
+        // exposes only "1 need attention — see the Audit tab".
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestImportFailure",
+            "-uiTestInitialMatterTab", "Documents",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+
+        let warning = app.descendants(matching: .any)["documents.importFailureWarning"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 20), "Import failure warning did not appear")
+
+        let detail = app.descendants(matching: .any)["documents.importFailureDetail.privileged-locked.pdf"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 10), "Rejected filename and guidance were not rendered")
+        XCTAssertEqual(detail.label, "privileged-locked.pdf")
+        XCTAssertTrue(
+            (detail.value as? String)?.contains("encrypted_source") == true,
+            "Stable rejection code is missing: \(detail.debugDescription)"
+        )
+        XCTAssertTrue(
+            (detail.value as? String)?.contains("Remove encryption from a copy and try again.") == true,
+            "Recovery guidance is missing: \(detail.debugDescription)"
+        )
+    }
+}
+
+/// T-UX-07 exercises the first extracted-part correction surface against a
+/// hermetic synthetic document; it never opens or modifies the user's store.
+@MainActor
+final class DocumentCorrectionUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testTUX07CorrectionEditorSavesHistoryAndShowsReindexing() {
+        // T-UX-07 expected RED: no part-edit caller, editor/reason controls, or
+        // correction-history accessibility surface exists in the Documents tab.
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestDocumentCorrection",
+            "-uiTestInitialMatterTab", "Documents",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+
+        let row = app.staticTexts["Correction Fixture.txt"]
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "Synthetic correction fixture did not appear")
+        row.click()
+        // T-UX-09 accessibility companion expected RED: the selected row's
+        // preview action has no stable identifier and is collapsed into the row.
+        XCTAssertTrue(
+            app.buttons["documents.preview"].waitForExistence(timeout: 10),
+            "Selected document preview action is not independently accessible"
+        )
+        let edit = app.buttons["documents.editExtractedText"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 10), "Edit extracted text action is missing")
+        edit.click()
+
+        let editor = app.textViews["documents.partEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "Part editor did not appear")
+        editor.click()
+        editor.typeKey("a", modifierFlags: .command)
+        editor.typeText("CORRECTED-BETA UI wire proof")
+        let reason = app.textFields["documents.editReason"]
+        XCTAssertTrue(reason.exists)
+        reason.click()
+        reason.typeText("Corrected the synthetic nondefault text")
+        app.buttons["documents.saveCorrection"].click()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documents.reindexingBadge"].waitForExistence(timeout: 10),
+            "Saved correction did not expose the Reindexing badge"
+        )
+
+        row.click()
+        XCTAssertTrue(edit.waitForExistence(timeout: 10))
+        edit.click()
+        XCTAssertEqual(app.textViews["documents.partEditor"].value as? String, "CORRECTED-BETA UI wire proof")
+        XCTAssertTrue(app.staticTexts["Revision history (2)"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["ORIGINAL-ALPHA"].exists)
+        XCTAssertTrue(app.staticTexts["CORRECTED-BETA UI wire proof"].exists)
+    }
+}
+
+/// T-UX-08 drives the review queue through exact accessibility controls against
+/// a hermetic draft/executed fixture.
+@MainActor
+final class DocumentRelationReviewUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testTUX08ReviewSurfaceShowsEvidenceAndClearsBlockerOnlyAfterReview() {
+        // T-UX-08 expected RED: the Documents tab has no relation review queue,
+        // evidence/diff surface, or confirm/reject/override accessibility actions.
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestDocumentRelations",
+            "-uiTestInitialMatterTab", "Documents",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+
+        let queue = app.buttons["relations.openReview"]
+        XCTAssertTrue(queue.waitForExistence(timeout: 20))
+        XCTAssertEqual(queue.value as? String, "1 unreviewed relation")
+        queue.click()
+
+        XCTAssertTrue(app.descendants(matching: .any)["relations.reviewSheet"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["relations.evidence"].exists)
+        XCTAssertTrue(app.staticTexts["relations.diff"].exists)
+        XCTAssertTrue(app.buttons["relations.confirm"].exists)
+        XCTAssertTrue(app.buttons["relations.reject"].exists)
+        XCTAssertTrue(app.buttons["relations.override"].exists)
+        XCTAssertTrue(app.staticTexts["relations.blocker"].exists)
+
+        app.buttons["relations.override"].click()
+        XCTAssertTrue(app.descendants(matching: .any)["relations.overrideSheet"].waitForExistence(timeout: 10))
+        app.buttons["relations.saveOverride"].click()
+
+        XCTAssertTrue(app.staticTexts["relations.auditConfirmation"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["relations.reviewComplete"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["relations.blocker"].exists)
+    }
+}
+
 /// End-to-end UI test driving the Research and Authorities tabs with mouse-style
 /// clicks and keyboard input — fully offline (no model or network). The app is
 /// launched with `-uiTestMode`, which opens a hermetic throwaway store seeded with
@@ -415,6 +675,28 @@ final class ChatCitationsAndExportUITests: XCTestCase {
         let preview = app.descendants(matching: .any)["documentPreview"]
         XCTAssertTrue(preview.waitForExistence(timeout: 10), "Document preview did not open for [S1]")
         XCTAssertTrue(app.staticTexts["agreement.pdf"].waitForExistence(timeout: 5), "Preview did not show the document name")
+
+        // T-UX-09 expected RED: the document preview has no extraction-structure
+        // switch or accessible node/relationship rows.
+        let structureToggle = app.descendants(matching: .any)["documentPreview.structureToggle"]
+        XCTAssertTrue(structureToggle.waitForExistence(timeout: 5), "Extraction Structure control is missing")
+        structureToggle.click()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documentPreview.structureSummary"].waitForExistence(timeout: 5),
+            "Structure node/relationship count is missing"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documentPreview.structure.node.footnote/1"].waitForExistence(timeout: 5),
+            "Footnote structure node is missing"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documentPreview.structure.node.comment/1"].waitForExistence(timeout: 5),
+            "Comment structure node is missing"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documentPreview.structure.edge.anchor_of.footnote/1.body/paragraph/1"].waitForExistence(timeout: 5),
+            "Footnote anchor relationship is missing"
+        )
         app.buttons["Done"].click()
 
         // Export Chat is reachable from the chat's actions menu. (SwiftUI's Menu

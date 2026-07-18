@@ -98,19 +98,24 @@ public struct ChatMessage: Identifiable, Sendable, Equatable {
     public var status: MessageStatus
     /// Inline citations resolved for a completed assistant message (empty otherwise).
     public var citations: [MessageCitation]
+    /// Present for grounded document answers whose persisted packet establishes
+    /// an assurance state. Ordinary chat turns remain nil.
+    public var assuranceState: OutputAssuranceState?
 
     public init(
         id: String,
         role: MessageRole,
         content: String,
         status: MessageStatus,
-        citations: [MessageCitation] = []
+        citations: [MessageCitation] = [],
+        assuranceState: OutputAssuranceState? = nil
     ) {
         self.id = id
         self.role = role
         self.content = content
         self.status = status
         self.citations = citations
+        self.assuranceState = assuranceState
     }
 
     init(record: MessageRecord) {

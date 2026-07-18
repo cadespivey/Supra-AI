@@ -1,0 +1,64 @@
+{
+  "corpusManifestSHA256" : "301354160021b873c173592300f90a925aa3dafaf3c3a7f03f10838cf3781509",
+  "decision" : {
+    "id" : "D-06",
+    "reasons" : [
+      "D-06 requires explicit repo-owner approval.",
+      "At least one B-RET metric regressed against the frozen v1 behavior.",
+      "B-LST-01 remains deferred until the exhaustive list engine lands in M6."
+    ],
+    "shippingDefault" : 1,
+    "status" : "blocked_recall_regression"
+  },
+  "exhaustiveList" : {
+    "metricID" : "B-LST-01",
+    "reason" : "The exhaustive list engine does not exist before M6.",
+    "status" : "deferred_until_m6"
+  },
+  "generatedAt" : "2026-07-18T04:29:29.741Z",
+  "metrics" : [
+    {
+      "delta" : 0,
+      "metricID" : "B-RET-02",
+      "name" : "full_evidence_set_recall_at_40",
+      "passesNoninferiority" : true,
+      "unit" : "rate",
+      "v1Value" : 0.625,
+      "v2Value" : 0.625
+    },
+    {
+      "delta" : 0.05882352941176461,
+      "metricID" : "B-RET-01",
+      "name" : "recall_at_12",
+      "passesNoninferiority" : true,
+      "unit" : "rate",
+      "v1Value" : 0.7058823529411765,
+      "v2Value" : 0.7647058823529411
+    },
+    {
+      "delta" : 0,
+      "metricID" : "B-RET-01",
+      "name" : "recall_at_40",
+      "passesNoninferiority" : true,
+      "unit" : "rate",
+      "v1Value" : 0.8235294117647058,
+      "v2Value" : 0.8235294117647058
+    },
+    {
+      "delta" : -0.35294117647058826,
+      "metricID" : "B-RET-01",
+      "name" : "recall_at_8",
+      "passesNoninferiority" : false,
+      "unit" : "rate",
+      "v1Value" : 0.6470588235294118,
+      "v2Value" : 0.29411764705882354
+    }
+  ],
+  "repositorySHA" : "02337f3d2aacbbec0c8e4d61e97c56b474b6a3c5",
+  "retrievalLatency" : {
+    "ratio" : 3.488260115565209,
+    "v1Seconds" : 0.05247604171745479,
+    "v2Seconds" : 0.18305008334573358
+  },
+  "schemaVersion" : 1
+}

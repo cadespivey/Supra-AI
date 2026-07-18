@@ -18,6 +18,65 @@ final class DocumentImportTests: XCTestCase {
         try buildSourceTree()
     }
 
+    @MainActor
+    func testTOPS05EditingTextEnqueuesExactlyOneReindexAndRefreshesFTS() async throws {
+        // T-OPS-05 expected RED: DocumentImportService has no
+        // setReindexEnqueuer seam and updateExtractedText only marks stale.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic edit reindex")
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            ocr: nil
+        )
+        _ = try await service.importSources(
+            [sourceRoot.appendingPathComponent("Contracts/agreement.txt")],
+            matterID: matter.id
+        )
+        _ = try await DocumentIndexingService(store: store, embedder: nil)
+            .indexMatter(matterID: matter.id)
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let part = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertFalse(try store.documentIndex.searchChunks(
+            matterID: matter.id,
+            query: "effective 2024",
+            documentIDs: [document.id]
+        ).isEmpty)
+
+        let queue = DocumentProcessingQueue(
+            store: store,
+            importService: service,
+            makeIndexingService: { DocumentIndexingService(store: store, embedder: nil) },
+            notifier: EditReindexNotifier()
+        )
+        service.setReindexEnqueuer { [weak queue] matterID in
+            _ = queue?.enqueueReindex(matterID: matterID)
+        }
+
+        try service.updateExtractedText(
+            documentID: document.id,
+            partID: part.id,
+            text: "ZEPHYR_NONDEFAULT_EDIT proves the saved correction reached FTS."
+        )
+
+        XCTAssertEqual(
+            try store.documentLibrary.fetchDocument(id: document.id)?.indexStatus,
+            DocumentIndexStatus.stale.rawValue
+        )
+        XCTAssertEqual(try store.documentJobs.fetchJobs(matterID: matter.id).count, 1)
+        await queue.waitUntilIdle()
+        XCTAssertFalse(try store.documentIndex.searchChunks(
+            matterID: matter.id,
+            query: "ZEPHYR_NONDEFAULT_EDIT",
+            documentIDs: [document.id]
+        ).isEmpty)
+        XCTAssertTrue(try store.documentIndex.searchChunks(
+            matterID: matter.id,
+            query: "effective 2024",
+            documentIDs: [document.id]
+        ).isEmpty)
+    }
+
     func testRecursiveImportPreservesHierarchyDedupsAndExpandsAttachments() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
@@ -72,6 +131,33 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertNotNil(batch.reportJSON)
     }
 
+    func testTSTR02ImportPersistsWrapperBoundToTheSelectedRevision() async throws {
+        // T-STR-02 expected RED: imports do not persist ExtractionResult.structure
+        // and SupraStore has no documentStructure repository before M4-W1.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic wrapper persistence")
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            ocr: nil
+        )
+        _ = try await service.importSources(
+            [sourceRoot.appendingPathComponent("Contracts/agreement.txt")],
+            matterID: matter.id
+        )
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let selectedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        let selectedRevisionID = try XCTUnwrap(selectedPart.currentRevisionID)
+        let nodes = try store.documentStructure.fetchNodes(documentID: document.id)
+        XCTAssertEqual(nodes.count, 2)
+        XCTAssertEqual(Set(nodes.map(\.revisionID)), [selectedRevisionID])
+        XCTAssertEqual(nodes.first { $0.parentNodeID == nil }?.kind, "document")
+        let wrapper = try XCTUnwrap(nodes.first { $0.nodeKey == "part/0" })
+        XCTAssertEqual(wrapper.parentNodeID, nodes.first { $0.nodeKey == "document" }?.id)
+        XCTAssertEqual(try store.documentStructure.resolveText(nodeID: wrapper.id), "Service agreement effective 2024-01-01.")
+    }
+
     func testMockedOCRFillsImageTextWithLowConfidenceReview() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
@@ -94,7 +180,7 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(parts.first?.ocrConfidence ?? 1, 0.40, accuracy: 0.001)
 
         // Editing the OCR text marks the doc edited + stale for re-index.
-        try service.updateExtractedText(documentID: doc.id, partID: parts[0].id, text: "Notice of default dated May 1, 2024.")
+        try await service.updateExtractedText(documentID: doc.id, partID: parts[0].id, text: "Notice of default dated May 1, 2024.")
         let edited = try XCTUnwrap(store.documentLibrary.fetchDocument(id: doc.id))
         XCTAssertEqual(edited.indexStatus, DocumentIndexStatus.stale.rawValue)
         XCTAssertTrue(edited.hasUserEditedText)
@@ -138,6 +224,230 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(parts[1].ocrConfidence ?? 0, 0.9, accuracy: 0.001)
         XCTAssertTrue(parts[2].normalizedText.contains("page three text QVX3"), "page 2 should carry the OCR text")
         XCTAssertEqual(parts[2].ocrConfidence ?? 0, 0.9, accuracy: 0.001)
+    }
+
+    func testTSTR09OCRRegionsPersistAgainstTheSelectedPageRevision() async throws {
+        // T-STR-09 integration expected RED: OCR replaces the selected page text,
+        // then structure persistence falls back to the universal wrapper and
+        // discards the Vision boxes instead of emitting revision-bound regions.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic OCR region persistence")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/ocr-regions.pdf")
+        try FileManager.default.createDirectory(
+            at: pdfURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try makePDF(at: pdfURL, pages: [.empty])
+        let ocrText = "OCR-LINE-742 recovered contract language\nOCR-LINE-913 recovered signature clause"
+        let boxes = """
+        [
+          {"x":0.10,"y":0.72,"w":0.60,"h":0.04,"confidence":0.94},
+          {"x":0.10,"y":0.64,"w":0.67,"h":0.04,"confidence":0.92}
+        ]
+        """
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            ocr: MockOCRService(pageResults: [
+                0: OCRTextResult(text: ocrText, confidence: 0.93, boundingBoxesJSON: boxes),
+            ])
+        )
+
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let selectedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        let selectedRevisionID = try XCTUnwrap(selectedPart.currentRevisionID)
+        let nodes = try store.documentStructure.fetchNodes(documentID: document.id)
+        let page = try XCTUnwrap(nodes.first { $0.kind == "page" })
+        XCTAssertEqual(page.revisionID, selectedRevisionID)
+        let regions = nodes.filter { $0.kind == "region" }
+        XCTAssertEqual(regions.count, 2)
+        XCTAssertEqual(Set(regions.map(\.revisionID)), [selectedRevisionID])
+        XCTAssertEqual(
+            try regions.map { try XCTUnwrap(store.documentStructure.resolveText(nodeID: $0.id)) },
+            ["OCR-LINE-742 recovered contract language", "OCR-LINE-913 recovered signature clause"]
+        )
+        let payloads = try regions.map { region -> [String: Any] in
+            let json = try XCTUnwrap(region.payloadJSON)
+            return try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+            )
+        }
+        XCTAssertTrue(payloads.allSatisfy { $0["semanticKind"] as? String == "ocr_line" })
+        XCTAssertEqual((payloads[0]["box"] as? [String: Any])?["x"] as? Double, 0.10)
+    }
+
+    func testTREV03MixedPDFRetainsEmbeddedAndOCRCandidatesAndIndexesSelection() async throws {
+        // T-REV-03 expected RED: applyOCR currently overwrites the embedded part
+        // when the OCR candidate is longer, and no immutable revision store or
+        // chunk revision binding exists.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic dual-candidate lineage")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/dual-candidate-lineage.pdf")
+        try FileManager.default.createDirectory(
+            at: pdfURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let embeddedText = "EMBEDDED-A1"
+        let ocrText = "OCR-BETA-DISTINCT-TEXT-THAT-WINS-V0"
+        try makePDF(at: pdfURL, pages: [.text(embeddedText)])
+
+        let ocr = MockOCRService(pageResults: [
+            0: OCRTextResult(
+                text: ocrText,
+                confidence: 0.93,
+                boundingBoxesJSON: #"[{"token":"OCR-BETA"}]"#
+            )
+        ])
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            ocr: ocr
+        )
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let revisions = try store.documentRevisions.fetchRevisions(documentID: document.id, partIndex: 0)
+        XCTAssertEqual(revisions.count, 2)
+        XCTAssertEqual(revisions.first { $0.origin == "embedded_pdf" }?.text, embeddedText)
+        XCTAssertEqual(revisions.first { $0.origin == "ocr" }?.text, ocrText)
+        XCTAssertEqual(revisions.first { $0.origin == "ocr" }?.ocrConfidence, 0.93)
+
+        let selectedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertEqual(selectedPart.normalizedText, ocrText, "v0 compatibility still selects the longer OCR text")
+        XCTAssertEqual(selectedPart.currentRevisionID, revisions.first { $0.origin == "ocr" }?.id)
+        XCTAssertNotNil(selectedPart.currentSelectionID)
+
+        _ = try await DocumentIndexingService(store: store, embedder: nil).indexDocument(documentID: document.id)
+        let chunks = try store.documentIndex.fetchChunks(documentID: document.id)
+        XCTAssertFalse(chunks.isEmpty)
+        XCTAssertTrue(chunks.allSatisfy { $0.revisionID == selectedPart.currentRevisionID })
+        XCTAssertTrue(chunks.allSatisfy { $0.normalizedText.contains("OCR-BETA-DISTINCT") })
+        XCTAssertFalse(chunks.contains { $0.normalizedText.contains("EMBEDDED-A1") })
+    }
+
+    func testTOCR01LongerLowConfidenceGarbledOCRCannotReplaceEmbeddedText() async throws {
+        // T-OCR-01 expected RED: policy v0 selects the longer OCR string even
+        // when confidence is below threshold and the candidate is garbled.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic longer-worse OCR")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/longer-worse-ocr.pdf")
+        try FileManager.default.createDirectory(
+            at: pdfURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let embeddedText = "PAYMENT DUE 30 DAYS"
+        let garbledOCR = "@@@@ PAYMENT ??? DUE 30 DAYS ##### duplicated duplicated duplicated"
+        try makePDF(at: pdfURL, pages: [.text(embeddedText)])
+
+        let extraction = ExtractionService(extractors: [
+            .pdf: PDFExtractor(lowTextPerPageThreshold: 1_000)
+        ])
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            extraction: extraction,
+            ocr: MockOCRService(pageResults: [
+                0: OCRTextResult(text: garbledOCR, confidence: 0.21)
+            ])
+        )
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let selectedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertEqual(selectedPart.normalizedText, embeddedText)
+        XCTAssertFalse(
+            selectedPart.normalizedText.contains("duplicated duplicated duplicated"),
+            "the exact longer garbled OCR value must be absent from the selected part"
+        )
+        let revisions = try store.documentRevisions.fetchRevisions(documentID: document.id, partIndex: 0)
+        XCTAssertEqual(revisions.first { $0.origin == "ocr" }?.text, garbledOCR)
+    }
+
+    func testTOCR03BothPoorCandidatesPersistAndRouteToSelectionReview() async throws {
+        // T-OCR-03 expected RED: both candidates persist after M3-W1, but the
+        // document has no comparative candidate-quality warning from policy v1.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic both-poor OCR")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/both-poor-ocr.pdf")
+        try FileManager.default.createDirectory(
+            at: pdfURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try makePDF(at: pdfURL, pages: [.text("x")])
+
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            extraction: ExtractionService(extractors: [
+                .pdf: PDFExtractor(lowTextPerPageThreshold: 1_000)
+            ]),
+            ocr: MockOCRService(pageResults: [
+                0: OCRTextResult(text: "## ?? @@", confidence: 0.19)
+            ])
+        )
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        XCTAssertEqual(document.status, MatterDocumentStatus.needsReview.rawValue)
+        let warningsJSON = try XCTUnwrap(document.extractionWarningsJSON)
+        let warnings = try JSONDecoder().decode([String].self, from: Data(warningsJSON.utf8))
+        XCTAssertTrue(
+            warnings.contains { $0.contains("OCR candidate quality unresolved") },
+            "the warning must identify comparative selection quality; got \(warnings)"
+        )
+        XCTAssertEqual(
+            try store.documentRevisions.fetchRevisions(documentID: document.id, partIndex: 0).count,
+            2
+        )
+    }
+
+    func testTOCR04HighConfidenceOCRWinsAndPersistsPolicyV1Decision() async throws {
+        // T-OCR-04 expected RED: longer-wins selects the OCR text, but the
+        // persisted decision is still policy v0 and contains no v1 scores.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic legitimate OCR win")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/high-quality-ocr.pdf")
+        try FileManager.default.createDirectory(
+            at: pdfURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try makePDF(at: pdfURL, pages: [.text("N0!S")])
+        let ocrText = "The inspected premises show active water intrusion above Unit 2C. "
+            + "Repair should begin after written notice and verified access."
+
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            extraction: ExtractionService(extractors: [
+                .pdf: PDFExtractor(lowTextPerPageThreshold: 1_000)
+            ]),
+            ocr: MockOCRService(pageResults: [
+                0: OCRTextResult(
+                    text: ocrText,
+                    confidence: 0.97,
+                    boundingBoxesJSON: #"[{"confidence":0.97},{"confidence":0.96}]"#
+                )
+            ])
+        )
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let selectedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertEqual(selectedPart.normalizedText, ocrText)
+        let selection = try XCTUnwrap(
+            store.documentRevisions.fetchSelections(documentID: document.id, partIndex: 0).last
+        )
+        XCTAssertEqual(selection.policyVersion, 1)
+        let decision = try JSONDecoder().decode(
+            OCRCandidateSelection.Decision.self,
+            from: Data(selection.decisionJSON.utf8)
+        )
+        XCTAssertEqual(decision.selectedRevisionID, selectedPart.currentRevisionID)
+        XCTAssertEqual(decision.chosenOrigin, .ocr)
+        XCTAssertFalse(decision.scores.isEmpty)
+        XCTAssertFalse(decision.needsReview)
     }
 
     func testEmptyOCRLeavesDocumentInNeedsReview() async throws {
@@ -574,6 +884,117 @@ final class DocumentImportTests: XCTestCase {
 
     // MARK: - Reprocess (re-extract from the managed blob)
 
+    @MainActor
+    func testTREV04UserCorrectionAppendsImmutableRevisionAndSelection() async throws {
+        // T-REV-04 expected RED: updateExtractedText has no author/reason inputs and
+        // still mutates document_pages_parts.normalized_text in place.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic immutable correction")
+        let source = sourceRoot.appendingPathComponent("Corrections/original.txt")
+        try FileManager.default.createDirectory(
+            at: source.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("fixture bytes".utf8).write(to: source)
+        let extractor = SequencedTextExtractor(texts: ["ORIGINAL-ALPHA"])
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            extraction: ExtractionService(extractors: [.plainText: extractor]),
+            ocr: nil
+        )
+        _ = try await service.importSources([source], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let originalPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        let originalRevisionID = try XCTUnwrap(originalPart.currentRevisionID)
+        let originalSelectionID = try XCTUnwrap(originalPart.currentSelectionID)
+
+        try service.updateExtractedText(
+            documentID: document.id,
+            partID: originalPart.id,
+            text: "CORRECTED-BETA",
+            author: "Synthetic Reviewer",
+            reason: "Corrected the nondefault fixture text"
+        )
+
+        let revisions = try store.documentRevisions.fetchRevisions(documentID: document.id, partIndex: 0)
+        XCTAssertEqual(revisions.count, 2)
+        let original = try XCTUnwrap(revisions.first { $0.id == originalRevisionID })
+        XCTAssertEqual(original.text, "ORIGINAL-ALPHA")
+        XCTAssertNotEqual(original.text, "CORRECTED-BETA")
+        let correction = try XCTUnwrap(revisions.first { $0.origin == "user_edit" })
+        XCTAssertEqual(correction.text, "CORRECTED-BETA")
+        XCTAssertEqual(correction.author, "Synthetic Reviewer")
+        XCTAssertEqual(correction.reason, "Corrected the nondefault fixture text")
+        XCTAssertEqual(correction.supersedesRevisionID, originalRevisionID)
+
+        let currentPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertEqual(currentPart.normalizedText, "CORRECTED-BETA")
+        XCTAssertEqual(currentPart.currentRevisionID, correction.id)
+        XCTAssertNotEqual(currentPart.currentSelectionID, originalSelectionID)
+        let selections = try store.documentRevisions.fetchSelections(documentID: document.id, partIndex: 0)
+        XCTAssertEqual(selections.count, 2)
+        XCTAssertEqual(selections.last?.selectedRevisionID, correction.id)
+        XCTAssertEqual(selections.last?.selectedBy, "user")
+    }
+
+    @MainActor
+    func testTREV05ReprocessPreservesSelectedUserEditAndRoutesConflictToReview() async throws {
+        // T-REV-05 expected RED: reprocessDocument replaces the compatible part
+        // projection and silently selects the new parser output over a user edit.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic correction conflict")
+        let source = sourceRoot.appendingPathComponent("Corrections/reprocess.txt")
+        try FileManager.default.createDirectory(
+            at: source.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("fixture bytes".utf8).write(to: source)
+        let extractor = SequencedTextExtractor(texts: ["ORIGINAL-ALPHA", "REPROCESSED-GAMMA"])
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            extraction: ExtractionService(extractors: [.plainText: extractor]),
+            ocr: nil
+        )
+        _ = try await service.importSources([source], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let originalPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        try service.updateExtractedText(
+            documentID: document.id,
+            partID: originalPart.id,
+            text: "CORRECTED-BETA",
+            author: "Synthetic Reviewer",
+            reason: "Preserve this correction across reprocessing"
+        )
+        let editedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        let selectedEditRevisionID = try XCTUnwrap(editedPart.currentRevisionID)
+        let selectedEditSelectionID = try XCTUnwrap(editedPart.currentSelectionID)
+
+        try await service.reprocessDocument(documentID: document.id)
+
+        let revisions = try store.documentRevisions.fetchRevisions(documentID: document.id, partIndex: 0)
+        XCTAssertEqual(revisions.count, 3)
+        XCTAssertEqual(revisions.first { $0.id == selectedEditRevisionID }?.text, "CORRECTED-BETA")
+        XCTAssertEqual(revisions.first { $0.origin == "user_edit" }?.author, "Synthetic Reviewer")
+        XCTAssertEqual(revisions.first { $0.text == "REPROCESSED-GAMMA" }?.origin, "parser")
+        let currentPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertEqual(currentPart.normalizedText, "CORRECTED-BETA")
+        XCTAssertEqual(currentPart.currentRevisionID, selectedEditRevisionID)
+        XCTAssertEqual(currentPart.currentSelectionID, selectedEditSelectionID)
+
+        let after = try XCTUnwrap(store.documentLibrary.fetchDocument(id: document.id))
+        XCTAssertEqual(after.status, MatterDocumentStatus.needsReview.rawValue)
+        let warningData = try XCTUnwrap(after.extractionWarningsJSON?.data(using: .utf8))
+        let warnings = try JSONDecoder().decode([String].self, from: warningData)
+        XCTAssertTrue(
+            warnings.contains { $0.localizedCaseInsensitiveContains("selection conflict") },
+            "the review warning must explicitly name the selection conflict; got \(warnings)"
+        )
+    }
+
     func testReprocessFailedDocumentReextractsAndRemarksFailedIdempotently() async throws {
         // Expected RED: compile error — `reprocessDocument(documentID:)` is not a member of
         // DocumentImportService.
@@ -639,6 +1060,36 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(repopulated.count, 1)
         XCTAssertEqual(repopulated.first?.normalizedText, "Service agreement effective 2024-01-01.")
         XCTAssertFalse(repopulated.contains { $0.normalizedText.contains("STALE-SENTINEL") }, "the stale text must be replaced by the re-extraction")
+    }
+}
+
+private struct EditReindexNotifier: DocumentNotifying {
+    func authorizationStatus() async -> DocumentNotificationAuthorizationStatus { .denied }
+    func requestAuthorization() async -> DocumentNotificationAuthorizationStatus { .denied }
+    func notify(title: String, body: String) async {}
+}
+
+/// Returns one deterministic parser result per extraction call so reprocessing
+/// can prove that a changed machine candidate never displaces a selected edit.
+private final class SequencedTextExtractor: DocumentExtractor, @unchecked Sendable {
+    private let lock = NSLock()
+    private let texts: [String]
+    private var callIndex = 0
+
+    init(texts: [String]) {
+        self.texts = texts
+    }
+
+    func extract(fileURL: URL) async throws -> ExtractionResult {
+        let text = lock.withLock { () -> String in
+            let index = min(callIndex, texts.count - 1)
+            callIndex += 1
+            return texts[index]
+        }
+        return ExtractionResult(
+            parts: [ExtractedPart(sourceKind: .text, text: text)],
+            method: "synthetic-sequenced-parser"
+        )
     }
 }
 

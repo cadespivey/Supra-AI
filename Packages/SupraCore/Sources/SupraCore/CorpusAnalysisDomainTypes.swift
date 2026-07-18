@@ -1,0 +1,243 @@
+import Foundation
+
+/// Assurance is intentionally orthogonal to an output's lifecycle status.
+/// These raw values are persisted on corpus-analysis runs beginning with v064.
+public enum OutputAssuranceState: String, Codable, CaseIterable, Hashable, Sendable {
+    case preliminary
+    case supportNeedsReview = "support_needs_review"
+    case propositionSupported = "proposition_supported"
+    case corpusIncomplete = "corpus_incomplete"
+    case corpusComplete = "corpus_complete"
+    case negativeBlocked = "negative_blocked"
+    case stale
+}
+
+/// One shared copy and eligibility contract for every assurance-bearing surface.
+/// Keeping these strings beside the persisted enum prevents output rows, chat,
+/// chronology, and exports from silently assigning different meanings to a state.
+public enum OutputAssurancePresentation {
+    public static func text(for state: OutputAssuranceState) -> String {
+        switch state {
+        case .preliminary:
+            "Preliminary — ranked sources only"
+        case .supportNeedsReview:
+            "Support needs review"
+        case .propositionSupported:
+            "Propositions supported — completeness not assessed"
+        case .corpusIncomplete:
+            "Corpus incomplete — review gaps"
+        case .corpusComplete:
+            "Corpus complete for this task and scope"
+        case .negativeBlocked:
+            "Negative conclusion blocked"
+        case .stale:
+            "Stale — sources or processing changed"
+        }
+    }
+
+    public static func isExportEligible(_ state: OutputAssuranceState) -> Bool {
+        state == .propositionSupported || state == .corpusComplete
+    }
+
+    public static func state(
+        rawValue: String?,
+        verificationStatus: OutputVerificationStatus
+    ) -> OutputAssuranceState {
+        rawValue.flatMap(OutputAssuranceState.init(rawValue:))
+            ?? (verificationStatus == .allSupported ? .propositionSupported : .supportNeedsReview)
+    }
+}
+
+public enum CorpusAnalysisTaskKind: String, Codable, CaseIterable, Hashable, Sendable {
+    case exhaustiveList = "exhaustive_list"
+    case chronology
+    case comparison
+    case negativeCheck = "negative_check"
+    case customExtraction = "custom_extraction"
+}
+
+public enum CorpusAnalysisRunStatus: String, Codable, CaseIterable, Hashable, Sendable {
+    case planning
+    case running
+    case reconciling
+    case verifying
+    case persisted
+    case failed
+    case cancelled
+}
+
+public enum CorpusAnalysisPartitionDisposition: String, Codable, CaseIterable, Hashable, Sendable {
+    case pending
+    case succeeded
+    case failed
+    case cancelled
+    case excluded
+
+    public var isTerminal: Bool { self != .pending }
+}
+
+public enum CorpusAnalysisAttemptOutcome: String, Codable, CaseIterable, Hashable, Sendable {
+    case running
+    case succeeded
+    case failed
+    case cancelled
+}
+
+/// Append-only attempt history stored on each partition. A `running` tail is
+/// deliberately durable so relaunch can classify an interrupted process life.
+public struct CorpusAnalysisAttemptHistoryEntry: Codable, Equatable, Sendable {
+    public var attemptNumber: Int
+    public var outcome: CorpusAnalysisAttemptOutcome
+    public var retryable: Bool
+    public var errorSummary: String?
+    public var startedAt: Date
+    public var completedAt: Date?
+
+    public init(
+        attemptNumber: Int,
+        outcome: CorpusAnalysisAttemptOutcome,
+        retryable: Bool = false,
+        errorSummary: String? = nil,
+        startedAt: Date,
+        completedAt: Date? = nil
+    ) {
+        self.attemptNumber = attemptNumber
+        self.outcome = outcome
+        self.retryable = retryable
+        self.errorSummary = errorSummary
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case attemptNumber = "attempt_number"
+        case outcome
+        case retryable
+        case errorSummary = "error_summary"
+        case startedAt = "started_at"
+        case completedAt = "completed_at"
+    }
+}
+
+public enum CorpusAnalysisSnapshotDisposition: String, Codable, CaseIterable, Hashable, Sendable {
+    case eligible
+    case excluded
+}
+
+/// One member of the frozen corpus denominator. Members without a document id
+/// are persisted import-source exclusions that never became documents.
+public struct CorpusAnalysisSnapshotMember: Codable, Equatable, Sendable {
+    public var memberKey: String
+    public var documentID: String?
+    public var displayName: String
+    public var revisionIDs: [String]
+    public var indexState: String?
+    public var disposition: CorpusAnalysisSnapshotDisposition
+    public var reason: String?
+
+    public init(
+        memberKey: String,
+        documentID: String? = nil,
+        displayName: String,
+        revisionIDs: [String] = [],
+        indexState: String? = nil,
+        disposition: CorpusAnalysisSnapshotDisposition,
+        reason: String? = nil
+    ) {
+        self.memberKey = memberKey
+        self.documentID = documentID
+        self.displayName = displayName
+        self.revisionIDs = revisionIDs
+        self.indexState = indexState
+        self.disposition = disposition
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case memberKey = "member_key"
+        case documentID = "document_id"
+        case displayName = "display_name"
+        case revisionIDs = "revision_ids"
+        case indexState = "index_state"
+        case disposition
+        case reason
+    }
+}
+
+public struct CorpusAnalysisSnapshot: Codable, Equatable, Sendable {
+    public var schemaVersion: Int
+    public var members: [CorpusAnalysisSnapshotMember]
+
+    public init(schemaVersion: Int = 1, members: [CorpusAnalysisSnapshotMember]) {
+        self.schemaVersion = schemaVersion
+        self.members = members
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case members
+    }
+}
+
+/// Canonical denominator and terminal-bucket accounting persisted on each run.
+public struct CorpusAnalysisCoverage: Codable, Equatable, Sendable {
+    public var schemaVersion: Int
+    public var snapshotMemberCount: Int
+    public var eligibleMemberCount: Int
+    public var excludedMemberCount: Int
+    public var excludedMembersDisclosed: Bool
+    public var partitionCount: Int
+    public var pendingPartitionCount: Int
+    public var succeededPartitionCount: Int
+    public var failedPartitionCount: Int
+    public var cancelledPartitionCount: Int
+    public var excludedPartitionCount: Int
+    public var terminalPartitionCount: Int
+    public var balanceErrorCount: Int
+
+    public init(
+        schemaVersion: Int = 1,
+        snapshotMemberCount: Int,
+        eligibleMemberCount: Int,
+        excludedMemberCount: Int,
+        excludedMembersDisclosed: Bool,
+        partitionCount: Int,
+        pendingPartitionCount: Int,
+        succeededPartitionCount: Int,
+        failedPartitionCount: Int,
+        cancelledPartitionCount: Int,
+        excludedPartitionCount: Int,
+        terminalPartitionCount: Int,
+        balanceErrorCount: Int
+    ) {
+        self.schemaVersion = schemaVersion
+        self.snapshotMemberCount = snapshotMemberCount
+        self.eligibleMemberCount = eligibleMemberCount
+        self.excludedMemberCount = excludedMemberCount
+        self.excludedMembersDisclosed = excludedMembersDisclosed
+        self.partitionCount = partitionCount
+        self.pendingPartitionCount = pendingPartitionCount
+        self.succeededPartitionCount = succeededPartitionCount
+        self.failedPartitionCount = failedPartitionCount
+        self.cancelledPartitionCount = cancelledPartitionCount
+        self.excludedPartitionCount = excludedPartitionCount
+        self.terminalPartitionCount = terminalPartitionCount
+        self.balanceErrorCount = balanceErrorCount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case snapshotMemberCount = "snapshot_member_count"
+        case eligibleMemberCount = "eligible_member_count"
+        case excludedMemberCount = "excluded_member_count"
+        case excludedMembersDisclosed = "excluded_members_disclosed"
+        case partitionCount = "partition_count"
+        case pendingPartitionCount = "pending_partition_count"
+        case succeededPartitionCount = "succeeded_partition_count"
+        case failedPartitionCount = "failed_partition_count"
+        case cancelledPartitionCount = "cancelled_partition_count"
+        case excludedPartitionCount = "excluded_partition_count"
+        case terminalPartitionCount = "terminal_partition_count"
+        case balanceErrorCount = "balance_error_count"
+    }
+}

@@ -3,15 +3,69 @@ import Foundation
 import SupraCore
 import SupraStore
 
+/// Actionable per-file detail retained from a completed import report.
+public struct DocumentImportFailureDetail: Sendable, Equatable {
+    public let displayName: String
+    public let sourceDisplayPath: String
+    public let disposition: String
+    public let rejectionCode: String?
+    public let reason: String?
+
+    public init(
+        displayName: String,
+        sourceDisplayPath: String,
+        disposition: String,
+        rejectionCode: String? = nil,
+        reason: String? = nil
+    ) {
+        self.displayName = displayName
+        self.sourceDisplayPath = sourceDisplayPath
+        self.disposition = disposition
+        self.rejectionCode = rejectionCode
+        self.reason = reason
+    }
+}
+
 /// Summary of an import that finished with per-file failures, for in-app display.
 public struct DocumentImportFailureSummary: Sendable, Equatable, Identifiable {
     public let matterID: String
     public let importedCount: Int
     public let discoveredCount: Int
     public let failedCount: Int
+    public let reasons: [String]
+    public let details: [DocumentImportFailureDetail]
+
+    public init(
+        matterID: String,
+        importedCount: Int,
+        discoveredCount: Int,
+        failedCount: Int,
+        reasons: [String] = [],
+        details: [DocumentImportFailureDetail] = []
+    ) {
+        self.matterID = matterID
+        self.importedCount = importedCount
+        self.discoveredCount = discoveredCount
+        self.failedCount = failedCount
+        self.reasons = reasons
+        self.details = details
+    }
     /// Stable per-outcome id so a dismissed banner stays dismissed but a new
     /// failing import re-shows one.
     public var id: String { "\(matterID)-\(discoveredCount)-\(importedCount)-\(failedCount)" }
+}
+
+/// Persisted relaunch work presented to the Documents tab.
+public struct ResumableDocumentImport: Sendable, Equatable, Identifiable {
+    public let jobID: String
+    public let matterID: String
+    public let totalCount: Int
+    public let unfinishedCount: Int
+
+    public var id: String { jobID }
+    public var message: String {
+        "Import interrupted — \(unfinishedCount) of \(totalCount) files not yet imported"
+    }
 }
 
 /// App-wide document processing queue (plan §5.2–§5.6). Exactly one job runs at a
@@ -24,6 +78,7 @@ public final class DocumentProcessingQueue: ObservableObject {
     @Published public private(set) var queuedJobs: [DocumentProcessingJobRecord] = []
     /// Jobs paused by an interrupted quit, awaiting the user's resume decision.
     @Published public private(set) var resumableJobs: [DocumentProcessingJobRecord] = []
+    @Published public private(set) var resumableImports: [ResumableDocumentImport] = []
     @Published public private(set) var lastError: String?
     /// The most recent import that completed with per-file failures, for in-app
     /// surfacing (the Documents tab shows a banner). Cleared on a later clean
@@ -37,13 +92,12 @@ public final class DocumentProcessingQueue: ObservableObject {
     /// runtime). Best-effort and main-actor isolated; never fails a job.
     private let classificationService: DocumentClassificationService?
     private let notifier: any DocumentNotifying
+    private let corpusAnalysisRunner: (@Sendable (CorpusAnalysisJobPayload) async throws -> Void)?
 
-    /// In-memory source URLs for not-yet-run import jobs (originals are not
-    /// persisted). A job whose sources are lost across a relaunch falls back to
-    /// store-only reconciliation (re-indexing already-copied documents).
+    /// Fast-path URLs for jobs that run in this process. Durable selected-source
+    /// rows and bookmarks are written before enqueue returns, so these are never
+    /// the sole source authority for FIFO-queued imports.
     private var pendingSources: [String: [URL]] = [:]
-    /// Optional destination folder per queued import job (nil = All Documents root).
-    private var pendingTargetFolderID: [String: String] = [:]
     private var runTask: Task<Void, Never>?
 
     public init(
@@ -51,13 +105,15 @@ public final class DocumentProcessingQueue: ObservableObject {
         importService: DocumentImportService,
         makeIndexingService: @escaping @Sendable () -> DocumentIndexingService,
         classificationService: DocumentClassificationService? = nil,
-        notifier: any DocumentNotifying = SystemDocumentNotifier()
+        notifier: any DocumentNotifying = SystemDocumentNotifier(),
+        corpusAnalysisRunner: (@Sendable (CorpusAnalysisJobPayload) async throws -> Void)? = nil
     ) {
         self.store = store
         self.importService = importService
         self.makeIndexingService = makeIndexingService
         self.classificationService = classificationService
         self.notifier = notifier
+        self.corpusAnalysisRunner = corpusAnalysisRunner
     }
 
     deinit {
@@ -69,7 +125,14 @@ public final class DocumentProcessingQueue: ObservableObject {
     /// Relaunch reconciliation: any job left active is treated as interrupted and
     /// moved to paused for the user to resume (plan §5.4).
     public func bootstrap() {
-        _ = try? store.documentJobs.reconcileInterruptedJobs()
+        do {
+            _ = try store.documentJobs.reconcileOrphanedBatches()
+            _ = try store.documentJobs.reconcileInterruptedJobs()
+            try reconcileQueuedImportsAfterRelaunch()
+            lastImportFailure = try restoredImportFailure()
+        } catch {
+            lastError = error.localizedDescription
+        }
         refresh()
     }
 
@@ -77,6 +140,18 @@ public final class DocumentProcessingQueue: ObservableObject {
         activeJob = try? store.documentJobs.fetchActiveJob()
         queuedJobs = (try? store.documentJobs.fetchQueuedJobs()) ?? []
         resumableJobs = (try? store.documentJobs.fetchPausedJobs()) ?? []
+        resumableImports = resumableJobs.compactMap { job in
+            guard let batchID = job.importBatchID,
+                  let summary = try? store.documentJobs.sourcesSummary(batchID: batchID),
+                  summary.totalCount > 0,
+                  summary.unfinishedCount > 0 else { return nil }
+            return ResumableDocumentImport(
+                jobID: job.id,
+                matterID: job.matterID,
+                totalCount: summary.totalCount,
+                unfinishedCount: summary.unfinishedCount
+            )
+        }
     }
 
     /// Enqueues an import job for the given source URLs.
@@ -84,10 +159,30 @@ public final class DocumentProcessingQueue: ObservableObject {
     public func enqueueImport(matterID: String, sources: [URL], sourceRootDisplay: String? = nil, targetFolderID: String? = nil) -> String? {
         guard !sources.isEmpty else { return nil }
         do {
-            let batch = try store.documentJobs.createBatch(matterID: matterID, sourceRootDisplay: sourceRootDisplay)
+            let batch = try store.documentJobs.createBatch(
+                matterID: matterID,
+                sourceRootDisplay: sourceRootDisplay,
+                targetFolderID: targetFolderID,
+                targetFolderRequested: targetFolderID != nil
+            )
+            for (selectionIndex, source) in sources.enumerated() {
+                _ = try store.documentJobs.recordDiscovered(
+                    batchID: batch.id,
+                    matterID: matterID,
+                    sourceKey: "selection:\(selectionIndex)",
+                    sourceDisplayPath: source.lastPathComponent,
+                    sourceBookmark: selectedSourceBookmark(for: source),
+                    state: .selected
+                )
+            }
+            try store.documentJobs.updateBatchProgress(
+                id: batch.id,
+                discoveredCount: sources.count,
+                importedCount: 0,
+                failedCount: 0
+            )
             let job = try store.documentJobs.enqueueJob(matterID: matterID, importBatchID: batch.id)
             pendingSources[job.id] = sources
-            if let targetFolderID { pendingTargetFolderID[job.id] = targetFolderID }
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "document_import_started", actor: "user",
                 summary: "Queued import of \(sources.count) item(s)", relatedTable: "document_processing_jobs", relatedID: job.id
@@ -180,10 +275,50 @@ public final class DocumentProcessingQueue: ObservableObject {
         }
     }
 
+    /// Enqueues a persisted v064 corpus-analysis run. The run itself owns the
+    /// frozen snapshot and partition ledger; the job payload carries only its id.
+    @discardableResult
+    public func enqueueCorpusAnalysis(matterID: String, runID: String) -> String? {
+        do {
+            let payloadJSON = String(
+                data: try JSONEncoder().encode(CorpusAnalysisJobPayload(runID: runID)),
+                encoding: .utf8
+            )
+            let job = try store.documentJobs.enqueueJob(
+                matterID: matterID,
+                kind: DocumentProcessingJobKind.corpusAnalysis.rawValue,
+                payloadJSON: payloadJSON
+            )
+            refresh()
+            pump()
+            return job.id
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Applies a correction through the import service's immutable-lineage path.
+    /// The service's composed reindex enqueuer schedules the follow-up work.
+    public func updateExtractedText(
+        documentID: String,
+        partID: String,
+        text: String,
+        author: String,
+        reason: String
+    ) throws {
+        try importService.updateExtractedText(
+            documentID: documentID,
+            partID: partID,
+            text: text,
+            author: author,
+            reason: reason
+        )
+    }
+
     public func cancelQueuedJob(id: String) {
         try? store.documentJobs.cancelJob(id: id)
         pendingSources[id] = nil
-        pendingTargetFolderID[id] = nil
         refresh()
     }
 
@@ -195,6 +330,25 @@ public final class DocumentProcessingQueue: ObservableObject {
         try? store.documentJobs.requeueJob(id: jobID)
         refresh()
         pump()
+    }
+
+    /// Discards a paused post-v059 import without touching rows that already
+    /// succeeded. Legacy paused jobs without a ledger retain the job-only cancel
+    /// behavior.
+    public func discard(jobID: String) {
+        do {
+            if let job = try store.documentJobs.fetchJob(id: jobID),
+               job.status == DocumentProcessingJobStatus.paused.rawValue,
+               let batchID = job.importBatchID,
+               !(try store.documentJobs.fetchSources(batchID: batchID)).isEmpty {
+                _ = try importService.discardBatch(batchID: batchID, matterID: job.matterID)
+            }
+            try store.documentJobs.cancelJob(id: jobID)
+            pendingSources[jobID] = nil
+            refresh()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     /// Awaits the current run loop until the queue is idle. Useful for tests and
@@ -212,6 +366,41 @@ public final class DocumentProcessingQueue: ObservableObject {
         runTask = Task { [weak self] in
             await self?.runLoop()
         }
+    }
+
+    /// Queued imports survive a quit differently from the one job that was
+    /// active: orphan-batch reconciliation makes their persisted selections
+    /// interrupted, then this step pauses the queued job so the existing Resume
+    /// UI owns re-entry. Pre-v059/bug-window jobs with no source authority can
+    /// never resume and fail explicitly instead of blocking FIFO forever.
+    private func reconcileQueuedImportsAfterRelaunch() throws {
+        for job in try store.documentJobs.fetchQueuedJobs() {
+            guard let batchID = job.importBatchID,
+                  let batch = try store.documentJobs.fetchBatch(id: batchID),
+                  batch.status == DocumentImportBatchStatus.interrupted.rawValue else { continue }
+            let sources = try store.documentJobs.fetchSources(batchID: batchID)
+            if sources.isEmpty {
+                try store.documentJobs.failJob(
+                    id: job.id,
+                    errorSummary: "source_authorization_unavailable"
+                )
+            } else if sources.contains(where: { !$0.isTerminal }) {
+                try store.documentJobs.pauseJob(id: job.id)
+            }
+        }
+    }
+
+    private func selectedSourceBookmark(for source: URL) -> Data? {
+        let scoped = source.startAccessingSecurityScopedResource()
+        defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+        let options: URL.BookmarkCreationOptions = scoped
+            ? [.withSecurityScope, .securityScopeAllowOnlyReadAccess]
+            : []
+        return try? source.bookmarkData(
+            options: options,
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
     }
 
     private func runLoop() async {
@@ -235,6 +424,35 @@ public final class DocumentProcessingQueue: ObservableObject {
         case .process: await runImportOrReindex(job)
         case .classify: await runClassify(job)
         case .reprocess: await runReprocess(job)
+        case .corpusAnalysis: await runCorpusAnalysis(job)
+        }
+    }
+
+    private func runCorpusAnalysis(_ job: DocumentProcessingJobRecord) async {
+        guard let json = job.payloadJSON,
+              let payload = try? JSONDecoder().decode(CorpusAnalysisJobPayload.self, from: Data(json.utf8)),
+              let corpusAnalysisRunner else {
+            let message = "The corpus-analysis runner or job payload is unavailable."
+            lastError = message
+            try? store.documentJobs.failJob(id: job.id, errorSummary: message)
+            return
+        }
+        do {
+            setPhase(job.id, .analyzingCorpus)
+            try await corpusAnalysisRunner(payload)
+            try store.documentJobs.completeJob(id: job.id)
+            refresh()
+        } catch {
+            lastError = error.localizedDescription
+            try? store.documentJobs.failJob(id: job.id, errorSummary: error.localizedDescription)
+            _ = try? store.auditEvents.recordEvent(
+                matterID: job.matterID,
+                eventType: "corpus_analysis_failed",
+                actor: "system",
+                summary: "Corpus analysis failed: \(error.localizedDescription)",
+                relatedTable: "document_processing_jobs",
+                relatedID: job.id
+            )
         }
     }
 
@@ -245,16 +463,29 @@ public final class DocumentProcessingQueue: ObservableObject {
         do {
             if let sources = pendingSources[job.id], !sources.isEmpty {
                 setPhase(job.id, .copyingHashing)
+                let targetFolderID = try job.importBatchID.flatMap {
+                    try store.documentJobs.fetchBatch(id: $0)?.targetFolderID
+                }
                 let outcome = try await importService.importSources(
                     sources, matterID: job.matterID,
-                    targetFolderID: pendingTargetFolderID[job.id], batchID: job.importBatchID
+                    targetFolderID: targetFolderID, batchID: job.importBatchID
                 )
                 importReport = outcome.report
                 pendingSources[job.id] = nil
-                pendingTargetFolderID[job.id] = nil
                 try? store.documentJobs.updateJobProgress(
                     id: job.id, phase: .extractingText,
                     completedUnits: outcome.report.importedCount, totalUnits: outcome.report.discoveredCount
+                )
+            } else if let batchID = job.importBatchID,
+                      !(try store.documentJobs.fetchSources(batchID: batchID)).isEmpty {
+                setPhase(job.id, .copyingHashing)
+                let outcome = try await importService.resumeBatch(batchID: batchID, matterID: job.matterID)
+                importReport = outcome.report
+                try? store.documentJobs.updateJobProgress(
+                    id: job.id,
+                    phase: .extractingText,
+                    completedUnits: outcome.report.importedCount,
+                    totalUnits: outcome.report.discoveredCount
                 )
             }
 
@@ -377,7 +608,9 @@ public final class DocumentProcessingQueue: ObservableObject {
                 matterID: job.matterID,
                 importedCount: report.importedCount,
                 discoveredCount: report.discoveredCount,
-                failedCount: report.failedCount
+                failedCount: report.failedCount,
+                reasons: Self.failureReasons(from: report),
+                details: Self.failureDetails(from: report)
             )
             await notifier.notify(
                 title: "Import complete with issues",
@@ -397,6 +630,55 @@ public final class DocumentProcessingQueue: ObservableObject {
     private func setPhase(_ jobID: String, _ phase: DocumentProcessingPhase) {
         try? store.documentJobs.updateJobProgress(id: jobID, phase: phase)
         refresh()
+    }
+
+    private func restoredImportFailure() throws -> DocumentImportFailureSummary? {
+        guard let batch = try store.documentJobs.fetchLatestImportFailureBatch() else { return nil }
+        let report = batch.reportJSON
+            .flatMap { $0.data(using: .utf8) }
+            .flatMap { try? JSONDecoder().decode(DocumentImportReport.self, from: $0) }
+        return DocumentImportFailureSummary(
+            matterID: batch.matterID,
+            importedCount: batch.importedCount,
+            discoveredCount: batch.discoveredCount,
+            failedCount: batch.failedCount,
+            reasons: report.map { Self.failureReasons(from: $0) } ?? [],
+            details: report.map { Self.failureDetails(from: $0) } ?? []
+        )
+    }
+
+    private static func failureReasons(from report: DocumentImportReport) -> [String] {
+        Array(Set(report.items.compactMap(\.reason))).sorted()
+    }
+
+    private static func failureDetails(from report: DocumentImportReport) -> [DocumentImportFailureDetail] {
+        let failedDispositions: Set<String> = [
+            DocumentImportDisposition.extractionFailed.rawValue,
+            DocumentImportDisposition.unsupported.rawValue,
+            DocumentImportDisposition.ocrFailed.rawValue,
+            DocumentImportSourceState.rejected.rawValue,
+            DocumentImportSourceState.unsupportedByPolicy.rawValue,
+            DocumentImportSourceState.failed.rawValue,
+            DocumentImportSourceState.cancelled.rawValue,
+            DocumentImportSourceState.interrupted.rawValue,
+        ]
+        return report.items
+            .filter { failedDispositions.contains($0.disposition) }
+            .map {
+                DocumentImportFailureDetail(
+                    displayName: $0.displayName,
+                    sourceDisplayPath: $0.sourceDisplayPath,
+                    disposition: $0.disposition,
+                    rejectionCode: $0.rejectionCode,
+                    reason: $0.reason
+                )
+            }
+            .sorted {
+                if $0.sourceDisplayPath != $1.sourceDisplayPath {
+                    return $0.sourceDisplayPath < $1.sourceDisplayPath
+                }
+                return $0.displayName < $1.displayName
+            }
     }
 }
 

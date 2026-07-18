@@ -1,0 +1,5 @@
+SYNTHETIC-DATA-ONLY
+
+Every person, organization, matter, identifier, and event in this
+benchmark is SYNTHETIC, FICTIONAL, AND NONPRIVILEGED. It is intended
+only for deterministic document-ingestion testing.

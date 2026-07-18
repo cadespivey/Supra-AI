@@ -15,9 +15,29 @@ public final class DocumentJobRepository: @unchecked Sendable {
     // MARK: - Import batches
 
     @discardableResult
-    public func createBatch(matterID: String, sourceRootDisplay: String? = nil) throws -> DocumentImportBatchRecord {
+    public func createBatch(
+        matterID: String,
+        sourceRootDisplay: String? = nil,
+        targetFolderID: String? = nil,
+        targetFolderRequested: Bool = false
+    ) throws -> DocumentImportBatchRecord {
         try writer.write { db in
-            let record = DocumentImportBatchRecord(matterID: matterID, sourceRootDisplay: sourceRootDisplay)
+            guard targetFolderRequested == (targetFolderID != nil) else {
+                throw DocumentJobRepositoryError.invalidTargetFolderIntent
+            }
+            if let targetFolderID {
+                guard let folder = try DocumentFolderRecord.fetchOne(db, key: targetFolderID),
+                      folder.matterID == matterID,
+                      folder.deletedAt == nil else {
+                    throw DocumentJobRepositoryError.targetFolderUnavailable(targetFolderID)
+                }
+            }
+            let record = DocumentImportBatchRecord(
+                matterID: matterID,
+                sourceRootDisplay: sourceRootDisplay,
+                targetFolderID: targetFolderID,
+                targetFolderRequested: targetFolderRequested
+            )
             try record.insert(db)
             return record
         }
@@ -70,6 +90,305 @@ public final class DocumentJobRepository: @unchecked Sendable {
                 arguments: [matterID]
             )
         }
+    }
+
+    /// Finalizes batches left active by a terminated process. Every active
+    /// source becomes resumable `interrupted`; already-accounted outcomes and
+    /// their exact reasons are preserved in a synthesized report. The batch
+    /// update and source transitions are one transaction and a repeated call is
+    /// a no-op because only discovering/processing batches are selected.
+    @discardableResult
+    public func reconcileOrphanedBatches() throws -> [DocumentImportBatchRecord] {
+        try writer.write { db in
+            var batches = try DocumentImportBatchRecord.fetchAll(
+                db,
+                sql: """
+                SELECT * FROM document_import_batches
+                WHERE status IN (?, ?)
+                ORDER BY started_at, id
+                """,
+                arguments: [
+                    DocumentImportBatchStatus.discovering.rawValue,
+                    DocumentImportBatchStatus.processing.rawValue,
+                ]
+            )
+            guard !batches.isEmpty else { return [] }
+
+            let now = Date()
+            let interruptionReason = "Import interrupted before completion."
+            let activeStates = [
+                DocumentImportSourceState.selected.rawValue,
+                DocumentImportSourceState.discovered.rawValue,
+                DocumentImportSourceState.validated.rawValue,
+                DocumentImportSourceState.copying.rawValue,
+            ]
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+
+            for index in batches.indices {
+                let batchID = batches[index].id
+                try db.execute(
+                    sql: """
+                    UPDATE document_import_sources
+                    SET state = ?, reason = COALESCE(reason, ?), updated_at = ?
+                    WHERE import_batch_id = ? AND state IN (?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        DocumentImportSourceState.interrupted.rawValue,
+                        interruptionReason,
+                        now,
+                        batchID,
+                        activeStates[0],
+                        activeStates[1],
+                        activeStates[2],
+                        activeStates[3],
+                    ]
+                )
+
+                let sources = try DocumentImportSourceRecord.fetchAll(
+                    db,
+                    sql: """
+                    SELECT * FROM document_import_sources
+                    WHERE import_batch_id = ?
+                    ORDER BY created_at, id
+                    """,
+                    arguments: [batchID]
+                )
+                let stateCounts = Dictionary(grouping: sources, by: \.state).mapValues { $0.count }
+                let importedCount = stateCounts[DocumentImportSourceState.admitted.rawValue, default: 0]
+                let failedCount = [
+                    DocumentImportSourceState.rejected,
+                    .unsupportedByPolicy,
+                    .failed,
+                    .cancelled,
+                    .interrupted,
+                ].reduce(into: 0) { count, state in
+                    count += stateCounts[state.rawValue, default: 0]
+                }
+                let report = ReconciledImportReport(
+                    items: sources.map(ReconciledImportReportItem.init),
+                    counts: stateCounts
+                )
+                let reportJSON = String(data: try encoder.encode(report), encoding: .utf8)
+
+                batches[index].status = DocumentImportBatchStatus.interrupted.rawValue
+                batches[index].discoveredCount = sources.count
+                batches[index].importedCount = importedCount
+                batches[index].failedCount = failedCount
+                batches[index].reportJSON = reportJSON
+                batches[index].completedAt = now
+                batches[index].updatedAt = now
+                try batches[index].update(db)
+            }
+            return batches
+        }
+    }
+
+    /// Most recent persisted batch that should restore the import-failure
+    /// banner after process recreation.
+    public func fetchLatestImportFailureBatch() throws -> DocumentImportBatchRecord? {
+        try writer.read { db in
+            try DocumentImportBatchRecord.fetchOne(
+                db,
+                sql: """
+                SELECT * FROM document_import_batches
+                WHERE status IN (?, ?, ?)
+                ORDER BY COALESCE(completed_at, updated_at) DESC, id DESC
+                LIMIT 1
+                """,
+                arguments: [
+                    DocumentImportBatchStatus.interrupted.rawValue,
+                    DocumentImportBatchStatus.completeWithFailures.rawValue,
+                    DocumentImportBatchStatus.failed.rawValue,
+                ]
+            )
+        }
+    }
+
+    // MARK: - Import source ledger
+
+    /// Inserts the durable identity for a selected/discovered source, or returns
+    /// the existing row for the batch/key idempotency contract. Child rows never
+    /// retain a top-level security-scoped bookmark.
+    @discardableResult
+    public func recordDiscovered(
+        batchID: String,
+        matterID: String,
+        sourceKey: String,
+        sourceDisplayPath: String,
+        sourceBookmark: Data? = nil,
+        parentSourceID: String? = nil,
+        state: DocumentImportSourceState = .discovered
+    ) throws -> DocumentImportSourceRecord {
+        let normalizedKey = sourceKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPath = sourceDisplayPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedKey.isEmpty else {
+            throw DocumentJobRepositoryError.requiredFieldMissing("source_key")
+        }
+        guard !normalizedPath.isEmpty, !NSString(string: normalizedPath).isAbsolutePath else {
+            throw DocumentJobRepositoryError.invalidSourceDisplayPath(sourceDisplayPath)
+        }
+        return try writer.write { db in
+            guard let batch = try DocumentImportBatchRecord.fetchOne(db, key: batchID),
+                  batch.matterID == matterID else {
+                throw DocumentJobRepositoryError.batchMatterMismatch(batchID: batchID, matterID: matterID)
+            }
+            if let existing = try DocumentImportSourceRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM document_import_sources WHERE import_batch_id = ? AND source_key = ?",
+                arguments: [batchID, normalizedKey]
+            ) {
+                guard existing.matterID == matterID else {
+                    throw DocumentJobRepositoryError.batchMatterMismatch(batchID: batchID, matterID: matterID)
+                }
+                guard existing.sourceDisplayPath == normalizedPath,
+                      existing.parentSourceID == parentSourceID else {
+                    throw DocumentJobRepositoryError.sourceIdentityMismatch(normalizedKey)
+                }
+                return existing
+            }
+            if let parentSourceID {
+                guard let parent = try DocumentImportSourceRecord.fetchOne(db, key: parentSourceID),
+                      parent.importBatchID == batchID,
+                      parent.matterID == matterID else {
+                    throw DocumentJobRepositoryError.parentSourceMismatch(parentSourceID)
+                }
+            }
+            let record = DocumentImportSourceRecord(
+                importBatchID: batchID,
+                matterID: matterID,
+                sourceKey: normalizedKey,
+                sourceDisplayPath: normalizedPath,
+                sourceBookmark: parentSourceID == nil && !state.isTerminal ? sourceBookmark : nil,
+                parentSourceID: parentSourceID,
+                state: state.rawValue
+            )
+            try record.insert(db)
+            return record
+        }
+    }
+
+    /// Advances one source toward a terminal accounting state. Bookmark clearing
+    /// occurs in the same transaction as the terminal state write.
+    @discardableResult
+    public func markState(
+        sourceID: String,
+        state: DocumentImportSourceState,
+        rejectionCode: String? = nil,
+        reason: String? = nil,
+        documentID: String? = nil,
+        blobSHA256: String? = nil
+    ) throws -> DocumentImportSourceRecord {
+        try writer.write { db in
+            guard var record = try DocumentImportSourceRecord.fetchOne(db, key: sourceID) else {
+                throw DocumentJobRepositoryError.sourceNotFound(sourceID)
+            }
+            let current = DocumentImportSourceState(rawValue: record.state)
+            guard Self.canTransition(from: current, to: state) else {
+                throw DocumentJobRepositoryError.invalidSourceTransition(from: record.state, to: state.rawValue)
+            }
+            if let documentID {
+                guard let document = try MatterDocumentRecord.fetchOne(db, key: documentID),
+                      document.matterID == record.matterID else {
+                    throw DocumentJobRepositoryError.documentMatterMismatch(documentID)
+                }
+            }
+            record.state = state.rawValue
+            if let rejectionCode { record.rejectionCode = rejectionCode }
+            if let reason { record.reason = reason }
+            if let documentID { record.documentID = documentID }
+            if let blobSHA256 { record.blobSHA256 = blobSHA256 }
+            if state.isTerminal { record.sourceBookmark = nil }
+            record.updatedAt = Date()
+            try record.update(db)
+            return record
+        }
+    }
+
+    public func fetchSources(batchID: String) throws -> [DocumentImportSourceRecord] {
+        try writer.read { db in
+            try DocumentImportSourceRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM document_import_sources WHERE import_batch_id = ? ORDER BY created_at, id",
+                arguments: [batchID]
+            )
+        }
+    }
+
+    public func fetchSources(matterID: String) throws -> [DocumentImportSourceRecord] {
+        try writer.read { db in
+            try DocumentImportSourceRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM document_import_sources WHERE matter_id = ? ORDER BY created_at, id",
+                arguments: [matterID]
+            )
+        }
+    }
+
+    public func unfinishedSources(batchID: String) throws -> [DocumentImportSourceRecord] {
+        try fetchSources(batchID: batchID).filter { !$0.isTerminal }
+    }
+
+    public func sourcesSummary(batchID: String) throws -> DocumentImportSourcesSummary {
+        let sources = try fetchSources(batchID: batchID)
+        func count(_ state: DocumentImportSourceState) -> Int {
+            sources.count { $0.state == state.rawValue }
+        }
+        let admitted = count(.admitted)
+        let containers = count(.containerCompleted)
+        let rejected = count(.rejected)
+        let unsupported = count(.unsupportedByPolicy)
+        let failed = count(.failed)
+        let cancelled = count(.cancelled)
+        let interrupted = count(.interrupted)
+        let hidden = count(.excludedHidden)
+        let excluded = count(.excludedByUser)
+        let terminal = admitted + containers + rejected + unsupported + failed
+            + cancelled + hidden + excluded
+        let unfinishedStates: Set<DocumentImportSourceState> = [
+            .selected, .discovered, .validated, .copying, .interrupted,
+        ]
+        let unfinished = sources.count {
+            guard let state = $0.sourceState else { return false }
+            return unfinishedStates.contains(state)
+        }
+        let categorized = terminal + unfinished
+        return DocumentImportSourcesSummary(
+            totalCount: sources.count,
+            terminalCount: terminal,
+            unfinishedCount: unfinished,
+            contentDenominator: sources.count - containers,
+            admittedCount: admitted,
+            containerCompletedCount: containers,
+            rejectedCount: rejected,
+            unsupportedByPolicyCount: unsupported,
+            failedCount: failed,
+            cancelledCount: cancelled,
+            interruptedCount: interrupted,
+            excludedHiddenCount: hidden,
+            excludedByUserCount: excluded,
+            balanceErrorCount: abs(sources.count - categorized)
+        )
+    }
+
+    private static func canTransition(
+        from current: DocumentImportSourceState?,
+        to next: DocumentImportSourceState
+    ) -> Bool {
+        guard let current else { return false }
+        if current == next { return true }
+        if current == .interrupted, next == .copying { return true }
+        if current.isTerminal { return false }
+        if next == .interrupted { return true }
+        if next.isTerminal { return true }
+        let rank: [DocumentImportSourceState: Int] = [
+            .selected: 0,
+            .discovered: 1,
+            .validated: 2,
+            .copying: 3,
+        ]
+        guard let currentRank = rank[current], let nextRank = rank[next] else { return false }
+        return nextRank >= currentRank
     }
 
     // MARK: - Processing jobs
@@ -235,9 +554,15 @@ public final class DocumentJobRepository: @unchecked Sendable {
                 sql: """
                 UPDATE document_processing_jobs
                 SET status = ?, queue_position = ?, paused_at = NULL, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status = ?
                 """,
-                arguments: [DocumentProcessingJobStatus.queued.rawValue, maxPosition + 1, now, id]
+                arguments: [
+                    DocumentProcessingJobStatus.queued.rawValue,
+                    maxPosition + 1,
+                    now,
+                    id,
+                    DocumentProcessingJobStatus.paused.rawValue,
+                ]
             )
         }
     }
@@ -325,4 +650,42 @@ public final class DocumentJobRepository: @unchecked Sendable {
             return ids
         }
     }
+}
+
+private struct ReconciledImportReport: Codable {
+    var items: [ReconciledImportReportItem]
+    var counts: [String: Int]
+}
+
+private struct ReconciledImportReportItem: Codable {
+    var displayName: String
+    var sourceDisplayPath: String
+    var disposition: String
+    var reason: String?
+    var documentID: String?
+    var parentDocumentID: String?
+    var rejectionCode: String?
+
+    init(_ source: DocumentImportSourceRecord) {
+        displayName = NSString(string: source.sourceDisplayPath).lastPathComponent
+        sourceDisplayPath = source.sourceDisplayPath
+        disposition = source.state
+        reason = source.reason
+        documentID = source.documentID
+        parentDocumentID = nil
+        rejectionCode = source.rejectionCode
+    }
+}
+
+public enum DocumentJobRepositoryError: Error, Equatable, Sendable {
+    case requiredFieldMissing(String)
+    case invalidTargetFolderIntent
+    case targetFolderUnavailable(String)
+    case batchMatterMismatch(batchID: String, matterID: String)
+    case invalidSourceDisplayPath(String)
+    case parentSourceMismatch(String)
+    case sourceIdentityMismatch(String)
+    case sourceNotFound(String)
+    case invalidSourceTransition(from: String, to: String)
+    case documentMatterMismatch(String)
 }

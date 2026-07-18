@@ -1,7 +1,7 @@
 # Roadmap
 
 This roadmap describes where Supra AI has been and where it may go next. It is
-forward-looking as of the **1.5.x** line — a plan, not a record of past commitments.
+forward-looking as of the **2.3.x** line — a plan, not a record of past commitments.
 Dated, completed history lives in [CHANGELOG.md](CHANGELOG.md) and the per-milestone
 plans in [`Docs/Milestones/`](Docs/Milestones/).
 
@@ -49,6 +49,30 @@ These are concrete follow-ups already identified in the Milestone 3 handoff note
 ([`Docs/Milestones/Milestone3.md`](Docs/Milestones/Milestone3.md), "known limitations").
 They sharpen what already ships:
 
+- **Document-ingestion refinement (implemented in source; protected sign-off pending)** —
+  durable per-source import accounting and recovery; immutable extraction revisions; typed
+  DOCX/PDF/XLSX/EML/legal structure; a default-off structure-aware chunker; exhaustive corpus
+  ledgers; reviewed document relations; tokenizer-aware packets; output lineage, verification
+  dimensions, shared assurance/export gates, and atomic grounded-chat promotion. The fixed
+  10/50/200-document performance harness and deterministic zero-unaffected-work gate are also
+  implemented, and the repo owner approved the fixed-hardware statistical performance envelope
+  on July 18, 2026. The protected real-model/UI/Vision/bookmark matrix remains a release sign-off
+  gate; chunker v2 remains default-off.
+
+- **Index-lineage hardening (implemented in source)** — readiness is evaluated against the
+  active embedding model; switching models or saving corrected extracted text queues the
+  normal background indexing workflow. Converter-version drift marks affected documents
+  stale for explicit manual reprocessing instead of silently claiming current readiness.
+- **Document-relation review (implemented in source)** — deterministic duplicate/version
+  proposals remain non-operative until a user confirms or rejects them in an audited Documents
+  queue. Confirmed relations add explicit version-state metadata; unresolved in-scope relations
+  block clean comparison and negative-result assurance instead of silently choosing a document.
+- **Tokenizer-aware grounded packing (implemented in source)** — the runtime exposes batched
+  exact token counts for the loaded model. Q&A and chronology preflight the serialized packet,
+  Q&A retries one overflow with fewer sources, and grounded chat refuses rather than saving
+  partial output or citations after a context overflow. A conservative no-runtime estimate and
+  deterministic B-CTX accounting cover fallback and recovery behavior; the live-model matrix
+  remains part of protected on-device validation.
 - **Documents tab UX** — nested folder tree presentation and drag-between-folders (move/copy
   already exists at the controller/repository level; the v1 sidebar is a flat list).
 - **Guided Q&A in the UI** — manual source selection is supported in `DocumentQAController`
@@ -60,8 +84,9 @@ They sharpen what already ships:
   OOXML; improve formatting fidelity.
 - **XLSX sheet-by-relationship-id** — map worksheets by `xl/_rels` relationship id rather than
   position (affects locators only for reordered/deleted multi-sheet workbooks).
-- **Performance benchmarking** — exercise the documented §13 targets at the ~200-document
-  scale, and benchmark semantic/OCR quality against the chosen embedding model and Vision.
+- **Live semantic/OCR benchmarking** — the deterministic and fixed-scale performance protocols
+  are implemented; record the protected Vision and chosen-model quality runs on release-candidate
+  hardware before approving their statistical bands.
 - **App-run validation with live models** — the deterministic SwiftPM suite is green; run the
   model-dependent Diagnostics scenarios against loaded chat + embedding models on-device.
 

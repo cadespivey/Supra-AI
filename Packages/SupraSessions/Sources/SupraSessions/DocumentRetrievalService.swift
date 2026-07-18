@@ -26,6 +26,7 @@ public struct RetrievalScope: Codable, Sendable, Equatable {
 /// (plan §7.4).
 public struct RetrievedSource: Sendable {
     public var chunkID: String
+    public var revisionID: String? = nil
     public var documentID: String
     public var documentName: String
     public var locator: DocumentSourceLocator
@@ -37,10 +38,29 @@ public struct RetrievedSource: Sendable {
     public var ocrConfidence: Double?
     public var duplicateLocations: [String]
     public var rank: Int
-    /// Compact document context shown to the model (e.g. "Contracts & Agreements ·
-    /// 2023-05-01") so it can prefer the operative/executed document over a draft and
-    /// weigh recency when sources conflict. `nil` when no classification/date exists.
+    /// Compact document context shown to the model. Classification/date context is
+    /// descriptive; operative/draft state is appended only from confirmed relations.
+    /// An unreviewed proposal never becomes an implicit ranking instruction.
     public var metadata: String?
+    /// Present only for structure-aware v2 chunks. Hidden provenance is resolved
+    /// from the primary node and its same-revision ancestors after ranking.
+    public var unitKind: String?
+    public var hiddenDerived: Bool
+
+    func groundingSource(sourceID: String, label: String, lowConfidence: Bool) -> GroundingSource {
+        GroundingSource(
+            sourceID: sourceID,
+            label: label,
+            documentName: documentName,
+            locatorDisplay: locator.displayString,
+            text: text,
+            excerpt: excerpt,
+            lowConfidence: lowConfidence,
+            metadata: metadata,
+            unitKind: unitKind,
+            hiddenDerived: hiddenDerived
+        )
+    }
 }
 
 /// Readiness of a scope for Q&A/chronology (plan §8.1). Generation is blocked
@@ -49,8 +69,35 @@ public struct ScopeReadiness: Sendable, Equatable {
     public var totalDocuments: Int
     public var readyDocuments: Int
     public var pendingDocuments: Int
+    public var failedDocuments: Int
+    public var needsReviewDocuments: Int
     public var requiresSemanticIndex: Bool
     public var isFullyReady: Bool
+    public var blockingReasons: [String]
+
+    public init(
+        totalDocuments: Int,
+        readyDocuments: Int,
+        pendingDocuments: Int,
+        failedDocuments: Int = 0,
+        needsReviewDocuments: Int = 0,
+        requiresSemanticIndex: Bool,
+        isFullyReady: Bool,
+        blockingReasons: [String] = []
+    ) {
+        self.totalDocuments = totalDocuments
+        self.readyDocuments = readyDocuments
+        self.pendingDocuments = pendingDocuments
+        self.failedDocuments = failedDocuments
+        self.needsReviewDocuments = needsReviewDocuments
+        self.requiresSemanticIndex = requiresSemanticIndex
+        self.isFullyReady = isFullyReady
+        self.blockingReasons = blockingReasons
+    }
+
+    public var summaryText: String {
+        "\(readyDocuments) ready, \(failedDocuments) failed, \(needsReviewDocuments) needs review"
+    }
 }
 
 public struct RetrievalResult: Sendable {
@@ -74,6 +121,9 @@ public enum RetrievalDepth: String, Sendable, Equatable {
 /// (optional) local semantic similarity, with folder/tag/date/document filters,
 /// duplicate collapse, and source diversity (plan §7.4).
 public final class DocumentRetrievalService: @unchecked Sendable {
+    static let defaultMaxPerDocument = 4
+    static let defaultMinSemanticSimilarity = 0.15
+    static let fastMinSemanticSimilarity = 0.25
     private let store: SupraStore
     private let embedder: (any TextEmbedder)?
     private let maxPerDocument: Int
@@ -95,31 +145,74 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     /// embedder is configured). Immediate; no model work (plan §13.3).
     public func scopeReadiness(matterID: String, scope: RetrievalScope) throws -> ScopeReadiness {
         let docIDs = Set(try resolveScope(matterID: matterID, scope: scope))
-        // Terminally-failed/unsupported documents can never be indexed, so they
-        // are excluded from the readiness denominator rather than blocking forever.
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
             .filter { docIDs.contains($0.id) }
-            .filter { $0.extractionStatus != DocumentExtractionStatus.failed.rawValue && $0.status != MatterDocumentStatus.failed.rawValue }
         let requiresSemantic = embedder != nil
-        let ready = documents.filter { Self.isReady($0, requiresSemantic: requiresSemantic) }.count
+        var ready = 0
+        var failed = 0
+        var needsReview = 0
+        var blockers: [String] = []
+        for document in documents {
+            if document.extractionStatus == DocumentExtractionStatus.failed.rawValue
+                || document.status == MatterDocumentStatus.failed.rawValue {
+                failed += 1
+                blockers.append("\(document.displayName): \(Self.readinessDetail(for: document, fallback: "failed processing"))")
+                continue
+            }
+            if document.status == MatterDocumentStatus.needsReview.rawValue {
+                needsReview += 1
+                blockers.append("\(document.displayName): \(Self.readinessDetail(for: document, fallback: "needs review"))")
+                continue
+            }
+            guard Self.isTextReady(document) else { continue }
+            guard document.extractionMethod?.hasPrefix("converted_lossy@toolchain:") != true else { continue }
+            if let embedder {
+                guard try store.documentIndex.hasCompleteEmbeddings(
+                    documentID: document.id,
+                    embeddingModelID: embedder.modelID
+                ) else { continue }
+            }
+            ready += 1
+        }
         return ScopeReadiness(
             totalDocuments: documents.count,
             readyDocuments: ready,
-            pendingDocuments: documents.count - ready,
+            // `pendingDocuments` retains its historical meaning: every admitted
+            // document that is not ready and has not terminally failed. A
+            // needs-review member is therefore both pending user resolution and
+            // named separately in `needsReviewDocuments` for honest UI copy.
+            pendingDocuments: max(0, documents.count - ready - failed),
+            failedDocuments: failed,
+            needsReviewDocuments: needsReview,
             requiresSemanticIndex: requiresSemantic,
-            isFullyReady: !documents.isEmpty && ready == documents.count
+            isFullyReady: !documents.isEmpty
+                && ready == documents.count
+                && failed == 0
+                && needsReview == 0,
+            blockingReasons: blockers
         )
     }
 
     public func retrieve(matterID: String, query: String, scope: RetrievalScope, limit: Int = 12, depth: RetrievalDepth = .deep) async throws -> RetrievalResult {
         // The fast tier trades recall for precision: a higher semantic floor keeps
         // marginally-similar chunks out of the small preliminary packet (spec §3.1).
-        let semanticFloor = depth == .fast ? max(minSemanticSimilarity, 0.25) : minSemanticSimilarity
+        let semanticFloor = depth == .fast
+            ? max(minSemanticSimilarity, Self.fastMinSemanticSimilarity)
+            : minSemanticSimilarity
         let scopeIDs = try resolveScope(matterID: matterID, scope: scope)
         let readiness = try scopeReadiness(matterID: matterID, scope: scope)
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
         let nameByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0.displayName) })
-        let metadataByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, Self.contextMetadata(for: $0)) })
+        let relations = try store.documentRelations.fetchAll(matterID: matterID)
+        let relationMetadataByID = DocumentRelationDownstreamPolicy
+            .confirmedMetadataByDocumentID(relations: relations)
+        let metadataByID = Dictionary(uniqueKeysWithValues: documents.map { document in
+            let parts = [
+                Self.contextMetadata(for: document),
+                relationMetadataByID[document.id],
+            ].compactMap { $0 }
+            return (document.id, parts.isEmpty ? nil : parts.joined(separator: " · "))
+        })
 
         // FTS candidates (keyword). Fused with the semantic list by Reciprocal Rank
         // Fusion (RRF): each list contributes 1/(k + rank), summed per chunk. RRF is
@@ -160,6 +253,25 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             }
         }
 
+        // Typed v2 units carry evidence that their raw source text does not
+        // necessarily name. A Word comment rarely contains the word "comment";
+        // a table cell rarely says "table." When the query explicitly asks for
+        // those structures, seed matching typed units as candidates with the
+        // equivalent of a top-ranked lexical + semantic match. V1 has no typed
+        // units and remains unchanged.
+        let requestedStructureKinds = Self.requestedStructureKinds(query: query)
+        if !requestedStructureKinds.isEmpty {
+            let structureIntentScore = 2 * Self.rrfContribution(rank: 1)
+            for documentID in scopeIDs {
+                for chunk in try store.documentIndex.fetchChunks(documentID: documentID)
+                    where chunk.chunkerVersion == 2
+                        && chunk.unitKind.map(requestedStructureKinds.contains) == true {
+                    chunkByID[chunk.id] = chunk
+                    scores[chunk.id, default: 0] += structureIntentScore
+                }
+            }
+        }
+
         // Hydrate any chunks only found via semantic search.
         let missingIDs = scores.keys.filter { chunkByID[$0] == nil }
         for chunk in try store.documentIndex.fetchChunks(ids: Array(missingIDs)) {
@@ -168,10 +280,16 @@ public final class DocumentRetrievalService: @unchecked Sendable {
 
         // Rank, then collapse duplicates by normalized text, then apply source
         // diversity (cap per document).
-        let ordered = scores.sorted { $0.value > $1.value }
+        let rawOrdered = scores.sorted { $0.value > $1.value }
+        let ordered = Self.v2DocumentDiverseOrder(
+            rawOrdered,
+            chunksByID: chunkByID,
+            documentNamesByID: nameByID
+        )
         var seenText: [String: Int] = [:]   // text hash -> index in result
         var perDocument: [String: Int] = [:]
         var sources: [RetrievedSource] = []
+        var structureContextByChunkID: [String: DocumentStructureRetrievalContext] = [:]
         for (chunkID, score) in ordered {
             guard let chunk = chunkByID[chunkID] else { continue }
             let textKey = DocumentStorageDigest.key(chunk.normalizedText)
@@ -193,9 +311,17 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 emailPartPath: chunk.emailPartPath, charStart: chunk.charStart,
                 charEnd: chunk.charEnd, boundingBoxesJSON: chunk.boundingBoxesJSON
             )
+            let structureContext: DocumentStructureRetrievalContext?
+            if chunk.chunkerVersion == 2, let nodeID = chunk.nodeID {
+                structureContext = try store.documentStructure.retrievalContext(nodeID: nodeID)
+                if let structureContext { structureContextByChunkID[chunk.id] = structureContext }
+            } else {
+                structureContext = nil
+            }
             seenText[textKey] = sources.count
             sources.append(RetrievedSource(
                 chunkID: chunk.id,
+                revisionID: chunk.revisionID,
                 documentID: chunk.documentID,
                 documentName: nameByID[chunk.documentID] ?? "Document",
                 locator: locator,
@@ -207,7 +333,9 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 ocrConfidence: chunk.ocrConfidence,
                 duplicateLocations: [],
                 rank: 0,
-                metadata: metadataByID[chunk.documentID] ?? nil
+                metadata: metadataByID[chunk.documentID] ?? nil,
+                unitKind: chunk.chunkerVersion == 2 ? (chunk.unitKind ?? structureContext?.unitKind) : nil,
+                hiddenDerived: structureContext?.hiddenDerived ?? false
             ))
             if sources.count >= limit { break }
         }
@@ -230,9 +358,15 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 docChunks = (try? store.documentIndex.fetchChunks(documentID: current.documentID)) ?? []
                 chunksByDocument[current.documentID] = docChunks
             }
-            let expanded = Self.expandedChunk(
-                current: current, inDocumentChunks: docChunks, excluding: selectedChunkIDs
-            )
+            let expanded: (text: String, charStart: Int?, charEnd: Int?)
+            if current.chunkerVersion == 2,
+               let parent = structureContextByChunkID[current.id]?.parent {
+                expanded = (parent.text, parent.charStart, parent.charEnd)
+            } else {
+                expanded = Self.expandedChunk(
+                    current: current, inDocumentChunks: docChunks, excluding: selectedChunkIDs
+                )
+            }
             sources[index].text = expanded.text
             if expanded.text != current.normalizedText {
                 if let start = expanded.charStart { sources[index].locator.charStart = start }
@@ -240,15 +374,124 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             }
         }
 
-        var warning: String?
-        if !readiness.isFullyReady {
-            warning = "Search scope is still indexing: \(readiness.readyDocuments)/\(readiness.totalDocuments) documents ready."
+        let hasLossyLegacyDocument = documents.contains { document in
+            scopeIDs.contains(document.id)
+                && document.extractionMethod?.hasPrefix("converted_lossy@toolchain:") == true
         }
+        var warnings: [String] = []
+        if hasLossyLegacyDocument {
+            warnings.append("This scope includes converted_lossy legacy .doc content. Convert the file to .docx or PDF and review the extracted text before making completeness or negative claims.")
+        } else if !readiness.isFullyReady {
+            warnings.append("Search scope is still indexing: \(readiness.readyDocuments)/\(readiness.totalDocuments) documents ready.")
+        }
+        let relationWarnings = DocumentRelationDownstreamPolicy.unreviewedReasons(
+            relations: relations,
+            documents: documents,
+            inScopeDocumentIDs: Set(scopeIDs)
+        )
+        if !relationWarnings.isEmpty {
+            warnings.append("Preliminary retrieval warning: " + relationWarnings.joined(separator: " "))
+        }
+        let warning = warnings.isEmpty ? nil : warnings.joined(separator: " ")
 
         return RetrievalResult(
             sources: sources, readiness: readiness, incompleteScopeWarning: warning,
             usedSemantic: usedSemantic, query: query, scopeDocumentIDs: scopeIDs
         )
+    }
+
+    /// Chunker v2 deliberately emits finer-grained structural units than v1. A
+    /// raw score sort can therefore spend the whole top-K packet on sibling
+    /// units from one document even when the next document is also responsive.
+    /// Interleave each document's v2 queue by depth: every document's strongest
+    /// unit appears before any document's second unit. Mixed-version stores keep
+    /// the legacy raw order while a re-chunk job is in flight, and an all-v1
+    /// result is byte-for-byte unchanged.
+    static func v2DocumentDiverseOrder(
+        _ ordered: [(key: String, value: Double)],
+        chunksByID: [String: DocumentChunkRecord],
+        documentNamesByID: [String: String]
+    ) -> [(key: String, value: Double)] {
+        guard !ordered.isEmpty,
+              ordered.allSatisfy({ chunksByID[$0.key]?.chunkerVersion == 2 }) else {
+            return ordered
+        }
+
+        var queues: [String: [(key: String, value: Double)]] = [:]
+        for candidate in ordered {
+            guard let documentID = chunksByID[candidate.key]?.documentID else { return ordered }
+            queues[documentID, default: []].append(candidate)
+        }
+
+        for documentID in queues.keys {
+            queues[documentID]?.sort { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value > rhs.value }
+                guard let lhsChunk = chunksByID[lhs.key], let rhsChunk = chunksByID[rhs.key] else {
+                    return lhs.key < rhs.key
+                }
+                if lhsChunk.chunkIndex != rhsChunk.chunkIndex {
+                    return lhsChunk.chunkIndex < rhsChunk.chunkIndex
+                }
+                if lhsChunk.normalizedText != rhsChunk.normalizedText {
+                    return lhsChunk.normalizedText < rhsChunk.normalizedText
+                }
+                return lhs.key < rhs.key
+            }
+        }
+
+        let documentOrder = queues.keys.sorted { lhs, rhs in
+            let lhsQueue = queues[lhs] ?? []
+            let rhsQueue = queues[rhs] ?? []
+            let lhsAggregate = lhsQueue.prefix(2).reduce(0) { $0 + $1.value }
+            let rhsAggregate = rhsQueue.prefix(2).reduce(0) { $0 + $1.value }
+            if lhsAggregate != rhsAggregate { return lhsAggregate > rhsAggregate }
+            let lhsBest = lhsQueue.first?.value ?? 0
+            let rhsBest = rhsQueue.first?.value ?? 0
+            if lhsBest != rhsBest { return lhsBest > rhsBest }
+            let lhsName = documentNamesByID[lhs] ?? lhs
+            let rhsName = documentNamesByID[rhs] ?? rhs
+            if lhsName != rhsName { return lhsName < rhsName }
+            return lhs < rhs
+        }
+
+        let maximumDepth = queues.values.map(\.count).max() ?? 0
+        var diversified: [(key: String, value: Double)] = []
+        diversified.reserveCapacity(ordered.count)
+        for depth in 0..<maximumDepth {
+            for documentID in documentOrder {
+                guard let queue = queues[documentID], depth < queue.count else { continue }
+                diversified.append(queue[depth])
+            }
+        }
+        return diversified
+    }
+
+    private static func requestedStructureKinds(query: String) -> Set<String> {
+        let lowered = query.lowercased()
+        var kinds = Set<DocumentStructureNodeKind>()
+        if lowered.contains("table") || lowered.contains("cell")
+            || lowered.contains("row") || lowered.contains("column") {
+            kinds.formUnion([.table, .tableRow, .tableCell, .cellRange])
+        }
+        if lowered.contains("footnote") { kinds.insert(.footnote) }
+        if lowered.contains("endnote") { kinds.insert(.endnote) }
+        if lowered.contains("comment") { kinds.insert(.comment) }
+        if lowered.contains("header") { kinds.insert(.header) }
+        if lowered.contains("footer") { kinds.insert(.footer) }
+        if lowered.contains("annotation") { kinds.insert(.region) }
+        if lowered.contains("attachment") { kinds.insert(.attachmentRef) }
+        if lowered.contains("quoted") || lowered.contains("quote") { kinds.insert(.emailQuote) }
+        if lowered.contains("objection") { kinds.insert(.objection) }
+        if lowered.contains("deposition") || lowered.contains("question and answer") {
+            kinds.formUnion([.depositionQuestion, .depositionAnswer])
+        }
+        if lowered.contains("discovery request") || lowered.contains("production request") {
+            kinds.insert(.discoveryRequest)
+        }
+        if lowered.contains("discovery response") || lowered.contains("production response") {
+            kinds.insert(.discoveryResponse)
+        }
+        return Set(kinds.map(\.rawValue))
     }
 
     /// A compact "type · date" descriptor for a document, drawn from the classifier's
@@ -259,7 +502,8 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         var parts: [String] = []
         if let json = document.classificationMetadataJSON,
            let data = json.data(using: .utf8),
-           let classification = try? JSONDecoder().decode(DocumentClassification.self, from: data) {
+           let classification = try? JSONDecoder().decode(DocumentClassification.self, from: data),
+           !classification.abstained {
             parts.append(classification.primaryCategory.displayName)
         }
         if let date = document.metadataModifiedAt ?? document.metadataCreatedAt {
@@ -330,15 +574,34 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         )
     }
 
-    private static func isReady(_ document: MatterDocumentRecord, requiresSemantic: Bool) -> Bool {
+    private static func isTextReady(_ document: MatterDocumentRecord) -> Bool {
         switch DocumentIndexStatus(rawValue: document.indexStatus) {
         case .ready:
             return true
         case .textIndexed:
-            return !requiresSemantic
+            return true
         default:
             return false
         }
+    }
+
+    private static func readinessDetail(
+        for document: MatterDocumentRecord,
+        fallback: String
+    ) -> String {
+        if let summary = document.ocrConfidenceSummary,
+           !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return summary
+        }
+        for json in [document.extractionErrorsJSON, document.extractionWarningsJSON] {
+            guard let json,
+                  let data = json.data(using: .utf8),
+                  let values = try? JSONDecoder().decode([String].self, from: data),
+                  let first = values.first,
+                  !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            return first
+        }
+        return fallback
     }
 }
 

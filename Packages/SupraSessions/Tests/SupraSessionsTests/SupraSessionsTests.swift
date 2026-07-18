@@ -3708,6 +3708,7 @@ enum GenerationOutcome {
 
 final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     private let loadResult: LoadModelResponse
+    private let tokenCountOutcome: @Sendable (CountTokensRequest) throws -> CountTokensResponse
     private let outcome: @Sendable (GenerateRequest) -> GenerationOutcome
     private let lock = NSLock()
     private var _cancelledGenerationIDs: [GenerationID] = []
@@ -3729,10 +3730,25 @@ final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
 
     init(
         loadResult: LoadModelResponse = LoadModelResponse(status: .loaded, modelID: ModelID()),
+        tokenCountOutcome: @escaping @Sendable (CountTokensRequest) throws -> CountTokensResponse = { request in
+            CountTokensResponse(
+                modelID: request.modelID,
+                // Existing controller fixtures model the historical four-byte
+                // token estimate unless a test injects nondefault exact counts.
+                counts: request.texts.map { ($0.utf8.count + 3) / 4 }
+            )
+        },
         outcome: @escaping @Sendable (GenerateRequest) -> GenerationOutcome = { _ in .events([]) }
     ) {
         self.loadResult = loadResult
+        self.tokenCountOutcome = tokenCountOutcome
         self.outcome = outcome
+    }
+
+    convenience init(
+        _ outcome: @escaping @Sendable (GenerateRequest) -> GenerationOutcome
+    ) {
+        self.init(outcome: outcome)
     }
 
     func connect() async throws {}
@@ -3744,6 +3760,10 @@ final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
         }
         callback?(request)
         return loadResult
+    }
+
+    func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
+        try tokenCountOutcome(request)
     }
 
     func generate(_ request: GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error> {

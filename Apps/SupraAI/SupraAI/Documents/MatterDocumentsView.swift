@@ -24,8 +24,10 @@ struct MatterDocumentsView: View {
     @State private var newFolderParentID: String?
     @State private var showTrash = false
     @State private var showChronology = false
+    @State private var showRelationReview = false
     @State private var dropTargeted = false
     @State private var preview: PreviewItem?
+    @State private var correctionDraft: DocumentPartCorrectionDraft?
     // Shared inspector-panel width, persisted across launches (same key as chat).
     @AppStorage("supra.slideOverWidth") private var previewWidthRaw: Double = 580
     private var previewWidth: Binding<CGFloat> {
@@ -45,6 +47,7 @@ struct MatterDocumentsView: View {
             }
             documentActionBar
             Divider()
+            resumeImportBanner
             jobProgress
             importFailureBanner
             classifyPendingBanner
@@ -95,6 +98,16 @@ struct MatterDocumentsView: View {
                 ) { showChronology = false }
             }
         }
+        .sheet(isPresented: $showRelationReview) {
+            DocumentRelationReviewSheet(
+                controller: controller.relationReviewController
+            ) { showRelationReview = false }
+        }
+        .sheet(item: $correctionDraft) { draft in
+            PartTextEditSheet(draft: draft) { text, reason in
+                try controller.saveCorrection(draft, text: text, reason: reason)
+            }
+        }
         .onAppear {
             controller.reload()
             controller.classifyPendingIfNeeded()
@@ -132,6 +145,30 @@ struct MatterDocumentsView: View {
             }
             .disabled(chronologyController == nil)
 
+            Button {
+                controller.relationReviewController.reload()
+                showRelationReview = true
+            } label: {
+                // A single label root is important on macOS: separate top-level
+                // label children are each bridged as a copy of the parent button.
+                HStack(spacing: 6) {
+                    Label("Review Relations", systemImage: "point.3.connected.trianglepath.dotted")
+                    if controller.relationReviewController.pendingReviewCount > 0 {
+                        Text("\(controller.relationReviewController.pendingReviewCount)")
+                            .font(.supraCaption.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.18), in: Capsule())
+                            // The parent button announces this count through its
+                            // accessibility value; the pill is visual decoration.
+                            .accessibilityHidden(true)
+                    }
+                }
+            }
+            .buttonStyle(.ghost)
+            .accessibilityIdentifier("relations.openReview")
+            .accessibilityValue(relationReviewAccessibilityValue)
+
             Spacer()
 
             SupraToolbarIconButton("Trash", systemImage: "trash", role: .destructive) {
@@ -140,6 +177,11 @@ struct MatterDocumentsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private var relationReviewAccessibilityValue: String {
+        let count = controller.relationReviewController.pendingReviewCount
+        return count == 1 ? "1 unreviewed relation" : "\(count) unreviewed relations"
     }
 
     // MARK: - Sidebar
@@ -279,7 +321,7 @@ struct MatterDocumentsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(doc.displayName).lineLimit(1)
                 HStack(spacing: 6) {
-                    statusBadge(doc.status)
+                    statusBadge(doc)
                     if let summary = doc.ocrConfidenceSummary {
                         Text(summary).font(.supraCaption).foregroundStyle(.orange)
                     }
@@ -305,11 +347,14 @@ struct MatterDocumentsView: View {
                 .fill(isSelected ? Color.accentColor.opacity(0.12) : .clear)
         )
         .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
         // Double-click opens the file in the default app (suppressed while 2+ files are
         // ticked for a batch action); a single click selects the row to reveal its
         // actions; dragging it onto a folder moves it.
         .onTapGesture(count: 2) { if checkedDocIDs.count <= 1 { openInDefaultApp(doc) } }
-        .onTapGesture { selectedDocID = isSelected ? nil : doc.id }
+        // Selection is idempotent: clicking the already-selected row keeps its
+        // action cluster available (including after an editor or preview closes).
+        .onTapGesture { selectedDocID = doc.id }
         .draggable(doc.id)
     }
 
@@ -318,15 +363,28 @@ struct MatterDocumentsView: View {
     @ViewBuilder
     private func rowActions(_ doc: MatterDocumentRecord) -> some View {
         Button { showPreview(doc) } label: { Image(systemName: "eye") }
-            .buttonStyle(.plain).help("Preview")
+            .buttonStyle(.plain)
+            .help("Preview")
+            .accessibilityLabel("Preview \(doc.displayName)")
+            .accessibilityIdentifier("documents.preview")
         Button { openInDefaultApp(doc) } label: { Image(systemName: "arrow.up.forward.app") }
             .buttonStyle(.plain).help("Open & edit in your default app")
-        if doc.status == MatterDocumentStatus.failed.rawValue {
-            Button { controller.retryProcessing(documentID: doc.id) } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.plain).help("Retry processing")
+        Button {
+            correctionDraft = controller.correctionDraft(documentID: doc.id)
+        } label: {
+            Image(systemName: "pencil.and.list.clipboard")
         }
+        .buttonStyle(.plain)
+        .help("Edit extracted text")
+        .accessibilityIdentifier("documents.editExtractedText")
+        Button { controller.retryProcessing(documentID: doc.id) } label: {
+            Image(systemName: "arrow.clockwise")
+        }
+        .buttonStyle(.plain)
+        .help(doc.status == MatterDocumentStatus.failed.rawValue
+            ? "Retry processing"
+            : "Reprocess extracted text")
+        .accessibilityIdentifier("documents.reprocess")
         Menu {
             ForEach(controller.tags) { tag in
                 Button { controller.toggleTag(tag.id, on: doc.id) } label: {
@@ -493,6 +551,39 @@ struct MatterDocumentsView: View {
 
     // MARK: - Pieces
 
+    @ViewBuilder
+    private var resumeImportBanner: some View {
+        if let interrupted = queue.resumableImports.first(where: { $0.matterID == controller.matterID }) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.clockwise.circle.fill")
+                    .foregroundStyle(.orange)
+                Text(interrupted.message)
+                    .font(.supraCaption)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+                    .accessibilityIdentifier("documents.resumeMessage")
+                Spacer()
+                Button("Resume") {
+                    queue.resume(jobID: interrupted.jobID)
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("documents.resumeAction")
+                Button("Discard") {
+                    queue.discard(jobID: interrupted.jobID)
+                }
+                .buttonStyle(.ghost)
+                .accessibilityIdentifier("documents.discardAction")
+            }
+            .padding(8)
+            .background(Color.orange.opacity(0.12))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("documents.resumeBanner")
+            .accessibilityLabel("Import interrupted")
+            .accessibilityValue(interrupted.message)
+        }
+    }
+
     private var setupBanner: some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
@@ -515,9 +606,13 @@ struct MatterDocumentsView: View {
     private var importFailureBanner: some View {
         if let failure = queue.lastImportFailure,
            failure.matterID == controller.matterID,
+           !queue.resumableImports.contains(where: { $0.matterID == controller.matterID }),
            dismissedImportFailureID != failure.id {
-            let message = "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see the Audit tab for details."
-            VStack(alignment: .trailing, spacing: 4) {
+            let itemNoun = failure.failedCount == 1 ? "item" : "items"
+            let message = failure.details.isEmpty
+                ? "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see the Audit tab for details."
+                : "Imported \(failure.importedCount) of \(failure.discoveredCount). Review the \(failure.failedCount) \(itemNoun) below."
+            VStack(alignment: .leading, spacing: 6) {
                 SupraWarningBanner(
                     .warning,
                     title: "Some files couldn’t be imported",
@@ -530,16 +625,49 @@ struct MatterDocumentsView: View {
                 .accessibilityValue("Some files could not be imported. \(message)")
                 .accessibilityFocused($importFailureFocused)
 
-                Button {
-                    importFailureFocused = false
-                    dismissedImportFailureID = failure.id
-                    queue.clearImportFailure()
-                } label: {
-                    Label("Dismiss import warning", systemImage: "xmark")
+                ForEach(Array(failure.details.enumerated()), id: \.offset) { _, detail in
+                    let detailAccessibilityValue = [
+                        detail.rejectionCode.map { "Code: \($0)" },
+                        detail.reason,
+                    ].compactMap { $0 }.joined(separator: ". ")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(detail.displayName)
+                            .font(.supraCaption)
+                            .fontWeight(.semibold)
+                            .accessibilityIdentifier("documents.importFailureDetail.\(detail.displayName)")
+                            .accessibilityLabel(detail.displayName)
+                            .accessibilityValue(detailAccessibilityValue)
+                        if let code = detail.rejectionCode {
+                            Text("Code: \(code)")
+                                .font(.supraCaption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        if let reason = detail.reason {
+                            Text(reason)
+                                .font(.supraCaption)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.orange.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
-                .buttonStyle(.ghost)
-                .accessibilityIdentifier("documents.dismissImportFailureWarning")
-                .accessibilityHint("Removes this warning; rejection details remain in the Audit tab")
+
+                HStack {
+                    Spacer()
+                    Button {
+                        importFailureFocused = false
+                        dismissedImportFailureID = failure.id
+                        queue.clearImportFailure()
+                    } label: {
+                        Label("Dismiss import warning", systemImage: "xmark")
+                    }
+                    .buttonStyle(.ghost)
+                    .accessibilityIdentifier("documents.dismissImportFailureWarning")
+                    .accessibilityHint("Removes this warning; rejection details remain in the Audit tab")
+                }
             }
             .padding(.horizontal, 8)
             .padding(.top, 8)
@@ -632,13 +760,17 @@ struct MatterDocumentsView: View {
         }
     }
 
-    private func statusBadge(_ status: String) -> some View {
-        let (label, color) = Self.statusAppearance(status)
+    private func statusBadge(_ document: MatterDocumentRecord) -> some View {
+        let reindexing = controller.isCorrectionReindexing(document)
+        let (label, color) = reindexing
+            ? ("Reindexing", Color.blue)
+            : Self.statusAppearance(document.status)
         return Text(label)
             .font(.supraCaption.weight(.medium))
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(color.opacity(0.18), in: Capsule())
             .foregroundStyle(color)
+            .accessibilityIdentifier(reindexing ? "documents.reindexingBadge" : "")
     }
 
     private static func statusAppearance(_ status: String) -> (String, Color) {
@@ -776,8 +908,12 @@ struct DocumentChronologySheet: View {
                     Toggle("Limit to the selected folder", isOn: $scopeThisFolder)
                 }
                 if let readiness = chronology.scopeReadiness(scope: scope) {
-                    Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) documents indexed")
+                    Text(readiness.summaryText)
                         .font(.supraCaption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
+                    if !readiness.blockingReasons.isEmpty {
+                        Text(readiness.blockingReasons.joined(separator: " · "))
+                            .font(.supraCaption).foregroundStyle(.orange)
+                    }
                 }
                 routeStatus
                 if let routingMessage {
@@ -796,6 +932,9 @@ struct DocumentChronologySheet: View {
                 Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
+                        if let assurance = result.assuranceState {
+                            AssuranceBadge(state: assurance)
+                        }
                         if result.status == StructuredOutputStatus.needsReview.rawValue {
                             Label("Needs review — \(result.warnings.joined(separator: " "))", systemImage: "exclamationmark.triangle")
                                 .font(.supraCaption).foregroundStyle(.orange)
@@ -847,16 +986,26 @@ struct DocumentChronologySheet: View {
             scope: scope,
             format: format,
             modelID: resolved.modelID,
+            modelLineage: resolved.modelLineage,
             route: resolved.route
         )
     }
 
     private func regenerate(outputID: String) async {
         guard let resolved = await resolveRouteModel() else { return }
-        _ = await chronology.regenerate(outputID: outputID, modelID: resolved.modelID, route: resolved.route)
+        _ = await chronology.regenerate(
+            outputID: outputID,
+            modelID: resolved.modelID,
+            modelLineage: resolved.modelLineage,
+            route: resolved.route
+        )
     }
 
-    private func resolveRouteModel() async -> (modelID: ModelID, route: ModelRoute)? {
+    private func resolveRouteModel() async -> (
+        modelID: ModelID,
+        modelLineage: DocumentGenerationModelLineage,
+        route: ModelRoute
+    )? {
         routingMessage = nil
         guard let route else {
             routingMessage = "No route is available for this chronology."
@@ -864,7 +1013,11 @@ struct DocumentChronologySheet: View {
         }
         switch await library.ensureLoadedRoutedModelID(for: route.role, configuration: router.configuration) {
         case let .success(modelID):
-            return (modelID, route)
+            guard let modelLineage = library.generationLineage(for: modelID) else {
+                routingMessage = DocumentGenerationLineageError.stableModelIdentityUnavailable.localizedDescription
+                return nil
+            }
+            return (modelID, modelLineage, route)
         case let .failure(issue):
             routingMessage = issue.message
             return nil
@@ -879,6 +1032,7 @@ struct DocumentChronologySheet: View {
 struct DocumentPreviewView: View {
     let model: DocumentPreviewModel
     let onClose: () -> Void
+    @State private var showingStructure = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -888,6 +1042,22 @@ struct DocumentPreviewView: View {
                     Text(model.locatorDisplay).font(.supraSubheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if !model.structureNodes.isEmpty {
+                    Button {
+                        showingStructure.toggle()
+                    } label: {
+                        Label(
+                            showingStructure ? "Show Document" : "Extraction Structure",
+                            systemImage: showingStructure
+                                ? "doc.text"
+                                : "point.3.connected.trianglepath.dotted"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help(showingStructure ? "Return to the document preview" : "Inspect extracted nodes and relationships")
+                    .accessibilityIdentifier("documentPreview.structureToggle")
+                }
                 Button("Done", action: onClose).keyboardShortcut(.defaultAction)
             }
             .padding()
@@ -899,10 +1069,33 @@ struct DocumentPreviewView: View {
                 }
                 .padding(.horizontal).padding(.bottom, 6)
             }
+            if let revisionNotice = model.revisionNotice {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: model.revisionID == nil ? "clock.badge.questionmark" : "clock.badge.checkmark")
+                        .foregroundStyle(model.revisionID == nil ? Color.orange : Color.secondary)
+                    Text(revisionNotice)
+                        .font(.supraCaption)
+                        .foregroundStyle(model.revisionID == nil ? Color.orange : Color.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 6)
+                .accessibilityIdentifier("documentPreview.revisionNotice")
+            }
             Divider()
-            body(for: model.kind)
+            Group {
+                if showingStructure {
+                    DocumentStructurePreviewView(
+                        nodes: model.structureNodes,
+                        edges: model.structureEdges
+                    )
+                } else {
+                    body(for: model.kind)
+                }
+            }
                 .frame(minWidth: 560, minHeight: 460)
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("documentPreview")
     }
 
@@ -994,6 +1187,162 @@ struct DocumentPreviewView: View {
     }
 }
 
+/// A deliberately compact inspection view for the persisted extraction graph.
+/// Legal-document structure is presented as a hierarchy first and relationships
+/// second: the same mental model as clauses/notes/anchors, without exposing raw
+/// database identifiers or displacing the ordinary document preview.
+struct DocumentStructurePreviewView: View {
+    let nodes: [DocumentStructurePreviewNode]
+    let edges: [DocumentStructurePreviewEdge]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Label("Extraction Structure", systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.supraSubheadline.weight(.semibold))
+                Spacer()
+                Text("\(nodes.count) nodes · \(edges.count) relationships")
+                    .font(.supraCaption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.accentColor.opacity(0.07))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("documentPreview.structureSummary")
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(nodes) { node in
+                        nodeRow(node)
+                        Divider().padding(.leading, 16 + indentation(for: node))
+                    }
+
+                    if !edges.isEmpty {
+                        Text("Relationships")
+                            .font(.supraSubheadline.weight(.semibold))
+                            .padding(.horizontal, 16)
+                            .padding(.top, 18)
+                            .padding(.bottom, 8)
+
+                        ForEach(edges) { edge in
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.caption)
+                                    .foregroundStyle(Color.accentColor)
+                                Text(prettyKind(edge.kind))
+                                    .font(.supraCaption.weight(.semibold))
+                                Text("\(edge.fromNodeKey) → \(edge.toNodeKey)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 6)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(edge.display)
+                            .accessibilityIdentifier(
+                                "documentPreview.structure.edge.\(edge.kind).\(edge.fromNodeKey).\(edge.toNodeKey)"
+                            )
+                        }
+                    }
+                }
+                .padding(.bottom, 16)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func nodeRow(_ node: DocumentStructurePreviewNode) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Capsule()
+                .fill(node.depth == 0 ? Color.accentColor : Color.accentColor.opacity(0.38))
+                .frame(width: 3, height: node.depth == 0 ? 34 : 24)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(prettyKind(node.kind))
+                        .font(.supraCaption.weight(.semibold))
+                        .foregroundStyle(node.depth == 0 ? Color.primary : Color.secondary)
+                    Text(node.nodeKey)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Spacer(minLength: 8)
+                    if let range = rangeText(node) {
+                        Text(range)
+                            .font(.supraCaption.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+
+                if let text = node.textContent, !text.isEmpty {
+                    Text(text)
+                        .font(.supraBody)
+                        .lineLimit(4)
+                        .textSelection(.enabled)
+                }
+
+                if let payload = node.payloadJSON, !payload.isEmpty {
+                    Text(prettyPayload(payload))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(6)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .padding(.leading, 16 + indentation(for: node))
+        .padding(.trailing, 16)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(node.depth == 0 ? Color.accentColor.opacity(0.035) : Color.clear)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(prettyKind(node.kind)): \(node.nodeKey)")
+        .accessibilityValue(accessibilityValue(node))
+        .accessibilityIdentifier("documentPreview.structure.node.\(node.nodeKey)")
+    }
+
+    private func indentation(for node: DocumentStructurePreviewNode) -> CGFloat {
+        CGFloat(min(node.depth, 8)) * 14
+    }
+
+    private func rangeText(_ node: DocumentStructurePreviewNode) -> String? {
+        guard let start = node.charStart, let end = node.charEnd else { return nil }
+        return "chars \(start)–\(end)"
+    }
+
+    private func prettyKind(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "_", with: " ")
+            .split(separator: " ")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    private func prettyPayload(_ raw: String) -> String {
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              JSONSerialization.isValidJSONObject(object),
+              let formatted = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
+              let string = String(data: formatted, encoding: .utf8) else { return raw }
+        return string
+    }
+
+    private func accessibilityValue(_ node: DocumentStructurePreviewNode) -> String {
+        [
+            node.textContent,
+            node.payloadJSON,
+            rangeText(node),
+            node.parentNodeKey.map { "Parent: \($0)" },
+        ]
+        .compactMap { $0 }
+        .joined(separator: ". ")
+    }
+}
+
 /// PDFKit preview navigated to a page, with a best-effort text-match highlight.
 struct PDFKitView: NSViewRepresentable {
     let url: URL
@@ -1017,11 +1366,23 @@ struct PDFKitView: NSViewRepresentable {
         }
         if let highlightText, !highlightText.isEmpty {
             let snippet = String(highlightText.prefix(80))
-            if let selection = document.findString(snippet, withOptions: [.caseInsensitive]).first {
+            let selections = document.findString(snippet, withOptions: [.caseInsensitive])
+            let candidatePageIndexes = selections.map { selection in
+                selection.pages.first.map(document.index(for:)) ?? NSNotFound
+            }
+            if let index = PDFLocatorHighlightPolicy.selectionIndex(
+                targetPageIndex: pageIndex,
+                candidatePageIndexes: candidatePageIndexes
+            ) {
+                let selection = selections[index]
                 selection.color = .yellow
                 view.highlightedSelections = [selection]
                 view.go(to: selection)
+            } else {
+                view.highlightedSelections = []
             }
+        } else {
+            view.highlightedSelections = []
         }
     }
 }

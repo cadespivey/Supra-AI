@@ -7,6 +7,7 @@ public protocol RuntimeClientProtocol: Sendable {
     func connect() async throws
     func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse
     func generate(_ request: GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error>
+    func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse
     func cancelGeneration(_ generationID: GenerationID) async throws -> CancelGenerationResponse
     func recentEvents(for generationID: GenerationID, after sequenceNumber: Int) async throws -> [GenerationEvent]
     func unloadModel() async throws -> UnloadModelResponse
@@ -24,6 +25,12 @@ public protocol RuntimeClientProtocol: Sendable {
 }
 
 public extension RuntimeClientProtocol {
+    func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
+        throw RuntimeClientError.remoteInvocationFailed(
+            "Token counting is not supported by this runtime client."
+        )
+    }
+
     // Default implementations so non-embedding test doubles need not implement
     // the M3 embedding surface. The real RuntimeClient overrides all three.
     func loadEmbeddingModel(_ request: LoadEmbeddingModelRequest) async throws -> LoadEmbeddingModelResponse {

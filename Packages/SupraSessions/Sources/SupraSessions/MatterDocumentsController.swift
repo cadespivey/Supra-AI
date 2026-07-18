@@ -14,6 +14,25 @@ public struct DocumentSearchHit: Identifiable, Sendable {
     public let locatorDisplay: String
 }
 
+public struct DocumentPartRevisionItem: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let origin: String
+    public let text: String
+    public let author: String?
+    public let reason: String?
+    public let createdAt: Date
+}
+
+public struct DocumentPartCorrectionDraft: Identifiable, Sendable, Equatable {
+    public var id: String { partID }
+    public let documentID: String
+    public let documentName: String
+    public let partID: String
+    public let partIndex: Int
+    public let text: String
+    public let history: [DocumentPartRevisionItem]
+}
+
 /// Drives the per-matter Documents tab: folders, document instances, tags, import,
 /// search, and trash (plan §39). Import is gated on completed Document Intelligence
 /// setup and routed through the app-wide processing queue.
@@ -41,8 +60,14 @@ public final class MatterDocumentsController: ObservableObject {
     }
     @Published public private(set) var searchHits: [DocumentSearchHit] = []
     @Published public var message: String?
+    /// Documents whose saved correction is waiting for its replacement index to
+    /// become visible. Keep the transition on screen briefly even when a tiny
+    /// document re-indexes within the same UI turn; otherwise the editor closes
+    /// without any visible acknowledgement that re-indexing was requested.
+    @Published public private(set) var correctionReindexingDocumentIDs: Set<String> = []
 
     public let matterID: String
+    public let relationReviewController: DocumentRelationReviewController
     private let store: SupraStore
     private let queue: DocumentProcessingQueue
     private let isImportReady: @MainActor () -> Bool
@@ -50,6 +75,9 @@ public final class MatterDocumentsController: ObservableObject {
     private let previewLoader: DocumentPreviewLoader
     private var processingObserver: AnyCancellable?
     private var pollTimer: AnyCancellable?
+    private var correctionBadgeMinimumEnd: [String: Date] = [:]
+    private var correctionBadgeTimers: [String: Task<Void, Never>] = [:]
+    private static let correctionBadgeMinimumVisibility: TimeInterval = 1.5
     /// Total extracted characters per document (SUM over its parts), refreshed in
     /// `reload()`. Backs the classification-floor gate in `unclassifiedCount` so the
     /// property stays cheap for the view to read.
@@ -68,6 +96,10 @@ public final class MatterDocumentsController: ObservableObject {
         self.isImportReady = isImportReady
         self.storage = storage
         self.previewLoader = DocumentPreviewLoader(store: store, storage: storage)
+        self.relationReviewController = DocumentRelationReviewController(
+            matterID: matterID,
+            store: store
+        )
         reload()
         observeProcessing()
     }
@@ -121,6 +153,81 @@ public final class MatterDocumentsController: ObservableObject {
         previewLoader.loadDocument(documentID: documentID)
     }
 
+    /// Loads the first natural part as the initial correction entry point,
+    /// together with every immutable revision for review in the sheet.
+    public func correctionDraft(documentID: String) -> DocumentPartCorrectionDraft? {
+        guard let document = try? store.documentLibrary.fetchDocument(id: documentID),
+              let part = try? store.documentIndex.fetchParts(documentID: documentID).first
+        else { return nil }
+        let revisions = (try? store.documentRevisions.fetchRevisions(
+            documentID: documentID,
+            partIndex: part.partIndex
+        )) ?? []
+        return DocumentPartCorrectionDraft(
+            documentID: documentID,
+            documentName: document.displayName,
+            partID: part.id,
+            partIndex: part.partIndex,
+            text: part.normalizedText,
+            history: revisions.map {
+                DocumentPartRevisionItem(
+                    id: $0.id,
+                    origin: $0.origin,
+                    text: $0.text,
+                    author: $0.author,
+                    reason: $0.reason,
+                    createdAt: $0.createdAt
+                )
+            }
+        )
+    }
+
+    public func saveCorrection(
+        _ draft: DocumentPartCorrectionDraft,
+        text: String,
+        reason: String,
+        author: String = "Local user"
+    ) throws {
+        let documentID = draft.documentID
+        correctionReindexingDocumentIDs.insert(documentID)
+        correctionBadgeMinimumEnd[documentID] = Date().addingTimeInterval(
+            Self.correctionBadgeMinimumVisibility
+        )
+        correctionBadgeTimers[documentID]?.cancel()
+
+        do {
+            try queue.updateExtractedText(
+                documentID: documentID,
+                partID: draft.partID,
+                text: text,
+                author: author,
+                reason: reason
+            )
+            reload()
+            correctionBadgeTimers[documentID] = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.correctionBadgeMinimumVisibility))
+                guard !Task.isCancelled, let self else { return }
+                self.reload()
+                self.correctionBadgeTimers[documentID] = nil
+            }
+        } catch {
+            correctionReindexingDocumentIDs.remove(documentID)
+            correctionBadgeMinimumEnd[documentID] = nil
+            correctionBadgeTimers[documentID] = nil
+            throw error
+        }
+    }
+
+    /// Whether the Documents UI should communicate that a saved correction is
+    /// being re-indexed. The durable store state wins for genuinely pending work;
+    /// the controller-owned set prevents an instant small-file completion from
+    /// erasing the only visible acknowledgement of the save.
+    public func isCorrectionReindexing(_ document: MatterDocumentRecord) -> Bool {
+        correctionReindexingDocumentIDs.contains(document.id)
+            || (document.hasUserEditedText
+                && document.indexStatus == DocumentIndexStatus.stale.rawValue)
+    }
+
     /// The managed file URL of a document's original blob, for opening in the user's
     /// default app or sharing the original file. Nil if the blob is missing on disk.
     public func fileURL(forDocument documentID: String) -> URL? {
@@ -172,15 +279,36 @@ public final class MatterDocumentsController: ObservableObject {
     public func reload() {
         folders = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
         documents = (try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []
+        reconcileCorrectionBadgeVisibility()
         documentCharCounts = (try? store.documentIndex.fetchTotalCharCounts(matterID: matterID)) ?? [:]
         trashedDocuments = (try? store.documentLibrary.fetchSoftDeletedDocuments(matterID: matterID)) ?? []
         trashedFolders = ((try? store.documentLibrary.fetchFolders(matterID: matterID, includeDeleted: true)) ?? []).filter { $0.deletedAt != nil }
         tags = (try? store.documentLibrary.fetchTags(matterID: matterID)) ?? []
+        relationReviewController.reload()
         // The selected folder can vanish out from under the selection (deleting
         // an ancestor cascades to the whole subtree); fall back to All Documents
         // rather than silently filtering — and scoping Q&A — by an invisible folder.
         if selectedSidebarID != Self.allDocumentsTag, !folders.contains(where: { $0.id == selectedSidebarID }) {
             selectedSidebarID = Self.allDocumentsTag
+        }
+    }
+
+    private func reconcileCorrectionBadgeVisibility(now: Date = Date()) {
+        let documentsByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0) })
+        for documentID in Array(correctionReindexingDocumentIDs) {
+            guard let document = documentsByID[documentID] else {
+                correctionReindexingDocumentIDs.remove(documentID)
+                correctionBadgeMinimumEnd[documentID] = nil
+                correctionBadgeTimers[documentID]?.cancel()
+                correctionBadgeTimers[documentID] = nil
+                continue
+            }
+            let minimumEnd = correctionBadgeMinimumEnd[documentID] ?? .distantPast
+            let indexIsCurrent = document.indexStatus != DocumentIndexStatus.stale.rawValue
+            if now >= minimumEnd, indexIsCurrent {
+                correctionReindexingDocumentIDs.remove(documentID)
+                correctionBadgeMinimumEnd[documentID] = nil
+            }
         }
     }
 
@@ -315,7 +443,9 @@ public final class MatterDocumentsController: ObservableObject {
     public func classification(forDocument documentID: String) -> DocumentClassification? {
         guard let json = documents.first(where: { $0.id == documentID })?.classificationMetadataJSON,
               let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(DocumentClassification.self, from: data)
+        guard let classification = try? JSONDecoder().decode(DocumentClassification.self, from: data),
+              !classification.abstained else { return nil }
+        return classification
     }
 
     public func toggleTag(_ tagID: String, on documentID: String) {

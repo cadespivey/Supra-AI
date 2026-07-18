@@ -415,6 +415,85 @@
         "sourceFilename": "sovereign-immunity-presuit-notice.pdf"
       }
     ],
+    "taskKeys": {
+      "lists": [
+        {
+          "id": "ic-list-policy-deductibles",
+          "prompt": "List the policy deductibles relevant to the loss.",
+          "expectedAnswer": "$2,500 all-other-perils deductible and a 2% Coverage A hurricane deductible equal to $8,200.",
+          "evidence": [
+            {"sourceFilename": "tidewater-policy-declarations.pdf", "locatorHint": "Declarations deductibles section"}
+          ]
+        }
+      ],
+      "chronology": [
+        {
+          "id": "ic-chron-loss-adjustment-denial",
+          "prompt": "Order the asserted loss dates, report, adjustment, denial, and county notice.",
+          "expectedAnswer": "2024-09-26 testimony date; 2024-09-28 form date; 2024-09-30 report; 2024-10-14 worksheet; 2024-11-12 denial; 2024-12-02 county notice.",
+          "evidence": [
+            {"sourceFilename": "calloway-recorded-statement-transcript.docx", "locatorHint": "date-of-loss testimony"},
+            {"sourceFilename": "claim-form-acord-scanned.pdf", "locatorHint": "date-of-loss and report fields"},
+            {"sourceFilename": "adjuster-damages-worksheet.xlsx", "locatorHint": "worksheet date"},
+            {"sourceFilename": "tidewater-denial-reservation-of-rights.pdf", "locatorHint": "letter date"},
+            {"sourceFilename": "sovereign-immunity-presuit-notice.pdf", "locatorHint": "notice date"}
+          ]
+        }
+      ],
+      "comparisons": [
+        {
+          "id": "ic-compare-loss-dates",
+          "prompt": "Compare the date of loss in the claim form and recorded statement.",
+          "expectedAnswer": "Claim form: September 28, 2024; recorded statement: night of September 26, 2024.",
+          "evidence": [
+            {"sourceFilename": "claim-form-acord-scanned.pdf", "locatorHint": "Date of Loss field"},
+            {"sourceFilename": "calloway-recorded-statement-transcript.docx", "locatorHint": "answer identifying the 26th"}
+          ]
+        }
+      ],
+      "contradictions": [
+        {
+          "id": "ic-contradiction-loss-date",
+          "prompt": "Identify the material date contradiction.",
+          "expectedAnswer": "The claim form records 09/28/2024, while the insured says damage began on 09/26/2024.",
+          "evidence": [
+            {"sourceFilename": "claim-form-acord-scanned.pdf", "locatorHint": "Date of Loss field"},
+            {"sourceFilename": "calloway-recorded-statement-transcript.docx", "locatorHint": "recorded-statement loss narrative"}
+          ]
+        }
+      ],
+      "negatives": [
+        {
+          "id": "ic-negative-storm-name",
+          "prompt": "What official hurricane name caused the loss?",
+          "expectedAnswer": "Not supported; the corpus refers only to a hurricane and gives no storm name.",
+          "evidence": [
+            {"sourceFilename": "claim-form-acord-scanned.pdf", "locatorHint": "generic hurricane description with no proper name"}
+          ]
+        }
+      ],
+      "structures": [
+        {
+          "id": "ic-structure-damages-total",
+          "prompt": "Resolve RCV and net ACV using worksheet labels and cells.",
+          "expectedAnswer": "$148,750 RCV and $126,950 net ACV payable from the Summary sheet.",
+          "evidence": [
+            {"sourceFilename": "adjuster-damages-worksheet.xlsx", "locatorHint": "Summary B9 and B12"}
+          ]
+        }
+      ],
+      "versions": [
+        {
+          "id": "ic-version-coverage-position",
+          "prompt": "Which documents establish the insurer's operative coverage position?",
+          "expectedAnswer": "The issued policy supplies Exclusion 3(b), and the November 12 denial applies it; an unsupported internal MSG does not control.",
+          "evidence": [
+            {"sourceFilename": "tidewater-policy-declarations.pdf", "locatorHint": "Section I Exclusion 3(b)"},
+            {"sourceFilename": "tidewater-denial-reservation-of-rights.pdf", "locatorHint": "denial rationale"}
+          ]
+        }
+      ]
+    },
     "courtListener": {
       "legalIssue": "Florida sovereign immunity for a tort claim against a county under Fla. Stat. § 768.28, including the planning-level vs. operational-level distinction for negligent operation/maintenance of a stormwater pump station, the statutory $200,000/$300,000 damages caps, and the § 768.28(6) pre-suit written-notice condition precedent.",
       "jurisdiction": "Florida (state courts; Fla. 2d/3d DCA and Florida Supreme Court authority)",

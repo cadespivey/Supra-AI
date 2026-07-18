@@ -12,7 +12,8 @@ let package = Package(
     ],
     products: [
         .library(name: "SupraTestKit", targets: ["SupraTestKit"]),
-        .executable(name: "SeedCorpus", targets: ["SeedCorpus"])
+        .executable(name: "SeedCorpus", targets: ["SeedCorpus"]),
+        .executable(name: "SupraBench", targets: ["SupraBench"])
     ],
     dependencies: [
         .package(path: "../SupraCore"),
@@ -37,6 +38,16 @@ let package = Package(
         .executableTarget(
             name: "SeedCorpus",
             dependencies: ["SupraTestKit"]
+        ),
+        .executableTarget(
+            name: "SupraBench",
+            dependencies: [
+                "SupraTestKit",
+                .product(name: "SupraCore", package: "SupraCore"),
+                .product(name: "SupraStore", package: "SupraStore"),
+                .product(name: "SupraDocuments", package: "SupraDocuments"),
+                .product(name: "SupraSessions", package: "SupraSessions")
+            ]
         ),
         .testTarget(
             name: "SupraTestKitTests",

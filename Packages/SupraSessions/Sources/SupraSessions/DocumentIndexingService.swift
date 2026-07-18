@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SupraCore
 import SupraDocuments
@@ -9,12 +10,12 @@ import SupraStore
 /// (index status `stale`).
 public final class DocumentIndexingService: @unchecked Sendable {
     private let store: SupraStore
-    private let chunker: DocumentChunker
+    private let chunker: DocumentChunker?
     private let embedder: (any TextEmbedder)?
 
     public init(
         store: SupraStore,
-        chunker: DocumentChunker = DocumentChunker(),
+        chunker: DocumentChunker? = nil,
         embedder: (any TextEmbedder)? = nil
     ) {
         self.store = store
@@ -26,6 +27,36 @@ public final class DocumentIndexingService: @unchecked Sendable {
     /// configured. Returns the number of chunks produced.
     @discardableResult
     public func indexDocument(documentID: String) async throws -> Int {
+        let document = try store.documentLibrary.fetchDocument(id: documentID)
+        let selectedChunker = try chunker ?? DocumentChunker(
+            version: store.documentSettings.loadSettings().chunkerVersion
+        )
+        let existingChunks = try store.documentIndex.fetchChunks(documentID: documentID)
+        let canReuseTextIndex = !existingChunks.isEmpty
+            && existingChunks.allSatisfy { $0.chunkerVersion == selectedChunker.version }
+            && (document?.indexStatus == DocumentIndexStatus.ready.rawValue
+                || document?.indexStatus == DocumentIndexStatus.textIndexed.rawValue)
+
+        // A model switch changes only semantic lineage. Reuse the current chunks
+        // and FTS rows so adding model-B vectors neither repeats text work nor
+        // cascades away still-valid model-A vectors.
+        if let embedder, canReuseTextIndex {
+            if try !store.documentIndex.hasCompleteEmbeddings(
+                documentID: documentID,
+                embeddingModelID: embedder.modelID
+            ) {
+                try await embedChunks(existingChunks, documentID: documentID, embedder: embedder)
+                try recordSemanticCompletion(documentID: documentID, chunkCount: existingChunks.count)
+            }
+            try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .ready)
+            try store.documentLibrary.promoteStatus(
+                documentID: documentID,
+                to: .ready,
+                whenCurrentIn: [.indexing, .embedding]
+            )
+            return existingChunks.count
+        }
+
         let parts = try store.documentIndex.fetchParts(documentID: documentID)
         let chunkParts = parts.map { part in
             ChunkPart(
@@ -41,11 +72,52 @@ public final class DocumentIndexingService: @unchecked Sendable {
                 boundingBoxesJSON: part.boundingBoxesJSON
             )
         }
-        let chunks = chunker.chunk(parts: chunkParts)
+        let revisionIDsByPartID = Dictionary(
+            uniqueKeysWithValues: parts.compactMap { part in
+                part.currentRevisionID.map { (part.id, $0) }
+            }
+        )
+        let partIDsByRevisionID = Dictionary(
+            uniqueKeysWithValues: revisionIDsByPartID.map { ($0.value, $0.key) }
+        )
+        let structureNodes = try store.documentStructure.fetchNodes(documentID: documentID)
+        let chunkNodes = structureNodes.compactMap { node -> ChunkStructureNode? in
+            guard let partID = partIDsByRevisionID[node.revisionID],
+                  let kind = DocumentStructureNodeKind(rawValue: node.kind) else { return nil }
+            return ChunkStructureNode(
+                nodeID: node.id,
+                parentNodeID: node.parentNodeID,
+                partID: partID,
+                revisionID: node.revisionID,
+                ordinal: node.ordinal,
+                kind: kind,
+                charStart: node.charStart,
+                charEnd: node.charEnd,
+                textContent: node.textContent
+            )
+        }
+        let documentNodeIDs = Set(chunkNodes.map(\.nodeID))
+        let chunkEdges = try store.documentStructure.fetchEdges(documentID: documentID).compactMap { edge -> ChunkStructureEdge? in
+            guard documentNodeIDs.contains(edge.fromNodeID),
+                  documentNodeIDs.contains(edge.toNodeID),
+                  let kind = DocumentStructureEdgeKind(rawValue: edge.kind) else { return nil }
+            return ChunkStructureEdge(fromNodeID: edge.fromNodeID, toNodeID: edge.toNodeID, kind: kind)
+        }
+        let chunks = selectedChunker.chunk(parts: chunkParts, nodes: chunkNodes, edges: chunkEdges)
         let records = chunks.map { chunk in
-            DocumentChunkRecord(
+            let revisionID = chunk.partID.flatMap { revisionIDsByPartID[$0] }
+            return DocumentChunkRecord(
+                id: deterministicChunkID(
+                    documentID: documentID,
+                    revisionID: revisionID,
+                    chunk: chunk
+                ),
                 documentID: documentID,
                 pagePartID: chunk.partID,
+                revisionID: revisionID,
+                nodeID: chunk.nodeID,
+                unitKind: chunk.unitKind,
+                chunkerVersion: chunk.chunkerVersion,
                 chunkIndex: chunk.chunkIndex,
                 sourceKind: chunk.sourceKind.rawValue,
                 pageIndex: chunk.pageIndex,
@@ -69,10 +141,7 @@ public final class DocumentIndexingService: @unchecked Sendable {
         if let embedder, !records.isEmpty {
             try await embedChunks(records, documentID: documentID, embedder: embedder)
             try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .ready)
-            _ = try? store.auditEvents.recordEvent(
-                eventType: "semantic_indexing_completed", actor: "system",
-                summary: "Embedded \(records.count) chunks", relatedTable: "matter_documents", relatedID: documentID
-            )
+            try recordSemanticCompletion(documentID: documentID, chunkCount: records.count)
         }
         // Without an embedder the document remains text-indexed (searchable);
         // semantic readiness requires embeddings.
@@ -83,13 +152,37 @@ public final class DocumentIndexingService: @unchecked Sendable {
         return records.count
     }
 
+    private func deterministicChunkID(
+        documentID: String,
+        revisionID: String?,
+        chunk: DocumentChunk
+    ) -> String {
+        // v1 keeps its historical row-identity behavior. V2 needs stable ids so
+        // retries can prove the exact graph/text projection is unchanged.
+        guard chunk.chunkerVersion == 2 else { return UUID().uuidString }
+        let identity = [
+            "chunk-v2",
+            documentID,
+            revisionID ?? "",
+            chunk.partID ?? "",
+            chunk.nodeID ?? "",
+            String(chunk.chunkIndex),
+            String(chunk.charStart),
+            String(chunk.charEnd),
+            chunk.text,
+        ].joined(separator: "\u{001f}")
+        let digest = SHA256.hash(data: Data(identity.utf8))
+        return "chunk-v2-" + digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Indexes every document in a matter that is extracted but not yet (fully)
     /// indexed, or whose index is stale. Returns the count indexed.
     @discardableResult
     public func indexMatter(matterID: String) async throws -> Int {
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
         var indexed = 0
-        for document in documents where Self.needsIndexing(document, embedderAvailable: embedder != nil) {
+        for document in documents {
+            guard try needsIndexing(document) else { continue }
             // Honor cancellation between documents so stopping a large re-index (or an
             // app quit) doesn't keep churning through the remaining queue.
             try Task.checkCancellation()
@@ -127,7 +220,17 @@ public final class DocumentIndexingService: @unchecked Sendable {
         }
     }
 
-    private static func needsIndexing(_ document: MatterDocumentRecord, embedderAvailable: Bool) -> Bool {
+    private func recordSemanticCompletion(documentID: String, chunkCount: Int) throws {
+        _ = try? store.auditEvents.recordEvent(
+            eventType: "semantic_indexing_completed",
+            actor: "system",
+            summary: "Embedded \(chunkCount) chunks",
+            relatedTable: "matter_documents",
+            relatedID: documentID
+        )
+    }
+
+    private func needsIndexing(_ document: MatterDocumentRecord) throws -> Bool {
         // Skip documents still importing/needing OCR or that failed extraction.
         let extractionDone = document.extractionStatus == DocumentExtractionStatus.extracted.rawValue
             || document.extractionStatus == DocumentExtractionStatus.ocrComplete.rawValue
@@ -135,11 +238,19 @@ public final class DocumentIndexingService: @unchecked Sendable {
         guard extractionDone else { return false }
         switch DocumentIndexStatus(rawValue: document.indexStatus) {
         case .ready:
-            return false
+            guard let embedder else { return false }
+            return try !store.documentIndex.hasCompleteEmbeddings(
+                documentID: document.id,
+                embeddingModelID: embedder.modelID
+            )
         case .textIndexed:
             // Already chunked + FTS-indexed; only re-index to add embeddings when
             // an embedder is now available (otherwise it is fully indexed).
-            return embedderAvailable
+            guard let embedder else { return false }
+            return try !store.documentIndex.hasCompleteEmbeddings(
+                documentID: document.id,
+                embeddingModelID: embedder.modelID
+            )
         case .notIndexed, .stale, .failed, .none:
             return true
         }

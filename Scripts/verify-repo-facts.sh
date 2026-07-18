@@ -6,6 +6,7 @@ repo_root="$(cd "$repo_root" && pwd -P)"
 pbxproj="${repo_root}/Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
 macos_workflow="${repo_root}/.github/workflows/macos-ci.yml"
 scheduled_workflow="${repo_root}/.github/workflows/security-scheduled.yml"
+benchmark_workflow="${repo_root}/.github/workflows/benchmarks.yml"
 status=0
 
 fail() {
@@ -66,6 +67,7 @@ xpc_release_build="$(project_setting 5A0000000000000000000D06 CURRENT_PROJECT_VE
 bash "${repo_root}/Scripts/verify-release-version-state.sh" || status=1
 
 required_workflows=(
+  .github/workflows/benchmarks.yml
   .github/workflows/deploy-website.yml
   .github/workflows/macos-ci.yml
   .github/workflows/security-scheduled.yml
@@ -97,7 +99,7 @@ if [[ -f "$macos_workflow" ]]; then
   cmp -s "$expected_packages" "$workflow_packages" \
     || fail 'macOS CI package matrix must contain the exact fixed 14-package inventory'
 
-  for job in inventory swift-packages app-build app-smoke migration-fixtures website security dependency-review; do
+  for job in inventory swift-packages app-build app-smoke migration-fixtures document-benchmarks website security dependency-review; do
     grep -Eq "^  ${job}:" "$macos_workflow" || fail "macOS CI job is missing: ${job}"
   done
 fi
@@ -106,6 +108,20 @@ if [[ -f "$scheduled_workflow" ]]; then
   grep -Eq '^[[:space:]]+schedule:' "$scheduled_workflow" || fail 'scheduled security workflow has no schedule trigger'
   grep -Fq 'Scripts/verify-model-ids.sh' "$scheduled_workflow" || fail 'scheduled security workflow omits live model-ID verification'
   grep -Fq 'Scripts/verify-public-repository-assets.sh' "$scheduled_workflow" || fail 'scheduled security workflow omits public-ref metadata verification'
+fi
+
+if [[ -f "$benchmark_workflow" ]]; then
+  grep -Eq '^[[:space:]]+schedule:' "$benchmark_workflow" || fail 'scheduled benchmark workflow has no schedule trigger'
+  grep -Fq 'runs-on: macos-15' "$benchmark_workflow" || fail 'scheduled benchmark workflow must run on macos-15'
+  grep -Fq 'Scripts/run-benchmarks.sh --verify-baseline' "$benchmark_workflow" || fail 'scheduled benchmark workflow omits deterministic baseline verification'
+  grep -Fq 'Scripts/run-benchmarks.sh --performance' "$benchmark_workflow" || fail 'scheduled benchmark workflow omits fixed-scale performance safety verification'
+  if grep -Fq '${{ secrets.' "$benchmark_workflow"; then
+    fail 'scheduled benchmark workflow must not consume credentials'
+  fi
+fi
+
+if [[ -f "$macos_workflow" ]]; then
+  grep -Fq 'Scripts/run-benchmarks.sh --performance' "$macos_workflow" || fail 'protected macOS CI omits fixed-scale performance safety verification'
 fi
 
 while IFS=: read -r workflow line_number line; do

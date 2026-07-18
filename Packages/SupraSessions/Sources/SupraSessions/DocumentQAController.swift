@@ -12,9 +12,12 @@ import SupraStore
 /// set, and regeneration.
 @MainActor
 public final class DocumentQAController: ObservableObject {
+    public static let promptBuilderVersion = "document-qa-v1"
     @Published public private(set) var isGenerating = false
     @Published public private(set) var message: String?
     @Published public private(set) var lastResult: QAResult?
+    @Published public private(set) var lastPackingReport: TokenPackingReport?
+    private var sourceSetPackingReport: DocumentPackingReport?
 
     public struct QAResult: Sendable, Equatable {
         public var outputID: String
@@ -27,6 +30,7 @@ public final class DocumentQAController: ObservableObject {
         /// Which retrieval tier grounded this answer — `.fast` answers are
         /// preliminary and the UI offers "search all documents" (spec §3.2).
         public var depth: RetrievalDepth = .deep
+        public var assuranceState: OutputAssuranceState? = nil
     }
 
     public let matterID: String
@@ -67,6 +71,7 @@ public final class DocumentQAController: ObservableObject {
         mode: DocumentAnswerMode = .short,
         guidedChunkIDs: [String]? = nil,
         modelID: ModelID?,
+        modelLineage: DocumentGenerationModelLineage? = nil,
         route: ModelRoute? = nil,
         depth: RetrievalDepth = .fast
     ) async -> QAResult? {
@@ -79,6 +84,13 @@ public final class DocumentQAController: ObservableObject {
             } else {
                 "Assign a task model in the Models tab to ask questions."
             }
+            return nil
+        }
+        guard let resolvedModelLineage = modelLineage ?? DocumentGenerationModelLineage.resolve(
+            modelID: modelID,
+            store: store
+        ) else {
+            message = DocumentGenerationLineageError.stableModelIdentityUnavailable.localizedDescription
             return nil
         }
 
@@ -95,6 +107,8 @@ public final class DocumentQAController: ObservableObject {
 
         isGenerating = true
         message = nil
+        lastPackingReport = nil
+        sourceSetPackingReport = nil
         defer { isGenerating = false }
 
         let isGuided = (guidedChunkIDs?.isEmpty == false)
@@ -111,9 +125,15 @@ public final class DocumentQAController: ObservableObject {
                 message = "No matching sources were found in the selected scope."
                 return nil
             }
-            let groundingSources = prepared.map(\.source)
-            let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: trimmed, sources: groundingSources, mode: mode)
-            let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
+            let budgeted = try await collectBudgetedAnswer(
+                question: trimmed,
+                mode: mode,
+                prepared: prepared,
+                modelID: modelID,
+                route: effectiveRoute
+            )
+            prepared = budgeted.prepared
+            let answer = budgeted.answer
 
             let verification = try verify(
                 answer: answer,
@@ -122,12 +142,16 @@ public final class DocumentQAController: ObservableObject {
             )
             let appendix = makeAppendix(prepared)
             let markdown = verification.warningMarkdown + answer + "\n" + appendix.markdown()
-            let status: StructuredOutputStatus = verification.requiresReview ? .needsReview : .complete
+            let status: StructuredOutputStatus = effectiveDepth == .fast || verification.requiresReview
+                ? .needsReview
+                : .complete
 
             let result = try persist(
                 question: trimmed, scope: scope, mode: mode, markdown: markdown,
                 prepared: prepared, status: status, verification: verification,
-                sourceMode: isGuided ? .guided : .autoSource, depth: effectiveDepth
+                sourceMode: isGuided ? .guided : .autoSource, depth: effectiveDepth,
+                modelID: modelID, modelLineage: resolvedModelLineage, route: effectiveRoute,
+                prompt: budgeted.prompt
             )
             lastResult = result
             return result
@@ -143,7 +167,13 @@ public final class DocumentQAController: ObservableObject {
     /// request for the full pass. The prior version is retained, so a preliminary
     /// answer is never silently discarded (spec §5).
     @discardableResult
-    public func regenerate(outputID: String, modelID: ModelID?, route: ModelRoute? = nil, depth: RetrievalDepth = .deep) async -> QAResult? {
+    public func regenerate(
+        outputID: String,
+        modelID: ModelID?,
+        modelLineage: DocumentGenerationModelLineage? = nil,
+        route: ModelRoute? = nil,
+        depth: RetrievalDepth = .deep
+    ) async -> QAResult? {
         guard let output = try? store.structuredOutputs.fetchOutputs(matterID: matterID).first(where: { $0.id == outputID }),
               let activeVersionID = output.activeVersionID,
               let sourceSet = try? store.documentSources.fetchSourceSet(structuredOutputVersionID: activeVersionID) else {
@@ -170,6 +200,7 @@ public final class DocumentQAController: ObservableObject {
             mode: mode,
             guidedChunkIDs: guidedChunkIDs,
             modelID: modelID,
+            modelLineage: modelLineage,
             route: route ?? ModelRouter().route(forStructuredOutput: mode.outputType),
             depth: depth
         )
@@ -204,11 +235,10 @@ public final class DocumentQAController: ObservableObject {
         let candidates = result.sources.enumerated().map { index, retrieved -> PreparedSource in
             let low = (retrieved.ocrConfidence.map { $0 < lowConfidenceThreshold } ?? false)
             return PreparedSource(
-                source: GroundingSource(
+                source: retrieved.groundingSource(
                     sourceID: "\(matterID)/\(retrieved.chunkID)",
-                    label: "S\(index + 1)", documentName: retrieved.documentName,
-                    locatorDisplay: retrieved.locator.displayString, text: retrieved.text,
-                    excerpt: retrieved.excerpt, lowConfidence: low, metadata: retrieved.metadata
+                    label: "S\(index + 1)",
+                    lowConfidence: low
                 ),
                 documentID: retrieved.documentID, chunkID: retrieved.chunkID,
                 locatorJSON: retrieved.locator.encodedJSON(), rank: index,
@@ -288,12 +318,18 @@ public final class DocumentQAController: ObservableObject {
                     charStart: chunk.charStart, charEnd: chunk.charEnd
                 )
                 let low = (chunk.ocrConfidence.map { $0 < lowConfidenceThreshold } ?? false)
+                let structureContext = chunk.chunkerVersion == 2
+                    ? chunk.nodeID.flatMap { try? store.documentStructure.retrievalContext(nodeID: $0) }
+                    : nil
                 return PreparedSource(
                     source: GroundingSource(
                         sourceID: "\(matterID)/\(chunk.id)",
                         label: "S\(index + 1)", documentName: nameByID[chunk.documentID] ?? "Document",
                         locatorDisplay: locator.displayString, text: chunk.normalizedText,
-                        excerpt: chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText), lowConfidence: low
+                        excerpt: chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText),
+                        lowConfidence: low,
+                        unitKind: chunk.chunkerVersion == 2 ? (chunk.unitKind ?? structureContext?.unitKind) : nil,
+                        hiddenDerived: structureContext?.hiddenDerived ?? false
                     ),
                     documentID: chunk.documentID, chunkID: chunk.id,
                     locatorJSON: locator.encodedJSON(), rank: index, warnings: low ? ["low OCR confidence"] : []
@@ -314,7 +350,9 @@ public final class DocumentQAController: ObservableObject {
     private func persist(
         question: String, scope: RetrievalScope, mode: DocumentAnswerMode, markdown: String,
         prepared: [PreparedSource], status: StructuredOutputStatus, verification: DocumentSupportReport,
-        sourceMode: DocumentSourceSetMode, depth: RetrievalDepth
+        sourceMode: DocumentSourceSetMode, depth: RetrievalDepth,
+        modelID: ModelID, modelLineage: DocumentGenerationModelLineage,
+        route: ModelRoute?, prompt: String
     ) throws -> QAResult {
         let title = "Q&A: \(question.prefix(60))"
         let output = try store.structuredOutputs.createOutput(
@@ -330,13 +368,23 @@ public final class DocumentQAController: ObservableObject {
             mode: sourceMode,
             depth: depth
         )
+        let generation = try createGenerationSession(
+            modelID: modelID,
+            lineage: modelLineage,
+            prompt: prompt,
+            route: route
+        )
         let version = try store.structuredOutputs.createVersion(
             structuredOutputID: output.id, contentMarkdown: markdown,
             requiredSections: [], presentSections: [], missingSections: [],
+            generationSessionID: generation.id,
             verificationStatus: verification.verificationStatus,
             verificationVersion: DocumentSupportVerifier.version,
             verificationResults: verification.results,
+            verificationDimensions: VerificationDimensionsMapper.dimensions(for: verification),
             sourceSetID: sourceSetID,
+            promptBuilderVersion: Self.promptBuilderVersion,
+            assuranceState: depth == .fast ? .preliminary : nil,
             outputStatus: status
         )
         _ = try? store.auditEvents.recordEvent(
@@ -348,7 +396,8 @@ public final class DocumentQAController: ObservableObject {
             warnings: verification.warnings,
             citationLabels: verification.usedLabels,
             unsupported: verification.appearsUnsupported,
-            depth: depth
+            depth: depth,
+            assuranceState: version.assuranceState.flatMap(OutputAssuranceState.init(rawValue:))
         )
     }
 
@@ -359,6 +408,7 @@ public final class DocumentQAController: ObservableObject {
         mode: DocumentAnswerMode,
         guidedChunkIDs: [String]?,
         modelID: ModelID?,
+        modelLineage: DocumentGenerationModelLineage?,
         route: ModelRoute?,
         depth: RetrievalDepth = .deep
     ) async -> QAResult? {
@@ -371,27 +421,45 @@ public final class DocumentQAController: ObservableObject {
             }
             return nil
         }
+        guard let resolvedModelLineage = modelLineage ?? DocumentGenerationModelLineage.resolve(
+            modelID: modelID,
+            store: store
+        ) else {
+            message = DocumentGenerationLineageError.stableModelIdentityUnavailable.localizedDescription
+            return nil
+        }
         guard !isGenerating else {
             message = "A question is already being answered. Wait for it to finish."
             return nil
         }
         isGenerating = true
         message = nil
+        lastPackingReport = nil
+        sourceSetPackingReport = nil
         defer { isGenerating = false }
         let isGuided = (guidedChunkIDs?.isEmpty == false)
         do {
             let readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope)) ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
-            let prepared = try await prepareSources(question: question, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute, depth: depth)
+            var prepared = try await prepareSources(question: question, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute, depth: depth)
             guard !prepared.isEmpty else { message = "No matching sources were found."; return nil }
-            let prompt = DocumentQAPromptBuilder.buildQAPrompt(question: question, sources: prepared.map(\.source), mode: mode)
-            let answer = try await collect(prompt: prompt, modelID: modelID, route: effectiveRoute)
+            let budgeted = try await collectBudgetedAnswer(
+                question: question,
+                mode: mode,
+                prepared: prepared,
+                modelID: modelID,
+                route: effectiveRoute
+            )
+            prepared = budgeted.prepared
+            let answer = budgeted.answer
             let verification = try verify(
                 answer: answer,
                 prepared: prepared,
                 scopeFullyIndexed: readiness.isFullyReady
             )
             let markdown = verification.warningMarkdown + answer + "\n" + makeAppendix(prepared).markdown()
-            let status: StructuredOutputStatus = verification.requiresReview ? .needsReview : .complete
+            let status: StructuredOutputStatus = depth == .fast || verification.requiresReview
+                ? .needsReview
+                : .complete
 
             let existingVersions = (try? store.structuredOutputs.fetchVersions(structuredOutputID: outputID)) ?? []
             let parentVersionID = existingVersions.max(by: { $0.versionIndex < $1.versionIndex })?.id
@@ -402,14 +470,24 @@ public final class DocumentQAController: ObservableObject {
                 mode: isGuided ? .guided : .autoSource,
                 depth: depth
             )
+            let generation = try createGenerationSession(
+                modelID: modelID,
+                lineage: resolvedModelLineage,
+                prompt: budgeted.prompt,
+                route: effectiveRoute
+            )
             let version = try store.structuredOutputs.createVersion(
                 structuredOutputID: outputID, contentMarkdown: markdown,
                 requiredSections: [], presentSections: [], missingSections: [],
                 parentVersionID: parentVersionID,
+                generationSessionID: generation.id,
                 verificationStatus: verification.verificationStatus,
                 verificationVersion: DocumentSupportVerifier.version,
                 verificationResults: verification.results,
+                verificationDimensions: VerificationDimensionsMapper.dimensions(for: verification),
                 sourceSetID: sourceSetID,
+                promptBuilderVersion: Self.promptBuilderVersion,
+                assuranceState: depth == .fast ? .preliminary : nil,
                 outputStatus: status
             )
             _ = try? store.auditEvents.recordEvent(
@@ -424,7 +502,8 @@ public final class DocumentQAController: ObservableObject {
                 warnings: verification.warnings,
                 citationLabels: verification.usedLabels,
                 unsupported: verification.appearsUnsupported,
-                depth: depth
+                depth: depth,
+                assuranceState: version.assuranceState.flatMap(OutputAssuranceState.init(rawValue:))
             )
             lastResult = result
             return result
@@ -459,9 +538,46 @@ public final class DocumentQAController: ObservableObject {
     /// transaction.
     private func prepareSourceSet(prepared: [PreparedSource], scope: RetrievalScope, question: String, mode: DocumentSourceSetMode, depth: RetrievalDepth) throws -> String {
         let scopeJSON = (try? JSONEncoder().encode(scope)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let report = sourceSetPackingReport ?? DocumentSourceLineageBuilder.report(
+            summary: lastPackingReport,
+            candidates: prepared.map { item in
+                .init(
+                    sourceID: item.source.sourceID,
+                    label: item.source.label,
+                    rank: item.rank,
+                    originalText: item.source.text,
+                    packedText: item.source.packedText
+                )
+            }
+        )
+        let isGuided = mode == .guided
+        let configuration = DocumentRetrievalConfiguration(
+            mode: mode.rawValue,
+            depth: depth.rawValue,
+            candidateLimit: isGuided ? prepared.count : (depth == .fast ? Self.fastCandidatePoolSize : Self.candidatePoolSize),
+            packedLimit: isGuided ? prepared.count : (depth == .fast ? Self.fastPackedSourceLimit : Self.packedSourceLimit),
+            maxPerDocument: isGuided ? nil : DocumentRetrievalService.defaultMaxPerDocument,
+            semanticFloor: isGuided ? nil : (depth == .fast
+                ? DocumentRetrievalService.fastMinSemanticSimilarity
+                : DocumentRetrievalService.defaultMinSemanticSimilarity),
+            rrfK: isGuided ? nil : DocumentRetrievalService.rrfK
+        )
+        let lineage = try DocumentSourceLineageBuilder.make(
+            store: store,
+            matterID: matterID,
+            scope: scope,
+            configuration: configuration,
+            packingReport: report
+        )
         let sourceSet = try store.documentSources.createSourceSet(
             matterID: matterID, mode: mode, scopeJSON: scopeJSON, retrievalQuery: question,
-            retrievalDepth: depth.rawValue
+            retrievalDepth: depth.rawValue,
+            packingReportJSON: lineage.packingReportJSON,
+            embeddingModelID: lineage.embeddingModelID,
+            embeddingModelRevision: lineage.embeddingModelRevision,
+            chunkerVersion: lineage.chunkerVersion,
+            retrievalConfigJSON: lineage.retrievalConfigJSON,
+            corpusSnapshotHash: lineage.corpusSnapshotHash
         )
         let rows = prepared.map { source in
             DocumentOutputSourceRecord(
@@ -487,6 +603,136 @@ public final class DocumentQAController: ObservableObject {
         )
         let output = try await runtimeClient.collectGeneratedText(request)
         return ReasoningContent.answer(from: output)
+    }
+
+    private struct BudgetedAnswer {
+        var answer: String
+        var prepared: [PreparedSource]
+        var prompt: String
+    }
+
+    private enum QABudgetError: LocalizedError {
+        case requiredPacketTooLarge
+
+        var errorDescription: String? {
+            "The grounded question and its first source cannot fit the selected model's context window."
+        }
+    }
+
+    /// Counts the actual serialized cumulative source prefixes, packs the
+    /// largest safe prefix, and permits exactly one source-boundary retry when
+    /// the runtime tokenizer still reports overflow.
+    private func collectBudgetedAnswer(
+        question: String,
+        mode: DocumentAnswerMode,
+        prepared: [PreparedSource],
+        modelID: ModelID,
+        route: ModelRoute?
+    ) async throws -> BudgetedAnswer {
+        let systemPrompt = routedSystemPrompt(route)
+        let packetPrompts = prepared.indices.map { upperBound in
+            DocumentQAPromptBuilder.buildQAPrompt(
+                question: question,
+                sources: Array(prepared.prefix(upperBound + 1)).map(\.source),
+                mode: mode
+            )
+        }
+        var report = await RuntimeTokenBudgeting.report(
+            serializedPackets: packetPrompts.map {
+                RuntimeTokenBudgeting.serializedPacket(systemPrompt: systemPrompt, prompt: $0)
+            },
+            modelID: modelID,
+            options: route?.options ?? GenerationOptions(),
+            runtimeClient: runtimeClient
+        )
+        lastPackingReport = report
+        guard report.canPack else { throw QABudgetError.requiredPacketTooLarge }
+
+        var selected = Array(prepared.prefix(report.packedItemCount))
+        var prompt = DocumentQAPromptBuilder.buildQAPrompt(
+            question: question,
+            sources: selected.map(\.source),
+            mode: mode
+        )
+        do {
+            sourceSetPackingReport = DocumentSourceLineageBuilder.report(
+                summary: report,
+                candidates: prepared.map { item in
+                    .init(
+                        sourceID: item.source.sourceID,
+                        label: item.source.label,
+                        rank: item.rank,
+                        originalText: item.source.text,
+                        packedText: item.source.packedText
+                    )
+                }
+            )
+            return BudgetedAnswer(
+                answer: try await collect(prompt: prompt, modelID: modelID, route: route),
+                prepared: selected,
+                prompt: prompt
+            )
+        } catch let error as GenerationStreamError where error == .contextOverflowed {
+            guard selected.count > 1 else { throw error }
+        }
+
+        selected.removeLast()
+        prompt = DocumentQAPromptBuilder.buildQAPrompt(
+            question: question,
+            sources: selected.map(\.source),
+            mode: mode
+        )
+        let retryReport = await RuntimeTokenBudgeting.report(
+            serializedPackets: [
+                RuntimeTokenBudgeting.serializedPacket(systemPrompt: systemPrompt, prompt: prompt)
+            ],
+            modelID: modelID,
+            options: route?.options ?? GenerationOptions(),
+            runtimeClient: runtimeClient
+        )
+        report.countMethod = retryReport.countMethod
+        report.selectedInputTokens = retryReport.selectedInputTokens
+        report.packedItemCount = selected.count
+        report.omittedItemCount = report.consideredItemCount - selected.count
+        report.omissionReason = "context_overflow_retry"
+        report.overflowRetryCount = 1
+        report.cumulativeInputTokenCounts = retryReport.cumulativeInputTokenCounts
+        lastPackingReport = report
+        sourceSetPackingReport = DocumentSourceLineageBuilder.report(
+            summary: report,
+            candidates: prepared.map { item in
+                .init(
+                    sourceID: item.source.sourceID,
+                    label: item.source.label,
+                    rank: item.rank,
+                    originalText: item.source.text,
+                    packedText: item.source.packedText
+                )
+            }
+        )
+
+        return BudgetedAnswer(
+            answer: try await collect(prompt: prompt, modelID: modelID, route: route),
+            prepared: selected,
+            prompt: prompt
+        )
+    }
+
+    private func createGenerationSession(
+        modelID: ModelID,
+        lineage: DocumentGenerationModelLineage,
+        prompt: String,
+        route: ModelRoute?
+    ) throws -> GenerationSessionRecord {
+        try store.generation.createDocumentGenerationSession(
+            modelID: modelID.rawValue.uuidString,
+            modelRepository: lineage.modelRepository,
+            modelRevision: lineage.modelRevision,
+            promptBuilderVersion: Self.promptBuilderVersion,
+            prompt: prompt,
+            systemPrompt: routedSystemPrompt(route),
+            options: route?.options ?? GenerationOptions()
+        )
     }
 
     private func routedSystemPrompt(_ route: ModelRoute?) -> String? {

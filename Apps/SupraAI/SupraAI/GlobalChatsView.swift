@@ -462,6 +462,10 @@ struct GlobalChatsView: View {
                     ForEach(controller.messages) { message in
                         MessageRow(
                             message: message,
+                            artifactActions: controller.availableArtifactActions(messageID: message.id),
+                            onSaveToOutputs: {
+                                _ = controller.saveToOutputs(messageID: message.id)
+                            },
                             onOpenAuthority: { citation in
                                 // In-app reader when the citation carries a reader ref
                                 // (spec §2.5); legacy citations fall back to the browser.
@@ -492,8 +496,8 @@ struct GlobalChatsView: View {
                         HStack(spacing: 8) {
                             Label(
                                 offer.kind == .documents
-                                    ? "Preliminary — searched the most relevant passages."
-                                    : "Preliminary — answered from this matter's saved authorities.",
+                                    ? "Broader document search available"
+                                    : "Network authority search available",
                                 systemImage: "hare"
                             )
                             .font(.supraCaption).foregroundStyle(.secondary)
@@ -1181,6 +1185,8 @@ struct GlobalChatsView: View {
 
 private struct MessageRow: View {
     let message: ChatMessage
+    var artifactActions: [ChatMessageArtifactAction] = []
+    var onSaveToOutputs: () -> Void = {}
     /// Opens a tapped `[A#]` authority's CourtListener page.
     var onOpenAuthority: (MessageCitation) -> Void = { _ in }
     /// Opens a tapped `[S#]` matter-document citation in the trailing slide-over preview.
@@ -1241,6 +1247,9 @@ private struct MessageRow: View {
                     if message.isStreaming {
                         ProgressView().controlSize(.small)
                     }
+                    if let assurance = message.assuranceState {
+                        AssuranceBadge(state: assurance)
+                    }
                     statusBadge
                 }
             }
@@ -1285,8 +1294,19 @@ private struct MessageRow: View {
                 sourcesBlock
             }
             if showsCopy {
-                copyButton
-                    .opacity(isHovered ? 1 : 0.35)
+                HStack(spacing: 10) {
+                    copyButton
+                        .opacity(isHovered ? 1 : 0.35)
+                    if artifactActions.contains(.saveToOutputs) {
+                        Button(action: onSaveToOutputs) {
+                            Label("Save to Outputs", systemImage: "tray.and.arrow.down")
+                                .font(.caption.weight(.medium))
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("chat.message.saveToOutputs.\(message.id)")
+                        .help("Save this grounded answer and its retained sources to Outputs")
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1312,7 +1332,7 @@ private struct MessageRow: View {
     /// Only show a header row when there's something to say — a system tag, the
     /// streaming spinner, or a status badge. Plain answers get no heading.
     private var showsHeader: Bool {
-        message.role == .system || message.isStreaming || hasStatusBadge
+        message.role == .system || message.isStreaming || hasStatusBadge || message.assuranceState != nil
     }
 
     private var showsCopy: Bool {

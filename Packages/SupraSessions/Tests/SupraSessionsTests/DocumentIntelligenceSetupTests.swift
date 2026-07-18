@@ -10,6 +10,199 @@ import XCTest
 @MainActor
 final class DocumentIntelligenceSetupTests: XCTestCase {
 
+    func testTOPS04ModelSwitchEnqueuesOneReembedAndRetrievesWithModelB() async throws {
+        // T-OPS-04 expected RED: DocumentIntelligenceSetupController has no
+        // setReindexEnqueuer seam, so selecting model B cannot dispatch work.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic model-switch wire proof")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(
+                sha256: "tops04-orthogonal",
+                byteSize: 1,
+                originalExtension: "txt",
+                managedRelativePath: "blobs/tops04-orthogonal.txt"
+            )
+        ).blob
+        let aDocument = try insertExtractedDocument(
+            store: store,
+            matterID: matter.id,
+            blobID: blob.id,
+            name: "A-only Evidence.txt",
+            text: "A_VECTOR_CANARY belongs only to the first orthogonal branch."
+        )
+        let bDocument = try insertExtractedDocument(
+            store: store,
+            matterID: matter.id,
+            blobID: blob.id,
+            name: "B-only Evidence.txt",
+            text: "B_VECTOR_CANARY belongs only to the second orthogonal branch."
+        )
+        let modelA = DocumentEmbeddingModelRecord(
+            repoID: "synthetic/model-a",
+            localPath: "/tmp/tops04-a",
+            displayName: "Synthetic Model A",
+            dimension: 2,
+            runtimeFamily: "synthetic"
+        )
+        let modelB = DocumentEmbeddingModelRecord(
+            repoID: "synthetic/model-b",
+            localPath: "/tmp/tops04-b",
+            displayName: "Synthetic Model B",
+            dimension: 2,
+            runtimeFamily: "synthetic"
+        )
+        try store.documentSettings.upsertEmbeddingModel(modelA)
+        try store.documentSettings.upsertEmbeddingModel(modelB)
+        try store.documentSettings.selectEmbeddingModel(id: modelA.id)
+        _ = try await DocumentIndexingService(
+            store: store,
+            embedder: OrthogonalTestEmbedder(modelID: modelA.id, counter: EmbedCallCounter())
+        ).indexMatter(matterID: matter.id)
+
+        let modelBCalls = EmbedCallCounter()
+        let modelBEmbedder = OrthogonalTestEmbedder(modelID: modelB.id, counter: modelBCalls)
+        let importer = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: FileManager.default.temporaryDirectory
+                .appendingPathComponent("TOPS04-Storage-\(UUID().uuidString)", isDirectory: true)),
+            ocr: nil
+        )
+        let queue = DocumentProcessingQueue(
+            store: store,
+            importService: importer,
+            makeIndexingService: { DocumentIndexingService(store: store, embedder: modelBEmbedder) },
+            notifier: FakeNotifier(status: .denied)
+        )
+        let controller = DocumentIntelligenceSetupController(
+            store: store,
+            runtimeClient: SetupStubRuntimeClient(embeddingDimension: 2),
+            notifier: FakeNotifier(status: .denied),
+            capabilitiesProvider: { capableToolchain }
+        )
+        controller.setReindexEnqueuer { [weak queue] matterID in
+            _ = queue?.enqueueReindex(matterID: matterID)
+        }
+
+        controller.selectEmbeddingModel(id: modelB.id)
+
+        XCTAssertEqual(modelBCalls.value, 0, "model selection must not embed in the foreground")
+        XCTAssertEqual(try store.documentJobs.fetchJobs(matterID: matter.id).count, 1)
+        await queue.waitUntilIdle()
+        XCTAssertFalse(try store.documentIndex.fetchEmbeddings(
+            documentID: aDocument.id,
+            embeddingModelID: modelB.id
+        ).isEmpty)
+        XCTAssertFalse(try store.documentIndex.fetchEmbeddings(
+            documentID: bDocument.id,
+            embeddingModelID: modelB.id
+        ).isEmpty)
+
+        let result = try await DocumentRetrievalService(
+            store: store,
+            embedder: modelBEmbedder,
+            minSemanticSimilarity: 0.5
+        ).retrieve(
+            matterID: matter.id,
+            query: "NEUTRINO_Z9_QUERY",
+            scope: .wholeMatter
+        )
+        XCTAssertTrue(result.sources.contains {
+            $0.documentID == bDocument.id && !$0.ftsMatched && $0.semanticBucket != nil
+        })
+        XCTAssertFalse(result.sources.contains { $0.documentID == aDocument.id })
+    }
+
+    func testTOPS06ToolchainDriftMarksOnlyOlderLineageStaleWithoutReprocessing() throws {
+        // T-OPS-06 expected RED: refreshToolchain overwrites the stored version
+        // without comparing document lineage or marking the v1 document stale.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic converter drift")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(
+                sha256: "tops06-converter",
+                byteSize: 1,
+                originalExtension: "txt",
+                managedRelativePath: "blobs/tops06-converter.txt"
+            )
+        ).blob
+        let v1Document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "Converted Under V1.txt",
+            status: MatterDocumentStatus.ready.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            indexStatus: DocumentIndexStatus.ready.rawValue,
+            extractionMethod: "text@toolchain:v1"
+        ))
+        let v2Document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "Converted Under V2.txt",
+            status: MatterDocumentStatus.ready.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            indexStatus: DocumentIndexStatus.ready.rawValue,
+            extractionMethod: "text@toolchain:v2"
+        ))
+        try store.documentIndex.replaceParts(documentID: v1Document.id, parts: [
+            DocumentPagePartRecord(
+                documentID: v1Document.id,
+                partIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                normalizedText: "V1 sentinel text must survive drift detection.",
+                charCount: 46
+            ),
+        ])
+        try store.documentIndex.replaceParts(documentID: v2Document.id, parts: [
+            DocumentPagePartRecord(
+                documentID: v2Document.id,
+                partIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                normalizedText: "V2 current text remains ready.",
+                charCount: 30
+            ),
+        ])
+        try store.documentSettings.updateSettings { $0.converterToolchainVersion = "v1" }
+
+        let runtimeV2 = DocumentToolchainCapabilities(
+            version: "v2",
+            pdfText: true,
+            ocr: true,
+            nativeImageDecoding: true,
+            heicDecoding: true,
+            supportedFamilies: ["text"],
+            ocrLanguages: ["en-US"]
+        )
+        let controller = DocumentIntelligenceSetupController(
+            store: store,
+            runtimeClient: SetupStubRuntimeClient(embeddingDimension: 2),
+            notifier: FakeNotifier(status: .authorized),
+            capabilitiesProvider: { runtimeV2 }
+        )
+        controller.refreshToolchain()
+
+        XCTAssertEqual(
+            try store.documentLibrary.fetchDocument(id: v1Document.id)?.indexStatus,
+            DocumentIndexStatus.stale.rawValue
+        )
+        XCTAssertEqual(
+            try store.documentLibrary.fetchDocument(id: v2Document.id)?.indexStatus,
+            DocumentIndexStatus.ready.rawValue
+        )
+        XCTAssertEqual(
+            try store.auditEvents.fetchEvents(
+                relatedTable: "matter_documents",
+                relatedID: v1Document.id,
+                eventType: "document_converter_lineage_stale"
+            ).first?.summary,
+            "Converter toolchain changed from v1 to v2; document requires manual reprocessing."
+        )
+        XCTAssertEqual(
+            try store.documentIndex.fetchParts(documentID: v1Document.id).first?.normalizedText,
+            "V1 sentinel text must survive drift detection."
+        )
+        XCTAssertTrue(try store.documentJobs.fetchJobs(matterID: matter.id).isEmpty)
+    }
+
     func testSetupGatingBlocksThenCompletesWhenAllStepsPass() async throws {
         let store = try makeStore()
         let modelPath = try makeModelDirectory()
@@ -178,6 +371,65 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
             .appendingPathComponent("SetupModel-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url.path
+    }
+
+    private func insertExtractedDocument(
+        store: SupraStore,
+        matterID: String,
+        blobID: String,
+        name: String,
+        text: String
+    ) throws -> MatterDocumentRecord {
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matterID,
+            blobID: blobID,
+            displayName: name,
+            status: MatterDocumentStatus.indexing.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue
+        ))
+        try store.documentIndex.replaceParts(documentID: document.id, parts: [
+            DocumentPagePartRecord(
+                documentID: document.id,
+                partIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                normalizedText: text,
+                charCount: text.count
+            ),
+        ])
+        return document
+    }
+}
+
+private final class EmbedCallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.withLock { count }
+    }
+
+    func record(_ units: Int) {
+        lock.withLock { count += units }
+    }
+}
+
+private struct OrthogonalTestEmbedder: TextEmbedder {
+    let modelID: String
+    let counter: EmbedCallCounter
+    var modelRepoID: String { modelID }
+    var modelDisplayName: String { modelID }
+    let modelRevision: String? = nil
+    let dimension = 2
+
+    func embed(_ texts: [String]) async throws -> [[Float]] {
+        counter.record(texts.count)
+        return texts.map { text in
+            let normalized = text.uppercased()
+            if normalized.contains("B_VECTOR_CANARY") || normalized.contains("NEUTRINO_Z9_QUERY") {
+                return [1, 0]
+            }
+            return [0, 1]
+        }
     }
 }
 

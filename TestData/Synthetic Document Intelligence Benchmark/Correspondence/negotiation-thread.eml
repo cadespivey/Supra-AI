@@ -1,0 +1,39 @@
+From: Dana Quill <dquill@example.test>
+To: Morgan Vale <mvale@example.test>
+Subject: RE: Synthetic production schedule and omitted Exhibit G
+Date: Tue, 27 Jan 2026 14:22:00 -0500
+Bcc: Synthetic Audit <audit@example.test>
+Message-ID: <synthetic-thread-003@example.test>
+In-Reply-To: <synthetic-thread-002@example.test>
+References: <synthetic-thread-001@example.test> <synthetic-thread-002@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="SupraRelatedBoundary"
+
+--SupraRelatedBoundary
+Content-Type: text/html; charset=utf-8
+
+<html><body><pre>Morgan,
+
+The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists.
+
+[Inline chart: cid:synthetic-chart-001]
+
+--- Original Message ---
+From: Morgan Vale
+Sent: January 26, 2026
+Subject: Synthetic production schedule
+Please confirm the production deadline and complete exhibit set.</pre><img src="cid:synthetic-chart-001" alt="inline synthetic exhibit"></body></html>
+--SupraRelatedBoundary
+Content-Type: image/png; name="synthetic-chart.png"
+Content-ID: <synthetic-chart-001>
+Content-Disposition: inline; filename="synthetic-chart.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+--SupraRelatedBoundary
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="production-index.txt"
+Content-Transfer-Encoding: base64
+
+U1lOVEhFVElDIFBST0RVQ1RJT04gSU5ERVgKRXhoaWJpdHMgQS1GIHByb2R1Y2VkLiBFeGhpYml0IEcgaW50ZW50aW9uYWxseSBhYnNlbnQuIEV4aGliaXQgSCBwcm9kdWNlZC4=
+--SupraRelatedBoundary--

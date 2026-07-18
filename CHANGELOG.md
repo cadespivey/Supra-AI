@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.3.1] - 2026-07-18
+
+Document intelligence is now safer, more complete, and easier to audit from import through export.
+
+### Added
+
+- **Reviewable document structure** — DOCX, PDF, XLSX, and EML imports preserve legal-document
+  structure such as clauses, lists, tables, annotations, tracked changes, spreadsheet headers,
+  email headers, quoted replies, and attachment references. The document preview exposes the
+  extracted hierarchy and relationships alongside the ordinary source view.
+- **Recoverable, accountable imports** — interrupted imports resume after relaunch without
+  duplicating completed work, every selected source receives an explicit disposition, and locked
+  or unsupported files show the filename, stable failure code, and actionable recovery guidance.
+- **Immutable corrections and source lineage** — extracted text can be corrected without erasing
+  the original, citations remain bound to the exact revision used, and saved outputs retain their
+  source packet, model, prompt, verification, and staleness history.
+- **Human-reviewed document relationships** — exact copies, drafts, executed versions,
+  amendments, redlines, and superseded documents can be reviewed with structural evidence before
+  any version is treated as operative.
+- **Corpus-wide analysis safeguards** — resumable coverage ledgers, exhaustive list reconciliation,
+  independent verification dimensions, and explicit assurance states prevent failed, omitted, or
+  unreviewed material from being presented as a complete or clean result.
+
+### Changed
+
+- **Structure-aware retrieval is now the default** — Chunker v2 keeps related legal and tabular
+  units together, uses structural parent context, and retains an explicit Diagnostics rollback to
+  the legacy chunker. Existing matters are rebuilt once and saved citations remain displayable.
+- **Grounded output controls are stricter** — export eligibility follows persisted assurance,
+  source or configuration changes mark dependent outputs stale, tokenizer-aware packing fails
+  closed on context overflow, and grounded chat answers can be saved to Outputs atomically.
+- **Classification records their evidence** — classifications are append-only, model- and
+  revision-bound, and safely abstain when the evidence does not justify a label.
+
+### Fixed
+
+- **Verified model-manifest recovery** — a narrowly recognized legacy manifest misname is repaired
+  only after the manifest and every declared model artifact pass integrity verification.
+- **Document review accessibility** — correction, relation-review, citation-preview, import-failure,
+  and chunker rollback controls expose stable, full-size accessibility targets.
+
 ## [2.3.0] - 2026-07-15
 
 Download experience upgrade and a macOS 27 window fix.

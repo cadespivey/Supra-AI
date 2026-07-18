@@ -368,6 +368,87 @@
         "sourceFilename": "psa-4412-bayshore-executed.pdf"
       }
     ],
+    "taskKeys": {
+      "lists": [
+        {
+          "id": "ps-list-closing-adjustments",
+          "prompt": "List the material closing adjustments disclosed in the corpus.",
+          "expectedAnswer": "$7,500 seller closing-cost credit and $4,800 code-enforcement lien payoff.",
+          "evidence": [
+            {"sourceFilename": "addendum-no-1-financing-extension.docx", "locatorHint": "Section 2"},
+            {"sourceFilename": "closing-statement-settlement-sheet.xlsx", "locatorHint": "seller credit and lien-payoff rows"}
+          ]
+        }
+      ],
+      "chronology": [
+        {
+          "id": "ps-chron-contract-to-closing",
+          "prompt": "Order execution, addendum, title, inspection, loan commitment, contingency deadline, and closing.",
+          "expectedAnswer": "2026-02-27 PSA; 03-04 addendum; 03-05 title; 03-06 inspection; 03-11 loan commitment; 03-14 contingency deadline; 04-10 closing.",
+          "evidence": [
+            {"sourceFilename": "psa-4412-bayshore-executed.pdf", "locatorHint": "effective date, §7.2, and §9.1"},
+            {"sourceFilename": "addendum-no-1-financing-extension.docx", "locatorHint": "execution date"},
+            {"sourceFilename": "title-commitment-gulfstream.pdf", "locatorHint": "effective date"},
+            {"sourceFilename": "inspection-report-scanned.pdf", "locatorHint": "inspection date"},
+            {"sourceFilename": "financing-contingency-status.eml", "locatorHint": "commitment date and attachment"}
+          ]
+        }
+      ],
+      "comparisons": [
+        {
+          "id": "ps-compare-closing-dates",
+          "prompt": "Compare the contractual closing date with the email's asserted date.",
+          "expectedAnswer": "The PSA and Addendum set April 10, 2026; the lender email incorrectly says March 31, 2026.",
+          "evidence": [
+            {"sourceFilename": "psa-4412-bayshore-executed.pdf", "locatorHint": "§9.1"},
+            {"sourceFilename": "addendum-no-1-financing-extension.docx", "locatorHint": "closing-date confirmation"},
+            {"sourceFilename": "financing-contingency-status.eml", "locatorHint": "email body"}
+          ]
+        }
+      ],
+      "contradictions": [
+        {
+          "id": "ps-contradiction-closing-date",
+          "prompt": "Identify the closing-date contradiction.",
+          "expectedAnswer": "Controlling contract documents state April 10, while the lender email states March 31.",
+          "evidence": [
+            {"sourceFilename": "psa-4412-bayshore-executed.pdf", "locatorHint": "§9.1"},
+            {"sourceFilename": "financing-contingency-status.eml", "locatorHint": "closing-date sentence"}
+          ]
+        }
+      ],
+      "negatives": [
+        {
+          "id": "ps-negative-hoa-fee",
+          "prompt": "What HOA fee applies to the property?",
+          "expectedAnswer": "Not supported; the corpus gives no HOA membership or fee.",
+          "evidence": [
+            {"sourceFilename": "psa-4412-bayshore-executed.pdf", "locatorHint": "agreement contains no HOA term"}
+          ]
+        }
+      ],
+      "structures": [
+        {
+          "id": "ps-structure-cash-to-close",
+          "prompt": "Resolve the buyer's estimated cash to close using spreadsheet labels.",
+          "expectedAnswer": "$262,750 in the ESTIMATED CASH TO CLOSE FROM BUYER row.",
+          "evidence": [
+            {"sourceFilename": "closing-statement-settlement-sheet.xlsx", "locatorHint": "Settlement sheet cash-to-close row"}
+          ]
+        }
+      ],
+      "versions": [
+        {
+          "id": "ps-version-controlling-closing-terms",
+          "prompt": "Which documents control the closing date and seller credit?",
+          "expectedAnswer": "The executed PSA as supplemented by Addendum No. 1 controls; the unsupported MSG and inconsistent lender email do not amend it.",
+          "evidence": [
+            {"sourceFilename": "psa-4412-bayshore-executed.pdf", "locatorHint": "§9.1"},
+            {"sourceFilename": "addendum-no-1-financing-extension.docx", "locatorHint": "closing-date and credit provisions"}
+          ]
+        }
+      ]
+    },
     "courtListener": {
       "legalIssue": "Whether a buyer may obtain specific performance of a definite, signed Florida real-estate purchase and sale agreement where financing and inspection contingencies were timely satisfied and the seller repudiated, and the related question of whether recorded contract/property records implicate public-records access rather than copyright restriction.",
       "jurisdiction": "Florida (Supreme Court of Florida and District Courts of Appeal); 13th Judicial Circuit, Hillsborough County trial venue",

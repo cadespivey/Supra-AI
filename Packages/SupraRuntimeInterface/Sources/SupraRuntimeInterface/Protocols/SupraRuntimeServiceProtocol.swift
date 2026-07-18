@@ -13,6 +13,11 @@ public protocol SupraRuntimeServiceProtocol {
         reply: @escaping (GenerateStartResponse) -> Void
     )
 
+    func countTokens(
+        _ request: CountTokensRequest,
+        reply: @escaping (CountTokensResponse) -> Void
+    )
+
     func cancelGeneration(
         _ generationID: GenerationID,
         reply: @escaping (CancelGenerationResponse) -> Void

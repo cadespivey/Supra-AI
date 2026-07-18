@@ -12,6 +12,12 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
         "Return one short sentence confirming that local model inference is operational."
     private static let fixedSystemPrompt =
         "This is a local release validation. Reply briefly and do not repeat sensitive data."
+    private static let tokenizerPackets = [
+        "T-TOK-01 α.",
+        "B-CTX-01 deliberately longer synthetic packet: seven authorities, forty-three pages, zero client data.",
+        "§§ 12–14 — naïve façade; 2026-07-18.",
+    ]
+    private static let tokenizerCounts = [4, 23, 16]
     private static let generatedTokenCanary =
         "PRIVATE-GENERATED-TOKEN-CANARY-DO-NOT-ATTEST"
     private static let generatedTokenCount = 7
@@ -41,14 +47,37 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
 
         let attestation: SignedReleaseSmokeAttestation = try await runner.run()
 
-        XCTAssertEqual(client.calls, ["connect", "load", "generate", "unload"])
+        // Protected T-TOK-01 expected RED: the signed runner currently loads
+        // the model and generates without traversing the tokenizer RPC.
+        XCTAssertEqual(
+            client.calls,
+            [
+                "connect",
+                "load",
+                "countTokens",
+                "countTokens",
+                "countTokens",
+                "countTokens",
+                "generate",
+                "unload",
+            ]
+        )
         XCTAssertEqual(client.connectCallCount, 1)
         XCTAssertEqual(client.loadCallCount, 1)
+        XCTAssertEqual(client.countTokenCallCount, 4)
         XCTAssertEqual(client.generateCallCount, 1)
         XCTAssertEqual(client.unloadCallCount, 1)
 
         let request = try XCTUnwrap(client.generateRequests.first)
         let loadRequest = try XCTUnwrap(client.loadRequests.first)
+        XCTAssertEqual(
+            client.countTokenRequests.map(\.modelID),
+            Array(repeating: loadRequest.modelID, count: 4)
+        )
+        XCTAssertEqual(
+            client.countTokenRequests.map(\.texts),
+            [Self.tokenizerPackets] + Self.tokenizerPackets.map { [$0] }
+        )
         XCTAssertEqual(request.modelID, loadRequest.modelID)
         XCTAssertEqual(request.prompt, Self.fixedPrompt)
         XCTAssertEqual(request.systemPrompt, Self.fixedSystemPrompt)
@@ -179,10 +208,38 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
         XCTAssertNil(json.range(of: Self.generatedTokenCanary))
         XCTAssertNil(json.range(of: Self.fixedPrompt))
         XCTAssertNil(json.range(of: Self.fixedSystemPrompt))
+        for packet in Self.tokenizerPackets {
+            XCTAssertNil(json.range(of: packet))
+        }
         XCTAssertNil(json.range(of: fixture.modelDirectory.path))
         XCTAssertNil(json.range(of: "protected-release-weight-canary"))
         if let bookmark = loadRequest.modelBookmark?.base64EncodedString() {
             XCTAssertNil(json.range(of: bookmark))
+        }
+    }
+
+    func testTokenizerTransportAndContractFailuresRejectBeforeGenerationAndStillUnload() async throws {
+        // Protected T-TOK-01 expected RED: every case currently reaches
+        // generation because SignedReleaseSmokeRunner never calls countTokens.
+        for failure in TokenizerFailure.allCases {
+            let fixture = try makeFixture()
+            let authorization = try authorize(fixture)
+            let client = SignedSmokeRuntimeClientFake(
+                count: { request in try failure.response(for: request) },
+                stream: { request in Self.stream(events: Self.validEvents(for: request)) }
+            )
+            let runner = SignedReleaseSmokeRunner(
+                runtimeClient: client,
+                authorization: authorization,
+                metadata: metadata
+            )
+
+            let error = await capturedError { try await runner.run() }
+
+            XCTAssertNotNil(error, "\(failure) must fail closed")
+            XCTAssertGreaterThanOrEqual(client.countTokenCallCount, 1, "\(failure) must call the tokenizer")
+            XCTAssertEqual(client.generateCallCount, 0, "\(failure) must fail before generation")
+            XCTAssertEqual(client.unloadCallCount, 1, "\(failure) must still unload")
         }
     }
 
@@ -241,7 +298,20 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
         let error = await capturedError { try await runner.run() }
 
         XCTAssertNotNil(error)
-        XCTAssertEqual(client.calls, ["connect", "load", "generate", "cancel", "unload"])
+        XCTAssertEqual(
+            client.calls,
+            [
+                "connect",
+                "load",
+                "countTokens",
+                "countTokens",
+                "countTokens",
+                "countTokens",
+                "generate",
+                "cancel",
+                "unload",
+            ]
+        )
         XCTAssertEqual(client.cancelRequests, client.generateRequests.map(\.generationID))
         XCTAssertEqual(client.unloadCallCount, 1)
     }
@@ -269,7 +339,20 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
         let error = await capturedError { try await runner.run() }
 
         XCTAssertNotNil(error)
-        XCTAssertEqual(client.calls, ["connect", "load", "generate", "cancel", "unload"])
+        XCTAssertEqual(
+            client.calls,
+            [
+                "connect",
+                "load",
+                "countTokens",
+                "countTokens",
+                "countTokens",
+                "countTokens",
+                "generate",
+                "cancel",
+                "unload",
+            ]
+        )
         XCTAssertEqual(client.cancelCallCount, 1)
         XCTAssertEqual(client.cancelRequests, client.generateRequests.map(\.generationID))
         XCTAssertEqual(client.unloadCallCount, 1)
@@ -524,6 +607,27 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
             event(request, sequence: 3, type: .metrics, metrics: metrics),
             event(request, sequence: 4, type: .generationCompleted, metrics: metrics),
         ]
+    }
+
+    fileprivate static func validTokenCountResponse(
+        for request: CountTokensRequest
+    ) -> CountTokensResponse {
+        if request.texts == tokenizerPackets {
+            return CountTokensResponse(modelID: request.modelID, counts: tokenizerCounts)
+        }
+        if request.texts.count == 1,
+           let packet = request.texts.first,
+           let index = tokenizerPackets.firstIndex(of: packet) {
+            return CountTokensResponse(
+                modelID: request.modelID,
+                counts: [tokenizerCounts[index]]
+            )
+        }
+        return CountTokensResponse(
+            modelID: request.modelID,
+            counts: [],
+            error: RuntimeError(category: "test", message: "unexpected-tokenizer-packet")
+        )
     }
 
     private static func validGenerationMetrics(
@@ -803,10 +907,67 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
             )
         }
     }
+
+    private enum TokenizerFailure: CaseIterable, Sendable {
+        case transport
+        case wrongModel
+        case remoteError
+        case wrongCardinality
+        case zeroCount
+        case negativeCount
+        case batchSingleMismatch
+
+        func response(for request: CountTokensRequest) throws -> CountTokensResponse {
+            switch self {
+            case .transport:
+                throw SignedSmokeFakeError.countFailed
+            case .wrongModel:
+                return CountTokensResponse(
+                    modelID: ModelID(),
+                    counts: Self.validCounts(for: request)
+                )
+            case .remoteError:
+                return CountTokensResponse(
+                    modelID: request.modelID,
+                    counts: [],
+                    error: RuntimeError(category: "test", message: "count-error-canary")
+                )
+            case .wrongCardinality:
+                return CountTokensResponse(
+                    modelID: request.modelID,
+                    counts: Array(Self.validCounts(for: request).dropLast())
+                )
+            case .zeroCount:
+                return CountTokensResponse(
+                    modelID: request.modelID,
+                    counts: Array(repeating: 0, count: request.texts.count)
+                )
+            case .negativeCount:
+                return CountTokensResponse(
+                    modelID: request.modelID,
+                    counts: Array(repeating: -1, count: request.texts.count)
+                )
+            case .batchSingleMismatch:
+                let counts = Self.validCounts(for: request)
+                if request.texts == [SignedReleaseSmokeRunnerTests.tokenizerPackets[1]] {
+                    return CountTokensResponse(
+                        modelID: request.modelID,
+                        counts: [SignedReleaseSmokeRunnerTests.tokenizerCounts[1] + 1]
+                    )
+                }
+                return CountTokensResponse(modelID: request.modelID, counts: counts)
+            }
+        }
+
+        private static func validCounts(for request: CountTokensRequest) -> [Int] {
+            SignedReleaseSmokeRunnerTests.validTokenCountResponse(for: request).counts
+        }
+    }
 }
 
 private enum SignedSmokeFakeError: Error {
     case loadFailed
+    case countFailed
     case streamFailed
     case unloadFailed
 }
@@ -814,12 +975,14 @@ private enum SignedSmokeFakeError: Error {
 private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchecked Sendable {
     typealias Connect = @Sendable () throws -> Void
     typealias Load = @Sendable (LoadModelRequest) throws -> LoadModelResponse
+    typealias Count = @Sendable (CountTokensRequest) throws -> CountTokensResponse
     typealias Stream = @Sendable (GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error>
     typealias Unload = @Sendable () throws -> UnloadModelResponse
 
     private struct State {
         var calls: [String] = []
         var loadRequests: [LoadModelRequest] = []
+        var countTokenRequests: [CountTokensRequest] = []
         var generateRequests: [GenerateRequest] = []
         var cancelRequests: [GenerationID] = []
         var activeGenerationID: GenerationID?
@@ -829,6 +992,7 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
     private var state = State()
     private let connectHandler: Connect
     private let load: Load
+    private let count: Count
     private let stream: Stream
     private let unload: Unload
     private let unloadRequiresGenerationQuiescence: Bool
@@ -843,12 +1007,16 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
                 verifiedModelSHA256: request.contentBinding?.fingerprintSHA256
             )
         },
+        count: @escaping Count = { request in
+            SignedReleaseSmokeRunnerTests.validTokenCountResponse(for: request)
+        },
         stream: @escaping Stream,
         unload: @escaping Unload = { UnloadModelResponse(status: .unloaded) },
         unloadRequiresGenerationQuiescence: Bool = false
     ) {
         self.connectHandler = connect
         self.load = load
+        self.count = count
         self.stream = stream
         self.unload = unload
         self.unloadRequiresGenerationQuiescence = unloadRequiresGenerationQuiescence
@@ -868,6 +1036,14 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
 
     var loadRequests: [LoadModelRequest] {
         lock.withLock { state.loadRequests }
+    }
+
+    var countTokenCallCount: Int {
+        lock.withLock { state.countTokenRequests.count }
+    }
+
+    var countTokenRequests: [CountTokensRequest] {
+        lock.withLock { state.countTokenRequests }
     }
 
     var generateRequests: [GenerateRequest] {
@@ -901,6 +1077,14 @@ private final class SignedSmokeRuntimeClientFake: RuntimeClientProtocol, @unchec
             state.loadRequests.append(request)
         }
         return try load(request)
+    }
+
+    func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
+        lock.withLock {
+            state.calls.append("countTokens")
+            state.countTokenRequests.append(request)
+        }
+        return try count(request)
     }
 
     func generate(

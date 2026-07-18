@@ -7,6 +7,53 @@ import XCTest
 
 final class DocumentRetrievalTests: XCTestCase {
 
+    func testTOPS03ReadinessRequiresEmbeddingsForTheActiveModel() async throws {
+        // T-OPS-03 expected RED: a document whose index_status is `ready` is
+        // reported fully ready even when it has zero vectors for model B.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic active-model readiness")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(
+                sha256: "tops03-active-model",
+                byteSize: 1,
+                originalExtension: "txt",
+                managedRelativePath: "blobs/tops03-active-model.txt"
+            )
+        ).blob
+        let document = try makeDocument(
+            store,
+            matter.id,
+            blob.id,
+            nil,
+            "Active Model Evidence.txt",
+            "A nondefault semantic canary proves active-model readiness."
+        )
+        let modelA = FixedVectorEmbedder(modelID: "tops03-model-a", vector: [1, 0])
+        _ = try await DocumentIndexingService(store: store, embedder: modelA)
+            .indexMatter(matterID: matter.id)
+        XCTAssertFalse(try store.documentIndex.fetchEmbeddings(
+            documentID: document.id,
+            embeddingModelID: modelA.modelID
+        ).isEmpty)
+
+        let modelB = FixedVectorEmbedder(modelID: "tops03-model-b", vector: [0, 1])
+        let readiness = try DocumentRetrievalService(store: store, embedder: modelB)
+            .scopeReadiness(matterID: matter.id, scope: .wholeMatter)
+
+        XCTAssertFalse(readiness.isFullyReady)
+        XCTAssertEqual(readiness.readyDocuments, 0)
+        XCTAssertEqual(readiness.pendingDocuments, 1)
+        XCTAssertEqual(
+            try store.documentLibrary.fetchDocument(id: document.id)?.indexStatus,
+            DocumentIndexStatus.ready.rawValue,
+            "text/chunk readiness remains intact while model-B semantic readiness is pending"
+        )
+        XCTAssertTrue(try store.documentIndex.fetchEmbeddings(
+            documentID: document.id,
+            embeddingModelID: modelB.modelID
+        ).isEmpty)
+    }
+
     func testIndexingThenHybridRetrievalWithFiltersAndDuplicateCollapse() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme v. Roe")
@@ -109,6 +156,194 @@ final class DocumentRetrievalTests: XCTestCase {
             DocumentRetrievalService.expandedChunkText(current: chunks[1], inDocumentChunks: chunks + [otherPart]),
             "chunk0\n\nchunk1\n\nchunk2"
         )
+    }
+
+    func testTRET04V2TopKUsesDocumentDiversityWithoutChangingV1Order() async throws {
+        // T-RET-04 expected RED: fine-grained v2 chunks spend both top-two
+        // slots on document A, reproducing the benchmark's Recall@8 loss.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic v2 top-K diversity")
+        let blobA = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "tret04-a",
+            byteSize: 1,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/tret04-a.txt"
+        )).blob
+        let blobB = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "tret04-b",
+            byteSize: 1,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/tret04-b.txt"
+        )).blob
+        let documentA = try makeDocument(
+            store, matter.id, blobA.id, nil, "a.txt",
+            "DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE alpha. "
+                + "DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE beta."
+        )
+        let documentB = try makeDocument(
+            store, matter.id, blobB.id, nil, "b.txt", "DIVERSITY-WIRE gamma."
+        )
+
+        func install(version: Int) throws {
+            try store.documentIndex.replaceChunks(documentID: documentA.id, chunks: [
+                DocumentChunkRecord(
+                    id: "a1-v\(version)", documentID: documentA.id,
+                    chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
+                    normalizedText: "DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE alpha"
+                ),
+                DocumentChunkRecord(
+                    id: "a2-v\(version)", documentID: documentA.id,
+                    chunkerVersion: version, chunkIndex: 1, sourceKind: "text",
+                    normalizedText: "DIVERSITY-WIRE DIVERSITY-WIRE DIVERSITY-WIRE beta"
+                ),
+            ])
+            try store.documentIndex.replaceChunks(documentID: documentB.id, chunks: [
+                DocumentChunkRecord(
+                    id: "b1-v\(version)", documentID: documentB.id,
+                    chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
+                    normalizedText: "DIVERSITY-WIRE gamma"
+                ),
+            ])
+            try store.documentLibrary.updateIndexStatus(documentID: documentA.id, indexStatus: .textIndexed)
+            try store.documentLibrary.updateIndexStatus(documentID: documentB.id, indexStatus: .textIndexed)
+        }
+
+        try install(version: 2)
+        let v2 = try await DocumentRetrievalService(store: store).retrieve(
+            matterID: matter.id,
+            query: "DIVERSITY WIRE",
+            scope: .wholeMatter,
+            limit: 2
+        )
+        XCTAssertEqual(v2.sources.map(\.documentID), [documentA.id, documentB.id])
+        XCTAssertEqual(v2.sources.filter { $0.documentID == documentA.id }.count, 1)
+
+        try install(version: 1)
+        let v1 = try await DocumentRetrievalService(store: store).retrieve(
+            matterID: matter.id,
+            query: "DIVERSITY WIRE",
+            scope: .wholeMatter,
+            limit: 2
+        )
+        XCTAssertEqual(v1.sources.map(\.documentID), [documentA.id, documentA.id])
+        XCTAssertFalse(v1.sources.contains { $0.documentID == documentB.id })
+    }
+
+    func testTRET05V2AggregatesTwoStrongestChunksPerDocumentBeforeInterleaving() {
+        // T-RET-05 expected RED: the v2 order uses only each document's first
+        // raw-ranked chunk, so A incorrectly stays ahead of B even though B's
+        // two structural matches carry more combined evidence.
+        let v2Chunks = [
+            "a1": DocumentChunkRecord(
+                id: "a1", documentID: "document-a", chunkerVersion: 2,
+                chunkIndex: 0, sourceKind: "text", normalizedText: "A strongest"
+            ),
+            "b1": DocumentChunkRecord(
+                id: "b1", documentID: "document-b", chunkerVersion: 2,
+                chunkIndex: 0, sourceKind: "text", normalizedText: "B first"
+            ),
+            "b2": DocumentChunkRecord(
+                id: "b2", documentID: "document-b", chunkerVersion: 2,
+                chunkIndex: 1, sourceKind: "text", normalizedText: "B second"
+            ),
+        ]
+        let raw = [(key: "a1", value: 0.040), (key: "b1", value: 0.030), (key: "b2", value: 0.029)]
+        let names = ["document-a": "A.txt", "document-b": "B.txt"]
+
+        let v2 = DocumentRetrievalService.v2DocumentDiverseOrder(
+            raw,
+            chunksByID: v2Chunks,
+            documentNamesByID: names
+        )
+        XCTAssertEqual(v2.map(\.key), ["b1", "a1", "b2"])
+
+        let v1Chunks = v2Chunks.mapValues { chunk in
+            var legacy = chunk
+            legacy.chunkerVersion = 1
+            return legacy
+        }
+        let v1 = DocumentRetrievalService.v2DocumentDiverseOrder(
+            raw,
+            chunksByID: v1Chunks,
+            documentNamesByID: names
+        )
+        XCTAssertEqual(v1.map(\.key), ["a1", "b1", "b2"])
+    }
+
+    func testTRET06V2RetrievesTypedStructureIntentWithoutChangingV1LiteralSearch() async throws {
+        // T-RET-06 expected RED: only raw chunk text contributes candidates,
+        // so typed comment/table units whose text omits those labels disappear.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic typed structure intent")
+        let distractorBlob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "tret06-distractor",
+            byteSize: 1,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/tret06-distractor.txt"
+        )).blob
+        let structureBlob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "tret06-structure",
+            byteSize: 1,
+            originalExtension: "docx",
+            managedRelativePath: "blobs/tret06-structure.docx"
+        )).blob
+        let distractor = try makeDocument(
+            store, matter.id, distractorBlob.id, nil, "literal.txt", "comment table context"
+        )
+        let structured = try makeDocument(
+            store, matter.id, structureBlob.id, nil, "structured.docx",
+            "Reviewer asks whether business days apply. Amount 275000."
+        )
+
+        func install(version: Int) throws {
+            try store.documentIndex.replaceChunks(documentID: distractor.id, chunks: [
+                DocumentChunkRecord(
+                    id: "literal-v\(version)", documentID: distractor.id,
+                    unitKind: version == 2 ? DocumentStructureNodeKind.paragraph.rawValue : nil,
+                    chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
+                    normalizedText: "comment table context"
+                ),
+            ])
+            try store.documentIndex.replaceChunks(documentID: structured.id, chunks: [
+                DocumentChunkRecord(
+                    id: "comment-v\(version)", documentID: structured.id,
+                    unitKind: version == 2 ? DocumentStructureNodeKind.comment.rawValue : nil,
+                    chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
+                    normalizedText: "Reviewer asks whether business days apply"
+                ),
+                DocumentChunkRecord(
+                    id: "cell-v\(version)", documentID: structured.id,
+                    unitKind: version == 2 ? DocumentStructureNodeKind.tableCell.rawValue : nil,
+                    chunkerVersion: version, chunkIndex: 1, sourceKind: "text",
+                    normalizedText: "Amount 275000"
+                ),
+            ])
+            try store.documentLibrary.updateIndexStatus(documentID: distractor.id, indexStatus: .textIndexed)
+            try store.documentLibrary.updateIndexStatus(documentID: structured.id, indexStatus: .textIndexed)
+        }
+
+        try install(version: 2)
+        let v2 = try await DocumentRetrievalService(store: store).retrieve(
+            matterID: matter.id,
+            query: "Show the comment and table context",
+            scope: .wholeMatter,
+            limit: 3
+        )
+        XCTAssertEqual(v2.sources.first?.documentID, structured.id)
+        XCTAssertEqual(
+            Set(v2.sources.filter { $0.documentID == structured.id }.compactMap(\.unitKind)),
+            Set([DocumentStructureNodeKind.comment.rawValue, DocumentStructureNodeKind.tableCell.rawValue])
+        )
+
+        try install(version: 1)
+        let v1 = try await DocumentRetrievalService(store: store).retrieve(
+            matterID: matter.id,
+            query: "Show the comment and table context",
+            scope: .wholeMatter,
+            limit: 3
+        )
+        XCTAssertEqual(v1.sources.map(\.documentID), [distractor.id])
+        XCTAssertFalse(v1.sources.contains { $0.documentID == structured.id })
     }
 
     func testContextMetadataComposesTypeAndDate() {
@@ -214,5 +449,18 @@ private struct BagOfWordsEmbedder: TextEmbedder {
             hash = (hash ^ UInt64(byte)) &* 1099511628211
         }
         return Int(hash % 64)
+    }
+}
+
+private struct FixedVectorEmbedder: TextEmbedder {
+    let modelID: String
+    let vector: [Float]
+    var modelRepoID: String { modelID }
+    var modelDisplayName: String { modelID }
+    let modelRevision: String? = nil
+    var dimension: Int { vector.count }
+
+    func embed(_ texts: [String]) async throws -> [[Float]] {
+        texts.map { _ in vector }
     }
 }

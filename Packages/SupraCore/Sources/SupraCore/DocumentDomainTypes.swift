@@ -53,6 +53,7 @@ public enum DocumentProcessingPhase: String, Codable, CaseIterable, Hashable, Se
     case fullTextIndexing = "full_text_indexing"
     case semanticEmbedding = "semantic_embedding"
     case classifying
+    case analyzingCorpus = "analyzing_corpus"
     case finalizingReport = "finalizing_report"
     case complete
     case failed
@@ -92,16 +93,46 @@ public enum DocumentProcessingJobKind: String, Codable, CaseIterable, Hashable, 
     case process      // legacy import-or-reindex
     case classify     // classification phase only
     case reprocess    // re-extract named documents from their managed blobs
+    case corpusAnalysis = "corpus_analysis"
 }
 
 /// Status of an import batch.
 public enum DocumentImportBatchStatus: String, Codable, CaseIterable, Hashable, Sendable {
     case discovering
     case processing
+    case interrupted
     case complete
     case completeWithFailures = "complete_with_failures"
     case failed
     case cancelled
+}
+
+/// Incrementally persisted lifecycle of one selected or discovered import
+/// source. Raw values are the stable v059 database contract.
+public enum DocumentImportSourceState: String, Codable, CaseIterable, Hashable, Sendable {
+    case selected
+    case discovered
+    case validated
+    case copying
+    case admitted
+    case containerCompleted = "container_completed"
+    case rejected
+    case unsupportedByPolicy = "unsupported_by_policy"
+    case failed
+    case cancelled
+    case interrupted
+    case excludedHidden = "excluded_hidden"
+    case excludedByUser = "excluded_by_user"
+
+    public var isTerminal: Bool {
+        switch self {
+        case .selected, .discovered, .validated, .copying, .interrupted:
+            false
+        case .admitted, .containerCompleted, .rejected, .unsupportedByPolicy,
+             .failed, .cancelled, .excludedHidden, .excludedByUser:
+            true
+        }
+    }
 }
 
 /// Lifecycle of a source set attached to a generated output version.
@@ -116,6 +147,7 @@ public enum DocumentSourceSetMode: String, Codable, CaseIterable, Hashable, Send
     case autoSource = "auto_source"
     case guided
     case chronology
+    case exhaustive
 }
 
 /// Result of a single import-report line item, accounting for every discovered

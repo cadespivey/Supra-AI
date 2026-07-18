@@ -39,6 +39,76 @@ public final class GenerationRepository: @unchecked Sendable {
         }
     }
 
+    /// Persists the completed generation audit record for a document artifact.
+    /// A runtime model UUID is useful for diagnostics but is not stable lineage;
+    /// the repository/revision pair and prompt builder version are mandatory.
+    public func createDocumentGenerationSession(
+        modelID: String? = nil,
+        modelRepository: String,
+        modelRevision: String,
+        promptBuilderVersion: String,
+        prompt: String,
+        systemPrompt: String? = nil,
+        options: GenerationOptions
+    ) throws -> GenerationSessionRecord {
+        try createDocumentGenerationSession(
+            modelID: modelID,
+            modelRepository: modelRepository,
+            modelRevision: modelRevision,
+            promptBuilderVersion: promptBuilderVersion,
+            prompt: prompt,
+            systemPrompt: systemPrompt,
+            optionsJSON: JSONCoding.encode(options)
+        )
+    }
+
+    public func createDocumentGenerationSession(
+        modelID: String? = nil,
+        modelRepository: String,
+        modelRevision: String,
+        promptBuilderVersion: String,
+        prompt: String,
+        systemPrompt: String? = nil,
+        optionsJSON: String
+    ) throws -> GenerationSessionRecord {
+        let modelRepository = try Self.requireNonEmpty(
+            modelRepository,
+            fieldName: "model_repository"
+        )
+        let modelRevision = try Self.requireNonEmpty(
+            modelRevision,
+            fieldName: "model_revision"
+        )
+        let promptBuilderVersion = try Self.requireNonEmpty(
+            promptBuilderVersion,
+            fieldName: "prompt_builder_version"
+        )
+        let prompt = try Self.requireNonEmpty(prompt, fieldName: "prompt")
+        guard let optionsData = optionsJSON.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: optionsData)) != nil else {
+            throw GenerationRepositoryError.invalidOptionsJSON
+        }
+        return try writer.write { db in
+            let now = Date()
+            let record = GenerationSessionRecord(
+                modelID: modelID,
+                modelRepository: modelRepository,
+                modelRevision: modelRevision,
+                promptBuilderVersion: promptBuilderVersion,
+                prompt: prompt,
+                systemPrompt: systemPrompt,
+                optionsJSON: optionsJSON,
+                status: MessageStatus.completed.rawValue,
+                startedAt: now,
+                completedAt: now,
+                createdAt: now,
+                updatedAt: now
+            )
+            try record.insert(db)
+            return record
+        }
+    }
+
     public func linkVariant(generationID: String, variantID: String) throws {
         try writer.write { db in
             try db.execute(
@@ -79,6 +149,14 @@ public final class GenerationRepository: @unchecked Sendable {
                 arguments: [chatID]
             )
         }
+    }
+
+    private static func requireNonEmpty(_ value: String, fieldName: String) throws -> String {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            throw GenerationRepositoryError.requiredFieldMissing(fieldName)
+        }
+        return normalized
     }
 
     public func markFirstToken(generationID: String, date: Date = Date()) throws {
@@ -191,4 +269,9 @@ public final class GenerationRepository: @unchecked Sendable {
             )
         }
     }
+}
+
+public enum GenerationRepositoryError: Error, Equatable, Sendable {
+    case requiredFieldMissing(String)
+    case invalidOptionsJSON
 }

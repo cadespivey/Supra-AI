@@ -11,6 +11,7 @@ The required branch-protection checks are:
 - unsigned Debug and Release app/XPC builds
 - App UI and hosted XPC smoke
 - Shipping migration fixtures
+- Document benchmark deterministic gates
 - Website lint, build, audit, and asset guards
 - Secrets, entitlements, artifacts, models, and public metadata
 - Dependency review for pull requests
@@ -25,6 +26,25 @@ Live Hugging Face and public GitHub metadata checks are read-only and run on the
 security workflow. Pull requests run their offline or synthetic counterparts so an
 unrelated provider outage—or GitHub Support work on an existing hidden ref—cannot bypass or
 silently weaken the preventive gates. No workflow may fetch a prohibited public blob.
+
+Document-ingestion quality has a separate credential-free scheduled workflow,
+`.github/workflows/benchmarks.yml`, plus the pull-request
+`Document benchmark deterministic gates` job. Both run the SHA-frozen deterministic
+baseline and the fixed 10/50/200-document performance protocol on `macos-15`. The
+deterministic pass imports and indexes the synthetic corpus, exercises retrieval and
+matter-isolation probes, validates the baseline/threshold ledger, and fails if the canonical
+report drifts after removing only the run timestamp and current checkout SHA. The performance
+pass records fast/deep retrieval, exhaustive-ledger and structure-write p50/p95, import/index
+throughput, peak RSS, and one-document incremental rows/bytes/work. It immediately fails when
+incremental work touches any unaffected document.
+
+The repo owner approved the fixed-hardware B-PERF envelope on July 18, 2026: a 10% latency
+regression ceiling, a 10% throughput regression floor, a 48 MiB peak-RSS ceiling, a 25%
+incremental wall-time regression ceiling, and zero unaffected documents touched.
+`Scripts/run-benchmarks.sh --performance-release-gate` enforces that complete envelope.
+Comparisons are valid only when hardware identifier, macOS, Xcode, Swift, thermal state, and
+protocol exactly match the recorded baseline. GitHub-hosted runs therefore remain safety gates
+unless they match the approved release-candidate environment.
 
 ## Third-party Action pins and licenses
 

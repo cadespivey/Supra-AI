@@ -77,7 +77,10 @@ final class ModelRoutingTests: XCTestCase {
         XCTAssertEqual(skeleton?.role, .drafting)
         XCTAssertEqual(skeleton?.modelIdentifier, "Drafter")
 
-        for type in [StructuredOutputType.documentQA, .documentQAMemo, .factChronologyTable, .factChronologyNarrative] {
+        for type in [
+            StructuredOutputType.documentQA, .documentQAMemo, .documentExhaustiveList,
+            .factChronologyTable, .factChronologyNarrative,
+        ] {
             let route = router.route(forStructuredOutput: type)
             XCTAssertEqual(route?.role, .legalReasoning)
             XCTAssertEqual(route?.modelIdentifier, "Reasoner")

@@ -30,6 +30,8 @@ protocol ChatModelController: Sendable {
         onToken: @escaping @Sendable (String) async -> Void
     ) async throws -> RuntimeMetrics
 
+    func countTokens(texts: [String]) async throws -> [Int]
+
     func cancel() async
     func unload() async throws
 }
@@ -255,6 +257,22 @@ actor MLXModelController: ChatModelController {
             contextTrimmed: contextTrimmed,
             contextOverflowed: contextOverflowed
         )
+    }
+
+    func countTokens(texts: [String]) async throws -> [Int] {
+#if DEBUG
+        if isLifecycleTestModel {
+            return texts.map(TokenBudgeter.fallbackTokenCount)
+        }
+#endif
+        guard let container else {
+            throw MLXModelControllerError.modelNotLoaded
+        }
+        return await container.perform { context in
+            texts.map { text in
+                context.tokenizer.encode(text: text, addSpecialTokens: true).count
+            }
+        }
     }
 
     func cancel() async {

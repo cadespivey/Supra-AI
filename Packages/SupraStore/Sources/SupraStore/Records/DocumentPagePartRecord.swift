@@ -21,6 +21,8 @@ public struct DocumentPagePartRecord: Codable, FetchableRecord, PersistableRecor
     public var charCount: Int
     public var ocrConfidence: Double?
     public var boundingBoxesJSON: String?
+    public var currentRevisionID: String?
+    public var currentSelectionID: String?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -38,6 +40,8 @@ public struct DocumentPagePartRecord: Codable, FetchableRecord, PersistableRecor
         charCount: Int = 0,
         ocrConfidence: Double? = nil,
         boundingBoxesJSON: String? = nil,
+        currentRevisionID: String? = nil,
+        currentSelectionID: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -54,6 +58,8 @@ public struct DocumentPagePartRecord: Codable, FetchableRecord, PersistableRecor
         self.charCount = charCount
         self.ocrConfidence = ocrConfidence
         self.boundingBoxesJSON = boundingBoxesJSON
+        self.currentRevisionID = currentRevisionID
+        self.currentSelectionID = currentSelectionID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -72,6 +78,8 @@ public struct DocumentPagePartRecord: Codable, FetchableRecord, PersistableRecor
         case charCount = "char_count"
         case ocrConfidence = "ocr_confidence"
         case boundingBoxesJSON = "bounding_boxes_json"
+        case currentRevisionID = "current_revision_id"
+        case currentSelectionID = "current_selection_id"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }

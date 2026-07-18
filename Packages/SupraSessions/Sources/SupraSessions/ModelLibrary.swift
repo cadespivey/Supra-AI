@@ -100,6 +100,12 @@ public final class ModelLibrary: ObservableObject {
         return models.first { $0.id == modelID }
     }
 
+    /// Returns the verified, stable artifact identity used by document-output
+    /// lineage. A loaded runtime UUID alone is intentionally insufficient.
+    public func generationLineage(for modelID: ModelID) -> DocumentGenerationModelLineage? {
+        DocumentGenerationModelLineage.resolve(modelID: modelID, store: store)
+    }
+
     public func preferredModelID(
         for role: ModelRole,
         configuration: LegalModelConfiguration = .fromEnvironment()
@@ -419,10 +425,16 @@ public final class ModelLibrary: ObservableObject {
         }
 
         if ManagedModelStorage.isManaged(path: record.path, roots: managedModelRoots) {
+            let modelDirectory = URL(fileURLWithPath: record.path, isDirectory: true)
             do {
-                _ = try ManagedModelStorage.loadVerifiedManifest(
-                    at: URL(fileURLWithPath: record.path, isDirectory: true)
-                )
+                do {
+                    _ = try ManagedModelStorage.loadVerifiedManifest(at: modelDirectory)
+                } catch ManagedModelIntegrityError.manifestMissing {
+                    guard ManagedModelStorage.hasRecoverableMisnamedManifest(in: modelDirectory) else {
+                        throw ManagedModelIntegrityError.manifestMissing
+                    }
+                    _ = try ManagedModelStorage.repairMisnamedManifest(in: modelDirectory)
+                }
             } catch {
                 loadState = .failed(message: error.localizedDescription)
                 return

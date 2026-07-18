@@ -9,6 +9,162 @@ import XCTest
 
 @MainActor
 final class DocumentChronologyTests: XCTestCase {
+    private static let syntheticModelLineage = DocumentGenerationModelLineage(
+        modelRepository: "synthetic/chronology-runtime",
+        modelRevision: "chronology-revision-nondefault"
+    )
+
+    func testTENG13ChronologyPersistsCoverageAndPassAuditWithoutChangingVisibleOutput() async throws {
+        // Expected RED: DocumentChronologyController has no lastCorpusRunID and
+        // the existing private orchestration never persists a chronology corpus
+        // run, coverage denominator, dropped-source ledger, or per-pass audit.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic chronology parity")
+        try await indexDoc(store, matter.id, nil, "amended-complaint.txt", "McKernon Motors amended complaint filed 2023-11-02.")
+        try await indexDoc(store, matter.id, nil, "brake-failure-analysis.txt", "Brake failure analysis dated 2023-11-05.")
+        try await indexDoc(store, matter.id, nil, "correspondence-liberty-rail.txt", "Correspondence with Liberty Rail on 2023-11-09.")
+        try await indexDoc(store, matter.id, nil, "deposition-calloway.txt", "Deposition of Calloway taken 2023-11-14.")
+        try await indexDoc(store, matter.id, nil, "expert-report-metallurgy.txt", "Metallurgy expert report dated 2023-11-20.")
+        try await indexDoc(store, matter.id, nil, "warranty-terms-mckernon.txt", "Warranty terms executed 2023-11-27.")
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "| Date | Event | Source |\n| 2023-11-02 | Complaint filed [S1] | [S1] |"),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime, maxSources: 3)
+        let result = try XCTUnwrapAsync(await chronology.generate(
+            scope: .wholeMatter,
+            format: .table,
+            modelID: ModelID(),
+            modelLineage: DocumentGenerationModelLineage(
+                modelRepository: "synthetic/chronology-runtime",
+                modelRevision: "chronology-revision-nondefault"
+            )
+        ))
+
+        let expectedMarkdown = """
+        > ⚠️ **DOCUMENT SUPPORT NEEDS REVIEW — DO NOT RELY.** Proposition document-proposition-1 came from an incompletely indexed scope. Generated from an incompletely indexed scope.
+
+        > ⚠️ **CHRONOLOGY NEEDS REVIEW — DO NOT RELY.** One or more extraction passes omitted source labels; their dated facts may be uncovered.
+
+        | Date | Event | Source |
+        |---|---|---|
+        | 2023-11-02 | Complaint filed [S1] | [S1] |
+
+        ## Sources
+        - **[S1]** amended-complaint.txt — chars 0–51
+          > McKernon Motors amended complaint filed 2023-11-02.
+        - **[S2]** brake-failure-analysis.txt — chars 0–40
+          > Brake failure analysis dated 2023-11-05.
+        - **[S3]** correspondence-liberty-rail.txt — chars 0–47
+          > Correspondence with Liberty Rail on 2023-11-09.
+        """
+        let expectedMessage = "Chronology covers 3 of 6 dated sources; omitted to fit the model's budget: deposition-calloway.txt, expert-report-metallurgy.txt, warranty-terms-mckernon.txt. Narrow the scope or date range for full coverage."
+        XCTAssertEqual(result.markdown, expectedMarkdown, "ledger adoption must preserve chronology markdown byte-for-byte")
+        XCTAssertEqual(chronology.message, expectedMessage, "ledger adoption must preserve the existing UI coverage string")
+        let version = try XCTUnwrap(store.structuredOutputs.fetchVersion(id: result.versionID))
+        let generationID = try XCTUnwrap(version.generationSessionID, "T-LIN-03: chronology versions carry generation lineage")
+        let generation = try XCTUnwrap(store.generation.fetchGenerationSession(generationID: generationID))
+        XCTAssertEqual(generation.modelRepository, "synthetic/chronology-runtime")
+        XCTAssertEqual(generation.modelRevision, "chronology-revision-nondefault")
+        XCTAssertEqual(generation.promptBuilderVersion, "document-chronology-v1")
+        XCTAssertEqual(version.promptBuilderVersion, "document-chronology-v1")
+        XCTAssertEqual(version.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+        XCTAssertTrue(generation.optionsJSON.contains("maxOutputTokens"))
+
+        let runID = try XCTUnwrap(chronology.lastCorpusRunID)
+        let run = try XCTUnwrap(store.corpusAnalysis.fetchRun(matterID: matter.id, id: runID))
+        XCTAssertEqual(run.taskKind, CorpusAnalysisTaskKind.chronology.rawValue)
+        XCTAssertEqual(run.status, CorpusAnalysisRunStatus.persisted.rawValue)
+        XCTAssertEqual(run.structuredOutputVersionID, result.versionID)
+        XCTAssertEqual(run.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+        let sourceSet = try XCTUnwrap(store.documentSources.fetchSourceSet(structuredOutputVersionID: result.versionID))
+        XCTAssertNotNil(sourceSet.embeddingModelID, "T-LIN-01: chronology source sets stamp embedding lineage")
+        XCTAssertNotNil(sourceSet.embeddingModelRevision)
+        XCTAssertNotNil(sourceSet.chunkerVersion)
+        XCTAssertNotNil(sourceSet.retrievalConfigJSON)
+        XCTAssertNotNil(sourceSet.corpusSnapshotHash)
+        XCTAssertNotNil(sourceSet.packingReportJSON)
+
+        let coverage = try JSONDecoder().decode(
+            CorpusAnalysisCoverage.self,
+            from: Data(try XCTUnwrap(run.coverageJSON).utf8)
+        )
+        XCTAssertEqual(coverage.snapshotMemberCount, 6)
+        XCTAssertEqual(coverage.eligibleMemberCount, 3)
+        XCTAssertEqual(coverage.excludedMemberCount, 3)
+        XCTAssertEqual(coverage.partitionCount, 3)
+        XCTAssertEqual(coverage.succeededPartitionCount, 3)
+        XCTAssertEqual(coverage.pendingPartitionCount, 0)
+        XCTAssertEqual(coverage.balanceErrorCount, 0)
+
+        let ledger = try JSONDecoder().decode(
+            ChronologyLedgerReconciliationTestRecord.self,
+            from: Data(try XCTUnwrap(run.reconciliationJSON).utf8)
+        )
+        XCTAssertEqual(ledger.droppedCount, 3)
+        XCTAssertEqual(
+            ledger.omittedDocumentNames,
+            ["deposition-calloway.txt", "expert-report-metallurgy.txt", "warranty-terms-mckernon.txt"]
+        )
+        XCTAssertEqual(ledger.passes.count, 1)
+        XCTAssertEqual(ledger.passes[0].sourceLabels, ["S1", "S2", "S3"])
+        XCTAssertTrue(ledger.passes[0].coverageGap)
+    }
+
+    func testTENG14ChronologyCancelDiscardsOutputAndBalancesCancelledRunLedger() async throws {
+        // Expected RED: cancellation currently discards output rows but creates
+        // no durable run or partition ledger, so lastCorpusRunID is unavailable
+        // and no cancelled/succeeded terminal accounting can be asserted.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic chronology cancellation")
+        try await seedBrakeFilings(store, matter.id, count: 20)
+        let secondPassStarted = expectation(description: "second chronology pass began streaming")
+        let chronology = DocumentChronologyController(
+            matterID: matter.id,
+            store: store,
+            runtimeClient: HangingSecondCallRuntimeClient(secondCallStarted: secondPassStarted)
+        )
+
+        let generation = Task {
+            await chronology.generate(
+                scope: .wholeMatter,
+                format: .table,
+                modelID: ModelID(),
+                modelLineage: Self.syntheticModelLineage,
+                route: Self.tinyBatchRoute()
+            )
+        }
+        await fulfillment(of: [secondPassStarted], timeout: 5)
+        let runID = try XCTUnwrap(chronology.lastCorpusRunID)
+        chronology.cancel()
+        let result = await generation.value
+
+        XCTAssertNil(result)
+        XCTAssertEqual(chronology.message, "Chronology generation was cancelled.")
+        XCTAssertTrue(try store.structuredOutputs.fetchOutputs(matterID: matter.id).isEmpty)
+        XCTAssertTrue(try store.documentSources.fetchSourceSets(matterID: matter.id).isEmpty)
+
+        let run = try XCTUnwrap(store.corpusAnalysis.fetchRun(matterID: matter.id, id: runID))
+        XCTAssertEqual(run.status, CorpusAnalysisRunStatus.cancelled.rawValue)
+        XCTAssertNil(run.structuredOutputVersionID)
+        let coverage = try JSONDecoder().decode(
+            CorpusAnalysisCoverage.self,
+            from: Data(try XCTUnwrap(run.coverageJSON).utf8)
+        )
+        XCTAssertEqual(coverage.pendingPartitionCount, 0)
+        XCTAssertEqual(coverage.terminalPartitionCount, coverage.partitionCount)
+        XCTAssertGreaterThan(coverage.succeededPartitionCount, 0)
+        XCTAssertGreaterThan(coverage.cancelledPartitionCount, 0)
+        XCTAssertEqual(coverage.balanceErrorCount, 0)
+
+        let partitions = try store.corpusAnalysis.fetchPartitions(matterID: matter.id, runID: runID)
+        XCTAssertFalse(partitions.isEmpty)
+        XCTAssertTrue(partitions.allSatisfy {
+            $0.disposition != CorpusAnalysisPartitionDisposition.pending.rawValue
+        })
+    }
 
     func testTableChronologyUsesScopeOnlyDatedFactsWithCitations() async throws {
         let store = try makeStore()
@@ -30,7 +186,7 @@ final class DocumentChronologyTests: XCTestCase {
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
         // Narrative from the Notes folder only: must not include the contract date.
-        let notesResult = try XCTUnwrapAsync(await chronology.generate(scope: RetrievalScope(folderIDs: [notes.id]), format: .narrative, modelID: ModelID()))
+        let notesResult = try XCTUnwrapAsync(await chronology.generate(scope: RetrievalScope(folderIDs: [notes.id]), format: .narrative, modelID: ModelID(), modelLineage: Self.syntheticModelLineage))
         XCTAssertEqual(notesResult.status, StructuredOutputStatus.complete.rawValue)
         // The source set for the notes-only chronology references only the notes doc.
         let notesSources = try store.documentSources.fetchSources(structuredOutputVersionID: notesResult.versionID)
@@ -39,7 +195,7 @@ final class DocumentChronologyTests: XCTestCase {
         XCTAssertTrue(notesSources.allSatisfy { $0.documentID == notesDoc.id })
 
         // Whole-matter table chronology references both documents.
-        let allResult = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID()))
+        let allResult = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage))
         let allOutput = try XCTUnwrap(store.structuredOutputs.fetchOutputs(matterID: matter.id).first { $0.id == allResult.outputID })
         XCTAssertEqual(allOutput.outputType, StructuredOutputType.factChronologyTable.rawValue)
         let allSources = try store.documentSources.fetchSources(structuredOutputVersionID: allResult.versionID)
@@ -55,9 +211,9 @@ final class DocumentChronologyTests: XCTestCase {
         })
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
-        let first = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+        let first = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         let firstResult = try XCTUnwrap(first)
-        let regen = await chronology.regenerate(outputID: firstResult.outputID, modelID: ModelID())
+        let regen = await chronology.regenerate(outputID: firstResult.outputID, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         let regenResult = try XCTUnwrap(regen)
 
         // Same output, new version, with its own attached source set.
@@ -81,7 +237,7 @@ final class DocumentChronologyTests: XCTestCase {
         })
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
-        let generated = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+        let generated = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
 
         XCTAssertNotNil(generated)
     }
@@ -100,7 +256,7 @@ final class DocumentChronologyTests: XCTestCase {
         })
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
-        let generated = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+        let generated = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         let result = try XCTUnwrap(generated)
         XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue)
         let version = try XCTUnwrap(try store.structuredOutputs.fetchVersions(structuredOutputID: result.outputID).first)
@@ -163,7 +319,7 @@ final class DocumentChronologyTests: XCTestCase {
         // Default maxSources (1,000) — the corrected safety cap under test.
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
-        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID()))
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage))
 
         let docCount = try store.documentLibrary.fetchDocuments(matterID: matter.id).count
         let sources = try store.documentSources.fetchSources(structuredOutputVersionID: result.versionID)
@@ -210,7 +366,7 @@ final class DocumentChronologyTests: XCTestCase {
 
         // Unwrapping the result proves generation actually ran (and set `message` via
         // the real omission path) instead of bailing early into an unrelated message.
-        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID()))
+        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage))
 
         let message = try XCTUnwrap(chronology.message)
         // "deposition-calloway.txt" is the first omitted document (4th alphabetically).
@@ -243,7 +399,7 @@ final class DocumentChronologyTests: XCTestCase {
         let log = PromptLog()
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: log))
 
-        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()))
 
         XCTAssertGreaterThan(log.prompts.count, 1, "a packet past the serialized-size budget must run multiple map passes")
         let markdown = result.markdown
@@ -266,7 +422,7 @@ final class DocumentChronologyTests: XCTestCase {
         let log = PromptLog()
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: log))
 
-        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()))
 
         let mapPrompts = log.prompts.filter { $0.contains("BEGIN_UNTRUSTED_SOURCE_DATA") }
         XCTAssertGreaterThan(mapPrompts.count, 1, "the packet must be split across multiple map passes")
@@ -293,7 +449,7 @@ final class DocumentChronologyTests: XCTestCase {
         let log = PromptLog()
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: log))
 
-        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID(), route: Self.tinyBatchRoute()))
+        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()))
 
         XCTAssertGreaterThan(log.prompts.count, 1, "narrative over a multi-batch packet needs map passes plus one synthesis pass")
         let synthesis = try XCTUnwrap(log.prompts.last, "no generate call recorded")
@@ -315,7 +471,7 @@ final class DocumentChronologyTests: XCTestCase {
         let runtime = HangingSecondCallRuntimeClient(secondCallStarted: secondPassStarted)
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
-        let generation = Task { await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()) }
+        let generation = Task { await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()) }
         // The runtime double hangs its second stream, so the controller is
         // provably suspended inside batch 2 when the cancel lands.
         await fulfillment(of: [secondPassStarted], timeout: 5)
@@ -345,7 +501,7 @@ final class DocumentChronologyTests: XCTestCase {
 
         let generation = Task { () -> DocumentQAController.QAResult? in
             defer { callerCancellationFinished.fulfill() }
-            return await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute())
+            return await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute())
         }
         await fulfillment(of: [secondPassStarted], timeout: 5)
 
@@ -375,7 +531,7 @@ final class DocumentChronologyTests: XCTestCase {
         try await seedBrakeFilings(store, matter.id, count: 20)
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: PromptLog()))
 
-        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()))
 
         XCTAssertTrue(
             result.markdown.contains("| 2024-01-20 | Brake filing 20 recorded"),
@@ -404,7 +560,7 @@ final class DocumentChronologyTests: XCTestCase {
             runtimeClient: Self.batchScriptedRuntime(log: PromptLog(), appendMalformedRowsToFinalBatch: true)
         )
 
-        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()))
 
         XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue, "dropped model output must force review")
         XCTAssertTrue(
@@ -437,7 +593,7 @@ final class DocumentChronologyTests: XCTestCase {
         let log = PromptLog()
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: log))
 
-        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID()))
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage))
 
         XCTAssertEqual(log.prompts.count, 1, "a packet within one batch budget must remain a single pass")
         XCTAssertEqual(result.status, StructuredOutputStatus.complete.rawValue)
@@ -465,7 +621,7 @@ final class DocumentChronologyTests: XCTestCase {
             runtimeClient: Self.batchScriptedRuntime(log: log)
         )
 
-        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: route))
+        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: route))
 
         let promptTokenBudget = PromptBudget.promptTokenBudget(
             maxContextTokens: route.options.maxContextTokens,
@@ -500,7 +656,10 @@ final class DocumentChronologyTests: XCTestCase {
             mode: .legalResearch,
             role: .legalReasoning,
             modelIdentifier: "synthetic-ordering-model",
-            options: GenerationOptions(preset: .extractive, maxContextTokens: 768, maxOutputTokens: 128),
+            // The exact budget now reserves the full output plus the 256-token
+            // chat-template margin. 1,024 keeps one serialized source safe while
+            // still forcing the two documents into separate map passes.
+            options: GenerationOptions(preset: .extractive, maxContextTokens: 1_024, maxOutputTokens: 128),
             requiresCourtListener: false,
             requiresCitations: true,
             requiresJurisdiction: false,
@@ -514,7 +673,7 @@ final class DocumentChronologyTests: XCTestCase {
             runtimeClient: Self.batchScriptedRuntime(log: log)
         )
 
-        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: route))
+        _ = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: route))
 
         let prompts = log.prompts
         XCTAssertEqual(prompts.count, 2, "the tiny serialized budget should place one document in each map pass")
@@ -541,13 +700,13 @@ final class DocumentChronologyTests: XCTestCase {
         let runtime = HangingSecondCallRuntimeClient(secondCallStarted: secondPassStarted)
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
-        let liveRun = Task { await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()) }
+        let liveRun = Task { await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()) }
         await fulfillment(of: [secondPassStarted], timeout: 5)
         // Re-entrant call while the live run is suspended mid-batch-2 (the
         // realistic double-click window). Launched concurrently — a compliant
         // fix may either bounce immediately or await the live run, and a
         // sequential await here would deadlock against the later cancel().
-        let reentrant = Task { await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()) }
+        let reentrant = Task { await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()) }
         // Let the re-entrant call reach the controller before cancelling.
         await Task.yield()
         chronology.cancel()
@@ -587,7 +746,7 @@ final class DocumentChronologyTests: XCTestCase {
         })
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
-        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()))
 
         XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue, "a map pass that yielded no usable rows must force review")
         XCTAssertTrue(
@@ -630,7 +789,7 @@ final class DocumentChronologyTests: XCTestCase {
         })
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
-        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()))
 
         XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue)
         XCTAssertTrue(
@@ -667,7 +826,7 @@ final class DocumentChronologyTests: XCTestCase {
         })
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
-        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()))
 
         XCTAssertTrue(
             result.markdown.contains("| 2024-01-01 | Brake filing 1 recorded [S1] [S20]"),
@@ -705,7 +864,7 @@ final class DocumentChronologyTests: XCTestCase {
         })
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
-        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), route: Self.tinyBatchRoute()))
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()))
 
         // No silent label removal: the union stays visible in the merged row
         // (a standing guard that remains green after the fix).
@@ -731,7 +890,7 @@ final class DocumentChronologyTests: XCTestCase {
         try await seedBrakeFilings(store, matter.id, count: 20)
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: Self.batchScriptedRuntime(log: PromptLog()))
 
-        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID(), route: Self.tinyBatchRoute()))
+        let result = try XCTUnwrapAsync(await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID(), modelLineage: Self.syntheticModelLineage, route: Self.tinyBatchRoute()))
 
         XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue, "silent narrative omission must force review")
         XCTAssertTrue(
@@ -769,7 +928,7 @@ final class DocumentChronologyTests: XCTestCase {
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
         let result = try XCTUnwrapAsync(
-            await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID())
+            await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         )
 
         XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue)
@@ -802,7 +961,7 @@ final class DocumentChronologyTests: XCTestCase {
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
         let result = try XCTUnwrapAsync(
-            await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+            await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         )
 
         XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue)
@@ -826,7 +985,7 @@ final class DocumentChronologyTests: XCTestCase {
         )
 
         _ = try XCTUnwrapAsync(
-            await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID())
+            await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         )
 
         XCTAssertEqual(log.prompts.count, 2, "narrative completeness requires a parseable map pass and a bounded synthesis pass")
@@ -866,7 +1025,7 @@ final class DocumentChronologyTests: XCTestCase {
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
         let result = try XCTUnwrapAsync(
-            await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+            await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         )
 
         XCTAssertEqual(log.prompts.count, 2)
@@ -907,7 +1066,7 @@ final class DocumentChronologyTests: XCTestCase {
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
         let result = try XCTUnwrapAsync(
-            await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID())
+            await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         )
 
         let mapPrompts = log.prompts.filter { $0.contains("extracting dated facts") }
@@ -957,7 +1116,7 @@ final class DocumentChronologyTests: XCTestCase {
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
         let result = try XCTUnwrapAsync(
-            await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID())
+            await chronology.generate(scope: .wholeMatter, format: .narrative, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         )
 
         let synthesisPrompts = log.prompts.filter { $0.contains("MERGED ENTRIES:") }
@@ -979,10 +1138,10 @@ final class DocumentChronologyTests: XCTestCase {
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
         let liveRun = Task {
-            await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+            await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         }
         await fulfillment(of: [firstCallStarted], timeout: 5)
-        let rejected = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+        let rejected = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         XCTAssertNil(rejected)
         runtime.finishSuccessfully()
         let result = await liveRun.value
@@ -1023,7 +1182,7 @@ final class DocumentChronologyTests: XCTestCase {
         })
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: runtime)
 
-        let result = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+        let result = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
 
         XCTAssertNil(result)
         XCTAssertTrue(try store.structuredOutputs.fetchOutputs(matterID: matter.id).isEmpty)
@@ -1161,6 +1320,28 @@ final class DocumentChronologyTests: XCTestCase {
 
 /// Thread-safe capture of every prompt the controller sends, for call-count and
 /// per-batch label assertions.
+private struct ChronologyLedgerReconciliationTestRecord: Decodable {
+    struct Pass: Decodable {
+        var sourceLabels: [String]
+        var coverageGap: Bool
+
+        private enum CodingKeys: String, CodingKey {
+            case sourceLabels = "source_labels"
+            case coverageGap = "coverage_gap"
+        }
+    }
+
+    var droppedCount: Int
+    var omittedDocumentNames: [String]
+    var passes: [Pass]
+
+    private enum CodingKeys: String, CodingKey {
+        case droppedCount = "dropped_count"
+        case omittedDocumentNames = "omitted_document_names"
+        case passes
+    }
+}
+
 private final class PromptLog: @unchecked Sendable {
     private let lock = NSLock()
     private var _prompts: [String] = []

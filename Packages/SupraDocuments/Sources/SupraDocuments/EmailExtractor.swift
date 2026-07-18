@@ -49,6 +49,12 @@ public struct EmailExtractor: DocumentExtractor {
         let metaDate = message.headers["date"].flatMap(Self.parseDate)
         return ExtractionResult(
             parts: parts,
+            structure: Self.buildStructure(
+                message: message,
+                headerSummary: headerSummary,
+                body: body,
+                flatText: bodyText
+            ),
             method: "eml",
             attachments: attachments,
             metadataCreatedAt: metaDate
@@ -77,6 +83,207 @@ public struct EmailExtractor: DocumentExtractor {
         return lines.joined(separator: "\n")
     }
 
+    private static func buildStructure(
+        message: MIMEMessage,
+        headerSummary: String,
+        body: String,
+        flatText: String
+    ) -> ExtractedDocumentStructure {
+        let messageKey = "email/message"
+        let headerKey = "email/headers"
+        let normalizedBody = TextNormalization.normalize(body)
+        let references = messageIDs(in: message.headers["references"])
+        var messagePayload: [String: Any] = [
+            "semanticKind": "email_message",
+            "headers": message.headers,
+            "references": references,
+        ]
+        if let value = normalizedMessageID(message.headers["message-id"]) {
+            messagePayload["messageID"] = value
+        }
+        if let value = normalizedMessageID(message.headers["in-reply-to"]) {
+            messagePayload["inReplyTo"] = value
+        }
+        if let value = message.headers["subject"] { messagePayload["subject"] = value }
+
+        var nodes = [
+            ExtractedStructureNode(
+                nodeKey: "document",
+                partIndex: 0,
+                ordinal: 0,
+                kind: .document
+            ),
+            ExtractedStructureNode(
+                nodeKey: messageKey,
+                parentNodeKey: "document",
+                partIndex: 0,
+                ordinal: 0,
+                kind: .emailMessage,
+                payloadJSON: payloadJSON(messagePayload)
+            ),
+            ExtractedStructureNode(
+                nodeKey: headerKey,
+                parentNodeKey: messageKey,
+                partIndex: 0,
+                ordinal: 0,
+                kind: .header,
+                textContent: completeHeaderText(message.headers),
+                payloadJSON: payloadJSON([
+                    "semanticKind": "email_headers",
+                    "headers": message.headers,
+                ])
+            ),
+        ]
+        var edges: [ExtractedStructureEdge] = []
+        var textNodeRanges: [(key: String, range: Range<Int>)] = []
+
+        if !normalizedBody.isEmpty,
+           let bodyRange = flatText.range(of: normalizedBody, options: .backwards) {
+            let bodyStart = flatText.distance(from: flatText.startIndex, to: bodyRange.lowerBound)
+            let quoteStart = quotedReplyStart(in: normalizedBody)
+            let currentEnd = quoteStart.map { trimmedContentEnd(in: normalizedBody, before: $0) }
+                ?? normalizedBody.count
+            if currentEnd > 0 {
+                let range = bodyStart..<(bodyStart + currentEnd)
+                nodes.append(ExtractedStructureNode(
+                    nodeKey: "email/body/0",
+                    parentNodeKey: messageKey,
+                    partIndex: 0,
+                    ordinal: 1,
+                    kind: .emailBody,
+                    charStart: range.lowerBound,
+                    charEnd: range.upperBound,
+                    payloadJSON: payloadJSON(["quoted": false])
+                ))
+                textNodeRanges.append(("email/body/0", range))
+            }
+            if let quoteStart {
+                let range = (bodyStart + quoteStart)..<(bodyStart + normalizedBody.count)
+                nodes.append(ExtractedStructureNode(
+                    nodeKey: "email/quote/0",
+                    parentNodeKey: messageKey,
+                    partIndex: 0,
+                    ordinal: 2,
+                    kind: .emailQuote,
+                    charStart: range.lowerBound,
+                    charEnd: range.upperBound,
+                    payloadJSON: payloadJSON(["quoted": true, "boundary": "reply"])
+                ))
+                textNodeRanges.append(("email/quote/0", range))
+            }
+        }
+
+        for (index, reference) in message.contentIDReferences().enumerated() {
+            let key = "email/attachment-ref/\(index)"
+            nodes.append(ExtractedStructureNode(
+                nodeKey: key,
+                parentNodeKey: messageKey,
+                partIndex: 0,
+                ordinal: 3 + index,
+                kind: .attachmentRef,
+                textContent: "cid:\(reference.contentID)",
+                payloadJSON: payloadJSON([
+                    "semanticKind": "cid_attachment_reference",
+                    "contentID": reference.contentID,
+                    "fileName": reference.fileName ?? "",
+                    "contentType": reference.contentType,
+                    "disposition": reference.disposition,
+                ])
+            ))
+            let token = "cid:\(reference.contentID)"
+            let sourceKey = textNodeRanges.first { entry in
+                text(in: entry.range, source: flatText).localizedCaseInsensitiveContains(token)
+            }?.key
+            if let sourceKey {
+                edges.append(ExtractedStructureEdge(
+                    fromNodeKey: sourceKey,
+                    toNodeKey: key,
+                    kind: .references
+                ))
+            }
+        }
+
+        // Keep the calculation explicit: the specialized tree is supplemental;
+        // the legacy header summary remains in the flat revision unchanged.
+        _ = headerSummary
+        return ExtractedDocumentStructure(nodes: nodes, edges: edges)
+    }
+
+    private static func completeHeaderText(_ headers: [String: String]) -> String {
+        let priority = [
+            "from", "to", "cc", "bcc", "date", "subject", "message-id",
+            "in-reply-to", "references", "mime-version", "content-type",
+        ]
+        let ordered = priority.filter { headers[$0] != nil }
+            + headers.keys.filter { !priority.contains($0) }.sorted()
+        return ordered.compactMap { key in
+            headers[key].map { "\(canonicalHeaderName(key)): \($0)" }
+        }.joined(separator: "\n")
+    }
+
+    private static func canonicalHeaderName(_ key: String) -> String {
+        switch key {
+        case "message-id": return "Message-ID"
+        case "in-reply-to": return "In-Reply-To"
+        case "mime-version": return "MIME-Version"
+        case "content-type": return "Content-Type"
+        default: return key.split(separator: "-").map { $0.capitalized }.joined(separator: "-")
+        }
+    }
+
+    private static func normalizedMessageID(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
+    }
+
+    private static func messageIDs(in value: String?) -> [String] {
+        guard let value else { return [] }
+        let expression = try? NSRegularExpression(pattern: #"<[^>]+>"#)
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        let matches = expression?.matches(in: value, range: range) ?? []
+        let identifiers = matches.compactMap { match -> String? in
+            guard let matchRange = Range(match.range, in: value) else { return nil }
+            return String(value[matchRange])
+        }
+        if !identifiers.isEmpty { return identifiers }
+        return value.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    }
+
+    private static func quotedReplyStart(in text: String) -> Int? {
+        var offset = 0
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lower = trimmed.lowercased()
+            if (lower.contains("original message") && lower.contains("--"))
+                || (lower.hasPrefix("on ") && lower.hasSuffix(" wrote:"))
+                || lower.hasPrefix(">") {
+                return offset
+            }
+            offset += line.count + 1
+        }
+        return nil
+    }
+
+    private static func trimmedContentEnd(in text: String, before offset: Int) -> Int {
+        let boundary = text.index(text.startIndex, offsetBy: offset)
+        return text[..<boundary].trimmingCharacters(in: .whitespacesAndNewlines).count
+    }
+
+    private static func text(in range: Range<Int>, source: String) -> String {
+        let lower = source.index(source.startIndex, offsetBy: range.lowerBound)
+        let upper = source.index(source.startIndex, offsetBy: range.upperBound)
+        return String(source[lower..<upper])
+    }
+
+    private static func payloadJSON(_ object: [String: Any]) -> String? {
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
     private static func parseDate(_ string: String) -> Date? {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -99,6 +306,16 @@ struct MIMEMessage {
     struct Attachment {
         var fileName: String?
         var data: Data
+        var contentID: String?
+        var contentType: String
+        var disposition: String
+    }
+
+    struct ContentIDReference {
+        var contentID: String
+        var fileName: String?
+        var contentType: String
+        var disposition: String
     }
 
     static func parse(_ raw: String, policy: ImportPolicy = .default) throws -> MIMEMessage {
@@ -170,6 +387,12 @@ struct MIMEMessage {
         return result
     }
 
+    func contentIDReferences() -> [ContentIDReference] {
+        var result: [ContentIDReference] = []
+        collectContentIDReferences(into: &result)
+        return result
+    }
+
     private func collectAttachments(into result: inout [Attachment]) {
         for part in parts {
             if part.parts.isEmpty {
@@ -179,12 +402,52 @@ struct MIMEMessage {
                     || (part.headers["content-disposition"]?.contains("filename") ?? false)
                     || (!contentType.contains("text/plain") && !contentType.contains("text/html") && part.fileName() != nil)
                 if isAttachment {
-                    result.append(Attachment(fileName: part.fileName(), data: part.decodedData()))
+                    result.append(Attachment(
+                        fileName: part.fileName(),
+                        data: part.decodedData(),
+                        contentID: part.normalizedContentID,
+                        contentType: part.normalizedContentType,
+                        disposition: part.normalizedDisposition
+                    ))
                 }
             } else {
                 part.collectAttachments(into: &result)
             }
         }
+    }
+
+    private func collectContentIDReferences(into result: inout [ContentIDReference]) {
+        if parts.isEmpty, let contentID = normalizedContentID {
+            result.append(ContentIDReference(
+                contentID: contentID,
+                fileName: fileName(),
+                contentType: normalizedContentType,
+                disposition: normalizedDisposition
+            ))
+        }
+        for part in parts {
+            part.collectContentIDReferences(into: &result)
+        }
+    }
+
+    private var normalizedContentID: String? {
+        guard var value = headers["content-id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        if value.first == "<" { value.removeFirst() }
+        if value.last == ">" { value.removeLast() }
+        return value.isEmpty ? nil : value
+    }
+
+    private var normalizedContentType: String {
+        let value = headers["content-type"] ?? "application/octet-stream"
+        return value.split(separator: ";", maxSplits: 1).first
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            ?? "application/octet-stream"
+    }
+
+    private var normalizedDisposition: String {
+        let value = (headers["content-disposition"] ?? "").lowercased()
+        return value.contains("inline") ? "inline" : "attachment"
     }
 
     private var isAttachmentLeaf: Bool {

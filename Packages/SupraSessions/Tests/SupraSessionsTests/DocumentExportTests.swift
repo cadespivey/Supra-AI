@@ -14,10 +14,10 @@ final class DocumentExportTests: XCTestCase {
 
         // A saved Q&A output with a version + an attached source set.
         let output = try store.structuredOutputs.createOutput(matterID: matter.id, title: "Q&A: payment", outputType: .documentQA, status: .complete)
-        let version = try store.structuredOutputs.createVersion(
+        let version = try createExportableVersion(
+            store: store,
             structuredOutputID: output.id, versionIndex: 1,
-            contentMarkdown: "Payment was due March 3, 2024 [S1].",
-            requiredSections: [], presentSections: [], missingSections: []
+            contentMarkdown: "Payment was due March 3, 2024 [S1]."
         )
         let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(sha256: "a", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/a.pdf")).blob
         let doc = try store.documentLibrary.insertDocument(MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "agreement.pdf"))
@@ -43,6 +43,7 @@ final class DocumentExportTests: XCTestCase {
         XCTAssertTrue(md.contains("Payment was due March 3, 2024 [S1]."))
         XCTAssertTrue(md.contains("agreement.pdf"))
         XCTAssertTrue(md.contains("p. 3"))
+        XCTAssertTrue(md.contains("Assurance: Propositions supported — completeness not assessed"))
 
         // Export records persisted, and a single matter export audit exists.
         let exports = try store.documentSources.fetchExports(structuredOutputID: output.id)
@@ -58,10 +59,10 @@ final class DocumentExportTests: XCTestCase {
         // Saved version markdown already embeds a "## Sources" appendix, exactly as
         // the Q&A/chronology controllers persist it.
         let output = try store.structuredOutputs.createOutput(matterID: matter.id, title: "Q&A", outputType: .documentQA, status: .complete)
-        let version = try store.structuredOutputs.createVersion(
+        let version = try createExportableVersion(
+            store: store,
             structuredOutputID: output.id, versionIndex: 1,
-            contentMarkdown: "Answer body [S1].\n\n## Sources\n- **[S1]** agreement.pdf — p. 3",
-            requiredSections: [], presentSections: [], missingSections: []
+            contentMarkdown: "Answer body [S1].\n\n## Sources\n- **[S1]** agreement.pdf — p. 3"
         )
         let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(sha256: "a", byteSize: 1, originalExtension: "pdf", managedRelativePath: "blobs/a.pdf")).blob
         let doc = try store.documentLibrary.insertDocument(MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "agreement.pdf"))
@@ -129,6 +130,39 @@ final class DocumentExportTests: XCTestCase {
         XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains { $0.eventType == "export_completed" })
     }
 
+    func testTUX01ServiceRejectsVerificationOnlyExportWhenAssuranceIsNotEligible() throws {
+        // T-UX-01 expected RED: the controller hides export, but the service
+        // accepts a direct legacy/review-state export and can bypass assurance.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic export assurance")
+        let output = try store.structuredOutputs.createOutput(
+            matterID: matter.id,
+            title: "Blocked assurance",
+            outputType: .documentQA,
+            status: .needsReview
+        )
+        _ = try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id,
+            contentMarkdown: "UNEXPORTABLE NONDEFAULT CONTENT",
+            requiredSections: [],
+            presentSections: [],
+            missingSections: []
+        )
+
+        XCTAssertThrowsError(
+            try DocumentExportService(store: store).export(
+                matterID: matter.id,
+                structuredOutputID: output.id,
+                format: .markdown
+            )
+        ) { error in
+            guard case DocumentExportService.ExportError.assuranceBlocked = error else {
+                return XCTFail("expected assuranceBlocked, got \(error)")
+            }
+        }
+        XCTAssertTrue(try store.documentSources.fetchExports(structuredOutputID: output.id).isEmpty)
+    }
+
     private func makeFixture() throws -> (store: SupraStore, storage: DocumentStorage, matterID: String, outputID: String) {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
@@ -138,18 +172,54 @@ final class DocumentExportTests: XCTestCase {
             outputType: .documentQA,
             status: .complete
         )
-        _ = try store.structuredOutputs.createVersion(
+        _ = try createExportableVersion(
+            store: store,
             structuredOutputID: output.id,
             versionIndex: 1,
-            contentMarkdown: "Grounded answer.",
-            requiredSections: [],
-            presentSections: [],
-            missingSections: []
+            contentMarkdown: "Grounded answer."
         )
         let storage = DocumentStorage(
             root: FileManager.default.temporaryDirectory.appendingPathComponent("ExportFixture-\(UUID().uuidString)")
         )
         return (store, storage, matter.id, output.id)
+    }
+
+    private func createExportableVersion(
+        store: SupraStore,
+        structuredOutputID: String,
+        versionIndex: Int,
+        contentMarkdown: String
+    ) throws -> StructuredOutputVersionRecord {
+        let support = try PropositionSupportResult(
+            propositionID: "export-proposition",
+            status: .supported,
+            reasons: [],
+            evidence: [SupportEvidence(
+                sourceID: "export-source",
+                sourceLabel: "S1",
+                locator: "synthetic:export",
+                retainedExcerpt: "Grounded export evidence.",
+                verifierName: "DocumentExportTests",
+                verifierVersion: "tux01"
+            )],
+            timestamp: Date(timeIntervalSinceReferenceDate: 69)
+        )
+        return try store.structuredOutputs.createVersion(
+            structuredOutputID: structuredOutputID,
+            versionIndex: versionIndex,
+            contentMarkdown: contentMarkdown,
+            requiredSections: [],
+            presentSections: [],
+            missingSections: [],
+            verificationStatus: .allSupported,
+            verificationVersion: "tux01",
+            verificationResults: [support],
+            verificationDimensions: VerificationDimensionsMapper.dimensions(
+                verificationResults: [support]
+            ),
+            assuranceState: .propositionSupported,
+            outputStatus: .complete
+        )
     }
 
     private func makeStore() throws -> SupraStore {

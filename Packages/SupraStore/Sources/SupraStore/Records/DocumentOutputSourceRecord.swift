@@ -12,6 +12,10 @@ public struct DocumentOutputSourceRecord: Codable, FetchableRecord, PersistableR
     public var structuredOutputVersionID: String?
     public var documentID: String?
     public var chunkID: String?
+    /// Immutable extracted-text revision used when this citation was created.
+    /// Nil is an explicit pre-lineage/unknown state, never an instruction to
+    /// substitute whatever text happens to be current later.
+    public var revisionID: String?
     public var citationLabel: String
     public var locatorJSON: String
     public var excerpt: String
@@ -25,6 +29,7 @@ public struct DocumentOutputSourceRecord: Codable, FetchableRecord, PersistableR
         structuredOutputVersionID: String? = nil,
         documentID: String? = nil,
         chunkID: String? = nil,
+        revisionID: String? = nil,
         citationLabel: String,
         locatorJSON: String = "{}",
         excerpt: String = "",
@@ -37,6 +42,7 @@ public struct DocumentOutputSourceRecord: Codable, FetchableRecord, PersistableR
         self.structuredOutputVersionID = structuredOutputVersionID
         self.documentID = documentID
         self.chunkID = chunkID
+        self.revisionID = revisionID
         self.citationLabel = citationLabel
         self.locatorJSON = locatorJSON
         self.excerpt = excerpt
@@ -51,6 +57,7 @@ public struct DocumentOutputSourceRecord: Codable, FetchableRecord, PersistableR
         case structuredOutputVersionID = "structured_output_version_id"
         case documentID = "document_id"
         case chunkID = "chunk_id"
+        case revisionID = "revision_id"
         case citationLabel = "citation_label"
         case locatorJSON = "locator_json"
         case excerpt

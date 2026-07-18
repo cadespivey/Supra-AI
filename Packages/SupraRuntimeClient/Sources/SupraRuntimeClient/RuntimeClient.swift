@@ -8,6 +8,7 @@ public enum RuntimeClientError: Error, LocalizedError, Sendable {
     case encodingFailed(String)
     case decodingFailed(String)
     case generationRejected(GenerateStartResponse)
+    case invalidTokenCountResponse
 
     public var errorDescription: String? {
         switch self {
@@ -21,6 +22,8 @@ public enum RuntimeClientError: Error, LocalizedError, Sendable {
             "The runtime response could not be decoded: \(message)"
         case let .generationRejected(response):
             response.error?.message ?? "The runtime rejected the generation request with status \(response.status.rawValue)."
+        case .invalidTokenCountResponse:
+            "The runtime returned token counts that do not match the request."
         }
     }
 }
@@ -138,6 +141,22 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
                 }
             }
         }
+    }
+
+    public func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
+        let requestData = try encode(request)
+        let response = try await sendRequest(CountTokensResponse.self) { service, reply in
+            service.countTokens(requestData, withReply: reply)
+        }
+        if let error = response.error {
+            throw RuntimeClientError.remoteInvocationFailed(error.message)
+        }
+        guard response.modelID == request.modelID,
+              response.counts.count == request.texts.count,
+              response.counts.allSatisfy({ $0 >= 0 }) else {
+            throw RuntimeClientError.invalidTokenCountResponse
+        }
+        return response
     }
 
     public func cancelGeneration(_ generationID: GenerationID) async throws -> CancelGenerationResponse {

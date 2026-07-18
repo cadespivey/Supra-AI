@@ -58,6 +58,41 @@ final class ExtractionTests: XCTestCase {
         XCTAssertTrue(result.combinedText.contains("Retainer agreement signed."))
     }
 
+    func testTSTR02FlatFormatsEmitUniversalRevisionMappableWrapperTrees() async throws {
+        // T-STR-02 expected RED: ExtractionResult has no structure field and the
+        // shared wrapper node contract does not exist before M4-W1.
+        let fixtures = [
+            try write("wrapper.txt", "TXT-WRAPPER-NONDEFAULT"),
+            try write("wrapper.rtf", #"{\rtf1\ansi RTF-WRAPPER-NONDEFAULT\par}"#),
+            try write("wrapper.html", "<p>HTML-WRAPPER-NONDEFAULT</p>"),
+        ]
+
+        for fixture in fixtures {
+            let result = try await service.extract(fileURL: fixture)
+            let text = try XCTUnwrap(result.parts.first?.text)
+            XCTAssertEqual(result.structure.nodes.count, 2, fixture.lastPathComponent)
+            XCTAssertTrue(result.structure.edges.isEmpty)
+
+            let root = try XCTUnwrap(result.structure.nodes.first { $0.nodeKey == "document" })
+            XCTAssertEqual(root.kind, .document)
+            XCTAssertNil(root.parentNodeKey)
+            XCTAssertEqual(root.partIndex, 0)
+            XCTAssertNil(root.charStart)
+            XCTAssertNil(root.charEnd)
+            XCTAssertNil(root.textContent)
+
+            let wrapper = try XCTUnwrap(result.structure.nodes.first { $0.nodeKey == "part/0" })
+            XCTAssertEqual(wrapper.kind, .paragraph)
+            XCTAssertEqual(wrapper.parentNodeKey, root.nodeKey)
+            XCTAssertEqual(wrapper.partIndex, 0)
+            XCTAssertEqual(wrapper.ordinal, 0)
+            XCTAssertEqual(wrapper.charStart, 0)
+            XCTAssertEqual(wrapper.charEnd, text.count)
+            XCTAssertNil(wrapper.textContent)
+            XCTAssertEqual(result.combinedText, text, "adding structure must not change flat extraction text")
+        }
+    }
+
     func testXMLExtractsTextAndAttributes() async throws {
         let xml = try write("metadata.xml", "<doc author=\"Harvey Specter\"><title>Contract</title><note>Signed 2023</note></doc>")
         let result = try await service.extract(fileURL: xml)

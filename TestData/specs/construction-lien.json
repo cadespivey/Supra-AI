@@ -401,6 +401,85 @@
         "sourceFilename": "demand-letter.docx"
       }
     ],
+    "taskKeys": {
+      "lists": [
+        {
+          "id": "cl-list-payment-defenses",
+          "prompt": "List Coastal Marine's stated payment defenses.",
+          "expectedAnswer": "Pay-when-paid under Section 14.3 and an $18,525 Lot 4 back-charge.",
+          "evidence": [
+            {"sourceFilename": "payment-dispute-thread.eml", "locatorHint": "newest message items 1 and 2"}
+          ]
+        }
+      ],
+      "chronology": [
+        {
+          "id": "cl-chron-lien-dispute",
+          "prompt": "Order delivery, payment dispute, lien recording, and demand.",
+          "expectedAnswer": "2026-01-19 delivery; 2026-03-05 dispute email; 2026-03-11 lien recording; 2026-03-24 demand.",
+          "evidence": [
+            {"sourceFilename": "delivery-receipt-lot4.png", "locatorHint": "delivery date and signature block"},
+            {"sourceFilename": "payment-dispute-thread.eml", "locatorHint": "Date header"},
+            {"sourceFilename": "claim-of-lien-recorded.pdf", "locatorHint": "recording stamp"},
+            {"sourceFilename": "demand-letter.docx", "locatorHint": "letter date"}
+          ]
+        }
+      ],
+      "comparisons": [
+        {
+          "id": "cl-compare-balance-sources",
+          "prompt": "Compare the unpaid balance stated by the ledger, lien, and demand letter.",
+          "expectedAnswer": "Ledger and lien: $163,815; demand letter: $182,340; difference: $18,525.",
+          "evidence": [
+            {"sourceFilename": "payment-draw-ledger.xlsx", "locatorHint": "Draw Ledger NET UNPAID BALANCE row"},
+            {"sourceFilename": "claim-of-lien-recorded.pdf", "locatorHint": "paragraph 4"},
+            {"sourceFilename": "demand-letter.docx", "locatorHint": "demand paragraph"}
+          ]
+        }
+      ],
+      "contradictions": [
+        {
+          "id": "cl-contradiction-demand-overstatement",
+          "prompt": "Identify the material balance contradiction.",
+          "expectedAnswer": "The demand overstates the ledger and recorded lien by $18,525, apparently double-counting the Lot 4 back-charge.",
+          "evidence": [
+            {"sourceFilename": "demand-letter.docx", "locatorHint": "$182,340 demand paragraph"},
+            {"sourceFilename": "payment-draw-ledger.xlsx", "locatorHint": "$163,815 net-balance row"}
+          ]
+        }
+      ],
+      "negatives": [
+        {
+          "id": "cl-negative-bond-penal-sum",
+          "prompt": "What is the payment bond's penal sum?",
+          "expectedAnswer": "Not supported; the corpus names the bond and surety but supplies no penal sum.",
+          "evidence": [
+            {"sourceFilename": "lien-vs-bond-research-memo.pdf", "locatorHint": "bond discussion identifying the absent amount"}
+          ]
+        }
+      ],
+      "structures": [
+        {
+          "id": "cl-structure-ledger-total",
+          "prompt": "Resolve the net unpaid balance using its spreadsheet row and column context.",
+          "expectedAnswer": "$163,815 in the NET UNPAID BALANCE row of the Draw Ledger sheet.",
+          "evidence": [
+            {"sourceFilename": "payment-draw-ledger.xlsx", "locatorHint": "Draw Ledger final row, Amount Paid column"}
+          ]
+        }
+      ],
+      "versions": [
+        {
+          "id": "cl-version-controlling-balance",
+          "prompt": "Which stated balance should be used for the claim?",
+          "expectedAnswer": "Use the $163,815 ledger and recorded-lien balance, not the later $182,340 demand figure.",
+          "evidence": [
+            {"sourceFilename": "payment-draw-ledger.xlsx", "locatorHint": "NET UNPAID BALANCE"},
+            {"sourceFilename": "claim-of-lien-recorded.pdf", "locatorHint": "paragraph 4"}
+          ]
+        }
+      ]
+    },
     "courtListener": {
       "legalIssue": "Whether a subcontractor/supplier's Chapter 713 construction lien can attach to land owned by a public port authority, or whether its exclusive remedy for unpaid materials on a public project is a claim against the Section 255.05, Florida Statutes payment bond; and the strict-compliance requirements (Notice to Owner) governing such claims.",
       "jurisdiction": "Florida (Supreme Court of Florida and District Courts of Appeal)",

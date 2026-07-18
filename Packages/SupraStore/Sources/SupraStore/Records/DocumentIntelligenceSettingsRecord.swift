@@ -22,6 +22,9 @@ public struct DocumentIntelligenceSettingsRecord: Codable, FetchableRecord, Pers
     public var storageInitializedAt: Date?
     public var setupCompletedAt: Date?
     public var setupInvalidatedReason: String?
+    /// Internal rollout flag. Version 2 is the D-06 owner-approved shipping
+    /// default; version 1 remains available as the operational rollback path.
+    public var chunkerVersion: Int
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -39,6 +42,7 @@ public struct DocumentIntelligenceSettingsRecord: Codable, FetchableRecord, Pers
         storageInitializedAt: Date? = nil,
         setupCompletedAt: Date? = nil,
         setupInvalidatedReason: String? = nil,
+        chunkerVersion: Int = 2,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -55,6 +59,7 @@ public struct DocumentIntelligenceSettingsRecord: Codable, FetchableRecord, Pers
         self.storageInitializedAt = storageInitializedAt
         self.setupCompletedAt = setupCompletedAt
         self.setupInvalidatedReason = setupInvalidatedReason
+        self.chunkerVersion = chunkerVersion
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -73,6 +78,7 @@ public struct DocumentIntelligenceSettingsRecord: Codable, FetchableRecord, Pers
         case storageInitializedAt = "storage_initialized_at"
         case setupCompletedAt = "setup_completed_at"
         case setupInvalidatedReason = "setup_invalidated_reason"
+        case chunkerVersion = "chunker_version"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
