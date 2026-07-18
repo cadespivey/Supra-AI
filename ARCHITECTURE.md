@@ -138,7 +138,13 @@ repository:
   balanced ledger. Relaunch reuses the frozen snapshot, treats completed partitions as cache
   hits, closes an orphaned running attempt as interrupted, and schedules only cancelled,
   pending, or still-retryable work. The app-wide FIFO recognizes `corpus_analysis` jobs;
-  task-specific model mapping and output UX land in later work orders.
+  the first task-specific consumer is a strict-schema exhaustive list mapper. It reconciles
+  duplicate keys, conflicting values, contrary evidence, named omissions, and deterministic
+  precision/recall metrics without exposing raw invalid model responses. Validated evidence is
+  written as a version-scoped source set, and the run/source-set/version link commits atomically.
+  Failed or schema-invalid partitions force an attached `needs_review` output with
+  `corpus_incomplete`; negative conclusions are blocked unless coverage is complete and the run
+  found no positive item. Full output UX lands in later work orders.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

@@ -70,11 +70,36 @@ public struct CorpusAnalysisFinding: Codable, Equatable, Sendable {
     public var id: String
     public var value: String
     public var evidence: [CorpusAnalysisEvidenceReference]
+    public var contraryEvidence: [CorpusAnalysisEvidenceReference]
 
-    public init(id: String, value: String, evidence: [CorpusAnalysisEvidenceReference]) {
+    public init(
+        id: String,
+        value: String,
+        evidence: [CorpusAnalysisEvidenceReference],
+        contraryEvidence: [CorpusAnalysisEvidenceReference] = []
+    ) {
         self.id = id
         self.value = value
         self.evidence = evidence
+        self.contraryEvidence = contraryEvidence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case value
+        case evidence
+        case contraryEvidence = "contrary_evidence"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        value = try container.decode(String.self, forKey: .value)
+        evidence = try container.decode([CorpusAnalysisEvidenceReference].self, forKey: .evidence)
+        contraryEvidence = try container.decodeIfPresent(
+            [CorpusAnalysisEvidenceReference].self,
+            forKey: .contraryEvidence
+        ) ?? []
     }
 }
 
@@ -141,6 +166,7 @@ public enum CorpusAnalysisEngineError: Error, LocalizedError, Equatable, Sendabl
 public enum CorpusAnalysisMapFailure: Error, LocalizedError, Equatable, Sendable {
     case transient(String)
     case permanent(String)
+    case schemaInvalid(responseDigest: String, summary: String)
 
     public var isTransient: Bool {
         if case .transient = self { return true }
@@ -150,7 +176,14 @@ public enum CorpusAnalysisMapFailure: Error, LocalizedError, Equatable, Sendable
     public var errorDescription: String? {
         switch self {
         case .transient(let summary), .permanent(let summary): summary
+        case .schemaInvalid(let digest, let summary):
+            "\(summary); response_sha256=\(digest)"
         }
+    }
+
+    public var dispositionReason: String? {
+        if case .schemaInvalid = self { return "schema_invalid" }
+        return nil
     }
 }
 
@@ -267,7 +300,8 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                             partitionID: partition.id,
                             retryable: classified?.isTransient == true,
                             errorSummary: error.localizedDescription,
-                            maximumRetryCount: request.maximumRetryCount
+                            maximumRetryCount: request.maximumRetryCount,
+                            dispositionReason: classified?.dispositionReason
                         )
                         partitionFinished = !shouldRetry
                         if shouldRetry { try Task.checkCancellation() }
@@ -544,7 +578,7 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
             guard !finding.id.isEmpty,
                   findingIDs.insert(finding.id).inserted,
                   !finding.evidence.isEmpty,
-                  finding.evidence.allSatisfy({ evidence in
+                  (finding.evidence + finding.contraryEvidence).allSatisfy({ evidence in
                       guard let source = sourceByRevision[evidence.revisionID] else { return false }
                       return source.documentID == evidence.documentID
                           && source.locatorJSON == evidence.locatorJSON
@@ -557,21 +591,22 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
     private func reconciledFindings(
         from partitions: [CorpusAnalysisPartitionRecord]
     ) throws -> [CorpusAnalysisFinding] {
-        var findingsByID: [String: CorpusAnalysisFinding] = [:]
+        var reconciled: [CorpusAnalysisFinding] = []
         for partition in partitions where partition.disposition == CorpusAnalysisPartitionDisposition.succeeded.rawValue {
             guard let json = partition.findingsJSON,
                   let data = json.data(using: .utf8),
-                  let findings = try? JSONDecoder().decode([CorpusAnalysisFinding].self, from: data) else {
+                  let decodedFindings = try? JSONDecoder().decode([CorpusAnalysisFinding].self, from: data) else {
                 throw CorpusAnalysisEngineError.invalidPersistedJSON("findings")
             }
-            for finding in findings {
-                if let existing = findingsByID[finding.id], existing != finding {
-                    throw CorpusAnalysisEngineError.invalidFindingEvidence(finding.id)
+            for finding in decodedFindings {
+                if !reconciled.contains(finding) {
+                    reconciled.append(finding)
                 }
-                findingsByID[finding.id] = finding
             }
         }
-        return findingsByID.values.sorted { $0.id < $1.id }
+        return reconciled.sorted {
+            $0.id < $1.id || ($0.id == $1.id && $0.value < $1.value)
+        }
     }
 
     private func stalenessReasons(snapshot: CorpusAnalysisSnapshot) throws -> [String] {

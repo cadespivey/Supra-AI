@@ -251,7 +251,8 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
         partitionID: String,
         retryable: Bool,
         errorSummary: String,
-        maximumRetryCount: Int
+        maximumRetryCount: Int,
+        dispositionReason: String? = nil
     ) throws -> Bool {
         try writer.write { db in
             _ = try scopedRun(db, matterID: matterID, runID: runID)
@@ -272,7 +273,7 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
                 : CorpusAnalysisPartitionDisposition.failed.rawValue
             partition.dispositionReason = shouldRetry
                 ? "retry_scheduled"
-                : (retryable ? "retry_exhausted" : "map_failed")
+                : (dispositionReason ?? (retryable ? "retry_exhausted" : "map_failed"))
             partition.findingsJSON = nil
             partition.errorSummary = errorSummary
             partition.completedAt = shouldRetry ? nil : Date()

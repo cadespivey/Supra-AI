@@ -271,7 +271,8 @@ public struct ModelRouter: Sendable {
             return route
         case .draftingSkeleton:
             return route(for: .drafting)
-        case .documentQA, .documentQAMemo, .factChronologyTable, .factChronologyNarrative:
+        case .documentQA, .documentQAMemo, .documentExhaustiveList,
+             .factChronologyTable, .factChronologyNarrative:
             var route = route(for: .legalResearch)
             route.requiresCourtListener = false
             route.requiresJurisdiction = false
@@ -293,7 +294,8 @@ public struct ModelRouter: Sendable {
         switch type {
         case .legalIssueSpotting, .researchPlan, .caseResultSummary, .ruleSynthesis, .argumentOutline, .draftingSkeleton:
             return route(for: .legalCritique)
-        case .documentQA, .documentQAMemo, .factChronologyTable, .factChronologyNarrative:
+        case .documentQA, .documentQAMemo, .documentExhaustiveList,
+             .factChronologyTable, .factChronologyNarrative:
             return nil
         }
     }

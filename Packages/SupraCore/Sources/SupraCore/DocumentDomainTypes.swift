@@ -147,6 +147,7 @@ public enum DocumentSourceSetMode: String, Codable, CaseIterable, Hashable, Send
     case autoSource = "auto_source"
     case guided
     case chronology
+    case exhaustive
 }
 
 /// Result of a single import-report line item, accounting for every discovered

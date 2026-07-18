@@ -267,6 +267,7 @@ private struct DeterministicCorpusWorkload: Sendable {
             )
         ))
         observations.append(contentsOf: try await recoveryObservations(temporaryRoot: temporaryRoot))
+        observations.append(contentsOf: try await exhaustiveTaskObservations(temporaryRoot: temporaryRoot))
         return DeterministicWorkloadResult(
             observations: observations,
             retrievalSeconds: max(retrievalSeconds, Double.leastNonzeroMagnitude)
@@ -633,6 +634,175 @@ private struct DeterministicCorpusWorkload: Sendable {
         ]
     }
 
+    private func exhaustiveTaskObservations(temporaryRoot: URL) async throws -> [BenchmarkObservation] {
+        let root = temporaryRoot.appendingPathComponent("exhaustive-task-store", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let store = try SupraStore(url: root.appendingPathComponent("exhaustive.sqlite"))
+
+        let qualityMatter = try store.matters.createMatter(name: "Synthetic list quality benchmark")
+        _ = try insertCorpusFixture(
+            store: store,
+            matterID: qualityMatter.id,
+            name: "list-quality.txt",
+            partTexts: ["LIST-A", "LIST-A-DUPLICATE", "LIST-B-ONE", "LIST-B-CONFLICT-X"]
+        )
+        let quality = try await ExhaustiveListTask(store: store).run(
+            request: ExhaustiveListRequest(
+                runKey: "benchmark-list-quality",
+                matterID: qualityMatter.id,
+                title: "Synthetic list quality",
+                query: "Extract every synthetic list item.",
+                characterBudget: 1,
+                evaluationExpectedItemKeys: ["item-a", "item-b", "item-c"]
+            )
+        ) { input in
+            switch input.partition.sources.first?.text {
+            case "LIST-A":
+                try Self.listResponse(input, items: [
+                    .init(itemKey: "item-a", value: "100"),
+                ])
+            case "LIST-A-DUPLICATE":
+                try Self.listResponse(input, items: [
+                    .init(itemKey: "item-a", value: "100"),
+                ])
+            case "LIST-B-ONE":
+                try Self.listResponse(input, items: [
+                    .init(itemKey: "item-b", value: "200"),
+                ])
+            default:
+                try Self.listResponse(input, items: [
+                    .init(itemKey: "item-b", value: "250", contrary: true),
+                    .init(itemKey: "item-x", value: "999"),
+                ])
+            }
+        }
+
+        let failedMatter = try store.matters.createMatter(name: "Synthetic list failure benchmark")
+        _ = try insertCorpusFixture(
+            store: store,
+            matterID: failedMatter.id,
+            name: "list-failed.txt",
+            partTexts: ["LIST-FAIL"]
+        )
+        let failed = try await ExhaustiveListTask(store: store).run(
+            request: ExhaustiveListRequest(
+                runKey: "benchmark-list-failed",
+                matterID: failedMatter.id,
+                title: "Synthetic failed list",
+                query: "Extract every synthetic list item.",
+                characterBudget: 1
+            )
+        ) { _ in throw CorpusAnalysisMapFailure.permanent("synthetic benchmark map failure") }
+
+        let invalidMatter = try store.matters.createMatter(name: "Synthetic schema failure benchmark")
+        _ = try insertCorpusFixture(
+            store: store,
+            matterID: invalidMatter.id,
+            name: "list-schema-invalid.txt",
+            partTexts: ["LIST-SCHEMA-INVALID"]
+        )
+        let invalid = try await ExhaustiveListTask(store: store).run(
+            request: ExhaustiveListRequest(
+                runKey: "benchmark-list-schema-invalid",
+                matterID: invalidMatter.id,
+                title: "Synthetic schema-invalid list",
+                query: "Extract every synthetic list item.",
+                characterBudget: 1
+            )
+        ) { _ in #"{"schema_version":1,"items":[{"item_key":7}]}"# }
+
+        let qualityOutput = try store.structuredOutputs.fetchOutputs(matterID: qualityMatter.id)
+            .first(where: { $0.id == quality.outputID })
+        let failedOutput = try store.structuredOutputs.fetchOutputs(matterID: failedMatter.id)
+            .first(where: { $0.id == failed.outputID })
+        let invalidOutput = try store.structuredOutputs.fetchOutputs(matterID: invalidMatter.id)
+            .first(where: { $0.id == invalid.outputID })
+        let completenessFalseClaims = [qualityOutput, failedOutput, invalidOutput].count {
+            $0?.status == StructuredOutputStatus.complete.rawValue
+        }
+
+        let positiveDecision = CorpusNegativeGate.evaluate(
+            run: quality.run,
+            coverage: quality.coverage,
+            positiveFindingCount: quality.items.count
+        )
+        let inadequateDecision = CorpusNegativeGate.evaluate(
+            run: failed.run,
+            coverage: failed.coverage,
+            positiveFindingCount: failed.items.count
+        )
+        let negativeFalseAccepts = [positiveDecision, inadequateDecision].count { $0.allowed }
+
+        let truePositive = quality.metrics.truePositiveCount
+        let falsePositive = quality.metrics.emittedCount - truePositive
+        let falseNegative = quality.metrics.expectedCount - truePositive
+        let rawOutputCount = quality.metrics.emittedCount
+            + quality.metrics.duplicateCount
+            + quality.metrics.conflictCount
+        return [
+            BenchmarkObservation(
+                metricID: "B-LST-01",
+                name: "item_precision",
+                unit: "rate",
+                result: BenchmarkMetrics.rate(
+                    numerator: truePositive,
+                    denominator: truePositive + falsePositive,
+                    interval: .none
+                )
+            ),
+            BenchmarkObservation(
+                metricID: "B-LST-01",
+                name: "item_recall",
+                unit: "rate",
+                result: BenchmarkMetrics.rate(
+                    numerator: truePositive,
+                    denominator: truePositive + falseNegative,
+                    interval: .none
+                )
+            ),
+            BenchmarkObservation(
+                metricID: "B-LST-01",
+                name: "item_f1",
+                unit: "rate",
+                result: BenchmarkMetrics.rate(
+                    numerator: 2 * truePositive,
+                    denominator: 2 * truePositive + falsePositive + falseNegative,
+                    interval: .none
+                )
+            ),
+            BenchmarkObservation(
+                metricID: "B-LST-01",
+                name: "duplicate_output_rate",
+                unit: "rate",
+                result: BenchmarkMetrics.rate(
+                    numerator: quality.metrics.duplicateCount,
+                    denominator: rawOutputCount,
+                    interval: .none
+                )
+            ),
+            BenchmarkObservation(
+                metricID: "B-CMP-01",
+                name: "completeness_false_claim_rate",
+                unit: "rate",
+                result: BenchmarkMetrics.rate(
+                    numerator: completenessFalseClaims,
+                    denominator: 3,
+                    interval: .none
+                )
+            ),
+            BenchmarkObservation(
+                metricID: "B-NEG-01",
+                name: "negative_false_accept_rate",
+                unit: "rate",
+                result: BenchmarkMetrics.rate(
+                    numerator: negativeFalseAccepts,
+                    denominator: 2,
+                    interval: .none
+                )
+            ),
+        ]
+    }
+
     private func insertCorpusFixture(
         store: SupraStore,
         matterID: String,
@@ -708,6 +878,31 @@ private struct DeterministicCorpusWorkload: Sendable {
                 )]
             )
         })
+    }
+
+    private static func listResponse(
+        _ input: ExhaustiveListGenerationInput,
+        items: [BenchmarkListItemSpec]
+    ) throws -> String {
+        guard let source = input.partition.sources.first else {
+            throw BenchmarkCLIError.recoveryFixtureFailed
+        }
+        let evidence = CorpusAnalysisEvidenceReference(
+            documentID: source.documentID,
+            revisionID: source.revisionID,
+            locatorJSON: source.locatorJSON
+        )
+        let response = BenchmarkListResponse(items: items.map { item in
+            BenchmarkListResponseItem(
+                itemKey: item.itemKey,
+                value: item.value,
+                evidence: [evidence],
+                contraryEvidence: item.contrary ? [evidence] : []
+            )
+        })
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(response), as: UTF8.self)
     }
 
     private func sourceAccountingObservations(_ report: DocumentImportReport) -> [BenchmarkObservation] {
@@ -795,6 +990,36 @@ private struct DeterministicWorkloadResult: Sendable {
 private struct SpreadsheetCellPayload: Decodable {
     var sheetName: String
     var cellRef: String
+}
+
+private struct BenchmarkListItemSpec {
+    var itemKey: String
+    var value: String
+    var contrary = false
+}
+
+private struct BenchmarkListResponse: Encodable {
+    var schemaVersion = 1
+    var items: [BenchmarkListResponseItem]
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case items
+    }
+}
+
+private struct BenchmarkListResponseItem: Encodable {
+    var itemKey: String
+    var value: String
+    var evidence: [CorpusAnalysisEvidenceReference]
+    var contraryEvidence: [CorpusAnalysisEvidenceReference]
+
+    private enum CodingKeys: String, CodingKey {
+        case itemKey = "item_key"
+        case value
+        case evidence
+        case contraryEvidence = "contrary_evidence"
+    }
 }
 
 private struct BenchmarkCorpusFixture: Sendable {

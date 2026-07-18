@@ -64,7 +64,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
         XCTAssertEqual(result.metrics.precision, 2.0 / 3.0, accuracy: 0.000_001)
         XCTAssertEqual(result.metrics.duplicateCount, 1)
         XCTAssertEqual(result.metrics.conflictCount, 1)
-        XCTAssertEqual(result.run.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
+        XCTAssertEqual(result.run.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
 
         let persistedRun = try XCTUnwrap(store.corpusAnalysis.fetchRun(matterID: matter.id, id: result.run.id))
         XCTAssertEqual(persistedRun.structuredOutputVersionID, result.version.id)

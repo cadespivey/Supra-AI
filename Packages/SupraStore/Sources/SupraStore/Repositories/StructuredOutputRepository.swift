@@ -170,7 +170,8 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         verificationStatus: OutputVerificationStatus,
         verificationVersion: String,
         verificationResults: [PropositionSupportResult],
-        outputStatus: StructuredOutputStatus
+        outputStatus: StructuredOutputStatus,
+        corpusAnalysisRunID: String? = nil
     ) throws -> StructuredOutputVersionRecord {
         let requiredSectionsJSON = try JSONCoding.encode([String]())
         let verificationJSON = try JSONCoding.encode(verificationResults)
@@ -224,6 +225,14 @@ public final class StructuredOutputRepository: @unchecked Sendable {
             }
             guard output.matterID == sourceSet.matterID else {
                 throw StructuredOutputRepositoryError.sourceSetUnavailable(sourceSet.id)
+            }
+            if let corpusAnalysisRunID {
+                guard let run = try CorpusAnalysisRunRecord.fetchOne(db, key: corpusAnalysisRunID),
+                      run.matterID == output.matterID,
+                      run.status == CorpusAnalysisRunStatus.persisted.rawValue,
+                      run.structuredOutputVersionID == nil else {
+                    throw StructuredOutputRepositoryError.corpusRunUnavailable(corpusAnalysisRunID)
+                }
             }
 
             try sourceSet.insert(db)
@@ -302,6 +311,27 @@ public final class StructuredOutputRepository: @unchecked Sendable {
             guard db.changesCount == 1 else {
                 throw StructuredOutputRepositoryError.outputUnavailable(structuredOutputID)
             }
+            if let corpusAnalysisRunID {
+                try db.execute(
+                    sql: """
+                    UPDATE corpus_analysis_runs
+                    SET structured_output_version_id = ?
+                    WHERE id = ?
+                      AND matter_id = ?
+                      AND status = ?
+                      AND structured_output_version_id IS NULL
+                    """,
+                    arguments: [
+                        version.id,
+                        corpusAnalysisRunID,
+                        output.matterID,
+                        CorpusAnalysisRunStatus.persisted.rawValue,
+                    ]
+                )
+                guard db.changesCount == 1 else {
+                    throw StructuredOutputRepositoryError.corpusRunUnavailable(corpusAnalysisRunID)
+                }
+            }
             return version
         }
     }
@@ -343,6 +373,10 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         }
     }
 
+    public func fetchVersion(id: String) throws -> StructuredOutputVersionRecord? {
+        try writer.read { db in try StructuredOutputVersionRecord.fetchOne(db, key: id) }
+    }
+
     private static func requireNonEmpty(_ value: String, fieldName: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -359,4 +393,5 @@ public enum StructuredOutputRepositoryError: Error, Equatable, Sendable {
     case completeStatusRequiresAllSupportedVerification
     case sourceSetUnavailable(String)
     case outputUnavailable(String)
+    case corpusRunUnavailable(String)
 }
