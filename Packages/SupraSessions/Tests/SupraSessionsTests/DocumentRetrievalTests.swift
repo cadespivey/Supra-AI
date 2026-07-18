@@ -229,6 +229,47 @@ final class DocumentRetrievalTests: XCTestCase {
         XCTAssertFalse(v1.sources.contains { $0.documentID == documentB.id })
     }
 
+    func testTRET05V2AggregatesTwoStrongestChunksPerDocumentBeforeInterleaving() {
+        // T-RET-05 expected RED: the v2 order uses only each document's first
+        // raw-ranked chunk, so A incorrectly stays ahead of B even though B's
+        // two structural matches carry more combined evidence.
+        let v2Chunks = [
+            "a1": DocumentChunkRecord(
+                id: "a1", documentID: "document-a", chunkerVersion: 2,
+                chunkIndex: 0, sourceKind: "text", normalizedText: "A strongest"
+            ),
+            "b1": DocumentChunkRecord(
+                id: "b1", documentID: "document-b", chunkerVersion: 2,
+                chunkIndex: 0, sourceKind: "text", normalizedText: "B first"
+            ),
+            "b2": DocumentChunkRecord(
+                id: "b2", documentID: "document-b", chunkerVersion: 2,
+                chunkIndex: 1, sourceKind: "text", normalizedText: "B second"
+            ),
+        ]
+        let raw = [(key: "a1", value: 0.040), (key: "b1", value: 0.030), (key: "b2", value: 0.029)]
+        let names = ["document-a": "A.txt", "document-b": "B.txt"]
+
+        let v2 = DocumentRetrievalService.v2DocumentDiverseOrder(
+            raw,
+            chunksByID: v2Chunks,
+            documentNamesByID: names
+        )
+        XCTAssertEqual(v2.map(\.key), ["b1", "a1", "b2"])
+
+        let v1Chunks = v2Chunks.mapValues { chunk in
+            var legacy = chunk
+            legacy.chunkerVersion = 1
+            return legacy
+        }
+        let v1 = DocumentRetrievalService.v2DocumentDiverseOrder(
+            raw,
+            chunksByID: v1Chunks,
+            documentNamesByID: names
+        )
+        XCTAssertEqual(v1.map(\.key), ["a1", "b1", "b2"])
+    }
+
     func testContextMetadataComposesTypeAndDate() {
         var doc = MatterDocumentRecord(
             matterID: "m", blobID: "b", folderID: nil, displayName: "lease.pdf",
