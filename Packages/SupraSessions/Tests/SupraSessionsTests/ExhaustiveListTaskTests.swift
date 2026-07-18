@@ -7,6 +7,7 @@ import SupraStore
 import XCTest
 
 final class ExhaustiveListTaskTests: XCTestCase {
+    private static let modelLineageJSON = #"{"model_repository":"synthetic/exhaustive-runtime","model_revision":"exhaustive-revision-nondefault"}"#
     func testTENG09ListReconcilesDuplicatesConflictsContraryEvidenceAndNamedOmissions() async throws {
         // T-ENG-09 expected RED: exhaustive-list schema, reconciliation, metrics, and atomic output linkage are missing.
         let store = try makeStore()
@@ -117,7 +118,8 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 title: "Incomplete invoice list",
                 query: "Extract every invoice.",
                 characterBudget: 1,
-                evaluationExpectedItemKeys: ["invoice-good", "invoice-missing"]
+                evaluationExpectedItemKeys: ["invoice-good", "invoice-missing"],
+                modelLineageJSON: Self.modelLineageJSON
             )
         ) { input in
             if input.partition.sources.first?.text == "MAP-FAIL" {
@@ -165,7 +167,8 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 matterID: matter.id,
                 title: "Malformed list",
                 query: "Extract every reference.",
-                characterBudget: 1
+                characterBudget: 1,
+                modelLineageJSON: Self.modelLineageJSON
             )
         ) { _ in malformed }
 
@@ -197,7 +200,8 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 matterID: incompleteMatter.id,
                 title: "Blocked negative",
                 query: "Find any termination reference.",
-                characterBudget: 1
+                characterBudget: 1,
+                modelLineageJSON: Self.modelLineageJSON
             )
         ) { _ in throw CorpusAnalysisMapFailure.permanent("synthetic negative probe failure") }
         let blocked = CorpusNegativeGate.evaluate(
@@ -223,7 +227,8 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 matterID: completeMatter.id,
                 title: "Allowed negative",
                 query: "Find any termination reference.",
-                characterBudget: 1
+                characterBudget: 1,
+                modelLineageJSON: Self.modelLineageJSON
             )
         ) { input in try Self.response(input, items: []) }
         let allowed = CorpusNegativeGate.evaluate(

@@ -120,7 +120,7 @@ Managed model downloads are bound to a repository revision and verified manifest
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v066. Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v067. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -185,6 +185,15 @@ repository:
   turns keep the same pending packet through a nullable unique `message_id` link, validated
   against the owning matter; packed revision-bound source rows retain the verifier result JSON,
   while unpromoted turns create no structured output.
+- Saved document Q&A, chronology, and exhaustive-list versions record stable model repository/revision, prompt-builder version, options, source lineage, and assurance; exact dependency changes mark only affected versions stale without rewriting their content. The
+  v067 migration reuses `generation_sessions` for document artifacts without synthetic chat
+  owners, leaves unrelated legacy lineage unknown, and copies assurance only from a uniquely
+  linked corpus-analysis run. Source revision/edit, reprocess, reviewed relation, embedding
+  model/revision, chunker, and prompt-builder changes use matter-scoped joins to set
+  `assurance_state = stale`, retain the immutable version content, and move only an affected
+  active output to `needs_review`. A clean assurance can be restored only by appending a new
+  verified version. The deterministic B-LIN dependency matrix requires both stale-detection
+  precision and recall to remain 1.0.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

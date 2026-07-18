@@ -142,7 +142,7 @@ public final class DocumentRelationRepository: @unchecked Sendable {
                 metadataJSON: metadata
             ).insert(db)
 
-            try Self.invalidateOutputsCitingRelation(existing, reviewedAt: reviewedAt, db: db)
+            try Self.invalidateOutputsCitingRelation(reviewed, reviewedAt: reviewedAt, db: db)
             return reviewed
         }
     }
@@ -312,6 +312,32 @@ public final class DocumentRelationRepository: @unchecked Sendable {
         reviewedAt: Date,
         db: Database
     ) throws {
+        let reason = "document_relation_reviewed:relation=\(relation.id):state=\(relation.reviewState)"
+        try db.execute(
+            sql: """
+            UPDATE structured_output_versions
+            SET assurance_state = ?, stale_reason = ?, updated_at = ?
+            WHERE assurance_state IS NOT ?
+              AND id IN (
+                  SELECT structured_output_version_id
+                  FROM document_output_sources
+                  WHERE document_id IN (?, ?)
+                    AND structured_output_version_id IS NOT NULL
+              )
+              AND structured_output_id IN (
+                  SELECT id FROM structured_outputs WHERE matter_id = ?
+              )
+            """,
+            arguments: [
+                OutputAssuranceState.stale.rawValue,
+                reason,
+                reviewedAt,
+                OutputAssuranceState.stale.rawValue,
+                relation.fromDocumentID,
+                relation.toDocumentID,
+                relation.matterID,
+            ]
+        )
         try db.execute(
             sql: """
             UPDATE structured_outputs

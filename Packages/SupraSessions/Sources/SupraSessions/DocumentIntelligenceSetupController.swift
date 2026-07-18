@@ -210,11 +210,29 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
 
     public func selectEmbeddingModel(id: String) {
         let previousID = settings.selectedEmbeddingModelID
+        let previousModel = previousID.flatMap { try? store.documentSettings.fetchEmbeddingModel(id: $0) }
+        let nextModel = try? store.documentSettings.fetchEmbeddingModel(id: id)
         try? store.documentSettings.selectEmbeddingModel(id: id)
         try? store.documentSettings.invalidateSetup(reason: "embedding model changed")
         reloadSettings()
         reloadLocalState()
         guard previousID != id else { return }
+        if let previousModel, let nextModel {
+            do {
+                let service = OutputStalenessService(store: store)
+                for matter in try store.matters.fetchMatters() {
+                    _ = try service.embeddingModelChanged(
+                        matterID: matter.id,
+                        fromModelID: previousModel.repoID,
+                        fromRevision: previousModel.revision ?? "unresolved",
+                        toModelID: nextModel.repoID,
+                        toRevision: nextModel.revision ?? "unresolved"
+                    )
+                }
+            } catch {
+                message = "The embedding model changed, but dependent output status could not be refreshed: \(error.localizedDescription)"
+            }
+        }
         enqueueMattersMissingEmbeddings(modelID: id)
     }
 

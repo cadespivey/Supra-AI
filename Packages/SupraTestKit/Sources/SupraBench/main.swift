@@ -256,6 +256,7 @@ private struct DeterministicCorpusWorkload: Sendable {
             store: store,
             matterID: benchmarkMatter.id
         ))
+        observations.append(contentsOf: try lineageStalenessObservations(store: store))
         observations.append(contentsOf: contextPackingObservations())
 
         let benchmarkDocumentIDs = Set(
@@ -278,6 +279,253 @@ private struct DeterministicCorpusWorkload: Sendable {
         return DeterministicWorkloadResult(
             observations: observations,
             retrievalSeconds: max(retrievalSeconds, Double.leastNonzeroMagnitude)
+        )
+    }
+
+    private func lineageStalenessObservations(store: SupraStore) throws -> [BenchmarkObservation] {
+        let matter = try store.matters.createMatter(name: "Synthetic lineage dependency matrix")
+        let sourceDocument = try seedLineageDocument(store: store, matterID: matter.id, name: "source.txt")
+        let modelDocument = try seedLineageDocument(store: store, matterID: matter.id, name: "model.txt")
+        let chunkerDocument = try seedLineageDocument(store: store, matterID: matter.id, name: "chunker.txt")
+        let promptDocument = try seedLineageDocument(store: store, matterID: matter.id, name: "prompt.txt")
+        let relationDocument = try seedLineageDocument(store: store, matterID: matter.id, name: "relation.txt")
+        let relationTarget = try seedLineageDocument(store: store, matterID: matter.id, name: "relation-target.txt")
+        let controlDocument = try seedLineageDocument(store: store, matterID: matter.id, name: "control.txt")
+
+        let cases: [(key: String, version: StructuredOutputVersionRecord)] = [
+            ("source-edit", try seedLineageOutput(
+                store: store,
+                matterID: matter.id,
+                document: sourceDocument,
+                embeddingModelID: "embed-source",
+                embeddingRevision: "embed-source-r1",
+                chunkerVersion: 101,
+                promptBuilderVersion: "source-prompt-v1"
+            )),
+            ("model-revision", try seedLineageOutput(
+                store: store,
+                matterID: matter.id,
+                document: modelDocument,
+                embeddingModelID: "embed-model",
+                embeddingRevision: "embed-model-r1",
+                chunkerVersion: 102,
+                promptBuilderVersion: "model-prompt-v1"
+            )),
+            ("chunker", try seedLineageOutput(
+                store: store,
+                matterID: matter.id,
+                document: chunkerDocument,
+                embeddingModelID: "embed-chunker",
+                embeddingRevision: "embed-chunker-r1",
+                chunkerVersion: 103,
+                promptBuilderVersion: "chunker-prompt-v1"
+            )),
+            ("prompt", try seedLineageOutput(
+                store: store,
+                matterID: matter.id,
+                document: promptDocument,
+                embeddingModelID: "embed-prompt",
+                embeddingRevision: "embed-prompt-r1",
+                chunkerVersion: 104,
+                promptBuilderVersion: "document-prompt-v1"
+            )),
+            ("relation", try seedLineageOutput(
+                store: store,
+                matterID: matter.id,
+                document: relationDocument,
+                embeddingModelID: "embed-relation",
+                embeddingRevision: "embed-relation-r1",
+                chunkerVersion: 105,
+                promptBuilderVersion: "relation-prompt-v1"
+            )),
+        ]
+        let control = try seedLineageOutput(
+            store: store,
+            matterID: matter.id,
+            document: controlDocument,
+            embeddingModelID: "embed-control",
+            embeddingRevision: "embed-control-r1",
+            chunkerVersion: 106,
+            promptBuilderVersion: "control-prompt-v1"
+        )
+        let service = OutputStalenessService(store: store)
+        var seenStaleVersionIDs = Set<String>()
+        var actualStaleKeys = Set<String>()
+        let captureNewlyStale: (String) throws -> Void = { eventKey in
+            for item in cases where try store.structuredOutputs.fetchVersion(id: item.version.id)?.assuranceState
+                == OutputAssuranceState.stale.rawValue {
+                if seenStaleVersionIDs.insert(item.version.id).inserted {
+                    actualStaleKeys.insert("\(eventKey):\(item.key)")
+                }
+            }
+            if try store.structuredOutputs.fetchVersion(id: control.id)?.assuranceState
+                == OutputAssuranceState.stale.rawValue,
+               seenStaleVersionIDs.insert(control.id).inserted {
+                actualStaleKeys.insert("\(eventKey):control")
+            }
+        }
+
+        _ = try service.sourceRevisionChanged(
+            matterID: matter.id,
+            documentID: sourceDocument.document.id,
+            fromRevisionID: sourceDocument.revision.id,
+            toRevisionID: "synthetic-source-r2"
+        )
+        try captureNewlyStale("source-edit")
+        _ = try service.embeddingModelRevisionChanged(
+            matterID: matter.id,
+            modelID: "embed-model",
+            fromRevision: "embed-model-r1",
+            toRevision: "embed-model-r2"
+        )
+        try captureNewlyStale("model-revision")
+        _ = try service.chunkerVersionChanged(
+            matterID: matter.id,
+            fromVersion: 103,
+            toVersion: 203
+        )
+        try captureNewlyStale("chunker")
+        _ = try service.promptBuilderVersionChanged(
+            matterID: matter.id,
+            fromVersion: "document-prompt-v1",
+            toVersion: "document-prompt-v2"
+        )
+        try captureNewlyStale("prompt")
+        let relation = try store.documentRelations.propose(
+            matterID: matter.id,
+            fromDocumentID: relationDocument.document.id,
+            toDocumentID: relationTarget.document.id,
+            kind: .supersedes,
+            evidenceJSON: #"{"schema_version":1,"basis":"synthetic-lineage-benchmark"}"#,
+            confidence: 1,
+            proposedBy: .user
+        )
+        _ = try store.documentRelations.review(
+            matterID: matter.id,
+            id: relation.id,
+            decision: .confirmed,
+            reviewedBy: "SupraBench",
+            reviewedAt: Date(timeIntervalSinceReferenceDate: 67)
+        )
+        try captureNewlyStale("relation")
+
+        let expectedStaleKeys = Set(cases.map { "\($0.key):\($0.key)" })
+        return LineageStalenessBenchmark.observations(
+            expectedStaleKeys: expectedStaleKeys,
+            actualStaleKeys: actualStaleKeys
+        )
+    }
+
+    private func seedLineageDocument(
+        store: SupraStore,
+        matterID: String,
+        name: String
+    ) throws -> (document: MatterDocumentRecord, revision: DocumentPartRevisionRecord) {
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "lineage-\(UUID().uuidString)",
+            byteSize: 1,
+            originalExtension: "txt",
+            managedRelativePath: "lineage/\(UUID().uuidString).txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matterID,
+            blobID: blob.id,
+            displayName: name
+        ))
+        try store.documentIndex.replaceParts(documentID: document.id, parts: [
+            DocumentPagePartRecord(
+                documentID: document.id,
+                partIndex: 0,
+                sourceKind: "text",
+                normalizedText: "LINEAGE-BENCHMARK-SOURCE",
+                charCount: 24
+            ),
+        ])
+        let revision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "lineage-\(document.id)",
+            origin: "parser",
+            method: "synthetic",
+            text: "LINEAGE-BENCHMARK-SOURCE",
+            charCount: 24
+        ))
+        return (document, revision)
+    }
+
+    private func seedLineageOutput(
+        store: SupraStore,
+        matterID: String,
+        document: (document: MatterDocumentRecord, revision: DocumentPartRevisionRecord),
+        embeddingModelID: String,
+        embeddingRevision: String,
+        chunkerVersion: Int,
+        promptBuilderVersion: String
+    ) throws -> StructuredOutputVersionRecord {
+        let output = try store.structuredOutputs.createOutput(
+            matterID: matterID,
+            title: "Lineage \(promptBuilderVersion)",
+            outputType: .documentQA
+        )
+        let sourceSet = try store.documentSources.createSourceSet(
+            matterID: matterID,
+            mode: .autoSource,
+            scopeJSON: #"{"document_ids":["synthetic"]}"#,
+            retrievalQuery: "lineage benchmark",
+            packingReportJSON: #"{"schema_version":1}"#,
+            embeddingModelID: embeddingModelID,
+            embeddingModelRevision: embeddingRevision,
+            chunkerVersion: chunkerVersion,
+            retrievalConfigJSON: #"{"rrf_k":67}"#,
+            corpusSnapshotHash: "lineage-snapshot"
+        )
+        try store.documentSources.addOutputSource(DocumentOutputSourceRecord(
+            sourceSetID: sourceSet.id,
+            documentID: document.document.id,
+            revisionID: document.revision.id,
+            citationLabel: "S1",
+            locatorJSON: #"{"source_kind":"text","char_start":0,"char_end":24}"#,
+            excerpt: "LINEAGE-BENCHMARK-SOURCE",
+            rank: 1
+        ))
+        let generation = try store.generation.createDocumentGenerationSession(
+            modelID: "lineage-runtime-model",
+            modelRepository: "synthetic/lineage-model",
+            modelRevision: "lineage-model-r1",
+            promptBuilderVersion: promptBuilderVersion,
+            prompt: "SYNTHETIC LINEAGE PROMPT",
+            options: GenerationOptions(temperature: 0.19, maxOutputTokens: 319)
+        )
+        let result = try PropositionSupportResult(
+            propositionID: "lineage-proposition",
+            status: .supported,
+            reasons: ["direct_textual_support"],
+            evidence: [
+                SupportEvidence(
+                    sourceID: "lineage-source",
+                    sourceLabel: "S1",
+                    locator: "Synthetic, characters 0-24",
+                    retainedExcerpt: "LINEAGE-BENCHMARK-SOURCE",
+                    verifierName: "LineageBenchmarkVerifier",
+                    verifierVersion: "lineage-support-v1"
+                ),
+            ],
+            timestamp: Date(timeIntervalSinceReferenceDate: 67)
+        )
+        return try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id,
+            contentMarkdown: "PERSISTED LINEAGE BENCHMARK OUTPUT",
+            requiredSections: [],
+            presentSections: [],
+            missingSections: [],
+            generationSessionID: generation.id,
+            verificationStatus: .allSupported,
+            verificationVersion: "lineage-support-v1",
+            verificationResults: [result],
+            sourceSetID: sourceSet.id,
+            promptBuilderVersion: promptBuilderVersion,
+            assuranceState: .propositionSupported,
+            outputStatus: .complete
         )
     }
 
@@ -823,7 +1071,8 @@ private struct DeterministicCorpusWorkload: Sendable {
                 title: "Synthetic list quality",
                 query: "Extract every synthetic list item.",
                 characterBudget: 1,
-                evaluationExpectedItemKeys: ["item-a", "item-b", "item-c"]
+                evaluationExpectedItemKeys: ["item-a", "item-b", "item-c"],
+                modelLineageJSON: #"{"model_repository":"synthetic/benchmark-runtime","model_revision":"benchmark-revision-v1"}"#
             )
         ) { input in
             switch input.partition.sources.first?.text {
@@ -860,7 +1109,8 @@ private struct DeterministicCorpusWorkload: Sendable {
                 matterID: failedMatter.id,
                 title: "Synthetic failed list",
                 query: "Extract every synthetic list item.",
-                characterBudget: 1
+                characterBudget: 1,
+                modelLineageJSON: #"{"model_repository":"synthetic/benchmark-runtime","model_revision":"benchmark-revision-v1"}"#
             )
         ) { _ in throw CorpusAnalysisMapFailure.permanent("synthetic benchmark map failure") }
 
@@ -877,7 +1127,8 @@ private struct DeterministicCorpusWorkload: Sendable {
                 matterID: invalidMatter.id,
                 title: "Synthetic schema-invalid list",
                 query: "Extract every synthetic list item.",
-                characterBudget: 1
+                characterBudget: 1,
+                modelLineageJSON: #"{"model_repository":"synthetic/benchmark-runtime","model_revision":"benchmark-revision-v1"}"#
             )
         ) { _ in #"{"schema_version":1,"items":[{"item_key":7}]}"# }
 

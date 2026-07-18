@@ -1517,6 +1517,103 @@ public enum SupraMigrator {
             )
         }
 
+        migrator.registerMigration("v067_add_output_generation_lineage") { db in
+            try db.alter(table: "structured_output_versions") { table in
+                table.add(column: "prompt_builder_version", .text)
+                table.add(column: "assurance_state", .text)
+                table.add(column: "stale_reason", .text)
+            }
+
+            // Chat sessions predate document generation and required both chat
+            // and message owners. Rebuild the table so a completed document
+            // generation can use the same durable audit record without minting
+            // synthetic chats/messages. The stable repository/revision pair is
+            // deliberately separate from the per-load runtime UUID.
+            try db.create(table: "generation_sessions_v067") { table in
+                table.column("id", .text).primaryKey()
+                table.column("chat_id", .text)
+                    .references("chats", onDelete: .cascade)
+                table.column("message_id", .text)
+                    .references("messages", onDelete: .cascade)
+                table.column("variant_id", .text)
+                table.column("model_id", .text)
+                table.column("model_repository", .text)
+                table.column("model_revision", .text)
+                table.column("prompt_builder_version", .text)
+                table.column("prompt", .text).notNull()
+                table.column("system_prompt", .text)
+                table.column("options_json", .text).notNull()
+                table.column("status", .text).notNull()
+                table.column("started_at", .datetime).notNull()
+                table.column("first_token_at", .datetime)
+                table.column("completed_at", .datetime)
+                table.column("load_time_ms", .integer)
+                table.column("first_token_latency_ms", .integer)
+                table.column("tokens_per_second", .double)
+                table.column("cancellation_latency_ms", .integer)
+                table.column("peak_memory_mb", .integer)
+                table.column("generated_token_count", .integer)
+                table.column("error_summary", .text)
+                table.column("interruption_reason", .text)
+                table.column("diagnostic_event_id", .text)
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+            }
+            try db.execute(sql: """
+                INSERT INTO generation_sessions_v067 (
+                    id, chat_id, message_id, variant_id, model_id,
+                    prompt, system_prompt, options_json, status, started_at,
+                    first_token_at, completed_at, load_time_ms,
+                    first_token_latency_ms, tokens_per_second,
+                    cancellation_latency_ms, peak_memory_mb,
+                    generated_token_count, error_summary, interruption_reason,
+                    diagnostic_event_id, created_at, updated_at
+                )
+                SELECT
+                    id, chat_id, message_id, variant_id, model_id,
+                    prompt, system_prompt, options_json, status, started_at,
+                    first_token_at, completed_at, load_time_ms,
+                    first_token_latency_ms, tokens_per_second,
+                    cancellation_latency_ms, peak_memory_mb,
+                    generated_token_count, error_summary, interruption_reason,
+                    diagnostic_event_id, created_at, updated_at
+                FROM generation_sessions
+                """)
+            try db.drop(table: "generation_sessions")
+            try db.rename(table: "generation_sessions_v067", to: "generation_sessions")
+            try db.create(
+                index: "idx_generation_sessions_chat_id",
+                on: "generation_sessions",
+                columns: ["chat_id", "started_at"]
+            )
+            try db.create(
+                index: "idx_generation_sessions_message_id",
+                on: "generation_sessions",
+                columns: ["message_id"]
+            )
+
+            // Only a unique v064 run link is enough evidence to copy assurance.
+            // Unrelated and ambiguously-linked historical versions stay unknown.
+            try db.execute(sql: """
+                UPDATE structured_output_versions
+                SET assurance_state = (
+                    SELECT run.assurance_state
+                    FROM corpus_analysis_runs AS run
+                    WHERE run.structured_output_version_id = structured_output_versions.id
+                      AND run.assurance_state IS NOT NULL
+                    ORDER BY run.completed_at DESC, run.id
+                    LIMIT 1
+                )
+                WHERE assurance_state IS NULL
+                  AND (
+                    SELECT COUNT(*)
+                    FROM corpus_analysis_runs AS run
+                    WHERE run.structured_output_version_id = structured_output_versions.id
+                      AND run.assurance_state IS NOT NULL
+                  ) = 1
+                """)
+        }
+
         return migrator
     }
 

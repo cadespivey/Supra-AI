@@ -56,6 +56,8 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         verificationResults: [PropositionSupportResult]? = nil,
         verifiedAt: Date? = nil,
         sourceSetID: String? = nil,
+        promptBuilderVersion: String? = nil,
+        assuranceState: OutputAssuranceState? = nil,
         outputStatus: StructuredOutputStatus? = nil,
         makeActive: Bool = true
     ) throws -> StructuredOutputVersionRecord {
@@ -64,6 +66,9 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         let missingSectionsJSON = try JSONCoding.encode(missingSections)
         let verificationJSON = try verificationResults.map(JSONCoding.encode)
         let normalizedVerificationVersion = verificationVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPromptBuilderVersion = promptBuilderVersion?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedAssurance = assuranceState ?? Self.defaultAssurance(for: verificationStatus)
 
         if verificationStatus == .allSupported {
             guard let normalizedVerificationVersion, !normalizedVerificationVersion.isEmpty else {
@@ -76,8 +81,13 @@ public final class StructuredOutputRepository: @unchecked Sendable {
                 throw StructuredOutputRepositoryError.allSupportedResultRequired
             }
         }
-        if outputStatus == .complete, verificationStatus != .allSupported {
-            throw StructuredOutputRepositoryError.completeStatusRequiresAllSupportedVerification
+        if outputStatus == .complete {
+            guard verificationStatus == .allSupported else {
+                throw StructuredOutputRepositoryError.completeStatusRequiresAllSupportedVerification
+            }
+            guard Self.supportsCompleteStatus(resolvedAssurance) else {
+                throw StructuredOutputRepositoryError.completeStatusRequiresSupportedAssurance
+            }
         }
 
         return try writer.write { db in
@@ -102,6 +112,8 @@ public final class StructuredOutputRepository: @unchecked Sendable {
                 verificationVersion: normalizedVerificationVersion,
                 verificationJSON: verificationJSON,
                 verifiedAt: resolvedVerifiedAt,
+                promptBuilderVersion: normalizedPromptBuilderVersion,
+                assuranceState: resolvedAssurance.rawValue,
                 createdAt: now,
                 updatedAt: now
             )
@@ -171,11 +183,16 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         verificationVersion: String,
         verificationResults: [PropositionSupportResult],
         outputStatus: StructuredOutputStatus,
-        corpusAnalysisRunID: String? = nil
+        corpusAnalysisRunID: String? = nil,
+        generationSessionID: String? = nil,
+        promptBuilderVersion: String? = nil,
+        assuranceState: OutputAssuranceState? = nil
     ) throws -> StructuredOutputVersionRecord {
         let requiredSectionsJSON = try JSONCoding.encode([String]())
         let verificationJSON = try JSONCoding.encode(verificationResults)
         let normalizedVerificationVersion = verificationVersion
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPromptBuilderVersion = promptBuilderVersion?
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         if verificationStatus == .allSupported {
@@ -187,9 +204,6 @@ public final class StructuredOutputRepository: @unchecked Sendable {
             else {
                 throw StructuredOutputRepositoryError.allSupportedResultRequired
             }
-        }
-        if outputStatus == .complete, verificationStatus != .allSupported {
-            throw StructuredOutputRepositoryError.completeStatusRequiresAllSupportedVerification
         }
         if let newOutput {
             _ = try Self.requireNonEmpty(newOutput.title, fieldName: "title")
@@ -226,12 +240,25 @@ public final class StructuredOutputRepository: @unchecked Sendable {
             guard output.matterID == sourceSet.matterID else {
                 throw StructuredOutputRepositoryError.sourceSetUnavailable(sourceSet.id)
             }
+            var corpusRun: CorpusAnalysisRunRecord?
             if let corpusAnalysisRunID {
                 guard let run = try CorpusAnalysisRunRecord.fetchOne(db, key: corpusAnalysisRunID),
                       run.matterID == output.matterID,
                       run.status == CorpusAnalysisRunStatus.persisted.rawValue,
                       run.structuredOutputVersionID == nil else {
                     throw StructuredOutputRepositoryError.corpusRunUnavailable(corpusAnalysisRunID)
+                }
+                corpusRun = run
+            }
+            let resolvedAssurance = assuranceState
+                ?? corpusRun.flatMap { $0.assuranceState.flatMap(OutputAssuranceState.init(rawValue:)) }
+                ?? Self.defaultAssurance(for: verificationStatus)
+            if outputStatus == .complete {
+                guard verificationStatus == .allSupported else {
+                    throw StructuredOutputRepositoryError.completeStatusRequiresAllSupportedVerification
+                }
+                guard Self.supportsCompleteStatus(resolvedAssurance) else {
+                    throw StructuredOutputRepositoryError.completeStatusRequiresSupportedAssurance
                 }
             }
 
@@ -263,10 +290,13 @@ public final class StructuredOutputRepository: @unchecked Sendable {
                 requiredSectionsJSON: requiredSectionsJSON,
                 presentSectionsJSON: requiredSectionsJSON,
                 missingSectionsJSON: requiredSectionsJSON,
+                generationSessionID: generationSessionID,
                 verificationStatus: verificationStatus.rawValue,
                 verificationVersion: normalizedVerificationVersion,
                 verificationJSON: verificationJSON,
                 verifiedAt: now,
+                promptBuilderVersion: normalizedPromptBuilderVersion,
+                assuranceState: resolvedAssurance.rawValue,
                 createdAt: now,
                 updatedAt: now
             )
@@ -377,6 +407,221 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         try writer.read { db in try StructuredOutputVersionRecord.fetchOne(db, key: id) }
     }
 
+    /// Stale is terminal for an existing version. A clean assurance state is
+    /// earned by appending a newly verified/generated version, never by erasing
+    /// the historical dependency failure in place.
+    public func updateAssuranceState(
+        versionID: String,
+        assuranceState: OutputAssuranceState
+    ) throws {
+        try writer.write { db in
+            guard let current = try StructuredOutputVersionRecord.fetchOne(db, key: versionID) else {
+                throw StructuredOutputRepositoryError.versionUnavailable(versionID)
+            }
+            if current.assuranceState == OutputAssuranceState.stale.rawValue,
+               assuranceState != .stale {
+                throw StructuredOutputRepositoryError.staleVersionRequiresNewVersion(versionID)
+            }
+            try db.execute(
+                sql: """
+                UPDATE structured_output_versions
+                SET assurance_state = ?, stale_reason = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                arguments: [assuranceState.rawValue, Date(), versionID]
+            )
+        }
+    }
+
+    @discardableResult
+    public func markStaleForSourceRevision(
+        matterID: String,
+        documentID: String,
+        fromRevisionID: String,
+        toRevisionID: String
+    ) throws -> Int {
+        let reason = "source_revision_changed:document=\(documentID):from=\(fromRevisionID):to=\(toRevisionID)"
+        return try markStale(
+            reason: reason,
+            selectSQL: """
+            SELECT DISTINCT source.structured_output_version_id
+            FROM document_output_sources AS source
+            JOIN structured_output_versions AS version
+              ON version.id = source.structured_output_version_id
+            JOIN structured_outputs AS output
+              ON output.id = version.structured_output_id
+            WHERE output.matter_id = ?
+              AND source.document_id = ?
+              AND source.revision_id = ?
+              AND version.assurance_state IS NOT ?
+            """,
+            arguments: [matterID, documentID, fromRevisionID, OutputAssuranceState.stale.rawValue]
+        )
+    }
+
+    @discardableResult
+    public func markStaleForDocumentReprocess(
+        matterID: String,
+        documentID: String
+    ) throws -> Int {
+        try markStale(
+            reason: "document_reprocessed:document=\(documentID)",
+            selectSQL: """
+            SELECT DISTINCT source.structured_output_version_id
+            FROM document_output_sources AS source
+            JOIN structured_output_versions AS version
+              ON version.id = source.structured_output_version_id
+            JOIN structured_outputs AS output
+              ON output.id = version.structured_output_id
+            WHERE output.matter_id = ?
+              AND source.document_id = ?
+              AND version.assurance_state IS NOT ?
+            """,
+            arguments: [matterID, documentID, OutputAssuranceState.stale.rawValue]
+        )
+    }
+
+    @discardableResult
+    public func markStaleForEmbeddingModelRevision(
+        matterID: String,
+        modelID: String,
+        fromRevision: String,
+        toRevision: String
+    ) throws -> Int {
+        let reason = "embedding_model_revision_changed:model=\(modelID):from=\(fromRevision):to=\(toRevision)"
+        return try markStale(
+            reason: reason,
+            selectSQL: """
+            SELECT DISTINCT set_row.structured_output_version_id
+            FROM document_source_sets AS set_row
+            JOIN structured_output_versions AS version
+              ON version.id = set_row.structured_output_version_id
+            JOIN structured_outputs AS output
+              ON output.id = version.structured_output_id
+            WHERE output.matter_id = ?
+              AND set_row.embedding_model_id = ?
+              AND set_row.embedding_model_revision = ?
+              AND version.assurance_state IS NOT ?
+            """,
+            arguments: [matterID, modelID, fromRevision, OutputAssuranceState.stale.rawValue]
+        )
+    }
+
+    @discardableResult
+    public func markStaleForEmbeddingModelSelection(
+        matterID: String,
+        fromModelID: String,
+        fromRevision: String,
+        toModelID: String,
+        toRevision: String
+    ) throws -> Int {
+        let reason = "embedding_model_changed:from=\(fromModelID)@\(fromRevision):to=\(toModelID)@\(toRevision)"
+        return try markStale(
+            reason: reason,
+            selectSQL: """
+            SELECT DISTINCT set_row.structured_output_version_id
+            FROM document_source_sets AS set_row
+            JOIN structured_output_versions AS version
+              ON version.id = set_row.structured_output_version_id
+            JOIN structured_outputs AS output
+              ON output.id = version.structured_output_id
+            WHERE output.matter_id = ?
+              AND set_row.embedding_model_id = ?
+              AND set_row.embedding_model_revision = ?
+              AND version.assurance_state IS NOT ?
+            """,
+            arguments: [
+                matterID, fromModelID, fromRevision,
+                OutputAssuranceState.stale.rawValue,
+            ]
+        )
+    }
+
+    @discardableResult
+    public func markStaleForChunkerVersion(
+        matterID: String,
+        fromVersion: Int,
+        toVersion: Int
+    ) throws -> Int {
+        let reason = "chunker_version_changed:from=\(fromVersion):to=\(toVersion)"
+        return try markStale(
+            reason: reason,
+            selectSQL: """
+            SELECT DISTINCT set_row.structured_output_version_id
+            FROM document_source_sets AS set_row
+            JOIN structured_output_versions AS version
+              ON version.id = set_row.structured_output_version_id
+            JOIN structured_outputs AS output
+              ON output.id = version.structured_output_id
+            WHERE output.matter_id = ?
+              AND set_row.chunker_version = ?
+              AND version.assurance_state IS NOT ?
+            """,
+            arguments: [matterID, fromVersion, OutputAssuranceState.stale.rawValue]
+        )
+    }
+
+    @discardableResult
+    public func markStaleForPromptBuilderVersion(
+        matterID: String,
+        fromVersion: String,
+        toVersion: String
+    ) throws -> Int {
+        let reason = "prompt_builder_version_changed:from=\(fromVersion):to=\(toVersion)"
+        return try markStale(
+            reason: reason,
+            selectSQL: """
+            SELECT DISTINCT version.id
+            FROM structured_output_versions AS version
+            JOIN structured_outputs AS output
+              ON output.id = version.structured_output_id
+            WHERE output.matter_id = ?
+              AND version.prompt_builder_version = ?
+              AND version.assurance_state IS NOT ?
+            """,
+            arguments: [matterID, fromVersion, OutputAssuranceState.stale.rawValue]
+        )
+    }
+
+    private func markStale(
+        reason: String,
+        selectSQL: String,
+        arguments: StatementArguments
+    ) throws -> Int {
+        try writer.write { db in
+            let versionIDs = try String.fetchAll(db, sql: selectSQL, arguments: arguments)
+            guard !versionIDs.isEmpty else { return 0 }
+            let now = Date()
+            try db.execute(literal: """
+                UPDATE structured_output_versions
+                SET assurance_state = \(OutputAssuranceState.stale.rawValue),
+                    stale_reason = \(reason),
+                    updated_at = \(now)
+                WHERE id IN \(versionIDs)
+                  AND assurance_state IS NOT \(OutputAssuranceState.stale.rawValue)
+                """)
+            let changedCount = db.changesCount
+            try db.execute(literal: """
+                UPDATE structured_outputs
+                SET status = \(StructuredOutputStatus.needsReview.rawValue),
+                    updated_at = \(now)
+                WHERE active_version_id IN \(versionIDs)
+                  AND status IS NOT \(StructuredOutputStatus.needsReview.rawValue)
+                """)
+            return changedCount
+        }
+    }
+
+    private static func defaultAssurance(
+        for verificationStatus: OutputVerificationStatus
+    ) -> OutputAssuranceState {
+        verificationStatus == .allSupported ? .propositionSupported : .supportNeedsReview
+    }
+
+    private static func supportsCompleteStatus(_ assuranceState: OutputAssuranceState) -> Bool {
+        assuranceState == .propositionSupported || assuranceState == .corpusComplete
+    }
+
     private static func requireNonEmpty(_ value: String, fieldName: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -391,7 +636,10 @@ public enum StructuredOutputRepositoryError: Error, Equatable, Sendable {
     case verificationVersionRequired
     case allSupportedResultRequired
     case completeStatusRequiresAllSupportedVerification
+    case completeStatusRequiresSupportedAssurance
     case sourceSetUnavailable(String)
     case outputUnavailable(String)
     case corpusRunUnavailable(String)
+    case versionUnavailable(String)
+    case staleVersionRequiresNewVersion(String)
 }

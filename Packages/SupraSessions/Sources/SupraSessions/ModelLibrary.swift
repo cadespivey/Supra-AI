@@ -100,6 +100,12 @@ public final class ModelLibrary: ObservableObject {
         return models.first { $0.id == modelID }
     }
 
+    /// Returns the verified, stable artifact identity used by document-output
+    /// lineage. A loaded runtime UUID alone is intentionally insufficient.
+    public func generationLineage(for modelID: ModelID) -> DocumentGenerationModelLineage? {
+        DocumentGenerationModelLineage.resolve(modelID: modelID, store: store)
+    }
+
     public func preferredModelID(
         for role: ModelRole,
         configuration: LegalModelConfiguration = .fromEnvironment()

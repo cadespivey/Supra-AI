@@ -16,6 +16,7 @@ import SupraStore
 /// narrative synthesized from the merged entries in bounded second-stage passes.
 @MainActor
 public final class DocumentChronologyController: ObservableObject {
+    public static let promptBuilderVersion = "document-chronology-v1"
     /// Where a generation currently is, for progress UI. `mapping` counts are
     /// 1-based ("pass 2 of 3").
     public enum Progress: Equatable, Sendable {
@@ -42,6 +43,7 @@ public final class DocumentChronologyController: ObservableObject {
 
     private var generationTask: Task<DocumentQAController.QAResult?, Never>?
     private var activeGenerationID: GenerationID?
+    private var activeRunPrompts: [String] = []
 
     public let matterID: String
     private let store: SupraStore
@@ -80,15 +82,28 @@ public final class DocumentChronologyController: ObservableObject {
         scope: RetrievalScope = .wholeMatter,
         format: DocumentChronologyFormat = .table,
         modelID: ModelID?,
+        modelLineage: DocumentGenerationModelLineage? = nil,
         route: ModelRoute? = nil
     ) async -> DocumentQAController.QAResult? {
-        await run(scope: scope, format: format, modelID: modelID, route: route, existingOutputID: nil)
+        await run(
+            scope: scope,
+            format: format,
+            modelID: modelID,
+            modelLineage: modelLineage,
+            route: route,
+            existingOutputID: nil
+        )
     }
 
     /// Regenerates a saved chronology using its stored scope + format, creating a
     /// new version with a fresh source set (plan §9.1, §10.1).
     @discardableResult
-    public func regenerate(outputID: String, modelID: ModelID?, route: ModelRoute? = nil) async -> DocumentQAController.QAResult? {
+    public func regenerate(
+        outputID: String,
+        modelID: ModelID?,
+        modelLineage: DocumentGenerationModelLineage? = nil,
+        route: ModelRoute? = nil
+    ) async -> DocumentQAController.QAResult? {
         guard let output = try? store.structuredOutputs.fetchOutputs(matterID: matterID).first(where: { $0.id == outputID }),
               let activeVersionID = output.activeVersionID,
               let sourceSet = try? store.documentSources.fetchSourceSet(structuredOutputVersionID: activeVersionID) else {
@@ -97,7 +112,14 @@ public final class DocumentChronologyController: ObservableObject {
         }
         let scope = (try? JSONDecoder().decode(RetrievalScope.self, from: Data(sourceSet.scopeJSON.utf8))) ?? .wholeMatter
         let format: DocumentChronologyFormat = output.outputType == StructuredOutputType.factChronologyNarrative.rawValue ? .narrative : .table
-        return await run(scope: scope, format: format, modelID: modelID, route: route, existingOutputID: outputID)
+        return await run(
+            scope: scope,
+            format: format,
+            modelID: modelID,
+            modelLineage: modelLineage,
+            route: route,
+            existingOutputID: outputID
+        )
     }
 
     /// Wraps `produce` in a stored task so `cancel()` has something to cancel;
@@ -107,6 +129,7 @@ public final class DocumentChronologyController: ObservableObject {
         scope: RetrievalScope,
         format: DocumentChronologyFormat,
         modelID: ModelID?,
+        modelLineage: DocumentGenerationModelLineage?,
         route: ModelRoute?,
         existingOutputID: String?
     ) async -> DocumentQAController.QAResult? {
@@ -115,7 +138,14 @@ public final class DocumentChronologyController: ObservableObject {
         // the run that is already streaming.
         guard generationTask == nil else { return nil }
         let task = Task {
-            await self.produce(scope: scope, format: format, modelID: modelID, route: route, existingOutputID: existingOutputID)
+            await self.produce(
+                scope: scope,
+                format: format,
+                modelID: modelID,
+                modelLineage: modelLineage,
+                route: route,
+                existingOutputID: existingOutputID
+            )
         }
         generationTask = task
         defer { generationTask = nil }
@@ -149,6 +179,7 @@ public final class DocumentChronologyController: ObservableObject {
         scope: RetrievalScope,
         format: DocumentChronologyFormat,
         modelID: ModelID?,
+        modelLineage: DocumentGenerationModelLineage?,
         route: ModelRoute?,
         existingOutputID: String?
     ) async -> DocumentQAController.QAResult? {
@@ -159,6 +190,13 @@ public final class DocumentChronologyController: ObservableObject {
             } else {
                 "Assign a task model in the Models tab to build a chronology."
             }
+            return nil
+        }
+        guard let resolvedModelLineage = modelLineage ?? DocumentGenerationModelLineage.resolve(
+            modelID: modelID,
+            store: store
+        ) else {
+            message = DocumentGenerationLineageError.stableModelIdentityUnavailable.localizedDescription
             return nil
         }
         let readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope)) ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
@@ -175,6 +213,7 @@ public final class DocumentChronologyController: ObservableObject {
         message = nil
         summaryMessage = nil
         lastCorpusRunID = nil
+        activeRunPrompts = []
         defer {
             isGenerating = false
             progress = .idle
@@ -314,7 +353,11 @@ public final class DocumentChronologyController: ObservableObject {
                 status: status,
                 verificationStatus: persistedVerificationStatus,
                 verificationResults: verification.results + finalNarrativeCitationFailures,
-                corpusAnalysisRunID: ledger.runID
+                corpusAnalysisRunID: ledger.runID,
+                modelID: modelID,
+                modelLineage: resolvedModelLineage,
+                route: effectiveRoute,
+                prompt: activeRunPrompts.joined(separator: "\n\n--- prompt boundary ---\n\n")
             )
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "chronology_generated", actor: "runtime",
@@ -1068,7 +1111,11 @@ public final class DocumentChronologyController: ObservableObject {
         status: StructuredOutputStatus,
         verificationStatus: OutputVerificationStatus,
         verificationResults: [PropositionSupportResult],
-        corpusAnalysisRunID: String
+        corpusAnalysisRunID: String,
+        modelID: ModelID,
+        modelLineage: DocumentGenerationModelLineage,
+        route: ModelRoute?,
+        prompt: String
     ) throws -> (outputID: String, version: StructuredOutputVersionRecord) {
         let outputID = existingOutputID ?? UUID().uuidString
         let newOutput = existingOutputID == nil
@@ -1081,6 +1128,15 @@ public final class DocumentChronologyController: ObservableObject {
             )
             : nil
         let sourceSet = try makeSourceSet(prepared: prepared, scope: scope)
+        let generation = try store.generation.createDocumentGenerationSession(
+                modelID: modelID.rawValue.uuidString,
+                modelRepository: modelLineage.modelRepository,
+                modelRevision: modelLineage.modelRevision,
+                promptBuilderVersion: Self.promptBuilderVersion,
+                prompt: prompt,
+                systemPrompt: routedSystemPrompt(route),
+                options: route?.options ?? GenerationOptions()
+            )
         let version = try store.structuredOutputs.createVersionWithSourceSetAtomically(
             structuredOutputID: outputID,
             newOutput: newOutput,
@@ -1091,7 +1147,9 @@ public final class DocumentChronologyController: ObservableObject {
             verificationVersion: DocumentSupportVerifier.version,
             verificationResults: verificationResults,
             outputStatus: status,
-            corpusAnalysisRunID: corpusAnalysisRunID
+            corpusAnalysisRunID: corpusAnalysisRunID,
+            generationSessionID: generation.id,
+            promptBuilderVersion: Self.promptBuilderVersion
         )
         return (outputID, version)
     }
@@ -1352,6 +1410,7 @@ public final class DocumentChronologyController: ObservableObject {
     }
 
     private func collect(prompt: String, modelID: ModelID, route: ModelRoute?) async throws -> String {
+        activeRunPrompts.append(prompt)
         let request = GenerateRequest(
             generationID: GenerationID(), modelID: modelID, prompt: prompt,
             // Keep chronology structure isolated from the user's free-form profile

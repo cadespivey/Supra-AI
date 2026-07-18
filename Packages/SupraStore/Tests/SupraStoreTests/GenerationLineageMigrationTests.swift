@@ -20,43 +20,76 @@ final class GenerationLineageMigrationTests: XCTestCase {
         let matter = try matters.createMatter(name: "Synthetic v067 lineage matter")
         let chat = try chats.createMatterChat(matterID: matter.id, title: "Legacy chat lineage")
         let message = try chats.createAssistantMessageShell(chatID: chat.id)
-        let legacySession = try generation.createGenerationSession(
-            chatID: chat.id,
-            messageID: message.id,
-            modelID: "runtime-uuid-only",
-            prompt: "legacy prompt bytes",
-            options: GenerationOptions(temperature: 0.37, maxOutputTokens: 77)
+        let legacySessionID = "legacy-generation-session-v066"
+        let legacyOptions = try JSONCoding.encode(
+            GenerationOptions(temperature: 0.37, maxOutputTokens: 77)
         )
+        try queue.write { db in
+            let now = Date(timeIntervalSinceReferenceDate: 67)
+            try db.execute(
+                sql: """
+                INSERT INTO generation_sessions (
+                    id, chat_id, message_id, model_id, prompt, options_json,
+                    status, started_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                """,
+                arguments: [
+                    legacySessionID, chat.id, message.id, "runtime-uuid-only",
+                    "legacy prompt bytes", legacyOptions, now, now, now,
+                ]
+            )
+        }
         let linkedOutput = try outputs.createOutput(
             matterID: matter.id,
             title: "Run-linked output",
             outputType: .documentExhaustiveList,
             status: .needsReview
         )
-        let linkedVersion = try outputs.createVersion(
-            structuredOutputID: linkedOutput.id,
-            contentMarkdown: "RUN-LINKED-CONTENT",
-            requiredSections: [],
-            presentSections: [],
-            missingSections: [],
-            generationSessionID: legacySession.id,
-            makeActive: true
-        )
+        let linkedVersionID = "run-linked-version-v066"
         let unrelatedOutput = try outputs.createOutput(
             matterID: matter.id,
             title: "Unrelated historical output",
             outputType: .documentQA,
             status: .needsReview
         )
-        let unrelatedVersion = try outputs.createVersion(
-            structuredOutputID: unrelatedOutput.id,
-            contentMarkdown: "UNRELATED-HISTORICAL-CONTENT",
-            requiredSections: [],
-            presentSections: [],
-            missingSections: [],
-            makeActive: true
-        )
+        let unrelatedVersionID = "unrelated-version-v066"
         try queue.write { db in
+            let now = Date(timeIntervalSinceReferenceDate: 67)
+            try db.execute(
+                sql: """
+                INSERT INTO structured_output_versions (
+                    id, structured_output_id, version_index, content_markdown,
+                    required_sections_json, present_sections_json,
+                    missing_sections_json, generation_session_id,
+                    verification_status, created_at, updated_at
+                ) VALUES (?, ?, 1, ?, '[]', '[]', '[]', ?, 'legacy_unverified', ?, ?)
+                """,
+                arguments: [
+                    linkedVersionID, linkedOutput.id, "RUN-LINKED-CONTENT",
+                    legacySessionID, now, now,
+                ]
+            )
+            try db.execute(
+                sql: """
+                INSERT INTO structured_output_versions (
+                    id, structured_output_id, version_index, content_markdown,
+                    required_sections_json, present_sections_json,
+                    missing_sections_json, verification_status, created_at, updated_at
+                ) VALUES (?, ?, 1, ?, '[]', '[]', '[]', 'legacy_unverified', ?, ?)
+                """,
+                arguments: [
+                    unrelatedVersionID, unrelatedOutput.id,
+                    "UNRELATED-HISTORICAL-CONTENT", now, now,
+                ]
+            )
+            try db.execute(
+                sql: "UPDATE structured_outputs SET active_version_id = ? WHERE id = ?",
+                arguments: [linkedVersionID, linkedOutput.id]
+            )
+            try db.execute(
+                sql: "UPDATE structured_outputs SET active_version_id = ? WHERE id = ?",
+                arguments: [unrelatedVersionID, unrelatedOutput.id]
+            )
             try db.execute(
                 sql: """
                 INSERT INTO corpus_analysis_runs (
@@ -70,7 +103,7 @@ final class GenerationLineageMigrationTests: XCTestCase {
                     'persisted', 'corpus_complete', ?, ?, ?
                 )
                 """,
-                arguments: [matter.id, linkedVersion.id, Date(), Date()]
+                arguments: [matter.id, linkedVersionID, Date(), Date()]
             )
         }
 
@@ -101,8 +134,8 @@ final class GenerationLineageMigrationTests: XCTestCase {
             XCTAssertFalse(try XCTUnwrap(generationColumns["message_id"]).isNotNull)
         }
 
-        let migratedLinked = try XCTUnwrap(outputs.fetchVersion(id: linkedVersion.id))
-        let migratedUnrelated = try XCTUnwrap(outputs.fetchVersion(id: unrelatedVersion.id))
+        let migratedLinked = try XCTUnwrap(outputs.fetchVersion(id: linkedVersionID))
+        let migratedUnrelated = try XCTUnwrap(outputs.fetchVersion(id: unrelatedVersionID))
         XCTAssertEqual(migratedLinked.contentMarkdown, "RUN-LINKED-CONTENT")
         XCTAssertEqual(migratedLinked.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
         XCTAssertNil(migratedLinked.promptBuilderVersion)
@@ -112,7 +145,7 @@ final class GenerationLineageMigrationTests: XCTestCase {
         XCTAssertNil(migratedUnrelated.promptBuilderVersion)
         XCTAssertNil(migratedUnrelated.staleReason)
 
-        let preservedSession = try XCTUnwrap(generation.fetchGenerationSession(generationID: legacySession.id))
+        let preservedSession = try XCTUnwrap(generation.fetchGenerationSession(generationID: legacySessionID))
         XCTAssertEqual(preservedSession.chatID, chat.id)
         XCTAssertEqual(preservedSession.messageID, message.id)
         XCTAssertNil(preservedSession.modelRepository)

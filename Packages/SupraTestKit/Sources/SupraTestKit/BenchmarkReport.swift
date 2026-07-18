@@ -19,7 +19,7 @@ public enum BenchmarkMetricCatalog {
         .init(id: "B-EXT-01", title: "Extraction character error", unavailableReason: "normalized extraction goldens do not exist before M4"),
         .init(id: "B-EXT-02", title: "Extraction field accuracy", unavailableReason: "typed extraction fields do not exist before M4"),
         .init(id: "B-ISO-01", title: "Matter isolation", unavailableReason: "isolation observation unavailable"),
-        .init(id: "B-LIN-01", title: "Stale detection", unavailableReason: "lineage dependency matrix does not exist before M8"),
+        .init(id: "B-LIN-01", title: "Stale detection", unavailableReason: "lineage dependency observation unavailable"),
         .init(id: "B-LOC-01", title: "Locator round trip", unavailableReason: "revision-bound golden locators do not exist before M4"),
         .init(id: "B-LST-01", title: "Exhaustive list accuracy", unavailableReason: "exhaustive list engine does not exist before M6"),
         .init(id: "B-NEG-01", title: "Negative false accepts", unavailableReason: "negative task engine does not exist before M6"),

@@ -36,6 +36,7 @@ public final class DocumentRechunkService: @unchecked Sendable {
         let chunker = DocumentChunker(version: targetVersion)
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
         var scheduledDocumentIDs: [String] = []
+        var replacedChunkerVersions = Set<Int>()
 
         for document in documents where extractionIsComplete(document) {
             let chunks = try store.documentIndex.fetchChunks(documentID: document.id)
@@ -44,9 +45,18 @@ public final class DocumentRechunkService: @unchecked Sendable {
                 && chunks.allSatisfy { $0.chunkerVersion == targetVersion }
                 && (status == .textIndexed || status == .ready)
             guard !alreadyComplete else { continue }
+            replacedChunkerVersions.formUnion(chunks.map(\.chunkerVersion).filter { $0 != targetVersion })
             try Task.checkCancellation()
             try store.documentLibrary.updateIndexStatus(documentID: document.id, indexStatus: .stale)
             scheduledDocumentIDs.append(document.id)
+        }
+
+        for priorVersion in replacedChunkerVersions.sorted() {
+            _ = try OutputStalenessService(store: store).chunkerVersionChanged(
+                matterID: matterID,
+                fromVersion: priorVersion,
+                toVersion: targetVersion
+            )
         }
 
         let reindexed = try await DocumentIndexingService(

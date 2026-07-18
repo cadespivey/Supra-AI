@@ -11,6 +11,10 @@ import XCTest
 /// a runtime text model.
 @MainActor
 final class Milestone3ValidationTests: XCTestCase {
+    private static let modelLineage = DocumentGenerationModelLineage(
+        modelRepository: "synthetic/validation-runtime",
+        modelRevision: "validation-revision-v1"
+    )
     private var root = URL(fileURLWithPath: "/tmp")
     private var storageRoot = URL(fileURLWithPath: "/tmp")
 
@@ -94,7 +98,11 @@ final class Milestone3ValidationTests: XCTestCase {
             .events([.event(request, 0, .token, token: "Indemnification survives termination [S1]."), .event(request, 1, .generationCompleted)])
         })
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: embedder)
-        let qaGen = await qa.generate(question: "Does indemnification survive termination?", modelID: ModelID())
+        let qaGen = await qa.generate(
+            question: "Does indemnification survive termination?",
+            modelID: ModelID(),
+            modelLineage: Self.modelLineage
+        )
         let qaResult = try XCTUnwrap(qaGen)
         // Gate: Q&A has no unresolved citation ids.
         let qaSources = try store.documentSources.fetchSources(structuredOutputVersionID: qaResult.versionID)
@@ -105,7 +113,12 @@ final class Milestone3ValidationTests: XCTestCase {
             .events([.event(request, 0, .token, token: "| Date | Event | Source |\n| 2024-03-03 | Agreement executed [S1] | [S1] |"), .event(request, 1, .generationCompleted)])
         })
         let chronology = DocumentChronologyController(matterID: matter.id, store: store, runtimeClient: chronoRuntime)
-        let chronoGen = await chronology.generate(scope: .wholeMatter, format: .table, modelID: ModelID())
+        let chronoGen = await chronology.generate(
+            scope: .wholeMatter,
+            format: .table,
+            modelID: ModelID(),
+            modelLineage: Self.modelLineage
+        )
         let chronoResult = try XCTUnwrap(chronoGen)
         let chronoSources = try store.documentSources.fetchSources(structuredOutputVersionID: chronoResult.versionID)
         XCTAssertFalse(chronoSources.isEmpty)

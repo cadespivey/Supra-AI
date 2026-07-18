@@ -72,6 +72,10 @@ private func distinctCanaries(in text: String, canaries: [String]) -> Int {
 
 @MainActor
 final class DocumentQATests: XCTestCase {
+    private static let syntheticModelLineage = DocumentGenerationModelLineage(
+        modelRepository: "synthetic/qa-runtime",
+        modelRevision: "qa-revision-nondefault"
+    )
 
     func testRerankOrderPrefersModelLabelsThenBackfillsInRetrievalOrder() {
         let retrieval = (1...5).map { "S\($0)" } // S1…S5
@@ -119,7 +123,7 @@ final class DocumentQATests: XCTestCase {
             )
         )
         let result = try XCTUnwrap(generated)
-        XCTAssertEqual(result.status, StructuredOutputStatus.complete.rawValue)
+        XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue)
         XCTAssertEqual(result.citationLabels, ["S1"])
         XCTAssertFalse(result.unsupported)
         XCTAssertTrue(result.markdown.contains("## Sources"))
@@ -164,7 +168,7 @@ final class DocumentQATests: XCTestCase {
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: nil)
 
         // Default pass is the fast tier and records it on the source set.
-        let generated = await qa.generate(question: "When was the agreement signed?", modelID: ModelID())
+        let generated = await qa.generate(question: "When was the agreement signed?", modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         let preliminary = try XCTUnwrap(generated)
         XCTAssertEqual(preliminary.depth, .fast)
         let fastSet = try store.documentSources.fetchSourceSet(structuredOutputVersionID: preliminary.versionID)
@@ -172,7 +176,7 @@ final class DocumentQATests: XCTestCase {
 
         // "Search all documents" = regenerate at .deep: a NEW version (the
         // preliminary answer is retained) whose source set records the deep pass.
-        let regenerated = await qa.regenerate(outputID: preliminary.outputID, modelID: ModelID())
+        let regenerated = await qa.regenerate(outputID: preliminary.outputID, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         let deeper = try XCTUnwrap(regenerated)
         XCTAssertEqual(deeper.depth, .deep)
         XCTAssertNotEqual(deeper.versionID, preliminary.versionID, "the preliminary version is never discarded")
@@ -192,7 +196,7 @@ final class DocumentQATests: XCTestCase {
             ])
         })
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: nil)
-        let generated = await qa.generate(question: "What is the indemnification cap?", modelID: ModelID())
+        let generated = await qa.generate(question: "What is the indemnification cap?", modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         let result = try XCTUnwrap(generated)
         XCTAssertTrue(result.unsupported)
         // A refusal based on a retrieved subset cannot prove absence across the
@@ -217,7 +221,7 @@ final class DocumentQATests: XCTestCase {
         })
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: nil)
 
-        let generated = await qa.generate(question: "When was notice required?", modelID: ModelID())
+        let generated = await qa.generate(question: "When was notice required?", modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
 
         XCTAssertNotNil(generated)
     }
@@ -291,6 +295,7 @@ final class DocumentQATests: XCTestCase {
         let generated = await qa.generate(
             question: "When was the payment obligation due?",
             modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage,
             route: route
         )
         let result = try XCTUnwrap(generated)
@@ -319,7 +324,7 @@ final class DocumentQATests: XCTestCase {
             ])
         })
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: nil)
-        let generated = await qa.generate(question: "What were the damages?", modelID: ModelID())
+        let generated = await qa.generate(question: "What were the damages?", modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         let result = try XCTUnwrap(generated)
         XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue)
         XCTAssertTrue(result.warnings.contains { $0.contains("no inline citations") })
@@ -333,7 +338,7 @@ final class DocumentQATests: XCTestCase {
         _ = try store.documentLibrary.insertDocument(MatterDocumentRecord(matterID: matter.id, blobID: blob.id, displayName: "x.txt", status: MatterDocumentStatus.extracting.rawValue, extractionStatus: DocumentExtractionStatus.extracted.rawValue))
 
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: StubRuntimeClient(), embedder: nil)
-        let result = await qa.generate(question: "anything?", modelID: ModelID())
+        let result = await qa.generate(question: "anything?", modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         XCTAssertNil(result)
         XCTAssertNotNil(qa.message)
     }
@@ -494,7 +499,7 @@ final class DocumentQATests: XCTestCase {
         })
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: nil)
 
-        let generated = await qa.generate(question: "When was payment due?", modelID: ModelID())
+        let generated = await qa.generate(question: "When was payment due?", modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         let result = try XCTUnwrap(generated)
         XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue)
 
@@ -527,11 +532,11 @@ final class DocumentQATests: XCTestCase {
         })
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: nil)
 
-        let generated = await qa.generate(question: "When was the agreement executed?", modelID: ModelID())
+        let generated = await qa.generate(question: "When was the agreement executed?", modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         let first = try XCTUnwrap(generated)
-        let regenerated = await qa.regenerate(outputID: first.outputID, modelID: ModelID())
+        let regenerated = await qa.regenerate(outputID: first.outputID, modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         let second = try XCTUnwrap(regenerated)
-        XCTAssertEqual(first.status, StructuredOutputStatus.complete.rawValue)
+        XCTAssertEqual(first.status, StructuredOutputStatus.needsReview.rawValue)
         XCTAssertEqual(second.status, StructuredOutputStatus.needsReview.rawValue)
 
         let versions = try store.structuredOutputs.fetchVersions(structuredOutputID: first.outputID)
@@ -574,9 +579,9 @@ final class DocumentQATests: XCTestCase {
         })
         let qa = DocumentQAController(matterID: selectedMatter.id, store: store, runtimeClient: runtime, embedder: nil)
 
-        let generated = await qa.generate(question: "When was payment due?", modelID: ModelID())
+        let generated = await qa.generate(question: "When was payment due?", modelID: ModelID(), modelLineage: Self.syntheticModelLineage)
         let result = try XCTUnwrap(generated)
-        XCTAssertEqual(result.status, StructuredOutputStatus.complete.rawValue)
+        XCTAssertEqual(result.status, StructuredOutputStatus.needsReview.rawValue)
         let version = try XCTUnwrap(try store.structuredOutputs.fetchVersions(structuredOutputID: result.outputID).first)
         let verificationJSON = try XCTUnwrap(version.verificationJSON)
         XCTAssertFalse(verificationJSON.contains("OMEGA_CANARY"))

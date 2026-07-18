@@ -865,13 +865,23 @@ public final class DocumentImportService: @unchecked Sendable {
         reason: String = "User correction"
     ) throws {
         let matterID = try store.documentLibrary.fetchDocument(id: documentID)?.matterID
-        _ = try store.documentRevisions.appendUserEdit(
+        let priorRevisionID = try store.documentIndex.fetchParts(documentID: documentID)
+            .first(where: { $0.id == partID })?.currentRevisionID
+        let revision = try store.documentRevisions.appendUserEdit(
             documentID: documentID,
             partID: partID,
             text: TextNormalization.normalize(text),
             author: author.trimmingCharacters(in: .whitespacesAndNewlines),
             reason: reason.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+        if let matterID, let priorRevisionID {
+            _ = try OutputStalenessService(store: store).sourceRevisionChanged(
+                matterID: matterID,
+                documentID: documentID,
+                fromRevisionID: priorRevisionID,
+                toRevisionID: revision.id
+            )
+        }
         let selectedParts = try store.documentIndex.fetchParts(documentID: documentID)
         try persistStructure(
             .wrapper(for: extractedParts(from: selectedParts)),
@@ -924,6 +934,10 @@ public final class DocumentImportService: @unchecked Sendable {
             relativePath: blob.managedRelativePath,
             expectedSHA256: blob.sha256,
             expectedByteSize: blob.byteSize
+        )
+        _ = try OutputStalenessService(store: store).documentReprocessed(
+            matterID: document.matterID,
+            documentID: documentID
         )
         let hadSelectedUserEdit = try store.documentIndex.fetchParts(documentID: documentID).contains { part in
             guard let revisionID = part.currentRevisionID,

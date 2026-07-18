@@ -148,6 +148,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
 
     public static let schemaVersion = 1
     public static let verificationVersion = "exhaustive-list-v1"
+    public static let promptBuilderVersion = "exhaustive-list-v1"
 
     private let store: SupraStore
 
@@ -159,6 +160,12 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         request: ExhaustiveListRequest,
         generator: @escaping Generator
     ) async throws -> ExhaustiveListResult {
+        guard let resolvedModelLineage = DocumentGenerationModelLineage.decode(
+            json: request.modelLineageJSON
+        ) else {
+            throw DocumentGenerationLineageError.stableModelIdentityUnavailable
+        }
+        let promptCollector = PromptCollector()
         let engineResult = try await CorpusAnalysisEngine(store: store).run(
             request: CorpusAnalysisRequest(
                 runKey: request.runKey,
@@ -170,9 +177,11 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                 modelLineageJSON: request.modelLineageJSON
             )
         ) { partition in
+            let prompt = Self.prompt(query: request.query, partition: partition)
+            promptCollector.append(prompt)
             let raw = try await generator(ExhaustiveListGenerationInput(
                 partition: partition,
-                prompt: Self.prompt(query: request.query, partition: partition)
+                prompt: prompt
             ))
             return try Self.decodeMapResponse(raw)
         }
@@ -301,6 +310,17 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                 rank: index + 1
             )
         }
+        let generation = try store.generation.createDocumentGenerationSession(
+                    modelRepository: resolvedModelLineage.modelRepository,
+                    modelRevision: resolvedModelLineage.modelRevision,
+                    promptBuilderVersion: Self.promptBuilderVersion,
+                    prompt: promptCollector.joined(or: request.query),
+                    optionsJSON: try Self.canonicalJSON(GenerationAuditOptions(
+                        characterBudget: request.characterBudget,
+                        maximumRetryCount: request.maximumRetryCount,
+                        taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue
+                    ))
+                )
         let version = try store.structuredOutputs.createVersionWithSourceSetAtomically(
             structuredOutputID: outputID,
             newOutput: StructuredOutputRecord(
@@ -320,7 +340,9 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                 material: material
             ),
             outputStatus: outputStatus,
-            corpusAnalysisRunID: run.id
+            corpusAnalysisRunID: run.id,
+            generationSessionID: generation.id,
+            promptBuilderVersion: Self.promptBuilderVersion
         )
         run = try store.corpusAnalysis.fetchRun(matterID: request.matterID, id: run.id) ?? run
         return ExhaustiveListResult(
@@ -354,6 +376,35 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         Every emitted item requires at least one exact evidence reference from the source envelope.
         \(partition.promptEnvelope)
         """
+    }
+
+    private struct GenerationAuditOptions: Codable, Sendable {
+        var characterBudget: Int
+        var maximumRetryCount: Int
+        var taskKind: String
+
+        private enum CodingKeys: String, CodingKey {
+            case characterBudget = "character_budget"
+            case maximumRetryCount = "maximum_retry_count"
+            case taskKind = "task_kind"
+        }
+    }
+
+    private final class PromptCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var prompts: [String] = []
+
+        func append(_ prompt: String) {
+            lock.withLock { prompts.append(prompt) }
+        }
+
+        func joined(or fallback: String) -> String {
+            lock.withLock {
+                prompts.isEmpty
+                    ? fallback
+                    : prompts.joined(separator: "\n\n--- prompt boundary ---\n\n")
+            }
+        }
     }
 
     private static func decodeMapResponse(_ raw: String) throws -> CorpusAnalysisMapOutput {

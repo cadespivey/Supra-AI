@@ -23,13 +23,22 @@ final class RemediationRecoveryMigrationTests: XCTestCase {
                 activeVersionID: "version-legacy", status: StructuredOutputStatus.needsReview.rawValue,
                 createdAt: now, updatedAt: now
             ).insert(db)
-            try StructuredOutputVersionRecord(
-                id: "version-legacy", structuredOutputID: "output-legacy", versionIndex: 1,
-                contentMarkdown: "# Original synthetic content\n\nPreserve this exactly.",
-                requiredSectionsJSON: "[]", presentSectionsJSON: "[]", missingSectionsJSON: "[]",
-                verificationStatus: OutputVerificationStatus.legacyUnverified.rawValue,
-                createdAt: now, updatedAt: now
-            ).insert(db)
+            try db.execute(
+                sql: """
+                INSERT INTO structured_output_versions (
+                    id, structured_output_id, version_index, content_markdown,
+                    required_sections_json, present_sections_json,
+                    missing_sections_json, verification_status, created_at, updated_at
+                ) VALUES (?, ?, 1, ?, '[]', '[]', '[]', ?, ?, ?)
+                """,
+                arguments: [
+                    "version-legacy", "output-legacy",
+                    "# Original synthetic content\n\nPreserve this exactly.",
+                    OutputVerificationStatus.legacyUnverified.rawValue,
+                    now,
+                    now,
+                ]
+            )
             try AuditEventRecord(
                 id: "draft-event", matterID: "matter-a", timestamp: now,
                 eventType: "draft_generated", actor: "runtime",

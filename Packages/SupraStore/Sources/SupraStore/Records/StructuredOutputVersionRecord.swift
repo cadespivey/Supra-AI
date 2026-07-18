@@ -19,6 +19,9 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
     public var verificationVersion: String?
     public var verificationJSON: String?
     public var verifiedAt: Date?
+    public var promptBuilderVersion: String?
+    public var assuranceState: String?
+    public var staleReason: String?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -37,6 +40,9 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
         verificationVersion: String? = nil,
         verificationJSON: String? = nil,
         verifiedAt: Date? = nil,
+        promptBuilderVersion: String? = nil,
+        assuranceState: String? = nil,
+        staleReason: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -54,6 +60,9 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
         self.verificationVersion = verificationVersion
         self.verificationJSON = verificationJSON
         self.verifiedAt = verifiedAt
+        self.promptBuilderVersion = promptBuilderVersion
+        self.assuranceState = assuranceState
+        self.staleReason = staleReason
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -73,6 +82,9 @@ public struct StructuredOutputVersionRecord: Codable, FetchableRecord, Persistab
         case verificationVersion = "verification_version"
         case verificationJSON = "verification_json"
         case verifiedAt = "verified_at"
+        case promptBuilderVersion = "prompt_builder_version"
+        case assuranceState = "assurance_state"
+        case staleReason = "stale_reason"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }

@@ -12,6 +12,7 @@ import SupraStore
 /// set, and regeneration.
 @MainActor
 public final class DocumentQAController: ObservableObject {
+    public static let promptBuilderVersion = "document-qa-v1"
     @Published public private(set) var isGenerating = false
     @Published public private(set) var message: String?
     @Published public private(set) var lastResult: QAResult?
@@ -69,6 +70,7 @@ public final class DocumentQAController: ObservableObject {
         mode: DocumentAnswerMode = .short,
         guidedChunkIDs: [String]? = nil,
         modelID: ModelID?,
+        modelLineage: DocumentGenerationModelLineage? = nil,
         route: ModelRoute? = nil,
         depth: RetrievalDepth = .fast
     ) async -> QAResult? {
@@ -81,6 +83,13 @@ public final class DocumentQAController: ObservableObject {
             } else {
                 "Assign a task model in the Models tab to ask questions."
             }
+            return nil
+        }
+        guard let resolvedModelLineage = modelLineage ?? DocumentGenerationModelLineage.resolve(
+            modelID: modelID,
+            store: store
+        ) else {
+            message = DocumentGenerationLineageError.stableModelIdentityUnavailable.localizedDescription
             return nil
         }
 
@@ -132,12 +141,16 @@ public final class DocumentQAController: ObservableObject {
             )
             let appendix = makeAppendix(prepared)
             let markdown = verification.warningMarkdown + answer + "\n" + appendix.markdown()
-            let status: StructuredOutputStatus = verification.requiresReview ? .needsReview : .complete
+            let status: StructuredOutputStatus = effectiveDepth == .fast || verification.requiresReview
+                ? .needsReview
+                : .complete
 
             let result = try persist(
                 question: trimmed, scope: scope, mode: mode, markdown: markdown,
                 prepared: prepared, status: status, verification: verification,
-                sourceMode: isGuided ? .guided : .autoSource, depth: effectiveDepth
+                sourceMode: isGuided ? .guided : .autoSource, depth: effectiveDepth,
+                modelID: modelID, modelLineage: resolvedModelLineage, route: effectiveRoute,
+                prompt: budgeted.prompt
             )
             lastResult = result
             return result
@@ -153,7 +166,13 @@ public final class DocumentQAController: ObservableObject {
     /// request for the full pass. The prior version is retained, so a preliminary
     /// answer is never silently discarded (spec §5).
     @discardableResult
-    public func regenerate(outputID: String, modelID: ModelID?, route: ModelRoute? = nil, depth: RetrievalDepth = .deep) async -> QAResult? {
+    public func regenerate(
+        outputID: String,
+        modelID: ModelID?,
+        modelLineage: DocumentGenerationModelLineage? = nil,
+        route: ModelRoute? = nil,
+        depth: RetrievalDepth = .deep
+    ) async -> QAResult? {
         guard let output = try? store.structuredOutputs.fetchOutputs(matterID: matterID).first(where: { $0.id == outputID }),
               let activeVersionID = output.activeVersionID,
               let sourceSet = try? store.documentSources.fetchSourceSet(structuredOutputVersionID: activeVersionID) else {
@@ -180,6 +199,7 @@ public final class DocumentQAController: ObservableObject {
             mode: mode,
             guidedChunkIDs: guidedChunkIDs,
             modelID: modelID,
+            modelLineage: modelLineage,
             route: route ?? ModelRouter().route(forStructuredOutput: mode.outputType),
             depth: depth
         )
@@ -329,7 +349,9 @@ public final class DocumentQAController: ObservableObject {
     private func persist(
         question: String, scope: RetrievalScope, mode: DocumentAnswerMode, markdown: String,
         prepared: [PreparedSource], status: StructuredOutputStatus, verification: DocumentSupportReport,
-        sourceMode: DocumentSourceSetMode, depth: RetrievalDepth
+        sourceMode: DocumentSourceSetMode, depth: RetrievalDepth,
+        modelID: ModelID, modelLineage: DocumentGenerationModelLineage,
+        route: ModelRoute?, prompt: String
     ) throws -> QAResult {
         let title = "Q&A: \(question.prefix(60))"
         let output = try store.structuredOutputs.createOutput(
@@ -345,13 +367,22 @@ public final class DocumentQAController: ObservableObject {
             mode: sourceMode,
             depth: depth
         )
+        let generation = try createGenerationSession(
+            modelID: modelID,
+            lineage: modelLineage,
+            prompt: prompt,
+            route: route
+        )
         let version = try store.structuredOutputs.createVersion(
             structuredOutputID: output.id, contentMarkdown: markdown,
             requiredSections: [], presentSections: [], missingSections: [],
+            generationSessionID: generation.id,
             verificationStatus: verification.verificationStatus,
             verificationVersion: DocumentSupportVerifier.version,
             verificationResults: verification.results,
             sourceSetID: sourceSetID,
+            promptBuilderVersion: Self.promptBuilderVersion,
+            assuranceState: depth == .fast ? .preliminary : nil,
             outputStatus: status
         )
         _ = try? store.auditEvents.recordEvent(
@@ -374,6 +405,7 @@ public final class DocumentQAController: ObservableObject {
         mode: DocumentAnswerMode,
         guidedChunkIDs: [String]?,
         modelID: ModelID?,
+        modelLineage: DocumentGenerationModelLineage?,
         route: ModelRoute?,
         depth: RetrievalDepth = .deep
     ) async -> QAResult? {
@@ -384,6 +416,13 @@ public final class DocumentQAController: ObservableObject {
             } else {
                 "Assign a task model in the Models tab to regenerate."
             }
+            return nil
+        }
+        guard let resolvedModelLineage = modelLineage ?? DocumentGenerationModelLineage.resolve(
+            modelID: modelID,
+            store: store
+        ) else {
+            message = DocumentGenerationLineageError.stableModelIdentityUnavailable.localizedDescription
             return nil
         }
         guard !isGenerating else {
@@ -415,7 +454,9 @@ public final class DocumentQAController: ObservableObject {
                 scopeFullyIndexed: readiness.isFullyReady
             )
             let markdown = verification.warningMarkdown + answer + "\n" + makeAppendix(prepared).markdown()
-            let status: StructuredOutputStatus = verification.requiresReview ? .needsReview : .complete
+            let status: StructuredOutputStatus = depth == .fast || verification.requiresReview
+                ? .needsReview
+                : .complete
 
             let existingVersions = (try? store.structuredOutputs.fetchVersions(structuredOutputID: outputID)) ?? []
             let parentVersionID = existingVersions.max(by: { $0.versionIndex < $1.versionIndex })?.id
@@ -426,14 +467,23 @@ public final class DocumentQAController: ObservableObject {
                 mode: isGuided ? .guided : .autoSource,
                 depth: depth
             )
+            let generation = try createGenerationSession(
+                modelID: modelID,
+                lineage: resolvedModelLineage,
+                prompt: budgeted.prompt,
+                route: effectiveRoute
+            )
             let version = try store.structuredOutputs.createVersion(
                 structuredOutputID: outputID, contentMarkdown: markdown,
                 requiredSections: [], presentSections: [], missingSections: [],
                 parentVersionID: parentVersionID,
+                generationSessionID: generation.id,
                 verificationStatus: verification.verificationStatus,
                 verificationVersion: DocumentSupportVerifier.version,
                 verificationResults: verification.results,
                 sourceSetID: sourceSetID,
+                promptBuilderVersion: Self.promptBuilderVersion,
+                assuranceState: depth == .fast ? .preliminary : nil,
                 outputStatus: status
             )
             _ = try? store.auditEvents.recordEvent(
@@ -553,6 +603,7 @@ public final class DocumentQAController: ObservableObject {
     private struct BudgetedAnswer {
         var answer: String
         var prepared: [PreparedSource]
+        var prompt: String
     }
 
     private enum QABudgetError: LocalizedError {
@@ -613,7 +664,8 @@ public final class DocumentQAController: ObservableObject {
             )
             return BudgetedAnswer(
                 answer: try await collect(prompt: prompt, modelID: modelID, route: route),
-                prepared: selected
+                prepared: selected,
+                prompt: prompt
             )
         } catch let error as GenerationStreamError where error == .contextOverflowed {
             guard selected.count > 1 else { throw error }
@@ -656,7 +708,25 @@ public final class DocumentQAController: ObservableObject {
 
         return BudgetedAnswer(
             answer: try await collect(prompt: prompt, modelID: modelID, route: route),
-            prepared: selected
+            prepared: selected,
+            prompt: prompt
+        )
+    }
+
+    private func createGenerationSession(
+        modelID: ModelID,
+        lineage: DocumentGenerationModelLineage,
+        prompt: String,
+        route: ModelRoute?
+    ) throws -> GenerationSessionRecord {
+        try store.generation.createDocumentGenerationSession(
+            modelID: modelID.rawValue.uuidString,
+            modelRepository: lineage.modelRepository,
+            modelRevision: lineage.modelRevision,
+            promptBuilderVersion: Self.promptBuilderVersion,
+            prompt: prompt,
+            systemPrompt: routedSystemPrompt(route),
+            options: route?.options ?? GenerationOptions()
         )
     }
 

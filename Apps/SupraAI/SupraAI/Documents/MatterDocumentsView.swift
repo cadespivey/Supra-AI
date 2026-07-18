@@ -931,16 +931,26 @@ struct DocumentChronologySheet: View {
             scope: scope,
             format: format,
             modelID: resolved.modelID,
+            modelLineage: resolved.modelLineage,
             route: resolved.route
         )
     }
 
     private func regenerate(outputID: String) async {
         guard let resolved = await resolveRouteModel() else { return }
-        _ = await chronology.regenerate(outputID: outputID, modelID: resolved.modelID, route: resolved.route)
+        _ = await chronology.regenerate(
+            outputID: outputID,
+            modelID: resolved.modelID,
+            modelLineage: resolved.modelLineage,
+            route: resolved.route
+        )
     }
 
-    private func resolveRouteModel() async -> (modelID: ModelID, route: ModelRoute)? {
+    private func resolveRouteModel() async -> (
+        modelID: ModelID,
+        modelLineage: DocumentGenerationModelLineage,
+        route: ModelRoute
+    )? {
         routingMessage = nil
         guard let route else {
             routingMessage = "No route is available for this chronology."
@@ -948,7 +958,11 @@ struct DocumentChronologySheet: View {
         }
         switch await library.ensureLoadedRoutedModelID(for: route.role, configuration: router.configuration) {
         case let .success(modelID):
-            return (modelID, route)
+            guard let modelLineage = library.generationLineage(for: modelID) else {
+                routingMessage = DocumentGenerationLineageError.stableModelIdentityUnavailable.localizedDescription
+                return nil
+            }
+            return (modelID, modelLineage, route)
         case let .failure(issue):
             routingMessage = issue.message
             return nil
