@@ -7,6 +7,53 @@ import XCTest
 
 final class DocumentRetrievalTests: XCTestCase {
 
+    func testTOPS03ReadinessRequiresEmbeddingsForTheActiveModel() async throws {
+        // T-OPS-03 expected RED: a document whose index_status is `ready` is
+        // reported fully ready even when it has zero vectors for model B.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic active-model readiness")
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(
+                sha256: "tops03-active-model",
+                byteSize: 1,
+                originalExtension: "txt",
+                managedRelativePath: "blobs/tops03-active-model.txt"
+            )
+        ).blob
+        let document = try makeDocument(
+            store,
+            matter.id,
+            blob.id,
+            nil,
+            "Active Model Evidence.txt",
+            "A nondefault semantic canary proves active-model readiness."
+        )
+        let modelA = FixedVectorEmbedder(modelID: "tops03-model-a", vector: [1, 0])
+        _ = try await DocumentIndexingService(store: store, embedder: modelA)
+            .indexMatter(matterID: matter.id)
+        XCTAssertFalse(try store.documentIndex.fetchEmbeddings(
+            documentID: document.id,
+            embeddingModelID: modelA.modelID
+        ).isEmpty)
+
+        let modelB = FixedVectorEmbedder(modelID: "tops03-model-b", vector: [0, 1])
+        let readiness = try DocumentRetrievalService(store: store, embedder: modelB)
+            .scopeReadiness(matterID: matter.id, scope: .wholeMatter)
+
+        XCTAssertFalse(readiness.isFullyReady)
+        XCTAssertEqual(readiness.readyDocuments, 0)
+        XCTAssertEqual(readiness.pendingDocuments, 1)
+        XCTAssertEqual(
+            try store.documentLibrary.fetchDocument(id: document.id)?.indexStatus,
+            DocumentIndexStatus.ready.rawValue,
+            "text/chunk readiness remains intact while model-B semantic readiness is pending"
+        )
+        XCTAssertTrue(try store.documentIndex.fetchEmbeddings(
+            documentID: document.id,
+            embeddingModelID: modelB.modelID
+        ).isEmpty)
+    }
+
     func testIndexingThenHybridRetrievalWithFiltersAndDuplicateCollapse() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme v. Roe")
@@ -214,5 +261,18 @@ private struct BagOfWordsEmbedder: TextEmbedder {
             hash = (hash ^ UInt64(byte)) &* 1099511628211
         }
         return Int(hash % 64)
+    }
+}
+
+private struct FixedVectorEmbedder: TextEmbedder {
+    let modelID: String
+    let vector: [Float]
+    var modelRepoID: String { modelID }
+    var modelDisplayName: String { modelID }
+    let modelRevision: String? = nil
+    var dimension: Int { vector.count }
+
+    func embed(_ texts: [String]) async throws -> [[Float]] {
+        texts.map { _ in vector }
     }
 }

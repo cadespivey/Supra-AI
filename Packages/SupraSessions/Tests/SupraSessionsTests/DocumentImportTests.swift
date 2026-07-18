@@ -18,6 +18,65 @@ final class DocumentImportTests: XCTestCase {
         try buildSourceTree()
     }
 
+    @MainActor
+    func testTOPS05EditingTextEnqueuesExactlyOneReindexAndRefreshesFTS() async throws {
+        // T-OPS-05 expected RED: DocumentImportService has no
+        // setReindexEnqueuer seam and updateExtractedText only marks stale.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic edit reindex")
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            ocr: nil
+        )
+        _ = try await service.importSources(
+            [sourceRoot.appendingPathComponent("Contracts/agreement.txt")],
+            matterID: matter.id
+        )
+        _ = try await DocumentIndexingService(store: store, embedder: nil)
+            .indexMatter(matterID: matter.id)
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let part = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        XCTAssertFalse(try store.documentIndex.searchChunks(
+            matterID: matter.id,
+            query: "effective 2024",
+            documentIDs: [document.id]
+        ).isEmpty)
+
+        let queue = DocumentProcessingQueue(
+            store: store,
+            importService: service,
+            makeIndexingService: { DocumentIndexingService(store: store, embedder: nil) },
+            notifier: EditReindexNotifier()
+        )
+        service.setReindexEnqueuer { [weak queue] matterID in
+            _ = queue?.enqueueReindex(matterID: matterID)
+        }
+
+        try service.updateExtractedText(
+            documentID: document.id,
+            partID: part.id,
+            text: "ZEPHYR_NONDEFAULT_EDIT proves the saved correction reached FTS."
+        )
+
+        XCTAssertEqual(
+            try store.documentLibrary.fetchDocument(id: document.id)?.indexStatus,
+            DocumentIndexStatus.stale.rawValue
+        )
+        XCTAssertEqual(try store.documentJobs.fetchJobs(matterID: matter.id).count, 1)
+        await queue.waitUntilIdle()
+        XCTAssertFalse(try store.documentIndex.searchChunks(
+            matterID: matter.id,
+            query: "ZEPHYR_NONDEFAULT_EDIT",
+            documentIDs: [document.id]
+        ).isEmpty)
+        XCTAssertTrue(try store.documentIndex.searchChunks(
+            matterID: matter.id,
+            query: "effective 2024",
+            documentIDs: [document.id]
+        ).isEmpty)
+    }
+
     func testRecursiveImportPreservesHierarchyDedupsAndExpandsAttachments() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
@@ -640,6 +699,12 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(repopulated.first?.normalizedText, "Service agreement effective 2024-01-01.")
         XCTAssertFalse(repopulated.contains { $0.normalizedText.contains("STALE-SENTINEL") }, "the stale text must be replaced by the re-extraction")
     }
+}
+
+private struct EditReindexNotifier: DocumentNotifying {
+    func authorizationStatus() async -> DocumentNotificationAuthorizationStatus { .denied }
+    func requestAuthorization() async -> DocumentNotificationAuthorizationStatus { .denied }
+    func notify(title: String, body: String) async {}
 }
 
 /// Deterministic OCR double. `recognizeImage` keeps the original single-result
