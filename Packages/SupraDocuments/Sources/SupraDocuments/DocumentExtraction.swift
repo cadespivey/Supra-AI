@@ -163,12 +163,13 @@ public struct ExtractionService: Sendable {
         }
         do {
             _ = try DocumentTypeDetector.validate(fileURL: fileURL, expected: format, policy: policy)
-            let result = try await extract(
+            let extracted = try await extract(
                 extractor: extractor,
                 fileURL: fileURL,
                 timeoutSeconds: policy.maxParserDurationSeconds
             )
             try Task.checkCancellation()
+            let result = LegalStructureRecognizer.enrich(extracted)
             try policy.validateExtractionResult(result)
             return result
         } catch let violation as ImportPolicyViolation {

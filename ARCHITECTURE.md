@@ -138,6 +138,12 @@ repository:
   child-attachment import. A matter-scoped, idempotent post-import linker emits
   reply/thread edges only for unambiguous Message-IDs in that matter. Outlook MSG
   and conversation UI remain unsupported.
+  A format-agnostic deterministic legal pass recognizes numbered discovery
+  requests/responses/objections and paired deposition Q/A turns without changing
+  flat text. Intra-document pairs receive `responds_to` edges immediately; a
+  matter-scoped post-import linker connects uniquely numbered request/response
+  nodes across documents. It does not use a model or infer transcript page-line
+  fidelity beyond the revision ranges and line labels present in source text.
 - Milestone 4 (ScratchPad) added scratch-pad days/entries/attachments, billing drafts +
   line items, and per-matter billing profiles, plus LEDES `client_id` / `client_matter_id`
   columns on `matters`.

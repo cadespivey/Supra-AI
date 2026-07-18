@@ -189,6 +189,7 @@ public final class DocumentImportService: @unchecked Sendable {
         }
 
         relinkEmailThreads(matterID: matterID)
+        relinkLegalStructures(matterID: matterID)
 
         report.counts = Self.tallyCounts(report.items)
         let status: DocumentImportBatchStatus = report.failedCount > 0 ? .completeWithFailures : .complete
@@ -986,6 +987,7 @@ public final class DocumentImportService: @unchecked Sendable {
                 preserveSelectedUserEdits: true
             )
             relinkEmailThreads(matterID: document.matterID)
+            relinkLegalStructures(matterID: document.matterID)
             try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .stale)
             _ = try? store.auditEvents.recordEvent(
                 matterID: document.matterID, eventType: "document_reprocessed", actor: "user",
@@ -1016,6 +1018,20 @@ public final class DocumentImportService: @unchecked Sendable {
                 eventType: "document_email_thread_link_failed",
                 actor: "system",
                 summary: "Email thread linking failed: \(error.localizedDescription)",
+                relatedTable: "document_structure_edges"
+            )
+        }
+    }
+
+    private func relinkLegalStructures(matterID: String) {
+        do {
+            _ = try DocumentLegalStructureLinker(store: store).relink(matterID: matterID)
+        } catch {
+            _ = try? store.auditEvents.recordEvent(
+                matterID: matterID,
+                eventType: "document_legal_structure_link_failed",
+                actor: "system",
+                summary: "Legal structure linking failed: \(error.localizedDescription)",
                 relatedTable: "document_structure_edges"
             )
         }

@@ -134,6 +134,7 @@ public final class StructureRepository: @unchecked Sendable {
     public func replaceMatterEdges(
         matterID: String,
         kinds: Set<String>,
+        idPrefix: String? = nil,
         edges: [DocumentStructureEdgeRecord]
     ) throws {
         guard !kinds.isEmpty else { return }
@@ -147,6 +148,9 @@ public final class StructureRepository: @unchecked Sendable {
             }
             guard edges.allSatisfy({ $0.matterID == matterID && kinds.contains($0.kind) }) else {
                 throw StructureRepositoryError.edgeMatterMismatch(matterID)
+            }
+            if let idPrefix, !edges.allSatisfy({ $0.id.hasPrefix(idPrefix) }) {
+                throw StructureRepositoryError.edgeMatterMismatch(idPrefix)
             }
             guard Set(edges.map(\.id)).count == edges.count else {
                 throw StructureRepositoryError.duplicateNodeIdentity("edge_id")
@@ -172,8 +176,14 @@ public final class StructureRepository: @unchecked Sendable {
             let placeholders = Array(repeating: "?", count: kinds.count).joined(separator: ",")
             var arguments: [DatabaseValueConvertible] = [matterID]
             arguments.append(contentsOf: kinds.sorted())
+            var deleteSQL = "DELETE FROM document_structure_edges WHERE matter_id = ? AND kind IN (\(placeholders))"
+            if let idPrefix {
+                deleteSQL += " AND substr(id, 1, ?) = ?"
+                arguments.append(idPrefix.count)
+                arguments.append(idPrefix)
+            }
             try db.execute(
-                sql: "DELETE FROM document_structure_edges WHERE matter_id = ? AND kind IN (\(placeholders))",
+                sql: deleteSQL,
                 arguments: StatementArguments(arguments)
             )
             for edge in edges.sorted(by: { $0.id < $1.id }) {
