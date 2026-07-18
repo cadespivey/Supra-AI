@@ -60,7 +60,7 @@ final class ChunkerV2Tests: XCTestCase {
             node("target", partID: "sheet-1", revisionID: "rev-sheet", kind: .tableCell, range: valueRange),
         ]
         let edges = [ChunkStructureEdge(fromNodeID: "target", toNodeID: "header", kind: .headerFor)]
-        let part = ChunkPart(partID: "sheet-1", sourceKind: .spreadsheetSheet, text: text, sheetName: "Aging")
+        let part = ChunkPart(partID: "sheet-1", sourceKind: .spreadsheetCellRange, text: text, sheetName: "Aging")
 
         let v1 = DocumentChunker(version: 1).chunk(parts: [part], nodes: nodes, edges: edges)
         let v2 = DocumentChunker(version: 2).chunk(parts: [part], nodes: nodes, edges: edges)
@@ -120,7 +120,7 @@ final class ChunkerV2Tests: XCTestCase {
         let parts = [
             ChunkPart(partID: "page", sourceKind: .pdfPage, text: longText, pageIndex: 4, pageLabel: "5"),
             ChunkPart(partID: "empty", sourceKind: .text, text: " \n "),
-            ChunkPart(partID: "sheet", sourceKind: .spreadsheetSheet, text: "Outstanding Balance\t742.19", sheetName: "Aging", cellRange: "D8"),
+            ChunkPart(partID: "sheet", sourceKind: .spreadsheetCellRange, text: "Outstanding Balance\t742.19", sheetName: "Aging", cellRange: "D8"),
         ]
 
         let chunks = DocumentChunker(version: 1, maxChars: 200, overlapChars: 50)
