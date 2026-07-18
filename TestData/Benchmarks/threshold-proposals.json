@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "baselinePath": "TestData/Benchmarks/baseline-a7f29dec669ed901af3d6227544270ba704de192.json",
-  "harnessSHA256": "25558938047dcf0b24e63a3e0cc70118fd7944675f91421b84d05b1da8e98647",
+  "harnessSHA256": "e196817287e94a083c98d64eb0be5a0c38a615b2db70a8a3614c46bdbcaa6cb7",
   "decisions": [
     {
       "metricID": "B-ACC-01",
