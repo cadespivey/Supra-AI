@@ -241,6 +241,196 @@ final class ExhaustiveListTaskTests: XCTestCase {
         XCTAssertTrue(allowed.reasons.isEmpty)
     }
 
+    func testTDIM04ContraryEvidenceAcrossPartitionsFailsNamedDimensionWithBothPositionsRetained() async throws {
+        // T-DIM-04 expected RED: exhaustive output dimensions do not consume
+        // the engine's cross-partition contrary-evidence references.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic contrary sweep")
+        let supporting = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "supporting-agreement.txt",
+            partTexts: ["PRIMARY-POSITION-NONDEFAULT"]
+        )
+        let contrary = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "contrary-amendment.txt",
+            partTexts: ["CONTRARY-POSITION-NONDEFAULT"]
+        )
+        let supportingRevisionID = try XCTUnwrap(supporting.revisionIDs.first)
+
+        let result = try await ExhaustiveListTask(store: store).run(
+            request: ExhaustiveListRequest(
+                runKey: "contrary-dimension-run",
+                matterID: matter.id,
+                title: "Renewal positions",
+                query: "Extract every renewal position and sweep for contrary evidence.",
+                characterBudget: 1,
+                modelLineageJSON: Self.modelLineageJSON
+            )
+        ) { input in
+            let source = try XCTUnwrap(input.partition.sources.first)
+            if source.revisionID == supportingRevisionID {
+                return try Self.response(input, items: [
+                    .init(itemKey: "renewal", value: "Agreement renews", evidence: [.primary]),
+                ])
+            }
+            return try Self.response(input, items: [
+                .init(
+                    itemKey: "renewal",
+                    value: "Agreement renews",
+                    evidence: [.primary],
+                    contraryEvidence: [.primary]
+                ),
+            ])
+        }
+
+        let dimension = result.version.verificationDimensions.result(for: .contraryEvidence)
+        XCTAssertEqual(dimension.status, .failed)
+        XCTAssertTrue(dimension.reason?.contains("contrary-amendment.txt") == true)
+        XCTAssertEqual(Set(dimension.evidence.map(\.sourceID)), Set(contrary.revisionIDs))
+        XCTAssertTrue(dimension.evidence.allSatisfy { !$0.locator.isEmpty && !$0.excerpt.isEmpty })
+        XCTAssertEqual(
+            result.version.verificationDimensions.result(for: .propositionSupport).status,
+            .satisfied,
+            "contrary review must remain independent from proposition support"
+        )
+        XCTAssertEqual(result.run.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+        let sources = try store.documentSources.fetchSources(structuredOutputVersionID: result.version.id)
+        XCTAssertEqual(
+            Set(sources.compactMap(\.revisionID)),
+            Set(supporting.revisionIDs + contrary.revisionIDs),
+            "both the supporting and contrary positions must remain attached"
+        )
+    }
+
+    func testTDIM05FailedPartitionFailsListAndCorpusDimensionsWithoutErasingSupport() async throws {
+        // T-DIM-05 expected RED: the coverage ledger affects aggregate assurance
+        // but is not bound into independently persisted dimensions.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic dimension completeness")
+        _ = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "successful-ledger.txt",
+            partTexts: ["MAP-SUCCESS-NONDEFAULT"]
+        )
+        _ = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "failed-ledger.txt",
+            partTexts: ["MAP-FAILURE-NONDEFAULT"]
+        )
+
+        let result = try await ExhaustiveListTask(store: store).run(
+            request: ExhaustiveListRequest(
+                runKey: "dimension-incomplete-run",
+                matterID: matter.id,
+                title: "Incomplete payment list",
+                query: "Extract every payment.",
+                characterBudget: 1,
+                modelLineageJSON: Self.modelLineageJSON
+            )
+        ) { input in
+            if input.partition.sources.first?.text == "MAP-FAILURE-NONDEFAULT" {
+                throw CorpusAnalysisMapFailure.permanent("NONDEFAULT DIMENSION PARTITION FAILURE")
+            }
+            return try Self.response(input, items: [
+                .init(itemKey: "payment-one", value: "$731", evidence: [.primary]),
+            ])
+        }
+
+        let dimensions = result.version.verificationDimensions
+        XCTAssertEqual(dimensions.result(for: .listCompleteness).status, .failed)
+        XCTAssertTrue(dimensions.result(for: .listCompleteness).reason?.contains("failed-ledger.txt") == true)
+        XCTAssertEqual(dimensions.result(for: .corpusCoverage).status, .failed)
+        XCTAssertTrue(dimensions.result(for: .corpusCoverage).reason?.contains("NONDEFAULT DIMENSION PARTITION FAILURE") == true)
+        XCTAssertEqual(dimensions.result(for: .propositionSupport).status, .satisfied)
+        XCTAssertEqual(result.version.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+        XCTAssertEqual(result.run.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+    }
+
+    func testTDIM06RankedRetrievalCannotAuthorizeOrPersistCleanNegativeConclusion() {
+        // T-DIM-06 expected RED: the negative gate has no method contract and
+        // therefore cannot reject a top-k absence probe before persistence.
+        let decision = CorpusNegativeGate.evaluate(
+            method: CorpusNegativeMethod.rankedRetrieval,
+            proposedConclusion: "NO TERMINATION CLAUSE EXISTS — NONDEFAULT",
+            positiveFindingCount: 0
+        )
+
+        XCTAssertFalse(decision.allowed)
+        XCTAssertEqual(decision.assuranceState, .negativeBlocked)
+        XCTAssertNil(decision.permittedConclusion)
+        XCTAssertEqual(decision.verificationDimensions.result(for: .negativeValidity).status, .failed)
+        XCTAssertTrue(decision.verificationDimensions.result(for: .negativeValidity).reason?.contains(
+            "adequate exhaustive method was not run"
+        ) == true)
+    }
+
+    func testTDIM07LowConfidenceMemberBlocksNegativeDespiteCompleteTerminalPartitions() {
+        // T-DIM-07 expected RED: a complete partition ledger does not inspect
+        // review-required/low-confidence snapshot members for negative validity.
+        let run = CorpusAnalysisRunRecord(
+            runKey: "low-confidence-negative-run",
+            matterID: "synthetic-negative-matter",
+            taskKind: CorpusAnalysisTaskKind.negativeCheck.rawValue,
+            scopeJSON: #"{"schema_version":1}"#,
+            corpusSnapshotJSON: #"{"schema_version":1,"members":[]}"#,
+            partitionStrategy: "part_range:characters=173",
+            partitionStrategyVersion: 1,
+            status: CorpusAnalysisRunStatus.persisted.rawValue,
+            assuranceState: OutputAssuranceState.corpusComplete.rawValue
+        )
+        let snapshot = CorpusAnalysisSnapshot(members: [
+            .init(
+                memberKey: "document:low-ocr",
+                documentID: "low-ocr-document",
+                displayName: "Low OCR Exhibit",
+                revisionIDs: ["low-ocr-revision"],
+                indexState: DocumentIndexStatus.textIndexed.rawValue,
+                disposition: .excluded,
+                reason: "low_ocr_confidence:page=3:confidence=0.31"
+            ),
+        ])
+        let decision = CorpusNegativeGate.evaluate(
+            method: CorpusNegativeMethod.exhaustiveCorpus,
+            proposedConclusion: "NO RESPONSIVE PAYMENT EXISTS — NONDEFAULT",
+            run: run,
+            coverage: Self.completeCoverage,
+            snapshot: snapshot,
+            positiveFindingCount: 0
+        )
+
+        XCTAssertFalse(decision.allowed)
+        XCTAssertEqual(decision.assuranceState, .negativeBlocked)
+        XCTAssertNil(decision.permittedConclusion)
+        XCTAssertEqual(decision.verificationDimensions.result(for: .negativeValidity).status, .failed)
+        XCTAssertEqual(decision.verificationDimensions.result(for: .lowConfidenceHandling).status, .failed)
+        let reason = decision.verificationDimensions.result(for: .negativeValidity).reason ?? ""
+        XCTAssertTrue(reason.contains("Low OCR Exhibit"))
+        XCTAssertTrue(reason.contains("page=3"))
+        XCTAssertTrue(reason.contains("confidence=0.31"))
+    }
+
+    private static var completeCoverage: CorpusAnalysisCoverage {
+        CorpusAnalysisCoverage(
+            snapshotMemberCount: 1,
+            eligibleMemberCount: 1,
+            excludedMemberCount: 0,
+            excludedMembersDisclosed: true,
+            partitionCount: 1,
+            pendingPartitionCount: 0,
+            succeededPartitionCount: 1,
+            failedPartitionCount: 0,
+            cancelledPartitionCount: 0,
+            excludedPartitionCount: 0,
+            terminalPartitionCount: 1,
+            balanceErrorCount: 0
+        )
+    }
+
     private func makeStore() throws -> SupraStore {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ExhaustiveListTask-\(UUID().uuidString)", isDirectory: true)
