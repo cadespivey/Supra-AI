@@ -225,6 +225,19 @@ final class DocumentRechunkServiceTests: XCTestCase {
                 charCount: 4
             ),
         ])
+        try store.documentIndex.replaceChunks(documentID: document.id, chunks: [
+            DocumentChunkRecord(
+                id: "d06-empty-v1-chunk",
+                documentID: document.id,
+                chunkerVersion: 1,
+                chunkIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                charStart: 0,
+                charEnd: 4,
+                normalizedText: " \n\t ",
+                displayExcerpt: ""
+            ),
+        ])
 
         let result = try await DocumentChunkerRolloutService(store: store).switchAllMatters(
             to: 2,

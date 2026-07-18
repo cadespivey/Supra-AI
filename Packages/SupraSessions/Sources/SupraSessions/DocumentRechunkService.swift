@@ -41,8 +41,11 @@ public final class DocumentRechunkService: @unchecked Sendable {
         for document in documents where extractionIsComplete(document) {
             let chunks = try store.documentIndex.fetchChunks(documentID: document.id)
             let status = DocumentIndexStatus(rawValue: document.indexStatus)
-            let alreadyComplete = !chunks.isEmpty
-                && chunks.allSatisfy { $0.chunkerVersion == targetVersion }
+            let alreadyComplete = try targetProjectionIsComplete(
+                documentID: document.id,
+                targetVersion: targetVersion,
+                chunks: chunks
+            )
                 && (status == .textIndexed || status == .ready)
             guard !alreadyComplete else { continue }
             replacedChunkerVersions.formUnion(chunks.map(\.chunkerVersion).filter { $0 != targetVersion })
@@ -74,7 +77,11 @@ public final class DocumentRechunkService: @unchecked Sendable {
                 continue
             }
             let chunks = try store.documentIndex.fetchChunks(documentID: documentID)
-            let targetProjectionExists = !chunks.isEmpty && chunks.allSatisfy { $0.chunkerVersion == targetVersion }
+            let targetProjectionExists = try targetProjectionIsComplete(
+                documentID: documentID,
+                targetVersion: targetVersion,
+                chunks: chunks
+            )
             switch (targetProjectionExists, DocumentIndexStatus(rawValue: document.indexStatus)) {
             case (true, .textIndexed): textIndexed += 1
             case (true, .ready): ready += 1
@@ -106,5 +113,22 @@ public final class DocumentRechunkService: @unchecked Sendable {
         document.extractionStatus == DocumentExtractionStatus.extracted.rawValue
             || document.extractionStatus == DocumentExtractionStatus.ocrComplete.rawValue
             || document.extractionStatus == DocumentExtractionStatus.edited.rawValue
+    }
+
+    /// Empty selected text has no chunker-specific projection to persist. Treat
+    /// its empty chunk set as complete only after proving every persisted part is
+    /// whitespace-only; a non-empty document that unexpectedly produces zero
+    /// chunks remains pending and keeps the default flip fail-closed.
+    private func targetProjectionIsComplete(
+        documentID: String,
+        targetVersion: Int,
+        chunks: [DocumentChunkRecord]
+    ) throws -> Bool {
+        if !chunks.isEmpty {
+            return chunks.allSatisfy { $0.chunkerVersion == targetVersion }
+        }
+        return try store.documentIndex.fetchParts(documentID: documentID).allSatisfy {
+            $0.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 }
