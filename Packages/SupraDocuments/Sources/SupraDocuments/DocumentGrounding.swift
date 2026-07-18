@@ -14,8 +14,23 @@ public struct GroundingSource: Sendable, Equatable {
     /// Compact document descriptor (type · date) shown in the source header so the
     /// model can weigh document type and recency when sources conflict.
     public var metadata: String?
+    /// Structure-aware retrieval metadata. Both are absent/false for v1 so the
+    /// legacy source envelope remains byte-identical.
+    public var unitKind: String?
+    public var hiddenDerived: Bool
 
-    public init(sourceID: String = "", label: String, documentName: String, locatorDisplay: String, text: String, excerpt: String, lowConfidence: Bool = false, metadata: String? = nil) {
+    public init(
+        sourceID: String = "",
+        label: String,
+        documentName: String,
+        locatorDisplay: String,
+        text: String,
+        excerpt: String,
+        lowConfidence: Bool = false,
+        metadata: String? = nil,
+        unitKind: String? = nil,
+        hiddenDerived: Bool = false
+    ) {
         self.sourceID = sourceID
         self.label = label
         self.documentName = documentName
@@ -24,6 +39,8 @@ public struct GroundingSource: Sendable, Equatable {
         self.excerpt = excerpt
         self.lowConfidence = lowConfidence
         self.metadata = metadata
+        self.unitKind = unitKind
+        self.hiddenDerived = hiddenDerived
     }
 
     /// The exact text placed in the prompt and therefore the only text the
@@ -88,12 +105,17 @@ public enum DocumentQAPromptBuilder {
 /// makes the source/instruction boundary machine-visible in addition to the
 /// explicit natural-language boundary.
 enum UntrustedDocumentSourceEnvelope {
+    static let hiddenContentDisclosure = "Source content originated from a hidden spreadsheet sheet, row, or column."
+
     private struct SourceEnvelope: Encodable {
         let sourceID: String
         let label: String
         let documentName: String
         let locator: String
         let metadata: String?
+        let unitKind: String?
+        let hidden: Bool?
+        let hiddenContentDisclosure: String?
         let lowConfidenceOCR: Bool
         let text: String
 
@@ -103,6 +125,9 @@ enum UntrustedDocumentSourceEnvelope {
             case documentName = "document_name"
             case locator
             case metadata
+            case unitKind = "unit_kind"
+            case hidden
+            case hiddenContentDisclosure = "hidden_content_disclosure"
             case lowConfidenceOCR = "low_confidence_ocr"
             case text
         }
@@ -129,6 +154,9 @@ enum UntrustedDocumentSourceEnvelope {
                 documentName: $0.documentName,
                 locator: $0.locatorDisplay,
                 metadata: $0.metadata,
+                unitKind: $0.unitKind,
+                hidden: $0.hiddenDerived ? true : nil,
+                hiddenContentDisclosure: $0.hiddenDerived ? hiddenContentDisclosure : nil,
                 lowConfidenceOCR: $0.lowConfidence,
                 text: $0.packedText
             )

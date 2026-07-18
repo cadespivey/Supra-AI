@@ -596,11 +596,18 @@ public final class DocumentChronologyController: ObservableObject {
                     charStart: chunk.charStart, charEnd: chunk.charEnd
                 )
                 let low = (chunk.ocrConfidence.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false)
+                let structureContext = chunk.chunkerVersion == 2
+                    ? chunk.nodeID.flatMap { try? store.documentStructure.retrievalContext(nodeID: $0) }
+                    : nil
                 prepared.append(PreparedSource(
                     source: GroundingSource(
                         sourceID: "\(matterID)/\(chunk.id)",
                         label: label, documentName: document.displayName, locatorDisplay: locator.displayString,
-                        text: chunk.normalizedText, excerpt: chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText), lowConfidence: low
+                        text: chunk.normalizedText,
+                        excerpt: chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText),
+                        lowConfidence: low,
+                        unitKind: chunk.chunkerVersion == 2 ? (chunk.unitKind ?? structureContext?.unitKind) : nil,
+                        hiddenDerived: structureContext?.hiddenDerived ?? false
                     ),
                     documentID: document.id, chunkID: chunk.id, revisionID: chunk.revisionID,
                     locatorJSON: locator.encodedJSON(),

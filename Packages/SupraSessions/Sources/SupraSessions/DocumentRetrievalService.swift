@@ -41,6 +41,25 @@ public struct RetrievedSource: Sendable {
     /// 2023-05-01") so it can prefer the operative/executed document over a draft and
     /// weigh recency when sources conflict. `nil` when no classification/date exists.
     public var metadata: String?
+    /// Present only for structure-aware v2 chunks. Hidden provenance is resolved
+    /// from the primary node and its same-revision ancestors after ranking.
+    public var unitKind: String?
+    public var hiddenDerived: Bool
+
+    func groundingSource(sourceID: String, label: String, lowConfidence: Bool) -> GroundingSource {
+        GroundingSource(
+            sourceID: sourceID,
+            label: label,
+            documentName: documentName,
+            locatorDisplay: locator.displayString,
+            text: text,
+            excerpt: excerpt,
+            lowConfidence: lowConfidence,
+            metadata: metadata,
+            unitKind: unitKind,
+            hiddenDerived: hiddenDerived
+        )
+    }
 }
 
 /// Readiness of a scope for Q&A/chronology (plan §8.1). Generation is blocked
@@ -183,6 +202,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         var seenText: [String: Int] = [:]   // text hash -> index in result
         var perDocument: [String: Int] = [:]
         var sources: [RetrievedSource] = []
+        var structureContextByChunkID: [String: DocumentStructureRetrievalContext] = [:]
         for (chunkID, score) in ordered {
             guard let chunk = chunkByID[chunkID] else { continue }
             let textKey = DocumentStorageDigest.key(chunk.normalizedText)
@@ -204,6 +224,13 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 emailPartPath: chunk.emailPartPath, charStart: chunk.charStart,
                 charEnd: chunk.charEnd, boundingBoxesJSON: chunk.boundingBoxesJSON
             )
+            let structureContext: DocumentStructureRetrievalContext?
+            if chunk.chunkerVersion == 2, let nodeID = chunk.nodeID {
+                structureContext = try store.documentStructure.retrievalContext(nodeID: nodeID)
+                if let structureContext { structureContextByChunkID[chunk.id] = structureContext }
+            } else {
+                structureContext = nil
+            }
             seenText[textKey] = sources.count
             sources.append(RetrievedSource(
                 chunkID: chunk.id,
@@ -218,7 +245,9 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 ocrConfidence: chunk.ocrConfidence,
                 duplicateLocations: [],
                 rank: 0,
-                metadata: metadataByID[chunk.documentID] ?? nil
+                metadata: metadataByID[chunk.documentID] ?? nil,
+                unitKind: chunk.chunkerVersion == 2 ? (chunk.unitKind ?? structureContext?.unitKind) : nil,
+                hiddenDerived: structureContext?.hiddenDerived ?? false
             ))
             if sources.count >= limit { break }
         }
@@ -241,9 +270,15 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 docChunks = (try? store.documentIndex.fetchChunks(documentID: current.documentID)) ?? []
                 chunksByDocument[current.documentID] = docChunks
             }
-            let expanded = Self.expandedChunk(
-                current: current, inDocumentChunks: docChunks, excluding: selectedChunkIDs
-            )
+            let expanded: (text: String, charStart: Int?, charEnd: Int?)
+            if current.chunkerVersion == 2,
+               let parent = structureContextByChunkID[current.id]?.parent {
+                expanded = (parent.text, parent.charStart, parent.charEnd)
+            } else {
+                expanded = Self.expandedChunk(
+                    current: current, inDocumentChunks: docChunks, excluding: selectedChunkIDs
+                )
+            }
             sources[index].text = expanded.text
             if expanded.text != current.normalizedText {
                 if let start = expanded.charStart { sources[index].locator.charStart = start }

@@ -123,7 +123,8 @@ repository:
 - Chunker v2 is an internal, default-off rollout path that aligns retrieval chunks to
   revision-bound structure nodes and preserves table headers and linked legal units as
   context. Persisted chunks record their node, structural unit kind, and chunker version;
-  legacy v1 text and locators remain unchanged.
+  retrieval prefers same-revision parent context and explicitly discloses hidden-derived
+  spreadsheet evidence. Legacy v1 text, locators, and packed source JSON remain unchanged.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

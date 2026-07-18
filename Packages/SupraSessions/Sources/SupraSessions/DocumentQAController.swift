@@ -204,11 +204,10 @@ public final class DocumentQAController: ObservableObject {
         let candidates = result.sources.enumerated().map { index, retrieved -> PreparedSource in
             let low = (retrieved.ocrConfidence.map { $0 < lowConfidenceThreshold } ?? false)
             return PreparedSource(
-                source: GroundingSource(
+                source: retrieved.groundingSource(
                     sourceID: "\(matterID)/\(retrieved.chunkID)",
-                    label: "S\(index + 1)", documentName: retrieved.documentName,
-                    locatorDisplay: retrieved.locator.displayString, text: retrieved.text,
-                    excerpt: retrieved.excerpt, lowConfidence: low, metadata: retrieved.metadata
+                    label: "S\(index + 1)",
+                    lowConfidence: low
                 ),
                 documentID: retrieved.documentID, chunkID: retrieved.chunkID,
                 locatorJSON: retrieved.locator.encodedJSON(), rank: index,
@@ -288,12 +287,18 @@ public final class DocumentQAController: ObservableObject {
                     charStart: chunk.charStart, charEnd: chunk.charEnd
                 )
                 let low = (chunk.ocrConfidence.map { $0 < lowConfidenceThreshold } ?? false)
+                let structureContext = chunk.chunkerVersion == 2
+                    ? chunk.nodeID.flatMap { try? store.documentStructure.retrievalContext(nodeID: $0) }
+                    : nil
                 return PreparedSource(
                     source: GroundingSource(
                         sourceID: "\(matterID)/\(chunk.id)",
                         label: "S\(index + 1)", documentName: nameByID[chunk.documentID] ?? "Document",
                         locatorDisplay: locator.displayString, text: chunk.normalizedText,
-                        excerpt: chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText), lowConfidence: low
+                        excerpt: chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText),
+                        lowConfidence: low,
+                        unitKind: chunk.chunkerVersion == 2 ? (chunk.unitKind ?? structureContext?.unitKind) : nil,
+                        hiddenDerived: structureContext?.hiddenDerived ?? false
                     ),
                     documentID: chunk.documentID, chunkID: chunk.id,
                     locatorJSON: locator.encodedJSON(), rank: index, warnings: low ? ["low OCR confidence"] : []

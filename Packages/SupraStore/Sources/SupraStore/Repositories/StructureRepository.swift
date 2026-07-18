@@ -45,6 +45,41 @@ public enum StructureRepositoryError: Error, LocalizedError, Equatable, Sendable
     }
 }
 
+public struct DocumentStructureTextContext: Sendable, Equatable {
+    public var nodeID: String
+    public var kind: String
+    public var text: String
+    public var charStart: Int?
+    public var charEnd: Int?
+
+    public init(nodeID: String, kind: String, text: String, charStart: Int?, charEnd: Int?) {
+        self.nodeID = nodeID
+        self.kind = kind
+        self.text = text
+        self.charStart = charStart
+        self.charEnd = charEnd
+    }
+}
+
+public struct DocumentStructureRetrievalContext: Sendable, Equatable {
+    public var nodeID: String
+    public var unitKind: String
+    public var hiddenDerived: Bool
+    public var parent: DocumentStructureTextContext?
+
+    public init(
+        nodeID: String,
+        unitKind: String,
+        hiddenDerived: Bool,
+        parent: DocumentStructureTextContext?
+    ) {
+        self.nodeID = nodeID
+        self.unitKind = unitKind
+        self.hiddenDerived = hiddenDerived
+        self.parent = parent
+    }
+}
+
 /// Owns revision-bound structural trees and their matter-scoped relationships.
 /// Replacement validates the complete candidate before deleting the prior tree,
 /// and GRDB keeps validation/deletion/insertion in one transaction.
@@ -199,6 +234,46 @@ public final class StructureRepository: @unchecked Sendable {
                 return nil
             }
             return try resolvedText(node: node, revisionText: revision.text)
+        }
+    }
+
+    /// Resolves the retrieval-only projection for a persisted chunk node. Parent
+    /// text is returned only from the same immutable revision, so expansion can
+    /// never concatenate evidence under a false singular revision binding.
+    public func retrievalContext(nodeID: String) throws -> DocumentStructureRetrievalContext? {
+        try writer.read { db in
+            guard let node = try DocumentStructureNodeRecord.fetchOne(db, key: nodeID),
+                  let revision = try DocumentPartRevisionRecord.fetchOne(db, key: node.revisionID) else {
+                return nil
+            }
+            var hiddenDerived = Self.payloadIsHidden(node.payloadJSON)
+            var parentContext: DocumentStructureTextContext?
+            var parentID = node.parentNodeID
+            var visited = Set<String>()
+            while let id = parentID {
+                guard visited.insert(id).inserted,
+                      let parent = try DocumentStructureNodeRecord.fetchOne(db, key: id),
+                      parent.documentID == node.documentID,
+                      parent.revisionID == node.revisionID else { break }
+                hiddenDerived = hiddenDerived || Self.payloadIsHidden(parent.payloadJSON)
+                if parentContext == nil,
+                   let text = try resolvedText(node: parent, revisionText: revision.text) {
+                    parentContext = DocumentStructureTextContext(
+                        nodeID: parent.id,
+                        kind: parent.kind,
+                        text: text,
+                        charStart: parent.charStart,
+                        charEnd: parent.charEnd
+                    )
+                }
+                parentID = parent.parentNodeID
+            }
+            return DocumentStructureRetrievalContext(
+                nodeID: node.id,
+                unitKind: node.kind,
+                hiddenDerived: hiddenDerived,
+                parent: parentContext
+            )
         }
     }
 
@@ -393,5 +468,14 @@ public final class StructureRepository: @unchecked Sendable {
             cursor = parent
         }
         return result
+    }
+
+    private static func payloadIsHidden(_ payloadJSON: String?) -> Bool {
+        guard let payloadJSON,
+              let data = payloadJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        return object["hidden"] as? Bool == true
     }
 }

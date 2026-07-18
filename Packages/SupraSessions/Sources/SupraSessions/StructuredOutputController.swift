@@ -465,15 +465,10 @@ public final class StructuredOutputController: ObservableObject {
 
     private func groundingSource(for item: PreparedDocSource) -> GroundingSource {
         let lowConfidence = item.source.ocrConfidence.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false
-        return GroundingSource(
+        return item.source.groundingSource(
             sourceID: "\(matterID)/\(item.source.chunkID)",
             label: item.label,
-            documentName: item.source.documentName,
-            locatorDisplay: item.source.locator.displayString,
-            text: item.source.text,
-            excerpt: item.source.excerpt,
-            lowConfidence: lowConfidence,
-            metadata: item.source.metadata
+            lowConfidence: lowConfidence
         )
     }
 

@@ -309,15 +309,10 @@ final class MatterChatDocumentGrounding {
         }
         let sources: [GroundingSource] = retrieved.enumerated().map { index, retrieved in
             let low = retrieved.ocrConfidence.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false
-            return GroundingSource(
+            return retrieved.groundingSource(
                 sourceID: "\(matterID)/\(retrieved.chunkID)",
                 label: "S\(index + 1)",
-                documentName: retrieved.documentName,
-                locatorDisplay: retrieved.locator.displayString,
-                text: retrieved.text,
-                excerpt: retrieved.excerpt,
-                lowConfidence: low,
-                metadata: retrieved.metadata
+                lowConfidence: low
             )
         }
         let sourceRefs: [GroundedSourceRef] = retrieved.enumerated().map { index, retrieved in
