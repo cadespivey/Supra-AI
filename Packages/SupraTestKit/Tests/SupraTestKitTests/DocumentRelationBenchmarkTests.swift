@@ -54,6 +54,50 @@ final class DocumentRelationBenchmarkTests: XCTestCase {
         XCTAssertTrue(observations.allSatisfy { $0.metricID == "B-VER-01" })
     }
 
+    func testBVER02ScoresReviewedOperativeStatesAndRequiredAmbiguousBlockers() throws {
+        // B-VER-02 expected RED: the harness cannot score confirmed operative
+        // states or prove that every keyed ambiguous family blocks a clean result.
+        let expected = [
+            DocumentOperativeStateBenchmarkKey(
+                filename: "atlas-draft.docx",
+                state: "draft"
+            ),
+            DocumentOperativeStateBenchmarkKey(
+                filename: "atlas-executed.docx",
+                state: "operative"
+            ),
+            DocumentOperativeStateBenchmarkKey(
+                filename: "atlas-superseded.docx",
+                state: "superseded"
+            ),
+        ]
+        let predicted = [
+            DocumentOperativeStateBenchmarkKey(
+                filename: "atlas-draft.docx",
+                state: "draft"
+            ),
+            DocumentOperativeStateBenchmarkKey(
+                filename: "atlas-executed.docx",
+                state: "operative"
+            ),
+            DocumentOperativeStateBenchmarkKey(
+                filename: "atlas-superseded.docx",
+                state: "operative"
+            ),
+        ]
+
+        let observations = DocumentRelationReviewBenchmark.observations(
+            expectedOperativeStates: expected,
+            predictedOperativeStates: predicted,
+            expectedAmbiguousFamilyIDs: ["missing-date-amendment", "conflicting-executed-copies"],
+            blockedAmbiguousFamilyIDs: ["missing-date-amendment"]
+        )
+        let byName = Dictionary(uniqueKeysWithValues: observations.map { ($0.name, $0.result) })
+        XCTAssertEqual(try measured(byName["operative_state_accuracy"]), 2.0 / 3.0, accuracy: 0.000_001)
+        XCTAssertEqual(try measured(byName["ambiguous_block_rate"]), 0.5, accuracy: 0.000_001)
+        XCTAssertTrue(observations.allSatisfy { $0.metricID == "B-VER-02" })
+    }
+
     private func measured(
         _ result: BenchmarkResult?,
         file: StaticString = #filePath,
