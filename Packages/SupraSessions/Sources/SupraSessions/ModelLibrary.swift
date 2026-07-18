@@ -425,10 +425,16 @@ public final class ModelLibrary: ObservableObject {
         }
 
         if ManagedModelStorage.isManaged(path: record.path, roots: managedModelRoots) {
+            let modelDirectory = URL(fileURLWithPath: record.path, isDirectory: true)
             do {
-                _ = try ManagedModelStorage.loadVerifiedManifest(
-                    at: URL(fileURLWithPath: record.path, isDirectory: true)
-                )
+                do {
+                    _ = try ManagedModelStorage.loadVerifiedManifest(at: modelDirectory)
+                } catch ManagedModelIntegrityError.manifestMissing {
+                    guard ManagedModelStorage.hasRecoverableMisnamedManifest(in: modelDirectory) else {
+                        throw ManagedModelIntegrityError.manifestMissing
+                    }
+                    _ = try ManagedModelStorage.repairMisnamedManifest(in: modelDirectory)
+                }
             } catch {
                 loadState = .failed(message: error.localizedDescription)
                 return
