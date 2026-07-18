@@ -73,10 +73,17 @@ struct DiagnosticsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Button(chunkerSwitchTitle) {
+                Button {
                     let target = environment.documentChunkerVersion == 2 ? 1 : 2
                     Task { await environment.switchDocumentChunker(to: target) }
+                } label: {
+                    HStack {
+                        Text(chunkerSwitchTitle)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .disabled(environment.isChangingDocumentChunker)
                 .accessibilityIdentifier("diagnostics.chunker.switch")
             } header: {
