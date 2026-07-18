@@ -60,6 +60,11 @@ public final class MatterDocumentsController: ObservableObject {
     }
     @Published public private(set) var searchHits: [DocumentSearchHit] = []
     @Published public var message: String?
+    /// Documents whose saved correction is waiting for its replacement index to
+    /// become visible. Keep the transition on screen briefly even when a tiny
+    /// document re-indexes within the same UI turn; otherwise the editor closes
+    /// without any visible acknowledgement that re-indexing was requested.
+    @Published public private(set) var correctionReindexingDocumentIDs: Set<String> = []
 
     public let matterID: String
     public let relationReviewController: DocumentRelationReviewController
@@ -70,6 +75,9 @@ public final class MatterDocumentsController: ObservableObject {
     private let previewLoader: DocumentPreviewLoader
     private var processingObserver: AnyCancellable?
     private var pollTimer: AnyCancellable?
+    private var correctionBadgeMinimumEnd: [String: Date] = [:]
+    private var correctionBadgeTimers: [String: Task<Void, Never>] = [:]
+    private static let correctionBadgeMinimumVisibility: TimeInterval = 1.5
     /// Total extracted characters per document (SUM over its parts), refreshed in
     /// `reload()`. Backs the classification-floor gate in `unclassifiedCount` so the
     /// property stays cheap for the view to read.
@@ -180,14 +188,44 @@ public final class MatterDocumentsController: ObservableObject {
         reason: String,
         author: String = "Local user"
     ) throws {
-        try queue.updateExtractedText(
-            documentID: draft.documentID,
-            partID: draft.partID,
-            text: text,
-            author: author,
-            reason: reason
+        let documentID = draft.documentID
+        correctionReindexingDocumentIDs.insert(documentID)
+        correctionBadgeMinimumEnd[documentID] = Date().addingTimeInterval(
+            Self.correctionBadgeMinimumVisibility
         )
-        reload()
+        correctionBadgeTimers[documentID]?.cancel()
+
+        do {
+            try queue.updateExtractedText(
+                documentID: documentID,
+                partID: draft.partID,
+                text: text,
+                author: author,
+                reason: reason
+            )
+            reload()
+            correctionBadgeTimers[documentID] = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.correctionBadgeMinimumVisibility))
+                guard !Task.isCancelled, let self else { return }
+                self.reload()
+                self.correctionBadgeTimers[documentID] = nil
+            }
+        } catch {
+            correctionReindexingDocumentIDs.remove(documentID)
+            correctionBadgeMinimumEnd[documentID] = nil
+            correctionBadgeTimers[documentID] = nil
+            throw error
+        }
+    }
+
+    /// Whether the Documents UI should communicate that a saved correction is
+    /// being re-indexed. The durable store state wins for genuinely pending work;
+    /// the controller-owned set prevents an instant small-file completion from
+    /// erasing the only visible acknowledgement of the save.
+    public func isCorrectionReindexing(_ document: MatterDocumentRecord) -> Bool {
+        correctionReindexingDocumentIDs.contains(document.id)
+            || (document.hasUserEditedText
+                && document.indexStatus == DocumentIndexStatus.stale.rawValue)
     }
 
     /// The managed file URL of a document's original blob, for opening in the user's
@@ -241,6 +279,7 @@ public final class MatterDocumentsController: ObservableObject {
     public func reload() {
         folders = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
         documents = (try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []
+        reconcileCorrectionBadgeVisibility()
         documentCharCounts = (try? store.documentIndex.fetchTotalCharCounts(matterID: matterID)) ?? [:]
         trashedDocuments = (try? store.documentLibrary.fetchSoftDeletedDocuments(matterID: matterID)) ?? []
         trashedFolders = ((try? store.documentLibrary.fetchFolders(matterID: matterID, includeDeleted: true)) ?? []).filter { $0.deletedAt != nil }
@@ -251,6 +290,25 @@ public final class MatterDocumentsController: ObservableObject {
         // rather than silently filtering — and scoping Q&A — by an invisible folder.
         if selectedSidebarID != Self.allDocumentsTag, !folders.contains(where: { $0.id == selectedSidebarID }) {
             selectedSidebarID = Self.allDocumentsTag
+        }
+    }
+
+    private func reconcileCorrectionBadgeVisibility(now: Date = Date()) {
+        let documentsByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0) })
+        for documentID in Array(correctionReindexingDocumentIDs) {
+            guard let document = documentsByID[documentID] else {
+                correctionReindexingDocumentIDs.remove(documentID)
+                correctionBadgeMinimumEnd[documentID] = nil
+                correctionBadgeTimers[documentID]?.cancel()
+                correctionBadgeTimers[documentID] = nil
+                continue
+            }
+            let minimumEnd = correctionBadgeMinimumEnd[documentID] ?? .distantPast
+            let indexIsCurrent = document.indexStatus != DocumentIndexStatus.stale.rawValue
+            if now >= minimumEnd, indexIsCurrent {
+                correctionReindexingDocumentIDs.remove(documentID)
+                correctionBadgeMinimumEnd[documentID] = nil
+            }
         }
     }
 

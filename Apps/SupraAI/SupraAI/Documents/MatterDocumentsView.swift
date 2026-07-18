@@ -149,13 +149,20 @@ struct MatterDocumentsView: View {
                 controller.relationReviewController.reload()
                 showRelationReview = true
             } label: {
-                Label("Review Relations", systemImage: "point.3.connected.trianglepath.dotted")
-                if controller.relationReviewController.pendingReviewCount > 0 {
-                    Text("\(controller.relationReviewController.pendingReviewCount)")
-                        .font(.supraCaption.weight(.semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.18), in: Capsule())
+                // A single label root is important on macOS: separate top-level
+                // label children are each bridged as a copy of the parent button.
+                HStack(spacing: 6) {
+                    Label("Review Relations", systemImage: "point.3.connected.trianglepath.dotted")
+                    if controller.relationReviewController.pendingReviewCount > 0 {
+                        Text("\(controller.relationReviewController.pendingReviewCount)")
+                            .font(.supraCaption.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.18), in: Capsule())
+                            // The parent button announces this count through its
+                            // accessibility value; the pill is visual decoration.
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .buttonStyle(.ghost)
@@ -344,7 +351,9 @@ struct MatterDocumentsView: View {
         // ticked for a batch action); a single click selects the row to reveal its
         // actions; dragging it onto a folder moves it.
         .onTapGesture(count: 2) { if checkedDocIDs.count <= 1 { openInDefaultApp(doc) } }
-        .onTapGesture { selectedDocID = isSelected ? nil : doc.id }
+        // Selection is idempotent: clicking the already-selected row keeps its
+        // action cluster available (including after an editor or preview closes).
+        .onTapGesture { selectedDocID = doc.id }
         .draggable(doc.id)
     }
 
@@ -712,8 +721,7 @@ struct MatterDocumentsView: View {
     }
 
     private func statusBadge(_ document: MatterDocumentRecord) -> some View {
-        let reindexing = document.hasUserEditedText
-            && document.indexStatus == DocumentIndexStatus.stale.rawValue
+        let reindexing = controller.isCorrectionReindexing(document)
         let (label, color) = reindexing
             ? ("Reindexing", Color.blue)
             : Self.statusAppearance(document.status)
