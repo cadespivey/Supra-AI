@@ -591,7 +591,7 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
         for finding in output.findings {
             guard !finding.id.isEmpty,
                   findingIDs.insert(finding.id).inserted,
-                  !finding.evidence.isEmpty,
+                  !(finding.evidence + finding.contraryEvidence).isEmpty,
                   (finding.evidence + finding.contraryEvidence).allSatisfy({ evidence in
                       guard let source = sourceByRevision[evidence.revisionID] else { return false }
                       return source.documentID == evidence.documentID

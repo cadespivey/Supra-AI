@@ -105,6 +105,13 @@ public struct CorpusNegativeDecision: Equatable, Sendable {
     public var allowed: Bool
     public var assuranceState: OutputAssuranceState
     public var reasons: [String]
+    public var permittedConclusion: String?
+    public var verificationDimensions: VerificationDimensions
+}
+
+public enum CorpusNegativeMethod: String, Codable, CaseIterable, Sendable {
+    case rankedRetrieval = "ranked_retrieval"
+    case exhaustiveCorpus = "exhaustive_corpus"
 }
 
 public enum CorpusNegativeGate {
@@ -113,29 +120,131 @@ public enum CorpusNegativeGate {
         coverage: CorpusAnalysisCoverage,
         positiveFindingCount: Int
     ) -> CorpusNegativeDecision {
+        let snapshot = run.corpusSnapshotJSON.data(using: .utf8).flatMap {
+            try? JSONDecoder().decode(CorpusAnalysisSnapshot.self, from: $0)
+        }
+        return evaluate(
+            method: .exhaustiveCorpus,
+            proposedConclusion: "",
+            run: run,
+            coverage: coverage,
+            snapshot: snapshot,
+            positiveFindingCount: positiveFindingCount
+        )
+    }
+
+    public static func evaluate(
+        method: CorpusNegativeMethod,
+        proposedConclusion: String,
+        run: CorpusAnalysisRunRecord? = nil,
+        coverage: CorpusAnalysisCoverage? = nil,
+        snapshot: CorpusAnalysisSnapshot? = nil,
+        positiveFindingCount: Int
+    ) -> CorpusNegativeDecision {
         var reasons: [String] = []
+        if method != .exhaustiveCorpus {
+            reasons.append("An adequate exhaustive method was not run; ranked retrieval cannot establish absence.")
+        }
+        let adequateExhaustiveRun = method == .exhaustiveCorpus
+            && run?.partitionStrategy.hasPrefix("part_range:") == true
+            && run?.partitionStrategyVersion == 1
+        if method == .exhaustiveCorpus, !adequateExhaustiveRun {
+            reasons.append("An adequate exhaustive method was not run; the persisted run lacks the required part-range strategy and version.")
+        }
         if positiveFindingCount > 0 {
             reasons.append("The exhaustive run found \(positiveFindingCount) positive item(s).")
         }
-        if run.assuranceState != OutputAssuranceState.corpusComplete.rawValue
-            || coverage.pendingPartitionCount > 0
-            || coverage.failedPartitionCount > 0
-            || coverage.cancelledPartitionCount > 0
-            || coverage.balanceErrorCount > 0 {
+        let completeCoverage = adequateExhaustiveRun
+            && run?.assuranceState == OutputAssuranceState.corpusComplete.rawValue
+            && coverage.map { coverage in
+                coverage.pendingPartitionCount == 0
+                    && coverage.failedPartitionCount == 0
+                    && coverage.cancelledPartitionCount == 0
+                    && coverage.excludedPartitionCount == 0
+                    && coverage.succeededPartitionCount == coverage.partitionCount
+                    && coverage.balanceErrorCount == 0
+            } == true
+        if method == .exhaustiveCorpus, !completeCoverage {
+            let failed = coverage?.failedPartitionCount ?? 0
+            let cancelled = coverage?.cancelledPartitionCount ?? 0
+            let pending = coverage?.pendingPartitionCount ?? 0
+            let balanceErrors = coverage?.balanceErrorCount ?? 0
             reasons.append(
-                "The corpus is incomplete: failed=\(coverage.failedPartitionCount), "
-                    + "cancelled=\(coverage.cancelledPartitionCount), "
-                    + "pending=\(coverage.pendingPartitionCount), "
-                    + "balance_errors=\(coverage.balanceErrorCount)."
+                "The corpus is incomplete: failed=\(failed), "
+                    + "cancelled=\(cancelled), pending=\(pending), "
+                    + "balance_errors=\(balanceErrors)."
             )
         }
-        if reasons.isEmpty {
-            return CorpusNegativeDecision(allowed: true, assuranceState: .corpusComplete, reasons: [])
+        let excludedMembers = snapshot?.members.filter { $0.disposition == .excluded } ?? []
+        let exclusionReasons = excludedMembers.map { member in
+            "\(member.displayName): \(member.reason ?? "excluded from the frozen scope")"
         }
+        if !exclusionReasons.isEmpty {
+            reasons.append("Negative validity is blocked by excluded or review-required corpus members: \(exclusionReasons.joined(separator: "; ")).")
+        }
+        let lowConfidenceMembers = excludedMembers.filter { member in
+            let value = "\(member.displayName) \(member.reason ?? "")".lowercased()
+            return value.contains("ocr") || value.contains("confidence") || value.contains("review_required")
+        }
+        let allowed = reasons.isEmpty
+        let negativeReason = allowed
+            ? "The requested negative conclusion passed an adequate exhaustive method with complete coverage, no blocking members, and no positive findings."
+            : reasons.joined(separator: " ")
+        let coverageResult: VerificationDimensionResult
+        if method != .exhaustiveCorpus {
+            coverageResult = .init(
+                dimension: .corpusCoverage,
+                status: .notRun,
+                reason: "Corpus coverage was not run for ranked retrieval."
+            )
+        } else {
+            coverageResult = .init(
+                dimension: .corpusCoverage,
+                status: completeCoverage && excludedMembers.isEmpty ? .satisfied : .failed,
+                reason: completeCoverage && excludedMembers.isEmpty
+                    ? "Every frozen corpus partition succeeded with no blocking member."
+                    : negativeReason
+            )
+        }
+        let lowConfidenceResult: VerificationDimensionResult
+        if method != .exhaustiveCorpus {
+            lowConfidenceResult = .init(
+                dimension: .lowConfidenceHandling,
+                status: .notRun,
+                reason: "Low-confidence corpus handling was not run for ranked retrieval."
+            )
+        } else if lowConfidenceMembers.isEmpty {
+            lowConfidenceResult = .init(
+                dimension: .lowConfidenceHandling,
+                status: .satisfied,
+                reason: "No frozen corpus member is blocked by low-confidence or review-required text."
+            )
+        } else {
+            lowConfidenceResult = .init(
+                dimension: .lowConfidenceHandling,
+                status: .failed,
+                reason: lowConfidenceMembers.map {
+                    "\($0.displayName): \($0.reason ?? "low-confidence text")"
+                }.joined(separator: "; ")
+            )
+        }
+        let dimensions = VerificationDimensions.complete(overrides: [
+            coverageResult,
+            lowConfidenceResult,
+            .init(
+                dimension: .negativeValidity,
+                status: allowed ? .satisfied : .failed,
+                reason: negativeReason
+            ),
+        ])
         return CorpusNegativeDecision(
-            allowed: false,
-            assuranceState: .negativeBlocked,
-            reasons: reasons
+            allowed: allowed,
+            assuranceState: allowed ? .corpusComplete : .negativeBlocked,
+            reasons: reasons,
+            permittedConclusion: allowed && !proposedConclusion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? proposedConclusion
+                : nil,
+            verificationDimensions: dimensions
         )
     }
 }
@@ -190,33 +299,70 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             findings: engineResult.findings,
             expectedKeys: request.evaluationExpectedItemKeys
         )
-        var taskRun = engineResult.run
-        if taskRun.assuranceState == OutputAssuranceState.corpusComplete.rawValue,
-           !reconciliation.omissions.isEmpty {
-            taskRun = try store.corpusAnalysis.finalizeRun(
-                matterID: request.matterID,
-                runID: taskRun.id,
-                assuranceState: .corpusIncomplete,
-                assuranceReasons: [
-                    "Evaluation keys identify omitted items: "
-                        + reconciliation.omissions.map(\.itemKey).joined(separator: ", ") + ".",
-                ],
-                exclusionsDisclosed: true
-            )
-        }
         let disclosures = try failedPartitionDisclosures(
             partitions: engineResult.partitions,
             snapshot: engineResult.snapshot
         )
+        let excludedMembers = engineResult.snapshot.members
+            .filter { $0.disposition == .excluded }
+            .map { ExhaustiveListExcludedMember(name: $0.displayName, reason: $0.reason ?? "excluded") }
         let reconciliationRecord = ExhaustiveListReconciliationRecord(
             items: reconciliation.items,
             omissions: reconciliation.omissions,
             metrics: reconciliation.metrics,
             failedPartitions: disclosures,
-            excludedMembers: engineResult.snapshot.members
-                .filter { $0.disposition == .excluded }
-                .map { .init(name: $0.displayName, reason: $0.reason ?? "excluded") }
+            excludedMembers: excludedMembers
         )
+        let material = try evidenceMaterial(for: reconciliation.items)
+        let verificationResults = try supportResults(
+            items: reconciliation.items,
+            material: material
+        )
+        let coverageFailures = Self.coverageFailures(
+            coverage: engineResult.coverage,
+            disclosures: disclosures,
+            excludedMembers: excludedMembers
+        )
+        let listFailures = Self.listFailures(
+            reconciliation: reconciliation,
+            disclosures: disclosures,
+            excludedMembers: excludedMembers
+        )
+        let contraryEvidence = Self.contraryDimensionEvidence(
+            items: reconciliation.items,
+            material: material
+        )
+        let dimensions = CorpusVerificationDimensionsEvaluator.exhaustiveList(
+            base: VerificationDimensionsMapper.dimensions(
+                verificationResults: verificationResults
+            ),
+            coverage: engineResult.coverage,
+            listFailures: listFailures,
+            coverageFailures: coverageFailures,
+            contraryEvidence: contraryEvidence
+        )
+        var taskRun = engineResult.run
+        let corpusDimensionsFailed = [
+            VerificationDimensionName.contraryEvidence,
+            .listCompleteness,
+            .corpusCoverage,
+        ].contains { dimensions.result(for: $0).status == .failed }
+        if taskRun.assuranceState != OutputAssuranceState.stale.rawValue,
+           corpusDimensionsFailed {
+            let dimensionReasons = [
+                dimensions.result(for: .contraryEvidence),
+                dimensions.result(for: .listCompleteness),
+                dimensions.result(for: .corpusCoverage),
+            ].filter { $0.status == .failed }.compactMap(\.reason)
+            taskRun = try store.corpusAnalysis.finalizeRun(
+                matterID: request.matterID,
+                runID: taskRun.id,
+                assuranceState: .corpusIncomplete,
+                assuranceReasons: Self.orderedUnique(engineResult.assuranceReasons + dimensionReasons),
+                exclusionsDisclosed: true,
+                structuredOutputVersionID: taskRun.structuredOutputVersionID
+            )
+        }
         var run = try store.corpusAnalysis.saveReconciliation(
             matterID: request.matterID,
             runID: taskRun.id,
@@ -225,7 +371,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                 schemaInvalidPartitionCount: engineResult.partitions.count {
                     $0.dispositionReason == "schema_invalid"
                 },
-                metrics: reconciliation.metrics
+                metrics: reconciliation.metrics,
+                verificationDimensions: dimensions
             ))
         )
 
@@ -245,13 +392,17 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             )
         }
 
-        let material = try evidenceMaterial(for: reconciliation.items)
+        let requiredDimensions: Set<VerificationDimensionName> = [
+            .propositionSupport,
+            .citationResolution,
+            .criticalValueFidelity,
+            .lowConfidenceHandling,
+            .contraryEvidence,
+            .listCompleteness,
+            .corpusCoverage,
+        ]
         let needsReview = taskRun.assuranceState != OutputAssuranceState.corpusComplete.rawValue
-            || reconciliation.items.isEmpty
-            || !reconciliation.omissions.isEmpty
-            || !reconciliation.metrics.unexpectedItemKeys.isEmpty
-            || reconciliation.metrics.conflictCount > 0
-            || reconciliation.items.contains { !$0.contraryEvidence.isEmpty }
+            || !dimensions.satisfies(required: requiredDimensions)
         let verificationStatus: OutputVerificationStatus = needsReview ? .needsReview : .allSupported
         let outputStatus: StructuredOutputStatus = needsReview ? .needsReview : .complete
         let markdown = Self.markdown(
@@ -321,10 +472,6 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                         taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue
                     ))
                 )
-        let verificationResults = try supportResults(
-            items: reconciliation.items,
-            material: material
-        )
         let version = try store.structuredOutputs.createVersionWithSourceSetAtomically(
             structuredOutputID: outputID,
             newOutput: StructuredOutputRecord(
@@ -340,9 +487,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             verificationStatus: verificationStatus,
             verificationVersion: Self.verificationVersion,
             verificationResults: verificationResults,
-            verificationDimensions: VerificationDimensionsMapper.dimensions(
-                verificationResults: verificationResults
-            ),
+            verificationDimensions: dimensions,
             outputStatus: outputStatus,
             corpusAnalysisRunID: run.id,
             generationSessionID: generation.id,
@@ -377,7 +522,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         TASK: \(query)
         Return only strict JSON with this schema:
         {"schema_version":1,"items":[{"item_key":"stable-key","value":"literal value","evidence":[{"document_id":"...","revision_id":"...","locator_json":"..."}],"contrary_evidence":[]}]}
-        Every emitted item requires at least one exact evidence reference from the source envelope.
+        Every emitted item requires at least one exact reference across evidence and contrary_evidence.
+        A partition may emit evidence as empty only when contrary_evidence is nonempty; the reconciled item still requires primary evidence before it can be treated as supported.
         \(partition.promptEnvelope)
         """
     }
@@ -424,7 +570,9 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             let findings = try response.items.map { item -> CorpusAnalysisFinding in
                 let key = canonicalKey(item.itemKey)
                 let value = item.value.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !key.isEmpty, !value.isEmpty, !item.evidence.isEmpty else {
+                guard !key.isEmpty,
+                      !value.isEmpty,
+                      !(item.evidence + item.contraryEvidence).isEmpty else {
                     throw ExhaustiveListSchemaError.emptyRequiredField
                 }
                 guard keys.insert(key).inserted else {
@@ -520,6 +668,78 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         }.sorted { $0.partitionKey < $1.partitionKey }
     }
 
+    private static func coverageFailures(
+        coverage: CorpusAnalysisCoverage,
+        disclosures: [ExhaustiveListFailedPartition],
+        excludedMembers: [ExhaustiveListExcludedMember]
+    ) -> [String] {
+        var failures = disclosures.map { disclosure in
+            let name = disclosure.documentNames.isEmpty
+                ? disclosure.partitionKey
+                : disclosure.documentNames.joined(separator: ", ")
+            return "\(name): \(disclosure.reason); \(disclosure.errorSummary)"
+        }
+        failures += excludedMembers.map { "\($0.name): \($0.reason)" }
+        if coverage.pendingPartitionCount > 0 { failures.append("Pending partitions: \(coverage.pendingPartitionCount).") }
+        if coverage.cancelledPartitionCount > 0 { failures.append("Cancelled partitions: \(coverage.cancelledPartitionCount).") }
+        if coverage.excludedPartitionCount > 0 { failures.append("Excluded partitions: \(coverage.excludedPartitionCount).") }
+        if coverage.balanceErrorCount > 0 { failures.append("Coverage balance errors: \(coverage.balanceErrorCount).") }
+        return orderedUnique(failures)
+    }
+
+    private static func listFailures(
+        reconciliation: ExhaustiveListReconciliation,
+        disclosures: [ExhaustiveListFailedPartition],
+        excludedMembers: [ExhaustiveListExcludedMember]
+    ) -> [String] {
+        var failures = reconciliation.omissions.map {
+            "Omitted evaluation item \($0.itemKey): \($0.reason)."
+        }
+        failures += disclosures.map { disclosure in
+            let name = disclosure.documentNames.isEmpty
+                ? disclosure.partitionKey
+                : disclosure.documentNames.joined(separator: ", ")
+            return "Failed source \(name): \(disclosure.errorSummary)"
+        }
+        failures += excludedMembers.map { "Excluded corpus member \($0.name): \($0.reason)." }
+        if !reconciliation.metrics.unexpectedItemKeys.isEmpty {
+            failures.append(
+                "Unexpected evaluation items: \(reconciliation.metrics.unexpectedItemKeys.joined(separator: ", "))."
+            )
+        }
+        let conflicts = reconciliation.items.filter { $0.values.count > 1 }.map(\.itemKey)
+        if !conflicts.isEmpty {
+            failures.append("Conflicting values remain for: \(conflicts.joined(separator: ", ")).")
+        }
+        let missingPrimaryEvidence = reconciliation.items.filter(\.evidence.isEmpty).map(\.itemKey)
+        if !missingPrimaryEvidence.isEmpty {
+            failures.append(
+                "No primary supporting evidence remains for: \(missingPrimaryEvidence.joined(separator: ", "))."
+            )
+        }
+        return orderedUnique(failures)
+    }
+
+    private static func contraryDimensionEvidence(
+        items: [ExhaustiveListItem],
+        material: ExhaustiveListEvidenceMaterial
+    ) -> [VerificationDimensionEvidence] {
+        let sourceByReference = Dictionary(uniqueKeysWithValues: material.sources.map {
+            ($0.reference, $0)
+        })
+        return Array(Set(items.flatMap(\.contraryEvidence)))
+            .sorted(by: evidenceLessThan)
+            .compactMap { reference in
+                guard let source = sourceByReference[reference] else { return nil }
+                return VerificationDimensionEvidence(
+                    sourceID: reference.revisionID,
+                    sourceLabel: source.documentName,
+                    locator: reference.locatorJSON,
+                    excerpt: source.excerpt
+                )
+            }
+    }
+
     private func evidenceMaterial(for items: [ExhaustiveListItem]) throws -> ExhaustiveListEvidenceMaterial {
         let references = Array(Set(items.flatMap { $0.evidence + $0.contraryEvidence }))
             .sorted(by: Self.evidenceLessThan)
@@ -533,6 +753,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             labels[reference] = "E\(index + 1)"
             sources.append(ExhaustiveListEvidenceSource(
                 reference: reference,
+                documentName: try store.documentLibrary.fetchDocument(id: reference.documentID)?.displayName
+                    ?? reference.documentID,
                 excerpt: DocumentChunker.excerpt(revision.text)
             ))
         }
@@ -547,20 +769,23 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             ($0.reference, $0.excerpt)
         })
         return try items.map { item in
-            try PropositionSupportResult(
+            let evidence = item.evidence.map { reference in
+                SupportEvidence(
+                    sourceID: reference.revisionID,
+                    sourceLabel: material.labelByEvidence[reference] ?? "Evidence",
+                    locator: reference.locatorJSON,
+                    retainedExcerpt: excerptByReference[reference] ?? "Evidence retained in source set.",
+                    verifierName: "ExhaustiveListTask",
+                    verifierVersion: Self.verificationVersion
+                )
+            }
+            return try PropositionSupportResult(
                 propositionID: item.itemKey,
-                status: .supported,
-                reasons: item.values.count > 1 ? ["Conflicting values require review."] : [],
-                evidence: item.evidence.map { reference in
-                    SupportEvidence(
-                        sourceID: reference.revisionID,
-                        sourceLabel: material.labelByEvidence[reference] ?? "Evidence",
-                        locator: reference.locatorJSON,
-                        retainedExcerpt: excerptByReference[reference] ?? "Evidence retained in source set.",
-                        verifierName: "ExhaustiveListTask",
-                        verifierVersion: Self.verificationVersion
-                    )
-                },
+                status: evidence.isEmpty ? .unverifiable : .supported,
+                reasons: evidence.isEmpty
+                    ? ["No primary supporting evidence remained after contrary-evidence reconciliation."]
+                    : (item.values.count > 1 ? ["Conflicting values require review."] : []),
+                evidence: evidence,
                 timestamp: Date()
             )
         }
@@ -629,6 +854,11 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return String(decoding: try encoder.encode(value), as: UTF8.self)
+    }
+
+    private static func orderedUnique<T: Hashable>(_ values: [T]) -> [T] {
+        var seen = Set<T>()
+        return values.filter { seen.insert($0).inserted }
     }
 }
 
@@ -701,11 +931,13 @@ private struct ExhaustiveListValidationRecord: Codable {
     var schemaVersion = 1
     var schemaInvalidPartitionCount: Int
     var metrics: ExhaustiveListMetrics
+    var verificationDimensions: VerificationDimensions
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
         case schemaInvalidPartitionCount = "schema_invalid_partition_count"
         case metrics
+        case verificationDimensions = "verification_dimensions"
     }
 }
 
@@ -730,6 +962,7 @@ private struct ExhaustiveListExcludedMember: Codable {
 
 private struct ExhaustiveListEvidenceSource {
     var reference: CorpusAnalysisEvidenceReference
+    var documentName: String
     var excerpt: String
 }
 

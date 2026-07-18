@@ -170,3 +170,95 @@ public enum VerificationDimensionPresenter {
         }
     }
 }
+
+/// Deterministic corpus checks layer onto proposition support without
+/// promoting one contract into another. Callers provide ledger-derived reasons
+/// and retained contrary evidence; this evaluator never infers success from an
+/// aggregate assurance string alone.
+public enum CorpusVerificationDimensionsEvaluator {
+    public static func exhaustiveList(
+        base: VerificationDimensions,
+        coverage: CorpusAnalysisCoverage,
+        listFailures: [String],
+        coverageFailures: [String],
+        contraryEvidence: [VerificationDimensionEvidence]
+    ) -> VerificationDimensions {
+        let coverageIsComplete = coverage.pendingPartitionCount == 0
+            && coverage.failedPartitionCount == 0
+            && coverage.cancelledPartitionCount == 0
+            && coverage.excludedPartitionCount == 0
+            && coverage.succeededPartitionCount == coverage.partitionCount
+            && coverage.balanceErrorCount == 0
+            && coverageFailures.isEmpty
+        let completeListFailures = orderedUnique(coverageFailures + listFailures)
+        let existing = Dictionary(
+            uniqueKeysWithValues: base.results.map { ($0.dimension, $0) }
+        )
+        var overrides = existing
+        overrides[.corpusCoverage] = .init(
+            dimension: .corpusCoverage,
+            status: coverageIsComplete ? .satisfied : .failed,
+            reason: coverageIsComplete
+                ? "Every in-scope corpus partition succeeded and the coverage ledger balances."
+                : reason(
+                    prefix: "Corpus coverage is incomplete.",
+                    details: coverageFailures,
+                    fallback: "The ledger contains failed, cancelled, pending, excluded, or unbalanced partitions."
+                )
+        )
+        overrides[.listCompleteness] = .init(
+            dimension: .listCompleteness,
+            status: coverageIsComplete && completeListFailures.isEmpty ? .satisfied : .failed,
+            reason: coverageIsComplete && completeListFailures.isEmpty
+                ? "The exhaustive list completed across every in-scope partition without a recorded omission or conflict."
+                : reason(
+                    prefix: "List completeness was not established.",
+                    details: completeListFailures,
+                    fallback: "The exhaustive list has a coverage or reconciliation gap."
+                )
+        )
+        if !contraryEvidence.isEmpty {
+            let names = orderedUnique(contraryEvidence.compactMap(\.sourceLabel))
+            overrides[.contraryEvidence] = .init(
+                dimension: .contraryEvidence,
+                status: .failed,
+                reason: "The contrary-evidence sweep found retained contrary passages"
+                    + (names.isEmpty ? "." : " in \(names.joined(separator: ", "))."),
+                evidence: contraryEvidence
+            )
+        } else if coverageIsComplete {
+            overrides[.contraryEvidence] = .init(
+                dimension: .contraryEvidence,
+                status: .satisfied,
+                reason: "The exhaustive sweep recorded no contrary passage in the completed corpus run."
+            )
+        } else {
+            overrides[.contraryEvidence] = .init(
+                dimension: .contraryEvidence,
+                status: .notRun,
+                reason: "The contrary-evidence sweep cannot establish absence while corpus coverage is incomplete."
+            )
+        }
+        overrides[.chronologyCoverage] = .init(
+            dimension: .chronologyCoverage,
+            status: .notApplicable,
+            reason: "Chronology coverage does not apply to an exhaustive-list task."
+        )
+        overrides[.negativeValidity] = .init(
+            dimension: .negativeValidity,
+            status: .notApplicable,
+            reason: "Negative validity requires a separately requested negative conclusion."
+        )
+        return .complete(overrides: VerificationDimensionName.allCases.compactMap { overrides[$0] })
+    }
+
+    private static func reason(prefix: String, details: [String], fallback: String) -> String {
+        let details = orderedUnique(details)
+        return details.isEmpty ? "\(prefix) \(fallback)" : "\(prefix) \(details.joined(separator: " "))"
+    }
+
+    private static func orderedUnique<T: Hashable>(_ values: [T]) -> [T] {
+        var seen = Set<T>()
+        return values.filter { seen.insert($0).inserted }
+    }
+}

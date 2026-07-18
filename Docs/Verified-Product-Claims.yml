@@ -58,6 +58,17 @@ claims:
     last_reviewed: "2026-07-18"
     publication_anchor: "ARCHITECTURE.md"
 
+  - id: "DOCUMENT-CORPUS-VERIFICATION-GATES"
+    topic: "document-corpus-verification-gates"
+    wording: "Corpus-backed verification independently records contrary evidence, list completeness, corpus coverage, and negative validity; ranked retrieval and low-confidence or incomplete corpus members cannot authorize a clean negative conclusion."
+    owner: "Document reliability engineering"
+    code_anchor: "Packages/SupraSessions/Sources/SupraSessions/ExhaustiveListTask.swift"
+    verification: "Packages/SupraSessions/Tests/SupraSessionsTests/ExhaustiveListTaskTests.swift"
+    ci_job: "macos-ci/swift-packages"
+    applicable_version: "2.3.0 and later"
+    last_reviewed: "2026-07-18"
+    publication_anchor: "ARCHITECTURE.md"
+
   - id: "STORE-SUPPORTED-UPGRADES"
     topic: "supported-releases"
     wording: "Upgrade tests cover v1.4.1, v1.5.2, v1.8.0, v2.0.0, v2.1.0, v2.1.3, v2.2.0, and the latest-minus-one schema fixture."

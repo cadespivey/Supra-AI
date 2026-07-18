@@ -213,6 +213,11 @@ repository:
   their required dimensions, so an unrelated `not_run` result is visible without being silently
   treated as satisfied.
   Every newly verified structured-output version persists a complete independent verification-dimension ledger; historical, absent, partial, or malformed ledgers fail closed to not run without changing legacy content or aggregate status.
+  Exhaustive-list runs bind their coverage and reconciliation ledgers into independent corpus
+  coverage and list-completeness results, and retain cross-partition contrary passages as
+  dimension evidence alongside both positions. Negative conclusions use an explicit method gate:
+  ranked retrieval, any positive finding, incomplete coverage, or an excluded/review-required
+  source blocks persistence of clean absence wording. Corpus-backed verification independently records contrary evidence, list completeness, corpus coverage, and negative validity; ranked retrieval and low-confidence or incomplete corpus members cannot authorize a clean negative conclusion.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

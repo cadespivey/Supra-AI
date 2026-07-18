@@ -259,6 +259,7 @@ private struct DeterministicCorpusWorkload: Sendable {
         observations.append(contentsOf: try lineageStalenessObservations(store: store))
         observations.append(contentsOf: contextPackingObservations())
         observations.append(contentsOf: classificationObservations())
+        observations.append(contentsOf: try supportObservations())
 
         let benchmarkDocumentIDs = Set(
             try store.documentLibrary.fetchDocuments(matterID: benchmarkMatter.id).map(\.id)
@@ -340,6 +341,40 @@ private struct DeterministicCorpusWorkload: Sendable {
                 validEvidenceSpanCount: 1
             ),
         ])
+    }
+
+    private func supportObservations() throws -> [BenchmarkObservation] {
+        let fixtures: [(answer: String, text: String, lowConfidence: Bool, expected: Bool)] = [
+            ("Payment was due March 3, 2025 [S1].", "Payment was due March 3, 2025.", false, true),
+            ("Payment was due March 3, 2025 [S9].", "Payment was due March 3, 2025.", false, false),
+            ("Payment was due March 3, 2025 [S1].", "Payment was due March 3, 2025.", true, false),
+            (
+                "Payment was due March 3, 2025 [S1].",
+                "Payment was due March 3, 2025. …[source text truncated to fit the context window]",
+                false,
+                false
+            ),
+            ("Alpha paid Beta $900 and Gamma $500 [S1].", "Alpha paid Beta $500 and Gamma $900.", false, false),
+        ]
+        let cases = try fixtures.map { fixture in
+            let report = try DocumentSupportVerifier.verify(
+                answer: fixture.answer,
+                sources: [DocumentSupportSource(
+                    sourceID: "synthetic/support-source",
+                    label: "S1",
+                    locator: "chars 0-73",
+                    text: fixture.text,
+                    lowConfidence: fixture.lowConfidence
+                )],
+                scopeFullyIndexed: true,
+                timestamp: Date(timeIntervalSinceReferenceDate: 69)
+            )
+            return SupportBenchmarkCase(
+                expectedSupported: fixture.expected,
+                actualStatus: report.verificationStatus
+            )
+        }
+        return SupportBenchmark.observations(cases: cases)
     }
 
     private func lineageStalenessObservations(store: SupraStore) throws -> [BenchmarkObservation] {
