@@ -63,6 +63,7 @@
 		5A00000000000000000000E2 /* MLXEmbeddingModelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000130 /* MLXEmbeddingModelController.swift */; };
 		5A00000000000000000000E3 /* MatterDocumentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000131 /* MatterDocumentsView.swift */; };
 		5A00000000000000000000E4 /* PartTextEditSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000132 /* PartTextEditSheet.swift */; };
+		F7A000000000000000000001 /* DocumentRelationReviewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7A000000000000000000002 /* DocumentRelationReviewSheet.swift */; };
 		5A0000000000000000000F02 /* MatterDraftingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0000000000000000000F03 /* MatterDraftingView.swift */; };
 		89AC1CC2D0CFEA61CB407D94 /* ResearchAuthoritiesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDDEEEEA83AAE455AE64D9F5 /* ResearchAuthoritiesUITests.swift */; };
 		92040226CB4C642EDABCE796 /* BillingDraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D443FEB23479EC80411A4759 /* BillingDraftView.swift */; };
@@ -146,6 +147,7 @@
 		5A0000000000000000000130 /* MLXEmbeddingModelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXEmbeddingModelController.swift; sourceTree = "<group>"; };
 		5A0000000000000000000131 /* MatterDocumentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterDocumentsView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000132 /* PartTextEditSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PartTextEditSheet.swift; sourceTree = "<group>"; };
+		F7A000000000000000000002 /* DocumentRelationReviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentRelationReviewSheet.swift; sourceTree = "<group>"; };
 		5A0000000000000000000201 /* SupraAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SupraAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A0000000000000000000202 /* SupraRuntimeService.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = SupraRuntimeService.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A0000000000000000000F03 /* MatterDraftingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatterDraftingView.swift; sourceTree = "<group>"; };
@@ -346,6 +348,7 @@
 			children = (
 				5A0000000000000000000131 /* MatterDocumentsView.swift */,
 				5A0000000000000000000132 /* PartTextEditSheet.swift */,
+				F7A000000000000000000002 /* DocumentRelationReviewSheet.swift */,
 			);
 			path = Documents;
 			sourceTree = "<group>";
@@ -608,6 +611,7 @@
 				5A000000000000000000002E /* MatterOutputsView.swift in Sources */,
 				5A00000000000000000000E3 /* MatterDocumentsView.swift in Sources */,
 				5A00000000000000000000E4 /* PartTextEditSheet.swift in Sources */,
+				F7A000000000000000000001 /* DocumentRelationReviewSheet.swift in Sources */,
 				5A000000000000000000002F /* OutputDetailView.swift in Sources */,
 				C8914D48FD9E94ED7FA33488 /* ScratchPadView.swift in Sources */,
 				92040226CB4C642EDABCE796 /* BillingDraftView.swift in Sources */,

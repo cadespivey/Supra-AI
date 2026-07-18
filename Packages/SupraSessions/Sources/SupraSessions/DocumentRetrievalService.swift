@@ -37,9 +37,9 @@ public struct RetrievedSource: Sendable {
     public var ocrConfidence: Double?
     public var duplicateLocations: [String]
     public var rank: Int
-    /// Compact document context shown to the model (e.g. "Contracts & Agreements ·
-    /// 2023-05-01") so it can prefer the operative/executed document over a draft and
-    /// weigh recency when sources conflict. `nil` when no classification/date exists.
+    /// Compact document context shown to the model. Classification/date context is
+    /// descriptive; operative/draft state is appended only from confirmed relations.
+    /// An unreviewed proposal never becomes an implicit ranking instruction.
     public var metadata: String?
     /// Present only for structure-aware v2 chunks. Hidden provenance is resolved
     /// from the primary node and its same-revision ancestors after ranking.
@@ -149,7 +149,16 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         let readiness = try scopeReadiness(matterID: matterID, scope: scope)
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
         let nameByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0.displayName) })
-        let metadataByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, Self.contextMetadata(for: $0)) })
+        let relations = try store.documentRelations.fetchAll(matterID: matterID)
+        let relationMetadataByID = DocumentRelationDownstreamPolicy
+            .confirmedMetadataByDocumentID(relations: relations)
+        let metadataByID = Dictionary(uniqueKeysWithValues: documents.map { document in
+            let parts = [
+                Self.contextMetadata(for: document),
+                relationMetadataByID[document.id],
+            ].compactMap { $0 }
+            return (document.id, parts.isEmpty ? nil : parts.joined(separator: " · "))
+        })
 
         // FTS candidates (keyword). Fused with the semantic list by Reciprocal Rank
         // Fusion (RRF): each list contributes 1/(k + rank), summed per chunk. RRF is
@@ -290,12 +299,21 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             scopeIDs.contains(document.id)
                 && document.extractionMethod?.hasPrefix("converted_lossy@toolchain:") == true
         }
-        var warning: String?
+        var warnings: [String] = []
         if hasLossyLegacyDocument {
-            warning = "This scope includes converted_lossy legacy .doc content. Convert the file to .docx or PDF and review the extracted text before making completeness or negative claims."
+            warnings.append("This scope includes converted_lossy legacy .doc content. Convert the file to .docx or PDF and review the extracted text before making completeness or negative claims.")
         } else if !readiness.isFullyReady {
-            warning = "Search scope is still indexing: \(readiness.readyDocuments)/\(readiness.totalDocuments) documents ready."
+            warnings.append("Search scope is still indexing: \(readiness.readyDocuments)/\(readiness.totalDocuments) documents ready.")
         }
+        let relationWarnings = DocumentRelationDownstreamPolicy.unreviewedReasons(
+            relations: relations,
+            documents: documents,
+            inScopeDocumentIDs: Set(scopeIDs)
+        )
+        if !relationWarnings.isEmpty {
+            warnings.append("Preliminary retrieval warning: " + relationWarnings.joined(separator: " "))
+        }
+        let warning = warnings.isEmpty ? nil : warnings.joined(separator: " ")
 
         return RetrievalResult(
             sources: sources, readiness: readiness, incompleteScopeWarning: warning,

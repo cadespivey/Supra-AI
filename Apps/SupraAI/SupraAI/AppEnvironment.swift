@@ -380,6 +380,49 @@ final class AppEnvironment: ObservableObject {
         seedUITestRemediationWarningsIfNeeded()
         seedUITestInterruptedImportIfNeeded()
         seedUITestDocumentCorrectionIfNeeded()
+        seedUITestDocumentRelationsIfNeeded()
+    }
+
+    /// Seeds one proposal-only draft/executed family for the T-UX-08 review flow.
+    /// The relation evidence includes non-default diff counts so the UI test proves
+    /// the immutable evidence surface is wired, not a generic placeholder.
+    private func seedUITestDocumentRelationsIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestDocumentRelations"),
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            guard (try store.documentRelations.fetchAll(matterID: matterID)).isEmpty else { return }
+            func insert(_ id: String, name: String) throws -> MatterDocumentRecord {
+                let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                    id: "uitest-relation-blob-\(id)",
+                    sha256: "uitest-relation-sha-\(id)",
+                    byteSize: 24,
+                    originalExtension: "txt",
+                    managedRelativePath: "uitest/\(name)"
+                )).blob
+                return try store.documentLibrary.insertDocument(MatterDocumentRecord(
+                    id: "uitest-relation-\(id)",
+                    matterID: matterID,
+                    blobID: blob.id,
+                    displayName: name,
+                    status: MatterDocumentStatus.ready.rawValue,
+                    extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                    indexStatus: DocumentIndexStatus.ready.rawValue
+                ))
+            }
+            let draft = try insert("draft", name: "Atlas Agreement Draft.txt")
+            let executed = try insert("executed", name: "Atlas Agreement Executed.txt")
+            _ = try store.documentRelations.propose(
+                matterID: matterID,
+                fromDocumentID: draft.id,
+                toDocumentID: executed.id,
+                kind: .draftOf,
+                evidenceJSON: #"{"schema_version":1,"role_signal":"draft_to_executed","combined_similarity":0.84,"changed_units":2,"inserted_units":1,"deleted_units":0}"#,
+                confidence: 0.84,
+                proposedBy: .system
+            )
+        } catch {
+            assertionFailure("Could not seed relation review accessibility fixture: \(error)")
+        }
     }
 
     /// Seeds one revision-backed text part only for T-UX-07. The fixture lives in

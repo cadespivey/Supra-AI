@@ -62,6 +62,7 @@ public final class MatterDocumentsController: ObservableObject {
     @Published public var message: String?
 
     public let matterID: String
+    public let relationReviewController: DocumentRelationReviewController
     private let store: SupraStore
     private let queue: DocumentProcessingQueue
     private let isImportReady: @MainActor () -> Bool
@@ -87,6 +88,10 @@ public final class MatterDocumentsController: ObservableObject {
         self.isImportReady = isImportReady
         self.storage = storage
         self.previewLoader = DocumentPreviewLoader(store: store, storage: storage)
+        self.relationReviewController = DocumentRelationReviewController(
+            matterID: matterID,
+            store: store
+        )
         reload()
         observeProcessing()
     }
@@ -240,6 +245,7 @@ public final class MatterDocumentsController: ObservableObject {
         trashedDocuments = (try? store.documentLibrary.fetchSoftDeletedDocuments(matterID: matterID)) ?? []
         trashedFolders = ((try? store.documentLibrary.fetchFolders(matterID: matterID, includeDeleted: true)) ?? []).filter { $0.deletedAt != nil }
         tags = (try? store.documentLibrary.fetchTags(matterID: matterID)) ?? []
+        relationReviewController.reload()
         // The selected folder can vanish out from under the selection (deleting
         // an ancestor cascades to the whole subtree); fall back to All Documents
         // rather than silently filtering — and scoping Q&A — by an invisible folder.

@@ -24,6 +24,7 @@ struct MatterDocumentsView: View {
     @State private var newFolderParentID: String?
     @State private var showTrash = false
     @State private var showChronology = false
+    @State private var showRelationReview = false
     @State private var dropTargeted = false
     @State private var preview: PreviewItem?
     @State private var correctionDraft: DocumentPartCorrectionDraft?
@@ -97,6 +98,11 @@ struct MatterDocumentsView: View {
                 ) { showChronology = false }
             }
         }
+        .sheet(isPresented: $showRelationReview) {
+            DocumentRelationReviewSheet(
+                controller: controller.relationReviewController
+            ) { showRelationReview = false }
+        }
         .sheet(item: $correctionDraft) { draft in
             PartTextEditSheet(draft: draft) { text, reason in
                 try controller.saveCorrection(draft, text: text, reason: reason)
@@ -139,6 +145,23 @@ struct MatterDocumentsView: View {
             }
             .disabled(chronologyController == nil)
 
+            Button {
+                controller.relationReviewController.reload()
+                showRelationReview = true
+            } label: {
+                Label("Review Relations", systemImage: "point.3.connected.trianglepath.dotted")
+                if controller.relationReviewController.pendingReviewCount > 0 {
+                    Text("\(controller.relationReviewController.pendingReviewCount)")
+                        .font(.supraCaption.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.18), in: Capsule())
+                }
+            }
+            .buttonStyle(.ghost)
+            .accessibilityIdentifier("relations.openReview")
+            .accessibilityValue(relationReviewAccessibilityValue)
+
             Spacer()
 
             SupraToolbarIconButton("Trash", systemImage: "trash", role: .destructive) {
@@ -147,6 +170,11 @@ struct MatterDocumentsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private var relationReviewAccessibilityValue: String {
+        let count = controller.relationReviewController.pendingReviewCount
+        return count == 1 ? "1 unreviewed relation" : "\(count) unreviewed relations"
     }
 
     // MARK: - Sidebar

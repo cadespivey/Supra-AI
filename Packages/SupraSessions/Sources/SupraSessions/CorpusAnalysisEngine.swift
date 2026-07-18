@@ -350,11 +350,25 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                 runID: run.id
             )
             let staleReasons = try stalenessReasons(snapshot: plan.snapshot)
+            let versionRelationReasons: [String]
+            if DocumentRelationDownstreamPolicy.requiresReviewedRelations(for: request.taskKind) {
+                let inScopeDocumentIDs = Set(plan.snapshot.members.compactMap(\.documentID))
+                versionRelationReasons = DocumentRelationDownstreamPolicy.unreviewedReasons(
+                    relations: try store.documentRelations.fetchAll(matterID: request.matterID),
+                    documents: documents,
+                    inScopeDocumentIDs: inScopeDocumentIDs
+                )
+            } else {
+                versionRelationReasons = []
+            }
             let assurance: OutputAssuranceState
             let reasons: [String]
             if !staleReasons.isEmpty {
                 assurance = .stale
-                reasons = staleReasons
+                reasons = (staleReasons + versionRelationReasons).sorted()
+            } else if !versionRelationReasons.isEmpty {
+                assurance = request.taskKind == .negativeCheck ? .negativeBlocked : .corpusIncomplete
+                reasons = versionRelationReasons
             } else if coverage.pendingPartitionCount == 0,
                       coverage.failedPartitionCount == 0,
                       coverage.cancelledPartitionCount == 0,
