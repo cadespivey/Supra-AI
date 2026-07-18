@@ -83,6 +83,36 @@ final class BenchmarkHarnessTests: XCTestCase {
         XCTAssertEqual(try measured(ordering), 2.0 / 3.0, accuracy: 0.000_001)
     }
 
+    func testBOCRCalibrationMetricsUsePairedProbabilitiesAndFixedBins() throws {
+        // B-OCR-02 expected RED: the harness has no Brier-score or fixed-bin
+        // expected-calibration-error formulas before OCR policy v1 emits keys.
+        let probabilities = [0.9, 0.8, 0.2, 0.1]
+        let outcomes = [true, true, false, true]
+
+        XCTAssertEqual(
+            try measured(BenchmarkMetrics.brierScore(probabilities: probabilities, outcomes: outcomes)),
+            0.225,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            try measured(BenchmarkMetrics.expectedCalibrationError(
+                probabilities: probabilities,
+                outcomes: outcomes,
+                binCount: 2
+            )),
+            0.25,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            BenchmarkMetrics.brierScore(probabilities: [], outcomes: []).status,
+            .notApplicable
+        )
+        XCTAssertEqual(
+            BenchmarkMetrics.expectedCalibrationError(probabilities: [], outcomes: [], binCount: 5).status,
+            .notApplicable
+        )
+    }
+
     func testDeterministicRunnerProducesCanonicalCatalogOrderedJSON() async throws {
         // T-BEN-03 expected RED: BenchmarkRunner, canonical report encoding, and
         // the complete B-* catalog are absent.
