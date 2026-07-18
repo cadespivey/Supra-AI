@@ -140,6 +140,45 @@ final class PerformanceBenchmarkTests: XCTestCase {
         )
     }
 
+    func testApprovedEnvelopeKeepsHostedCaptureInSafetyMode() throws {
+        // B-PERF-MODE-01 expected RED: once thresholds are approved, capture
+        // mode incorrectly applies the release-only fixed-environment match.
+        let baseline = try report(run: .fixture)
+        let thresholds = PerformanceThresholdManifest.approvedFixture(from: baseline)
+        var hostedRun = PerformanceRunMetadata.fixture
+        hostedRun.hardwareIdentifier = "github-hosted-macos"
+        let cleanHostedReport = try report(run: hostedRun)
+
+        XCTAssertTrue(
+            PerformanceReleaseGate.evaluate(
+                report: cleanHostedReport,
+                thresholds: thresholds,
+                requireApprovedStatisticalThresholds: false
+            ).violations.isEmpty,
+            "capture mode must enforce deterministic safety without comparing unlike hardware"
+        )
+        XCTAssertEqual(
+            PerformanceReleaseGate.evaluate(
+                report: cleanHostedReport,
+                thresholds: thresholds,
+                requireApprovedStatisticalThresholds: true
+            ).violations.map(\.metricID),
+            ["B-PERF-01", "B-PERF-02", "B-PERF-03"],
+            "release mode must still fail closed on a different environment"
+        )
+
+        let dirtyHostedReport = try report(unaffectedDocumentsTouched: 1, run: hostedRun)
+        XCTAssertEqual(
+            PerformanceReleaseGate.evaluate(
+                report: dirtyHostedReport,
+                thresholds: thresholds,
+                requireApprovedStatisticalThresholds: false
+            ).violations.map(\.metricID),
+            ["B-PERF-03"],
+            "capture mode must retain the zero-unaffected-work safety gate"
+        )
+    }
+
     func testApprovedGateFailsClosedWhenMemoryOrIncrementalBandsAreMissing() throws {
         // D-09 expected RED: changing the manifest to approved while leaving the
         // owner-set B-PERF-02 memory and B-PERF-03 incremental bands nil silently
