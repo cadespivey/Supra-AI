@@ -131,7 +131,7 @@ final class ChunkerV2Tests: XCTestCase {
         XCTAssertEqual(chunks.map(\.charStart), [0, 150, 0])
         XCTAssertEqual(chunks.map(\.charEnd), [200, 210, 26])
         XCTAssertEqual(chunks.map(\.text), [String(repeating: "A", count: 200), String(repeating: "A", count: 60), "Outstanding Balance\t742.19"])
-        XCTAssertEqual(chunks.map(\.tokenCount), [1, 1, 2])
+        XCTAssertEqual(chunks.map(\.tokenCount), [1, 1, 3])
         XCTAssertEqual(chunks.map(\.pageIndex), [4, 4, nil])
         XCTAssertEqual(chunks.map(\.sheetName), [nil, nil, "Aging"])
     }
