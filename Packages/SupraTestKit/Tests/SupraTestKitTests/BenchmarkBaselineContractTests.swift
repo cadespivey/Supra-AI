@@ -175,9 +175,9 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         XCTAssertLessThanOrEqual(try measuredValue("B-OCR-02", "expected_calibration_error", in: baseline), 1)
     }
 
-    func testFixedPerformanceBaselineMatchesProtocolAndPendingThresholdLedger() throws {
-        // M10-W3/T-BEN-05 expected RED: the deterministic harness digest and
-        // baseline contract do not yet include the fixed performance protocol.
+    func testFixedPerformanceBaselineMatchesProtocolAndApprovedThresholdLedger() throws {
+        // M10-W3/D-09 expected RED: the owner-approved performance envelope has
+        // not yet been recorded in the fixed threshold manifest.
         let root = repoRoot()
         let thresholdURL = root.appendingPathComponent(
             "TestData/Benchmarks/performance-thresholds.json"
@@ -192,13 +192,13 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         )
 
         XCTAssertEqual(thresholds.schemaVersion, 1)
-        XCTAssertEqual(thresholds.approvalStatus, .pendingOwnerApproval)
-        XCTAssertNil(thresholds.approvedBy)
-        XCTAssertNil(thresholds.approvedAt)
+        XCTAssertEqual(thresholds.approvalStatus, .approved)
+        XCTAssertEqual(thresholds.approvedBy, "Cade Spivey")
+        XCTAssertEqual(thresholds.approvedAt, "2026-07-18")
         XCTAssertEqual(thresholds.latencyRegressionFraction, 0.10)
         XCTAssertEqual(thresholds.throughputRegressionFraction, 0.10)
-        XCTAssertNil(thresholds.peakRSSCeilingMiB)
-        XCTAssertNil(thresholds.incrementalWallClockRegressionFraction)
+        XCTAssertEqual(thresholds.peakRSSCeilingMiB, 48)
+        XCTAssertEqual(thresholds.incrementalWallClockRegressionFraction, 0.25)
         XCTAssertTrue(thresholds.requireZeroUnaffectedDocumentsTouched)
 
         XCTAssertEqual(report.schemaVersion, 1)
