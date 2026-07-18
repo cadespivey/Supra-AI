@@ -313,6 +313,10 @@ public enum PerformanceReleaseGate {
             ))
         }
 
+        guard requireApprovedStatisticalThresholds else {
+            return PerformanceGateEvaluation(violations: violations)
+        }
+
         let approved = thresholds.approvalStatus == .approved
             && thresholds.approvedBy?.isEmpty == false
             && thresholds.approvedAt?.isEmpty == false
