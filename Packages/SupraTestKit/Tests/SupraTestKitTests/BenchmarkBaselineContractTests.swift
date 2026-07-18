@@ -104,6 +104,22 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         XCTAssertEqual(duplicateWork.numerator, 0)
         XCTAssertEqual(duplicateWork.denominator, 3, "one import and two corpus checkpoints are replay probes")
 
+        XCTAssertEqual(try measuredValue("B-LST-01", "item_recall", in: baseline), 2.0 / 3.0, accuracy: 0.000_001)
+        XCTAssertEqual(try measuredValue("B-LST-01", "item_precision", in: baseline), 2.0 / 3.0, accuracy: 0.000_001)
+        XCTAssertEqual(try measuredValue("B-LST-01", "item_f1", in: baseline), 2.0 / 3.0, accuracy: 0.000_001)
+        let duplicateListItems = try measurement("B-LST-01", "duplicate_output_rate", in: baseline)
+        XCTAssertEqual(duplicateListItems.numerator, 1)
+        XCTAssertEqual(duplicateListItems.denominator, 5)
+
+        let falseCompleteness = try measurement("B-CMP-01", "completeness_false_claim_rate", in: baseline)
+        XCTAssertEqual(falseCompleteness.value, 0)
+        XCTAssertEqual(falseCompleteness.numerator, 0)
+        XCTAssertEqual(falseCompleteness.denominator, 3)
+        let falseNegatives = try measurement("B-NEG-01", "negative_false_accept_rate", in: baseline)
+        XCTAssertEqual(falseNegatives.value, 0)
+        XCTAssertEqual(falseNegatives.numerator, 0)
+        XCTAssertEqual(falseNegatives.denominator, 2)
+
         // B-OCR-01/B-OCR-02 expected RED: the frozen M2 baseline still reports
         // both metrics n/a because policy-v1 benchmark observations do not exist.
         XCTAssertEqual(try measuredValue("B-OCR-01", "selection_accuracy", in: baseline), 1)
