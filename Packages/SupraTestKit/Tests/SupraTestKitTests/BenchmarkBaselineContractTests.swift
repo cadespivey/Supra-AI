@@ -175,6 +175,62 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         XCTAssertLessThanOrEqual(try measuredValue("B-OCR-02", "expected_calibration_error", in: baseline), 1)
     }
 
+    func testFixedPerformanceBaselineMatchesProtocolAndPendingThresholdLedger() throws {
+        // M10-W3/T-BEN-05 expected RED: the deterministic harness digest and
+        // baseline contract do not yet include the fixed performance protocol.
+        let root = repoRoot()
+        let thresholdURL = root.appendingPathComponent(
+            "TestData/Benchmarks/performance-thresholds.json"
+        )
+        let thresholds = try JSONDecoder().decode(
+            PerformanceThresholdManifest.self,
+            from: Data(contentsOf: thresholdURL)
+        )
+        let report = try JSONDecoder().decode(
+            FixedPerformanceReport.self,
+            from: Data(contentsOf: root.appendingPathComponent(thresholds.baselinePath))
+        )
+
+        XCTAssertEqual(thresholds.schemaVersion, 1)
+        XCTAssertEqual(thresholds.approvalStatus, .pendingOwnerApproval)
+        XCTAssertNil(thresholds.approvedBy)
+        XCTAssertNil(thresholds.approvedAt)
+        XCTAssertEqual(thresholds.latencyRegressionFraction, 0.10)
+        XCTAssertEqual(thresholds.throughputRegressionFraction, 0.10)
+        XCTAssertNil(thresholds.peakRSSCeilingMiB)
+        XCTAssertNil(thresholds.incrementalWallClockRegressionFraction)
+        XCTAssertTrue(thresholds.requireZeroUnaffectedDocumentsTouched)
+
+        XCTAssertEqual(report.schemaVersion, 1)
+        XCTAssertEqual(report.run.protocolVersion, "document-performance-v1")
+        XCTAssertEqual(
+            thresholds.baselinePath,
+            "TestData/Benchmarks/performance-baseline-\(report.run.repositorySHA).json"
+        )
+        XCTAssertEqual(report.scales.map(\.documentCount), [10, 50, 200])
+        for scale in report.scales {
+            XCTAssertEqual(scale.importedDocumentCount, scale.documentCount)
+            XCTAssertEqual(scale.persistedLedgerRowCount, scale.documentCount)
+            XCTAssertEqual(scale.persistedStructureNodeCount, scale.documentCount * 2)
+            XCTAssertEqual(scale.fastRetrievalMilliseconds.count, 10)
+            XCTAssertEqual(scale.retrievalMilliseconds.count, 10)
+            XCTAssertFalse(scale.ledgerWriteMilliseconds.isEmpty)
+            XCTAssertEqual(scale.structureWriteMilliseconds.count, scale.documentCount)
+            XCTAssertGreaterThan(scale.documentsPerMinute, 0)
+            XCTAssertGreaterThan(scale.mebibytesPerSecond, 0)
+            XCTAssertGreaterThan(scale.peakRSSMiB, 0)
+        }
+        XCTAssertEqual(report.incremental.documentCount, 200)
+        XCTAssertEqual(report.incremental.changedDocumentCount, 1)
+        XCTAssertEqual(report.incremental.unaffectedDocumentsTouched, 0)
+        XCTAssertGreaterThan(report.incremental.rowsTouched, 0)
+        XCTAssertGreaterThan(report.incremental.bytesTouched, 0)
+
+        let recorded = try XCTUnwrap(thresholds.baseline)
+        XCTAssertEqual(recorded.environment, PerformanceEnvironmentFingerprint(run: report.run))
+        XCTAssertEqual(recorded, PerformanceThresholdBaseline(report: report))
+    }
+
     func testBOCRKeysAreSyntheticCompleteAndExerciseBothOutcomes() throws {
         let keyURL = repoRoot().appendingPathComponent("TestData/Benchmarks/ocr-selection-keys.json")
         let keys = try JSONDecoder().decode(OCRSelectionKeys.self, from: Data(contentsOf: keyURL))
@@ -214,12 +270,14 @@ final class BenchmarkBaselineContractTests: XCTestCase {
     private func harnessDigest(root: URL) throws -> String {
         let paths = [
             "Packages/SupraTestKit/Package.swift",
+            "Packages/SupraTestKit/Sources/SupraBench/PerformanceWorkload.swift",
             "Packages/SupraTestKit/Sources/SupraBench/main.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/ContextPackingBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/ClassificationBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/DocumentRelationBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/LineageStalenessBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/LocatorRoundTripBenchmark.swift",
+            "Packages/SupraTestKit/Sources/SupraTestKit/PerformanceBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/SupportBenchmark.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/BenchmarkMetrics.swift",
             "Packages/SupraTestKit/Sources/SupraTestKit/BenchmarkReport.swift",
