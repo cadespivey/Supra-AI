@@ -270,6 +270,82 @@ final class DocumentRetrievalTests: XCTestCase {
         XCTAssertEqual(v1.map(\.key), ["a1", "b1", "b2"])
     }
 
+    func testTRET06V2RetrievesTypedStructureIntentWithoutChangingV1LiteralSearch() async throws {
+        // T-RET-06 expected RED: only raw chunk text contributes candidates,
+        // so typed comment/table units whose text omits those labels disappear.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic typed structure intent")
+        let distractorBlob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "tret06-distractor",
+            byteSize: 1,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/tret06-distractor.txt"
+        )).blob
+        let structureBlob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "tret06-structure",
+            byteSize: 1,
+            originalExtension: "docx",
+            managedRelativePath: "blobs/tret06-structure.docx"
+        )).blob
+        let distractor = try makeDocument(
+            store, matter.id, distractorBlob.id, nil, "literal.txt", "comment table context"
+        )
+        let structured = try makeDocument(
+            store, matter.id, structureBlob.id, nil, "structured.docx",
+            "Reviewer asks whether business days apply. Amount 275000."
+        )
+
+        func install(version: Int) throws {
+            try store.documentIndex.replaceChunks(documentID: distractor.id, chunks: [
+                DocumentChunkRecord(
+                    id: "literal-v\(version)", documentID: distractor.id,
+                    unitKind: version == 2 ? DocumentStructureNodeKind.paragraph.rawValue : nil,
+                    chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
+                    normalizedText: "comment table context"
+                ),
+            ])
+            try store.documentIndex.replaceChunks(documentID: structured.id, chunks: [
+                DocumentChunkRecord(
+                    id: "comment-v\(version)", documentID: structured.id,
+                    unitKind: version == 2 ? DocumentStructureNodeKind.comment.rawValue : nil,
+                    chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
+                    normalizedText: "Reviewer asks whether business days apply"
+                ),
+                DocumentChunkRecord(
+                    id: "cell-v\(version)", documentID: structured.id,
+                    unitKind: version == 2 ? DocumentStructureNodeKind.tableCell.rawValue : nil,
+                    chunkerVersion: version, chunkIndex: 1, sourceKind: "text",
+                    normalizedText: "Amount 275000"
+                ),
+            ])
+            try store.documentLibrary.updateIndexStatus(documentID: distractor.id, indexStatus: .textIndexed)
+            try store.documentLibrary.updateIndexStatus(documentID: structured.id, indexStatus: .textIndexed)
+        }
+
+        try install(version: 2)
+        let v2 = try await DocumentRetrievalService(store: store).retrieve(
+            matterID: matter.id,
+            query: "Show the comment and table context",
+            scope: .wholeMatter,
+            limit: 3
+        )
+        XCTAssertEqual(v2.sources.first?.documentID, structured.id)
+        XCTAssertEqual(
+            Set(v2.sources.filter { $0.documentID == structured.id }.compactMap(\.unitKind)),
+            Set([DocumentStructureNodeKind.comment.rawValue, DocumentStructureNodeKind.tableCell.rawValue])
+        )
+
+        try install(version: 1)
+        let v1 = try await DocumentRetrievalService(store: store).retrieve(
+            matterID: matter.id,
+            query: "Show the comment and table context",
+            scope: .wholeMatter,
+            limit: 3
+        )
+        XCTAssertEqual(v1.sources.map(\.documentID), [distractor.id])
+        XCTAssertFalse(v1.sources.contains { $0.documentID == structured.id })
+    }
+
     func testContextMetadataComposesTypeAndDate() {
         var doc = MatterDocumentRecord(
             matterID: "m", blobID: "b", folderID: nil, displayName: "lease.pdf",
