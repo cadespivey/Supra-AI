@@ -40,6 +40,14 @@ final class DocumentChunkerRolloutUITests: XCTestCase {
         assertVersion("v2")
         let switcher = app.buttons["diagnostics.chunker.switch"]
         XCTAssertTrue(switcher.waitForExistence(timeout: 10))
+        // D-06 expected RED: the Form button currently exposes only its
+        // text-sized hit target, so assistive automation that resolves the
+        // containing row cannot activate the rollback control.
+        XCTAssertGreaterThanOrEqual(
+            switcher.frame.width,
+            app.windows.firstMatch.frame.width * 0.5,
+            "The destructive-safe chunker switch must expose a full-row hit target"
+        )
         switcher.click()
         assertVersion("v1")
         XCTAssertEqual(app.buttons["diagnostics.chunker.switch"].label, "Restore Chunker v2")
