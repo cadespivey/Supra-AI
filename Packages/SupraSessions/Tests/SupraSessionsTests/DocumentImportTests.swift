@@ -131,6 +131,33 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertNotNil(batch.reportJSON)
     }
 
+    func testTSTR02ImportPersistsWrapperBoundToTheSelectedRevision() async throws {
+        // T-STR-02 expected RED: imports do not persist ExtractionResult.structure
+        // and SupraStore has no documentStructure repository before M4-W1.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic wrapper persistence")
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            ocr: nil
+        )
+        _ = try await service.importSources(
+            [sourceRoot.appendingPathComponent("Contracts/agreement.txt")],
+            matterID: matter.id
+        )
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let selectedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        let selectedRevisionID = try XCTUnwrap(selectedPart.currentRevisionID)
+        let nodes = try store.documentStructure.fetchNodes(documentID: document.id)
+        XCTAssertEqual(nodes.count, 2)
+        XCTAssertEqual(Set(nodes.map(\.revisionID)), [selectedRevisionID])
+        XCTAssertEqual(nodes.first { $0.parentNodeID == nil }?.kind, "document")
+        let wrapper = try XCTUnwrap(nodes.first { $0.nodeKey == "part/0" })
+        XCTAssertEqual(wrapper.parentNodeID, nodes.first { $0.nodeKey == "document" }?.id)
+        XCTAssertEqual(try store.documentStructure.resolveText(nodeID: wrapper.id), "Service agreement effective 2024-01-01.")
+    }
+
     func testMockedOCRFillsImageTextWithLowConfidenceReview() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
