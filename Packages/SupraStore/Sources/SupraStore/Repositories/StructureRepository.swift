@@ -128,6 +128,60 @@ public final class StructureRepository: @unchecked Sendable {
         }
     }
 
+    /// Atomically replaces a matter-scoped family of cross-document edges.
+    /// The email thread linker uses this after import/reprocess; validating every
+    /// endpoint before deletion keeps a failed relink from erasing the last good graph.
+    public func replaceMatterEdges(
+        matterID: String,
+        kinds: Set<String>,
+        edges: [DocumentStructureEdgeRecord]
+    ) throws {
+        guard !kinds.isEmpty else { return }
+        try writer.write { db in
+            guard try String.fetchOne(
+                db,
+                sql: "SELECT id FROM matters WHERE id = ?",
+                arguments: [matterID]
+            ) != nil else {
+                throw StructureRepositoryError.edgeMatterMismatch(matterID)
+            }
+            guard edges.allSatisfy({ $0.matterID == matterID && kinds.contains($0.kind) }) else {
+                throw StructureRepositoryError.edgeMatterMismatch(matterID)
+            }
+            guard Set(edges.map(\.id)).count == edges.count else {
+                throw StructureRepositoryError.duplicateNodeIdentity("edge_id")
+            }
+            for edge in edges {
+                for endpointID in [edge.fromNodeID, edge.toNodeID] {
+                    let endpointMatterID = try String.fetchOne(
+                        db,
+                        sql: """
+                        SELECT d.matter_id
+                        FROM document_structure_nodes n
+                        JOIN matter_documents d ON d.id = n.document_id
+                        WHERE n.id = ?
+                        """,
+                        arguments: [endpointID]
+                    )
+                    guard endpointMatterID == matterID else {
+                        throw StructureRepositoryError.edgeMatterMismatch(edge.id)
+                    }
+                }
+            }
+
+            let placeholders = Array(repeating: "?", count: kinds.count).joined(separator: ",")
+            var arguments: [DatabaseValueConvertible] = [matterID]
+            arguments.append(contentsOf: kinds.sorted())
+            try db.execute(
+                sql: "DELETE FROM document_structure_edges WHERE matter_id = ? AND kind IN (\(placeholders))",
+                arguments: StatementArguments(arguments)
+            )
+            for edge in edges.sorted(by: { $0.id < $1.id }) {
+                try edge.insert(db)
+            }
+        }
+    }
+
     public func resolveText(nodeID: String) throws -> String? {
         try writer.read { db in
             guard let node = try DocumentStructureNodeRecord.fetchOne(db, key: nodeID),

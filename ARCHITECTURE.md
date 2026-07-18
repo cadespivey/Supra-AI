@@ -132,6 +132,12 @@ repository:
   in the complete evidence projection with explicit hidden-source payloads; consumers
   that request a visible-only projection must exclude those marked cells. Macros are
   presence-flagged only, and charts or visual style fidelity are not inferred.
+  EML preserves the parsed RFC header map (including Message-ID, In-Reply-To,
+  References, and file-present BCC), separates quoted replies, and represents CID
+  inline parts as attachment references while retaining the legacy flat body and
+  child-attachment import. A matter-scoped, idempotent post-import linker emits
+  reply/thread edges only for unambiguous Message-IDs in that matter. Outlook MSG
+  and conversation UI remain unsupported.
 - Milestone 4 (ScratchPad) added scratch-pad days/entries/attachments, billing drafts +
   line items, and per-matter billing profiles, plus LEDES `client_id` / `client_matter_id`
   columns on `matters`.
