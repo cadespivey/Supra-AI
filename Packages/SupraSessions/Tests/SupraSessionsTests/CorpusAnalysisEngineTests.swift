@@ -268,6 +268,15 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         XCTAssertEqual(partitions.count { $0.disposition == CorpusAnalysisPartitionDisposition.cancelled.rawValue }, 4)
         XCTAssertEqual(partitions.count { $0.disposition == CorpusAnalysisPartitionDisposition.pending.rawValue }, 0)
         XCTAssertEqual(partitions.compactMap(\.findingsJSON).count, 2, "successful checkpoints must survive cancellation")
+        let cancelledCoverage = try JSONDecoder().decode(
+            CorpusAnalysisCoverage.self,
+            from: Data(try XCTUnwrap(run.coverageJSON).utf8)
+        )
+        XCTAssertEqual(cancelledCoverage.partitionCount, 6)
+        XCTAssertEqual(cancelledCoverage.terminalPartitionCount, 6)
+        XCTAssertEqual(cancelledCoverage.succeededPartitionCount, 2)
+        XCTAssertEqual(cancelledCoverage.cancelledPartitionCount, 4)
+        XCTAssertEqual(cancelledCoverage.balanceErrorCount, 0)
     }
 
     func testTENG07RelaunchResumesOnlyNonSucceededPartitionsAgainstFrozenSnapshot() async throws {
@@ -331,7 +340,121 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         XCTAssertEqual(resumed.coverage.terminalPartitionCount, 5)
         XCTAssertEqual(resumed.coverage.balanceErrorCount, 0)
         XCTAssertEqual(resumed.findings.count, 5)
-        XCTAssertTrue(resumed.partitions.allSatisfy { $0.attemptCount == 1 })
+        XCTAssertEqual(
+            resumed.partitions.map(\.attemptCount),
+            [1, 1, 2, 1, 1],
+            "the cancelled in-flight attempt is retained before its successful retry"
+        )
+    }
+
+    func testTENG07RelaunchRetriesTransientFailureAndMapsPendingWithoutReplayingSuccesses() async throws {
+        // T-ENG-07 expected RED: no bootstrap path distinguishes checkpoints, retryable failures, and pending work.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic interrupted corpus")
+        let texts = (1...4).map { "INTERRUPTED-PART-\($0)" }
+        let fixture = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "interrupted.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: texts
+        )
+        let snapshot = CorpusAnalysisSnapshot(members: [.init(
+            memberKey: "document:\(fixture.documentID)",
+            documentID: fixture.documentID,
+            displayName: "interrupted.txt",
+            revisionIDs: fixture.revisionIDs,
+            indexState: DocumentIndexStatus.textIndexed.rawValue,
+            disposition: .eligible
+        )])
+        let run = try store.corpusAnalysis.createOrFetchRun(CorpusAnalysisRunRecord(
+            id: "interrupted-ledger-run",
+            runKey: "interrupted-ledger-key",
+            matterID: matter.id,
+            taskKind: CorpusAnalysisTaskKind.customExtraction.rawValue,
+            scopeJSON: try Self.canonicalJSON(CorpusAnalysisScope.wholeMatter),
+            corpusSnapshotJSON: try Self.canonicalJSON(snapshot),
+            partitionStrategy: "part_range:characters=1",
+            partitionStrategyVersion: 1,
+            status: CorpusAnalysisRunStatus.planning.rawValue
+        ))
+        let partitions = try fixture.revisionIDs.enumerated().map { index, revisionID in
+            CorpusAnalysisPartitionRecord(
+                id: "interrupted-partition-\(index)",
+                runID: run.id,
+                partitionKey: String(format: "%06d|part:\(index)", index),
+                inputRevisionIDsJSON: try Self.canonicalJSON([revisionID])
+            )
+        }
+        try store.corpusAnalysis.createPartitions(
+            matterID: matter.id,
+            runID: run.id,
+            partitions: partitions
+        )
+        _ = try store.corpusAnalysis.updateStatus(matterID: matter.id, runID: run.id, to: .running)
+
+        for index in 0...1 {
+            _ = try store.corpusAnalysis.beginAttempt(
+                matterID: matter.id,
+                runID: run.id,
+                partitionID: partitions[index].id
+            )
+            try store.corpusAnalysis.completeAttemptSucceeded(
+                matterID: matter.id,
+                runID: run.id,
+                partitionID: partitions[index].id,
+                findingsJSON: try Self.findingsJSON(
+                    documentID: fixture.documentID,
+                    revisionID: fixture.revisionIDs[index],
+                    text: texts[index]
+                )
+            )
+        }
+        _ = try store.corpusAnalysis.beginAttempt(
+            matterID: matter.id,
+            runID: run.id,
+            partitionID: partitions[2].id
+        )
+        let retryScheduled = try store.corpusAnalysis.completeAttemptFailed(
+            matterID: matter.id,
+            runID: run.id,
+            partitionID: partitions[2].id,
+            retryable: true,
+            errorSummary: "synthetic interrupted transient failure",
+            maximumRetryCount: 0
+        )
+        XCTAssertFalse(retryScheduled)
+        // partition[3] remains pending, representing work never started before process death.
+
+        let resumeProbe = EngineProbe()
+        let resumed = try await CorpusAnalysisEngine(store: store).run(
+            request: CorpusAnalysisRequest(
+                runKey: run.runKey,
+                matterID: matter.id,
+                taskKind: .customExtraction,
+                characterBudget: 1,
+                maximumRetryCount: 2
+            )
+        ) { input in
+            await resumeProbe.record(input)
+            return Self.mapFindings(input)
+        }
+
+        let resumedTexts = await resumeProbe.inputs.flatMap(\.sources).map(\.text)
+        XCTAssertEqual(resumedTexts, ["INTERRUPTED-PART-3", "INTERRUPTED-PART-4"])
+        XCTAssertEqual(resumed.snapshot, snapshot)
+        XCTAssertEqual(resumed.snapshot.members.first?.revisionIDs, fixture.revisionIDs)
+        XCTAssertEqual(resumed.findings.count, 4)
+        XCTAssertEqual(resumed.partitions.map(\.attemptCount), [1, 1, 2, 1])
+        XCTAssertTrue(resumed.partitions.allSatisfy {
+            $0.disposition == CorpusAnalysisPartitionDisposition.succeeded.rawValue
+        })
+        XCTAssertEqual(resumed.coverage.succeededPartitionCount, 4)
+        XCTAssertEqual(resumed.coverage.terminalPartitionCount, 4)
+        XCTAssertEqual(resumed.coverage.pendingPartitionCount, 0)
+        XCTAssertEqual(resumed.coverage.balanceErrorCount, 0)
     }
 
     func testTENG08TransientRetryCapPersistsThreeAttemptsAndBalancesAsIncomplete() async throws {
@@ -480,6 +603,33 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                 )]
             )
         })
+    }
+
+    private static func findingsJSON(
+        documentID: String,
+        revisionID: String,
+        text: String
+    ) throws -> String {
+        let locator = DocumentSourceLocator(
+            sourceKind: .text,
+            charStart: 0,
+            charEnd: text.count
+        )
+        return try canonicalJSON([CorpusAnalysisFinding(
+            id: "finding-\(revisionID)",
+            value: text,
+            evidence: [.init(
+                documentID: documentID,
+                revisionID: revisionID,
+                locatorJSON: locator.encodedJSON()
+            )]
+        )])
+    }
+
+    private static func canonicalJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
 }
 
