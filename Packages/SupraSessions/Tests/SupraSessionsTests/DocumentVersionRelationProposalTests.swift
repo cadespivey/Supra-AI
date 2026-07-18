@@ -29,13 +29,27 @@ final class DocumentVersionRelationProposalTests: XCTestCase {
             matterID: matter.id,
             id: "contract-executed",
             displayName: "Atlas Services Agreement Executed.docx",
-            text: "Control No. ATLAS-2026-001. Services begin January 1. Payment is due in 45 days. Liability is limited to $150,000.",
+            text: "Control No. ATLAS-2026-001. Services begin January 1. Payment is due in 45 days. Liability is limited to $150,000. Any amendment must be signed.",
             metadataDate: date("2026-01-15"),
             units: [
                 ("section/services", .paragraph, "Services begin January 1."),
                 ("section/payment", .paragraph, "Payment is due in 45 days."),
                 ("section/liability", .paragraph, "Liability is limited to $150,000."),
             ]
+        )
+        let executedCopy = try seedDocument(
+            store,
+            matterID: matter.id,
+            id: "contract-executed-copy",
+            displayName: "Atlas Services Agreement Executed Copy.docx",
+            text: "Control No. ATLAS-2026-001. Services begin January 1. Payment is due in 45 days. Liability is limited to $150,000. Any amendment must be signed.",
+            metadataDate: date("2026-01-16"),
+            units: [
+                ("section/services", .paragraph, "Services begin January 1."),
+                ("section/payment", .paragraph, "Payment is due in 45 days."),
+                ("section/liability", .paragraph, "Liability is limited to $150,000."),
+            ],
+            reuseBlobID: executed.blobID
         )
         let foreign = try seedDocument(
             store,
@@ -73,6 +87,9 @@ final class DocumentVersionRelationProposalTests: XCTestCase {
         XCTAssertEqual(evidence["deleted_units"] as? Int, 0)
         XCTAssertNotEqual(evidence["combined_similarity"] as? Double, 1.0)
         XCTAssertTrue(first.contains { $0.kind == DocumentRelationKind.nearDuplicate.rawValue })
+        XCTAssertFalse(first.contains {
+            $0.fromDocumentID == executedCopy.id || $0.toDocumentID == executedCopy.id
+        }, "byte-identical copy instances must not multiply directional version targets")
         XCTAssertFalse(first.contains {
             $0.fromDocumentID == foreign.id || $0.toDocumentID == foreign.id
         }, "same-family text in another matter must never enter a proposal")
@@ -153,15 +170,21 @@ final class DocumentVersionRelationProposalTests: XCTestCase {
         displayName: String,
         text: String,
         metadataDate: Date?,
-        units: [(String, DocumentStructureNodeKind, String)]? = nil
+        units: [(String, DocumentStructureNodeKind, String)]? = nil,
+        reuseBlobID: String? = nil
     ) throws -> MatterDocumentRecord {
-        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
-            id: "blob-\(id)",
-            sha256: "sha-\(id)",
-            byteSize: text.utf8.count,
-            originalExtension: "docx",
-            managedRelativePath: "blobs/\(id).docx"
-        )).blob
+        let blob: DocumentBlobRecord
+        if let reuseBlobID {
+            blob = try XCTUnwrap(store.documentLibrary.fetchBlob(id: reuseBlobID))
+        } else {
+            blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                id: "blob-\(id)",
+                sha256: "sha-\(id)",
+                byteSize: text.utf8.count,
+                originalExtension: "docx",
+                managedRelativePath: "blobs/\(id).docx"
+            )).blob
+        }
         let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
             id: id,
             matterID: matterID,
