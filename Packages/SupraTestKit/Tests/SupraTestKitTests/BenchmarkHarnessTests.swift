@@ -40,6 +40,17 @@ final class BenchmarkHarnessTests: XCTestCase {
         )
     }
 
+    func testCountMetricDoesNotEncodeAPlatformVariableDenominator() throws {
+        // T-BEN-PORT-02 expected RED: BenchmarkMetrics has no count helper, so
+        // B-ISO-01 serializes the platform-variable number of retrieval hits.
+        let count = BenchmarkMetrics.count(3)
+
+        XCTAssertEqual(try measured(count), 3)
+        XCTAssertEqual(count.numerator, 3)
+        XCTAssertNil(count.denominator, "a count is not a rate and must not freeze an exposure total")
+        XCTAssertNil(count.confidenceInterval)
+    }
+
     func testMetricsHandleAbstentionTiesAndFailedPartitions() throws {
         // T-BEN-04 expected RED: the hand-computable classification, ranking,
         // and completeness helpers are absent.
