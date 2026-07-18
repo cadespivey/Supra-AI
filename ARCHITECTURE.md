@@ -144,7 +144,12 @@ repository:
   written as a version-scoped source set, and the run/source-set/version link commits atomically.
   Failed or schema-invalid partitions force an attached `needs_review` output with
   `corpus_incomplete`; negative conclusions are blocked unless coverage is complete and the run
-  found no positive item. Full output UX lands in later work orders.
+  found no positive item. Chronology also adopts this ledger without changing its established
+  parser, merge, verifier, markdown, or UI-message contracts: the frozen denominator records one
+  partition per included document, every successful extraction pass carries an audit, capped
+  sources and omitted document names persist in reconciliation, and cancellation balances the
+  run while retaining discard-all semantics for output/version/source rows. Full output UX lands
+  in later work orders.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

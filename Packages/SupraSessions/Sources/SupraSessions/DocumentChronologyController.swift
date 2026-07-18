@@ -36,6 +36,9 @@ public final class DocumentChronologyController: ObservableObject {
     @Published public private(set) var message: String?
     @Published public private(set) var lastResult: DocumentQAController.QAResult?
     @Published public private(set) var progress: Progress = .idle
+    /// Durable coverage-ledger run backing the most recently accepted chronology
+    /// generation. Invalid/re-entrant requests leave this nil or unchanged.
+    @Published public private(set) var lastCorpusRunID: String?
 
     private var generationTask: Task<DocumentQAController.QAResult?, Never>?
     private var activeGenerationID: GenerationID?
@@ -171,11 +174,13 @@ public final class DocumentChronologyController: ObservableObject {
         isGenerating = true
         message = nil
         summaryMessage = nil
+        lastCorpusRunID = nil
         defer {
             isGenerating = false
             progress = .idle
         }
 
+        var chronologyLedger: ChronologyLedgerSession?
         do {
             progress = .harvesting
             await Task.yield()
@@ -187,6 +192,13 @@ public final class DocumentChronologyController: ObservableObject {
                 message = "No dated facts were found in the selected documents."
                 return nil
             }
+            let ledger = try makeChronologyLedger(
+                harvest: harvest,
+                scope: scope,
+                modelID: modelID
+            )
+            chronologyLedger = ledger
+            lastCorpusRunID = ledger.runID
             if harvest.droppedCount > 0 {
                 let named = harvest.omittedDocuments.prefix(5)
                 var namesClause = named.joined(separator: ", ")
@@ -210,7 +222,8 @@ public final class DocumentChronologyController: ObservableObject {
                 supportSources: supportSources,
                 format: format,
                 modelID: modelID,
-                route: effectiveRoute
+                route: effectiveRoute,
+                ledger: ledger
             )
             let answer = outcome.answer
 
@@ -291,6 +304,7 @@ public final class DocumentChronologyController: ObservableObject {
             // update before beginning the atomic persistence commit.
             await Task.yield()
             try Task.checkCancellation()
+            try ledger.finalize(harvest: harvest, outcome: outcome)
             let persisted = try persistChronology(
                 existingOutputID: existingOutputID,
                 format: format,
@@ -299,7 +313,8 @@ public final class DocumentChronologyController: ObservableObject {
                 markdown: markdown,
                 status: status,
                 verificationStatus: persistedVerificationStatus,
-                verificationResults: verification.results + finalNarrativeCitationFailures
+                verificationResults: verification.results + finalNarrativeCitationFailures,
+                corpusAnalysisRunID: ledger.runID
             )
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "chronology_generated", actor: "runtime",
@@ -328,8 +343,10 @@ public final class DocumentChronologyController: ObservableObject {
             // them as the user action, not a failure. Pre-save cancellation
             // persists nothing; saving itself is the point of no return.
             if error is CancellationError || (error as? GenerationStreamError) == .cancelled || Task.isCancelled {
+                try? chronologyLedger?.cancel()
                 message = "Chronology generation was cancelled."
             } else {
+                try? chronologyLedger?.fail(error)
                 message = "Chronology generation failed: \(error.localizedDescription)"
             }
             return nil
@@ -366,7 +383,8 @@ public final class DocumentChronologyController: ObservableObject {
         supportSources: [DocumentSupportSource],
         format: DocumentChronologyFormat,
         modelID: ModelID,
-        route: ModelRoute?
+        route: ModelRoute?,
+        ledger: ChronologyLedgerSession
     ) async throws -> GenerationOutcome {
         if format == .table {
             let oneShotPrompt = DocumentChronologyPromptBuilder.build(
@@ -378,12 +396,19 @@ public final class DocumentChronologyController: ObservableObject {
                 progress = .generating
                 await Task.yield()
                 do {
+                    let sourceIndices = Array(prepared.indices)
+                    try ledger.beginPass(sourceIndices: sourceIndices)
                     let rawAnswer = try await collect(prompt: oneShotPrompt, modelID: modelID, route: route)
                     let allowedLabels = Set(prepared.map { $0.source.label })
                     let audit = try await auditMapAnswer(
                         rawAnswer,
                         allowedLabels: allowedLabels,
                         allowedSources: supportSources
+                    )
+                    try ledger.completePass(
+                        sourceIndices: sourceIndices,
+                        sourceLabels: sourceIndices.map { prepared[$0].source.label },
+                        audit: audit
                     )
                     var outcome = GenerationOutcome(answer: ChronologyMerge.renderTable(audit.entries))
                     outcome.unparsedRowCount = audit.unparsedRowCount
@@ -405,7 +430,8 @@ public final class DocumentChronologyController: ObservableObject {
             supportSources: supportSources,
             format: format,
             modelID: modelID,
-            route: route
+            route: route,
+            ledger: ledger
         )
     }
 
@@ -414,7 +440,8 @@ public final class DocumentChronologyController: ObservableObject {
         supportSources: [DocumentSupportSource],
         format: DocumentChronologyFormat,
         modelID: ModelID,
-        route: ModelRoute?
+        route: ModelRoute?,
+        ledger: ChronologyLedgerSession
     ) async throws -> GenerationOutcome {
         let planned = try planMapBatches(prepared: prepared, route: route)
         var pending = planned.map(\.sourceIndices)
@@ -437,6 +464,7 @@ public final class DocumentChronologyController: ObservableObject {
 
             let mapAnswer: String
             do {
+                try ledger.beginPass(sourceIndices: sourceIndices)
                 mapAnswer = try await collect(prompt: mapPrompt, modelID: modelID, route: route)
             } catch let error as GenerationStreamError where error == .contextOverflowed {
                 guard sourceIndices.count > 1 else {
@@ -456,6 +484,11 @@ public final class DocumentChronologyController: ObservableObject {
                 mapAnswer,
                 allowedLabels: allowedLabels,
                 allowedSources: allowedSources
+            )
+            try ledger.completePass(
+                sourceIndices: sourceIndices,
+                sourceLabels: sourceIndices.map { prepared[$0].source.label },
+                audit: audit
             )
             outcome.unparsedRowCount += audit.unparsedRowCount
             if audit.isEmpty { outcome.emptyMapPassCount += 1 }
@@ -528,13 +561,29 @@ public final class DocumentChronologyController: ObservableObject {
         var documentOrderDate: Date
     }
 
+    private struct ChronologyHarvestDocument {
+        var documentID: String
+        var displayName: String
+        var indexState: String
+        var revisionIDs: [String]
+        var includedSourceIndices: [Int]
+        var droppedSourceCount: Int
+    }
+
+    private struct ChronologyHarvest {
+        var sources: [PreparedSource]
+        var omittedDocuments: [String]
+        var droppedCount: Int
+        var documents: [ChronologyHarvestDocument]
+    }
+
     /// Harvests every date-bearing source in the scope, bounded only by the
     /// `maxSources` safety cap. Metadata-date sources pass through the same cap
     /// as text chunks so many metadata-dated documents cannot starve the dated
     /// text chunks out of the packet. `omittedDocuments` lists the display name
     /// of each document that lost at least one source to the cap (once per
     /// name, in document order).
-    private func harvestSources(scope: RetrievalScope) async throws -> (sources: [PreparedSource], omittedDocuments: [String], droppedCount: Int) {
+    private func harvestSources(scope: RetrievalScope) async throws -> ChronologyHarvest {
         let scopeIDs = try store.documentLibrary.resolveScopeDocumentIDs(
             matterID: matterID, folderIDs: scope.folderIDs, documentIDs: scope.documentIDs,
             tagIDs: scope.tagIDs, dateStart: scope.dateStart, dateEnd: scope.dateEnd
@@ -542,6 +591,7 @@ public final class DocumentChronologyController: ObservableObject {
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID).filter { scopeIDs.contains($0.id) }
         var prepared: [PreparedSource] = []
         var omittedDocuments: [String] = []
+        var harvestDocuments: [ChronologyHarvestDocument] = []
         var rank = 0
         var droppedCount = 0
 
@@ -551,11 +601,16 @@ public final class DocumentChronologyController: ObservableObject {
                 await Task.yield()
             }
             var documentHadDrop = false
+            let sourceStart = prepared.count
+            var documentDroppedCount = 0
+            let chunks = try store.documentIndex.fetchChunks(documentID: document.id)
+            let revisionIDs = Array(Set(chunks.compactMap(\.revisionID))).sorted()
 
             // Metadata date (file/email), distinguished from text dates.
             if let metaDate = document.metadataCreatedAt {
                 if prepared.count >= maxSources {
                     droppedCount += 1
+                    documentDroppedCount += 1
                     documentHadDrop = true
                 } else {
                     let label = "S\(rank + 1)"
@@ -576,7 +631,6 @@ public final class DocumentChronologyController: ObservableObject {
             }
 
             // Date-bearing chunks (text dates).
-            let chunks = try store.documentIndex.fetchChunks(documentID: document.id)
             for (chunkIndex, chunk) in chunks.enumerated() {
                 if chunkIndex.isMultiple(of: 100) {
                     try Task.checkCancellation()
@@ -585,6 +639,7 @@ public final class DocumentChronologyController: ObservableObject {
                 guard DateExtraction.containsDate(chunk.normalizedText) else { continue }
                 if prepared.count >= maxSources {
                     droppedCount += 1
+                    documentDroppedCount += 1
                     documentHadDrop = true
                     continue
                 }
@@ -620,8 +675,333 @@ public final class DocumentChronologyController: ObservableObject {
             if documentHadDrop, !omittedDocuments.contains(document.displayName) {
                 omittedDocuments.append(document.displayName)
             }
+            harvestDocuments.append(ChronologyHarvestDocument(
+                documentID: document.id,
+                displayName: document.displayName,
+                indexState: document.indexStatus,
+                revisionIDs: revisionIDs,
+                includedSourceIndices: Array(sourceStart..<prepared.count),
+                droppedSourceCount: documentDroppedCount
+            ))
         }
-        return (prepared, omittedDocuments, droppedCount)
+        return ChronologyHarvest(
+            sources: prepared,
+            omittedDocuments: omittedDocuments,
+            droppedCount: droppedCount,
+            documents: harvestDocuments
+        )
+    }
+
+    private func makeChronologyLedger(
+        harvest: ChronologyHarvest,
+        scope: RetrievalScope,
+        modelID _: ModelID
+    ) throws -> ChronologyLedgerSession {
+        let snapshot = CorpusAnalysisSnapshot(members: harvest.documents.map { document in
+            let included = !document.includedSourceIndices.isEmpty
+            return CorpusAnalysisSnapshotMember(
+                memberKey: document.documentID,
+                documentID: document.documentID,
+                displayName: document.displayName,
+                revisionIDs: document.revisionIDs,
+                indexState: document.indexState,
+                disposition: included ? .eligible : .excluded,
+                reason: included
+                    ? nil
+                    : (document.droppedSourceCount > 0 ? "max_sources_cap" : "no_dated_sources")
+            )
+        })
+        let run = try store.corpusAnalysis.createOrFetchRun(CorpusAnalysisRunRecord(
+            runKey: "chronology:\(UUID().uuidString)",
+            matterID: matterID,
+            taskKind: CorpusAnalysisTaskKind.chronology.rawValue,
+            scopeJSON: try Self.canonicalJSON(scope),
+            corpusSnapshotJSON: try Self.canonicalJSON(snapshot),
+            partitionStrategy: "chronology_document_v1",
+            partitionStrategyVersion: 1,
+            status: CorpusAnalysisRunStatus.planning.rawValue
+        ))
+        let eligible = harvest.documents.filter { !$0.includedSourceIndices.isEmpty }
+        let partitions = try eligible.enumerated().map { index, document in
+            CorpusAnalysisPartitionRecord(
+                runID: run.id,
+                partitionKey: String(format: "document-%06d", index + 1),
+                inputRevisionIDsJSON: try Self.canonicalJSON(document.revisionIDs)
+            )
+        }
+        try store.corpusAnalysis.createPartitions(
+            matterID: matterID,
+            runID: run.id,
+            partitions: partitions
+        )
+        _ = try store.corpusAnalysis.updateStatus(
+            matterID: matterID,
+            runID: run.id,
+            to: .running
+        )
+        return ChronologyLedgerSession(
+            store: store,
+            matterID: matterID,
+            runID: run.id,
+            documents: eligible,
+            partitions: partitions,
+            sources: harvest.sources
+        )
+    }
+
+    @MainActor
+    private final class ChronologyLedgerSession {
+        let runID: String
+
+        private let store: SupraStore
+        private let matterID: String
+        private let partitionIDByDocumentID: [String: String]
+        private let documentIDBySourceIndex: [Int: String]
+        private let expectedSourceIndicesByDocumentID: [String: Set<Int>]
+        private var completedSourceIndices: Set<Int> = []
+        private var begunDocumentIDs: Set<String> = []
+        private var completedDocumentIDs: Set<String> = []
+        private var passes: [ChronologyPassAuditRecord] = []
+        private var isFinalized = false
+
+        init(
+            store: SupraStore,
+            matterID: String,
+            runID: String,
+            documents: [ChronologyHarvestDocument],
+            partitions: [CorpusAnalysisPartitionRecord],
+            sources: [PreparedSource]
+        ) {
+            self.store = store
+            self.matterID = matterID
+            self.runID = runID
+            partitionIDByDocumentID = Dictionary(uniqueKeysWithValues: zip(documents, partitions).map {
+                ($0.0.documentID, $0.1.id)
+            })
+            documentIDBySourceIndex = Dictionary(uniqueKeysWithValues: sources.indices.map {
+                ($0, sources[$0].documentID)
+            })
+            expectedSourceIndicesByDocumentID = Dictionary(uniqueKeysWithValues: documents.map {
+                ($0.documentID, Set($0.includedSourceIndices))
+            })
+        }
+
+        func beginPass(sourceIndices: [Int]) throws {
+            for documentID in documentIDs(for: sourceIndices)
+                where !begunDocumentIDs.contains(documentID)
+                    && !completedDocumentIDs.contains(documentID) {
+                guard let partitionID = partitionIDByDocumentID[documentID] else { continue }
+                _ = try store.corpusAnalysis.beginAttempt(
+                    matterID: matterID,
+                    runID: runID,
+                    partitionID: partitionID
+                )
+                begunDocumentIDs.insert(documentID)
+            }
+        }
+
+        func completePass(
+            sourceIndices: [Int],
+            sourceLabels: [String],
+            audit: MapAudit
+        ) throws {
+            completedSourceIndices.formUnion(sourceIndices)
+            passes.append(ChronologyPassAuditRecord(
+                passNumber: passes.count + 1,
+                sourceLabels: sourceLabels,
+                unparsedRowCount: audit.unparsedRowCount,
+                empty: audit.isEmpty,
+                coverageGap: audit.coverageGap,
+                outOfBatchCitationCount: audit.outOfBatchCitationCount,
+                unsupportedCitationCount: audit.unsupportedCitationCount
+            ))
+            for documentID in documentIDs(for: sourceIndices)
+                where !completedDocumentIDs.contains(documentID) {
+                guard let expected = expectedSourceIndicesByDocumentID[documentID],
+                      expected.isSubset(of: completedSourceIndices),
+                      let partitionID = partitionIDByDocumentID[documentID] else { continue }
+                if !begunDocumentIDs.contains(documentID) {
+                    _ = try store.corpusAnalysis.beginAttempt(
+                        matterID: matterID,
+                        runID: runID,
+                        partitionID: partitionID
+                    )
+                    begunDocumentIDs.insert(documentID)
+                }
+                try store.corpusAnalysis.completeAttemptSucceeded(
+                    matterID: matterID,
+                    runID: runID,
+                    partitionID: partitionID,
+                    findingsJSON: "[]"
+                )
+                completedDocumentIDs.insert(documentID)
+            }
+        }
+
+        func finalize(harvest: ChronologyHarvest, outcome: GenerationOutcome) throws {
+            _ = try store.corpusAnalysis.updateStatus(
+                matterID: matterID,
+                runID: runID,
+                to: .reconciling
+            )
+            let reconciliation = ChronologyLedgerReconciliationRecord(
+                droppedCount: harvest.droppedCount,
+                omittedDocumentNames: harvest.omittedDocuments,
+                mapPassCount: outcome.mapPassCount,
+                passes: passes
+            )
+            let validation = ChronologyLedgerValidationRecord(
+                unparsedRowCount: outcome.unparsedRowCount,
+                emptyMapPassCount: outcome.emptyMapPassCount,
+                mapCoverageGap: outcome.mapCoverageGap,
+                outOfBatchCitationCount: outcome.outOfBatchCitationCount,
+                unsupportedMapCitationCount: outcome.unsupportedMapCitationCount,
+                narrativeOmittedEntryCount: outcome.narrativeOmittedEntryCount
+            )
+            _ = try store.corpusAnalysis.saveReconciliation(
+                matterID: matterID,
+                runID: runID,
+                reconciliationJSON: try DocumentChronologyController.canonicalJSON(reconciliation),
+                validationResultsJSON: try DocumentChronologyController.canonicalJSON(validation)
+            )
+            _ = try store.corpusAnalysis.updateStatus(
+                matterID: matterID,
+                runID: runID,
+                to: .verifying
+            )
+
+            var reasons: [String] = []
+            if harvest.droppedCount > 0 {
+                reasons.append("\(harvest.droppedCount) dated source(s) were omitted by the chronology safety cap.")
+            }
+            if outcome.mapCoverageGap {
+                reasons.append("One or more chronology passes omitted source labels.")
+            }
+            if outcome.unparsedRowCount > 0 || outcome.emptyMapPassCount > 0 {
+                reasons.append("One or more chronology passes produced incomplete parse coverage.")
+            }
+            if outcome.outOfBatchCitationCount > 0 || outcome.unsupportedMapCitationCount > 0 {
+                reasons.append("One or more chronology pass citations failed validation.")
+            }
+            if outcome.narrativeOmittedEntryCount > 0 {
+                reasons.append("Narrative synthesis omitted reconciled chronology entries.")
+            }
+            _ = try store.corpusAnalysis.finalizeRun(
+                matterID: matterID,
+                runID: runID,
+                assuranceState: reasons.isEmpty ? .corpusComplete : .corpusIncomplete,
+                assuranceReasons: reasons,
+                exclusionsDisclosed: true
+            )
+            isFinalized = true
+        }
+
+        func cancel() throws {
+            guard !isFinalized else { return }
+            for documentID in begunDocumentIDs.subtracting(completedDocumentIDs) {
+                guard let partitionID = partitionIDByDocumentID[documentID] else { continue }
+                try store.corpusAnalysis.completeAttemptCancelled(
+                    matterID: matterID,
+                    runID: runID,
+                    partitionID: partitionID
+                )
+            }
+            _ = try store.corpusAnalysis.cancelRun(matterID: matterID, runID: runID)
+            isFinalized = true
+        }
+
+        func fail(_ error: Error) throws {
+            guard !isFinalized else { return }
+            for (documentID, partitionID) in partitionIDByDocumentID
+                where !completedDocumentIDs.contains(documentID) {
+                if begunDocumentIDs.contains(documentID) {
+                    _ = try store.corpusAnalysis.completeAttemptFailed(
+                        matterID: matterID,
+                        runID: runID,
+                        partitionID: partitionID,
+                        retryable: false,
+                        errorSummary: error.localizedDescription,
+                        maximumRetryCount: 0,
+                        dispositionReason: "chronology_failed"
+                    )
+                } else {
+                    try store.corpusAnalysis.setDisposition(
+                        matterID: matterID,
+                        runID: runID,
+                        partitionID: partitionID,
+                        disposition: .failed,
+                        dispositionReason: "chronology_failed",
+                        errorSummary: error.localizedDescription
+                    )
+                }
+            }
+            _ = try store.corpusAnalysis.coverage(matterID: matterID, runID: runID)
+            _ = try store.corpusAnalysis.updateStatus(matterID: matterID, runID: runID, to: .failed)
+            isFinalized = true
+        }
+
+        private func documentIDs(for sourceIndices: [Int]) -> [String] {
+            var seen = Set<String>()
+            return sourceIndices.compactMap { documentIDBySourceIndex[$0] }.filter {
+                seen.insert($0).inserted
+            }
+        }
+    }
+
+    private struct ChronologyPassAuditRecord: Codable {
+        var passNumber: Int
+        var sourceLabels: [String]
+        var unparsedRowCount: Int
+        var empty: Bool
+        var coverageGap: Bool
+        var outOfBatchCitationCount: Int
+        var unsupportedCitationCount: Int
+
+        private enum CodingKeys: String, CodingKey {
+            case passNumber = "pass_number"
+            case sourceLabels = "source_labels"
+            case unparsedRowCount = "unparsed_row_count"
+            case empty
+            case coverageGap = "coverage_gap"
+            case outOfBatchCitationCount = "out_of_batch_citation_count"
+            case unsupportedCitationCount = "unsupported_citation_count"
+        }
+    }
+
+    private struct ChronologyLedgerReconciliationRecord: Codable {
+        var schemaVersion = 1
+        var droppedCount: Int
+        var omittedDocumentNames: [String]
+        var mapPassCount: Int
+        var passes: [ChronologyPassAuditRecord]
+
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion = "schema_version"
+            case droppedCount = "dropped_count"
+            case omittedDocumentNames = "omitted_document_names"
+            case mapPassCount = "map_pass_count"
+            case passes
+        }
+    }
+
+    private struct ChronologyLedgerValidationRecord: Codable {
+        var schemaVersion = 1
+        var unparsedRowCount: Int
+        var emptyMapPassCount: Int
+        var mapCoverageGap: Bool
+        var outOfBatchCitationCount: Int
+        var unsupportedMapCitationCount: Int
+        var narrativeOmittedEntryCount: Int
+
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion = "schema_version"
+            case unparsedRowCount = "unparsed_row_count"
+            case emptyMapPassCount = "empty_map_pass_count"
+            case mapCoverageGap = "map_coverage_gap"
+            case outOfBatchCitationCount = "out_of_batch_citation_count"
+            case unsupportedMapCitationCount = "unsupported_map_citation_count"
+            case narrativeOmittedEntryCount = "narrative_omitted_entry_count"
+        }
     }
 
     /// Builds the source-set records in memory so the repository can insert the
@@ -658,7 +1038,8 @@ public final class DocumentChronologyController: ObservableObject {
         markdown: String,
         status: StructuredOutputStatus,
         verificationStatus: OutputVerificationStatus,
-        verificationResults: [PropositionSupportResult]
+        verificationResults: [PropositionSupportResult],
+        corpusAnalysisRunID: String
     ) throws -> (outputID: String, version: StructuredOutputVersionRecord) {
         let outputID = existingOutputID ?? UUID().uuidString
         let newOutput = existingOutputID == nil
@@ -680,9 +1061,16 @@ public final class DocumentChronologyController: ObservableObject {
             verificationStatus: verificationStatus,
             verificationVersion: DocumentSupportVerifier.version,
             verificationResults: verificationResults,
-            outputStatus: status
+            outputStatus: status,
+            corpusAnalysisRunID: corpusAnalysisRunID
         )
         return (outputID, version)
+    }
+
+    private static func canonicalJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
 
     // MARK: - Budgeting and map/reduce verification
