@@ -30,7 +30,10 @@ final class WordStructureTests: XCTestCase {
             <w:lvl w:ilvl="0"><w:start w:val="3"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>
             <w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%1.%2)"/></w:lvl>
           </w:abstractNum>
-          <w:num w:numId="42"><w:abstractNumId w:val="7"/></w:num>
+          <w:num w:numId="42">
+            <w:abstractNumId w:val="7"/>
+            <w:lvlOverride w:ilvl="1"><w:startOverride w:val="5"/></w:lvlOverride>
+          </w:num>
         </w:numbering>
         """)
         let result = try await extractDOCX(entries: [
@@ -51,6 +54,8 @@ final class WordStructureTests: XCTestCase {
         XCTAssertEqual(payload(top)["start"] as? Int, 3)
         XCTAssertEqual(payload(top)["format"] as? String, "decimal")
         XCTAssertEqual(payload(nested)["level"] as? Int, 1)
+        XCTAssertEqual(payload(nested)["start"] as? Int, 5)
+        XCTAssertEqual(payload(nested)["restart"] as? Bool, true)
         XCTAssertEqual(payload(nested)["levelText"] as? String, "%1.%2)")
     }
 

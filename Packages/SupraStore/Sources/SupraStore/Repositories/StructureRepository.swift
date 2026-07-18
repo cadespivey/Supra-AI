@@ -52,7 +52,7 @@ public final class StructureRepository: @unchecked Sendable {
     private let writer: any DatabaseWriter
 
     private static let structuralKinds: Set<String> = [
-        "document", "section", "list", "table", "table_row", "page",
+        "document", "section", "list", "table", "table_row", "table_cell", "page",
         "sheet", "email_message",
     ]
 

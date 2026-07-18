@@ -158,7 +158,12 @@ public struct WordExtractor: DocumentExtractor {
             )
         }
 
-        guard let documentXML = try ZipArchiveReader.entryData(in: fileURL, path: "word/document.xml", policy: policy) else {
+        let archive = try ZipArchiveReader.validatedArchive(at: fileURL, policy: policy)
+        guard let documentXML = try ZipArchiveReader.entryData(
+            in: archive,
+            path: "word/document.xml",
+            policy: policy
+        ) else {
             throw ExtractionError.malformed("Missing word/document.xml.")
         }
         try policy.validateXMLData(documentXML)
@@ -168,8 +173,16 @@ public struct WordExtractor: DocumentExtractor {
         guard parser.parse() else {
             throw ExtractionError.malformed("Could not parse word/document.xml.")
         }
-        let part = ExtractedPart(sourceKind: .convertedDocument, text: TextNormalization.normalize(collector.text))
-        return ExtractionResult(parts: [part], method: "ooxml-word")
+        let normalizedText = TextNormalization.normalize(collector.text)
+        let (structure, warnings) = try WordStructureAdapter(archive: archive, policy: policy)
+            .extract(documentXML: documentXML, normalizedBodyText: normalizedText)
+        let part = ExtractedPart(sourceKind: .convertedDocument, text: normalizedText)
+        return ExtractionResult(
+            parts: [part],
+            structure: structure,
+            method: "ooxml-word",
+            warnings: warnings
+        )
     }
 
     /// A number of legacy Word exports are RTF containers carrying a `.doc`
