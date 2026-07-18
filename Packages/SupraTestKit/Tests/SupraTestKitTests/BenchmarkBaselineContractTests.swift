@@ -97,6 +97,12 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         XCTAssertEqual(try measuredValue("B-ISO-01", "cross_matter_leak_count", in: baseline), 0)
         XCTAssertEqual(try measuredValue("B-REC-01", "successful_recovery_rate", in: baseline), 1)
         XCTAssertEqual(try measuredValue("B-REC-01", "duplicate_work_rate", in: baseline), 0)
+        let successfulRecovery = try measurement("B-REC-01", "successful_recovery_rate", in: baseline)
+        XCTAssertEqual(successfulRecovery.numerator, 5, "B-REC-01 must include three import and two corpus cases")
+        XCTAssertEqual(successfulRecovery.denominator, 5)
+        let duplicateWork = try measurement("B-REC-01", "duplicate_work_rate", in: baseline)
+        XCTAssertEqual(duplicateWork.numerator, 0)
+        XCTAssertEqual(duplicateWork.denominator, 3, "one import and two corpus checkpoints are replay probes")
 
         // B-OCR-01/B-OCR-02 expected RED: the frozen M2 baseline still reports
         // both metrics n/a because policy-v1 benchmark observations do not exist.
@@ -130,10 +136,18 @@ final class BenchmarkBaselineContractTests: XCTestCase {
     }
 
     private func measuredValue(_ metricID: String, _ name: String, in report: BenchmarkReport) throws -> Double {
-        let row = try XCTUnwrap(report.metrics.first { $0.id == metricID })
-        let measurement = try XCTUnwrap(row.measurements.first { $0.name == name })
+        let measurement = try measurement(metricID, name, in: report)
         XCTAssertEqual(measurement.status, .measured)
         return try XCTUnwrap(measurement.value)
+    }
+
+    private func measurement(
+        _ metricID: String,
+        _ name: String,
+        in report: BenchmarkReport
+    ) throws -> BenchmarkMeasurement {
+        let row = try XCTUnwrap(report.metrics.first { $0.id == metricID })
+        return try XCTUnwrap(row.measurements.first { $0.name == name })
     }
 
     private func harnessDigest(root: URL) throws -> String {
