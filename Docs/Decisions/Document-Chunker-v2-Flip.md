@@ -1,8 +1,9 @@
 # D-06 — Document Chunker v2 Default Flip
 
-Status: **approved by repo owner Cade Spivey on July 18, 2026 — implementation complete; exact-Release live drill pending**
+Status: **approved by repo owner Cade Spivey on July 18, 2026 — implementation and exact-Release live drill complete**
 Evidence source: `932622be28ea784fb37881ce1aea5e0cbb337f15`
 Benchmark artifact: `TestData/Benchmarks/chunker-v2-comparison-932622be28ea784fb37881ce1aea5e0cbb337f15.json`
+Live application source: `66339a3aabaac2e09feecdf035e3496cf765347d`
 
 ## Decision
 
@@ -47,13 +48,23 @@ post-M6 list gate is measured and passes.
 - T-CHK-07 forward migration, rollback, restore, readiness, and historical citation display:
   GREEN in deterministic package tests.
 - Hermetic signed-app UI flip/revert drill: GREEN (`DocumentChunkerRolloutUITests`, v2 → v1 →
-  v2, 1 test and 0 failures).
+  v2, 1 test and 0 failures). The control exposes a full-row hit target so the operator and
+  assistive automation activate the same action.
 - Repo-owner approval: **approved by Cade Spivey on July 18, 2026**.
-- Exact signed-Release existing-store drill: pending final qualification evidence.
+- Exact signed-Release existing-store drill: GREEN. The one-time promotion completed with
+  zero pending documents. The explicit full-store rollback rebuilt 38 documents under v1
+  (37 ready, 0 pending), and the restore rebuilt the same 38 documents under v2 (37 ready,
+  0 pending).
+- Historical citation display: GREEN after both rebuilds. The saved synthetic chronology
+  retained all five bound source labels and excerpts across v2 → v1 → v2.
+- Model-backed companion: GREEN. The repaired, hash-verified Qwen3 32B (4-bit) manifest loaded
+  in the exact signed Release app, and the selected synthetic matter's reclassification state
+  persisted after the chunker drill.
 
-## Required follow-up to complete D-06
+## Completed live qualification
 
-Run the exact signed-Release existing-store v2 migration and live v1 rollback/v2 restore,
-confirm zero pending documents and historical citation display after each rebuild, and record
-the completed drill in the private qualification evidence. The v1 implementation and operator
+The exact universal Developer ID Release app was deep-strict verified before launch. The live
+drill exercised the existing local store, observed the fail-closed active-version behavior
+during each rebuild, confirmed zero pending documents before the version changed, and verified
+the saved chronology before and after restoration. The v1 implementation and Diagnostics
 control remain the supported rollback path.
