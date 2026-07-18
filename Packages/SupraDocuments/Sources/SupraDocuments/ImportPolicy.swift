@@ -141,6 +141,7 @@ public struct ImportPolicyViolation: Error, LocalizedError, Sendable, Equatable 
         case sourceTooLarge = "source_too_large"
         case aggregateSourceBytes = "aggregate_source_bytes"
         case typeMismatch = "type_mismatch"
+        case encryptedSource = "encrypted_source"
         case unsafeArchivePath = "unsafe_archive_path"
         case duplicateArchiveEntry = "duplicate_archive_entry"
         case archiveEntryLimit = "archive_entry_limit"
@@ -159,6 +160,9 @@ public struct ImportPolicyViolation: Error, LocalizedError, Sendable, Equatable 
 
     public let code: Code
     public let reason: String
+
+    public static let encryptedSourceReason =
+        "Password-protected or encrypted files cannot be imported. Remove encryption from a copy and try again."
 
     public init(_ code: Code, _ reason: String) {
         self.code = code

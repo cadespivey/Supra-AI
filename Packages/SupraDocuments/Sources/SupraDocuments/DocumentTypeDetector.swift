@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 import UniformTypeIdentifiers
 import ZIPFoundation
 
@@ -31,6 +32,10 @@ public enum DocumentTypeDetector {
         switch (expected.family, detected.family) {
         case (.plainText, .plainText), (.markdown, .plainText), (.plainText, .markdown), (.markdown, .markdown):
             compatible = true
+        case (.word, .richText) where fileURL.pathExtension.lowercased() == "doc":
+            // Some legacy Word exports are RTF containers with a .doc suffix.
+            // They remain lossy/review-required, but are not a type-confusion risk.
+            compatible = true
         default:
             compatible = expected.family == detected.family
         }
@@ -48,6 +53,9 @@ public enum DocumentTypeDetector {
         let prefix = try boundedPrefix(of: fileURL, count: min(policy.maxInputBytes, 65_536))
 
         if prefix.starts(with: Data("%PDF-".utf8)) {
+            if let document = PDFDocument(url: fileURL), document.isEncrypted || document.isLocked {
+                throw ImportPolicyViolation(.encryptedSource, ImportPolicyViolation.encryptedSourceReason)
+            }
             return DetectedDocumentType(family: .pdf, evidence: "a PDF signature")
         }
         if prefix.starts(with: Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
@@ -61,12 +69,18 @@ public enum DocumentTypeDetector {
             return DetectedDocumentType(family: .image, evidence: "an ISO image container signature")
         }
         if prefix.starts(with: Data([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])) {
+            if containsEncryptedOOXMLStreams(prefix) {
+                throw ImportPolicyViolation(.encryptedSource, ImportPolicyViolation.encryptedSourceReason)
+            }
             let ext = fileURL.pathExtension.lowercased()
             let family: SupportedDocumentTypes.ExtractionFamily = ext == "xls" ? .spreadsheet : (ext == "msg" ? .email : .word)
             return DetectedDocumentType(family: family, evidence: "an OLE compound-document signature")
         }
         if prefix.starts(with: Data([0x50, 0x4B, 0x03, 0x04]))
             || prefix.starts(with: Data([0x50, 0x4B, 0x05, 0x06])) {
+            if containsEncryptedZIPEntry(prefix) {
+                throw ImportPolicyViolation(.encryptedSource, ImportPolicyViolation.encryptedSourceReason)
+            }
             return try detectOfficeArchive(fileURL: fileURL, policy: policy)
         }
 
@@ -149,6 +163,41 @@ public enum DocumentTypeDetector {
         } catch {
             throw ExtractionError.fileUnreadable(error.localizedDescription)
         }
+    }
+
+    private static func containsEncryptedOOXMLStreams(_ data: Data) -> Bool {
+        let streamNames = ["EncryptionInfo", "EncryptedPackage"]
+        return streamNames.allSatisfy { name in
+            guard let utf16Name = name.data(using: .utf16LittleEndian) else { return false }
+            return data.range(of: Data(name.utf8)) != nil
+                || data.range(of: utf16Name) != nil
+        }
+    }
+
+    /// ZIPFoundation deliberately omits encrypted entries because it cannot
+    /// decrypt them. Inspect the bounded raw prefix first so omission cannot be
+    /// mistaken for an empty/valid Office package. Bit 0 marks encryption; bit 6
+    /// marks strong encryption in the general-purpose flag.
+    private static func containsEncryptedZIPEntry(_ data: Data) -> Bool {
+        guard data.count >= 10 else { return false }
+        for offset in 0...(data.count - 10) {
+            let flagOffset: Int
+            if matches(data, at: offset, bytes: [0x50, 0x4B, 0x03, 0x04]) {
+                flagOffset = offset + 6
+            } else if matches(data, at: offset, bytes: [0x50, 0x4B, 0x01, 0x02]) {
+                flagOffset = offset + 8
+            } else {
+                continue
+            }
+            let flags = UInt16(data[flagOffset]) | (UInt16(data[flagOffset + 1]) << 8)
+            if flags & 0x0001 != 0 || flags & 0x0040 != 0 { return true }
+        }
+        return false
+    }
+
+    private static func matches(_ data: Data, at offset: Int, bytes: [UInt8]) -> Bool {
+        guard offset + bytes.count <= data.count else { return false }
+        return bytes.indices.allSatisfy { data[offset + $0] == bytes[$0] }
     }
 
     private static func looksLikeEmail(_ lower: String) -> Bool {

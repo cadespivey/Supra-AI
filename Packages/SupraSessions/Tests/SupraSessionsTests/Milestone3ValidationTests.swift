@@ -30,7 +30,9 @@ final class Milestone3ValidationTests: XCTestCase {
         let report = outcome.report
         XCTAssertGreaterThanOrEqual(report.discoveredCount, 14)
         // Gate: unsupported/corrupt files are reported, not silently skipped.
-        XCTAssertTrue(report.items.contains { $0.disposition == DocumentImportDisposition.unsupported.rawValue })
+        XCTAssertTrue(report.items.contains {
+            $0.disposition == DocumentImportSourceState.unsupportedByPolicy.rawValue
+        })
         XCTAssertTrue(report.failedCount >= 1)
 
         let docs = try store.documentLibrary.fetchDocuments(matterID: matter.id)

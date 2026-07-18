@@ -507,6 +507,17 @@ public final class DocumentImportService: @unchecked Sendable {
 
         do {
             try pinnedSourceValidator?()
+            if let reason = SupportedDocumentTypes.unsupportedByPolicyReason(for: url) {
+                try recordUnsupportedByPolicy(
+                    reason: reason,
+                    displayName: displayName,
+                    sourceDisplayPath: sourceDisplayPath,
+                    sourceID: sourceID,
+                    parentDocumentID: parentDocumentID,
+                    report: &report
+                )
+                return nil
+            }
             if let format {
                 _ = try DocumentTypeDetector.validate(fileURL: url, expected: format, policy: importPolicy)
             }
@@ -533,8 +544,8 @@ public final class DocumentImportService: @unchecked Sendable {
             return nil
         }
 
-        // Copy + dedup the blob even for unsupported files so the instance can be
-        // shown and managed; mark unsupported in the report.
+        // Unknown formats retain the legacy managed-instance behavior. Explicit
+        // policy formats (.xls/.msg) returned above before blob installation.
         let managedBlob: ManagedImportedBlob
         do {
             managedBlob = try ingestBlob(at: url)
@@ -1010,6 +1021,7 @@ public final class DocumentImportService: @unchecked Sendable {
         // confidences at all) is still caught (plan §6.2, §8.4).
         let usableTextCount = result.combinedText.filter { !$0.isWhitespace }.count
         let insufficientOCRText = ocrApplied && usableTextCount < OCRPolicy.minimumUsableTextLength
+        let convertedLossy = result.method == "converted_lossy"
 
         var warnings = result.warnings
         if ocrApplied {
@@ -1042,7 +1054,7 @@ public final class DocumentImportService: @unchecked Sendable {
             status = (lowConfidence || insufficientOCRText) ? .needsReview : .indexing
         } else {
             extractionStatus = .extracted
-            status = .indexing
+            status = convertedLossy ? .needsReview : .indexing
         }
 
         try store.documentLibrary.updateExtraction(
@@ -1389,10 +1401,28 @@ public final class DocumentImportService: @unchecked Sendable {
         report.items.append(DocumentImportReportItem(
             displayName: displayName,
             sourceDisplayPath: sourceDisplayPath,
-            disposition: DocumentImportDisposition.extractionFailed.rawValue,
+            disposition: DocumentImportSourceState.rejected.rawValue,
             reason: violation.localizedDescription,
             parentDocumentID: parentDocumentID,
             rejectionCode: violation.code.rawValue
+        ))
+    }
+
+    private func recordUnsupportedByPolicy(
+        reason: String,
+        displayName: String,
+        sourceDisplayPath: String,
+        sourceID: String,
+        parentDocumentID: String? = nil,
+        report: inout DocumentImportReport
+    ) throws {
+        try transitionSource(sourceID, to: .unsupportedByPolicy, reason: reason)
+        report.items.append(DocumentImportReportItem(
+            displayName: displayName,
+            sourceDisplayPath: sourceDisplayPath,
+            disposition: DocumentImportSourceState.unsupportedByPolicy.rawValue,
+            reason: reason,
+            parentDocumentID: parentDocumentID
         ))
     }
 

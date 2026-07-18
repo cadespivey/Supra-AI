@@ -36,6 +36,27 @@ items continue until an aggregate budget is exhausted. Rejected hostile items
 must not leave a document row or managed blob. Cancellation propagates and
 removes import staging files.
 
+## Encrypted and legacy-format disposition
+
+Password-protected PDFs, OLE-wrapped encrypted OOXML packages exposing
+`EncryptionInfo`/`EncryptedPackage`, and ZIP containers whose entry flags mark
+encryption are rejected before managed storage. Their stable code is
+`encrypted_source`, and the user is directed to remove encryption from a copy.
+Supra AI does not prompt for, store, or attempt passwords.
+
+Legacy `.xls` and Outlook `.msg` inputs remain selectable so the import report
+can account for them, but they terminate as `unsupported_by_policy` before any
+blob or document row is created. Guidance directs the user to export `.xls` as
+`.xlsx` and `.msg` as `.eml`. A supported format that is admitted and then fails
+its parser remains the distinct `failed` state.
+
+Legacy `.doc` is the deliberate exception: it remains admitted through the
+bounded AppKit text converter, is stamped `converted_lossy`, and enters
+`needs_review`. Its warning explains that tables, numbering, and layout can be
+lost. Retrieved text may support preliminary review with disclosure, but the
+document keeps the scope from claiming completeness or a clean negative until
+the user converts it to `.docx`/PDF and reviews the result.
+
 ## Durable source accounting and file authority
 
 Migration v059 adds `document_import_sources`, an incremental ledger for every

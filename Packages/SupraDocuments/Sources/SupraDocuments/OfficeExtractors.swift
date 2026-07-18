@@ -144,10 +144,18 @@ public struct WordExtractor: DocumentExtractor {
     public func extract(fileURL: URL) async throws -> ExtractionResult {
         let ext = fileURL.pathExtension.lowercased()
         if ext == "doc" {
-            let text = try await AppKitDocumentText.text(from: fileURL, type: .docFormat, policy: policy)
+            let text = try await AppKitDocumentText.text(
+                from: fileURL,
+                type: legacyWordDocumentType(at: fileURL),
+                policy: policy
+            )
             try policy.validateDecodedText(text)
             let part = ExtractedPart(sourceKind: .convertedDocument, text: TextNormalization.normalize(text))
-            return ExtractionResult(parts: [part], method: "nsattributedstring-doc")
+            return ExtractionResult(
+                parts: [part],
+                method: "converted_lossy",
+                warnings: [SupportedDocumentTypes.legacyDOCLossyWarning]
+            )
         }
 
         guard let documentXML = try ZipArchiveReader.entryData(in: fileURL, path: "word/document.xml", policy: policy) else {
@@ -162,6 +170,16 @@ public struct WordExtractor: DocumentExtractor {
         }
         let part = ExtractedPart(sourceKind: .convertedDocument, text: TextNormalization.normalize(collector.text))
         return ExtractionResult(parts: [part], method: "ooxml-word")
+    }
+
+    /// A number of legacy Word exports are RTF containers carrying a `.doc`
+    /// suffix. Select AppKit's decoder from a bounded prefix; true OLE `.doc`
+    /// files continue through `.docFormat`.
+    private func legacyWordDocumentType(at url: URL) -> NSAttributedString.DocumentType {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return .docFormat }
+        defer { try? handle.close() }
+        let prefix = (try? handle.read(upToCount: 16)) ?? Data()
+        return prefix.starts(with: Data("{\\rtf".utf8)) ? .rtf : .docFormat
     }
 }
 

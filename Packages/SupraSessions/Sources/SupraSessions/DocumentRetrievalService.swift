@@ -104,6 +104,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         var ready = 0
         for document in documents {
             guard Self.isTextReady(document) else { continue }
+            guard document.extractionMethod?.hasPrefix("converted_lossy@toolchain:") != true else { continue }
             if let embedder {
                 guard try store.documentIndex.hasCompleteEmbeddings(
                     documentID: document.id,
@@ -250,8 +251,14 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             }
         }
 
+        let hasLossyLegacyDocument = documents.contains { document in
+            scopeIDs.contains(document.id)
+                && document.extractionMethod?.hasPrefix("converted_lossy@toolchain:") == true
+        }
         var warning: String?
-        if !readiness.isFullyReady {
+        if hasLossyLegacyDocument {
+            warning = "This scope includes converted_lossy legacy .doc content. Convert the file to .docx or PDF and review the extracted text before making completeness or negative claims."
+        } else if !readiness.isFullyReady {
             warning = "Search scope is still indexing: \(readiness.readyDocuments)/\(readiness.totalDocuments) documents ready."
         }
 
