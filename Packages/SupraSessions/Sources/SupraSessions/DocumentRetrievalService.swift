@@ -253,6 +253,25 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             }
         }
 
+        // Typed v2 units carry evidence that their raw source text does not
+        // necessarily name. A Word comment rarely contains the word "comment";
+        // a table cell rarely says "table." When the query explicitly asks for
+        // those structures, seed matching typed units as candidates with the
+        // equivalent of a top-ranked lexical + semantic match. V1 has no typed
+        // units and remains unchanged.
+        let requestedStructureKinds = Self.requestedStructureKinds(query: query)
+        if !requestedStructureKinds.isEmpty {
+            let structureIntentScore = 2 * Self.rrfContribution(rank: 1)
+            for documentID in scopeIDs {
+                for chunk in try store.documentIndex.fetchChunks(documentID: documentID)
+                    where chunk.chunkerVersion == 2
+                        && chunk.unitKind.map(requestedStructureKinds.contains) == true {
+                    chunkByID[chunk.id] = chunk
+                    scores[chunk.id, default: 0] += structureIntentScore
+                }
+            }
+        }
+
         // Hydrate any chunks only found via semantic search.
         let missingIDs = scores.keys.filter { chunkByID[$0] == nil }
         for chunk in try store.documentIndex.fetchChunks(ids: Array(missingIDs)) {
@@ -261,7 +280,12 @@ public final class DocumentRetrievalService: @unchecked Sendable {
 
         // Rank, then collapse duplicates by normalized text, then apply source
         // diversity (cap per document).
-        let ordered = scores.sorted { $0.value > $1.value }
+        let rawOrdered = scores.sorted { $0.value > $1.value }
+        let ordered = Self.v2DocumentDiverseOrder(
+            rawOrdered,
+            chunksByID: chunkByID,
+            documentNamesByID: nameByID
+        )
         var seenText: [String: Int] = [:]   // text hash -> index in result
         var perDocument: [String: Int] = [:]
         var sources: [RetrievedSource] = []
@@ -374,6 +398,100 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             sources: sources, readiness: readiness, incompleteScopeWarning: warning,
             usedSemantic: usedSemantic, query: query, scopeDocumentIDs: scopeIDs
         )
+    }
+
+    /// Chunker v2 deliberately emits finer-grained structural units than v1. A
+    /// raw score sort can therefore spend the whole top-K packet on sibling
+    /// units from one document even when the next document is also responsive.
+    /// Interleave each document's v2 queue by depth: every document's strongest
+    /// unit appears before any document's second unit. Mixed-version stores keep
+    /// the legacy raw order while a re-chunk job is in flight, and an all-v1
+    /// result is byte-for-byte unchanged.
+    static func v2DocumentDiverseOrder(
+        _ ordered: [(key: String, value: Double)],
+        chunksByID: [String: DocumentChunkRecord],
+        documentNamesByID: [String: String]
+    ) -> [(key: String, value: Double)] {
+        guard !ordered.isEmpty,
+              ordered.allSatisfy({ chunksByID[$0.key]?.chunkerVersion == 2 }) else {
+            return ordered
+        }
+
+        var queues: [String: [(key: String, value: Double)]] = [:]
+        for candidate in ordered {
+            guard let documentID = chunksByID[candidate.key]?.documentID else { return ordered }
+            queues[documentID, default: []].append(candidate)
+        }
+
+        for documentID in queues.keys {
+            queues[documentID]?.sort { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value > rhs.value }
+                guard let lhsChunk = chunksByID[lhs.key], let rhsChunk = chunksByID[rhs.key] else {
+                    return lhs.key < rhs.key
+                }
+                if lhsChunk.chunkIndex != rhsChunk.chunkIndex {
+                    return lhsChunk.chunkIndex < rhsChunk.chunkIndex
+                }
+                if lhsChunk.normalizedText != rhsChunk.normalizedText {
+                    return lhsChunk.normalizedText < rhsChunk.normalizedText
+                }
+                return lhs.key < rhs.key
+            }
+        }
+
+        let documentOrder = queues.keys.sorted { lhs, rhs in
+            let lhsQueue = queues[lhs] ?? []
+            let rhsQueue = queues[rhs] ?? []
+            let lhsAggregate = lhsQueue.prefix(2).reduce(0) { $0 + $1.value }
+            let rhsAggregate = rhsQueue.prefix(2).reduce(0) { $0 + $1.value }
+            if lhsAggregate != rhsAggregate { return lhsAggregate > rhsAggregate }
+            let lhsBest = lhsQueue.first?.value ?? 0
+            let rhsBest = rhsQueue.first?.value ?? 0
+            if lhsBest != rhsBest { return lhsBest > rhsBest }
+            let lhsName = documentNamesByID[lhs] ?? lhs
+            let rhsName = documentNamesByID[rhs] ?? rhs
+            if lhsName != rhsName { return lhsName < rhsName }
+            return lhs < rhs
+        }
+
+        let maximumDepth = queues.values.map(\.count).max() ?? 0
+        var diversified: [(key: String, value: Double)] = []
+        diversified.reserveCapacity(ordered.count)
+        for depth in 0..<maximumDepth {
+            for documentID in documentOrder {
+                guard let queue = queues[documentID], depth < queue.count else { continue }
+                diversified.append(queue[depth])
+            }
+        }
+        return diversified
+    }
+
+    private static func requestedStructureKinds(query: String) -> Set<String> {
+        let lowered = query.lowercased()
+        var kinds = Set<DocumentStructureNodeKind>()
+        if lowered.contains("table") || lowered.contains("cell")
+            || lowered.contains("row") || lowered.contains("column") {
+            kinds.formUnion([.table, .tableRow, .tableCell, .cellRange])
+        }
+        if lowered.contains("footnote") { kinds.insert(.footnote) }
+        if lowered.contains("endnote") { kinds.insert(.endnote) }
+        if lowered.contains("comment") { kinds.insert(.comment) }
+        if lowered.contains("header") { kinds.insert(.header) }
+        if lowered.contains("footer") { kinds.insert(.footer) }
+        if lowered.contains("annotation") { kinds.insert(.region) }
+        if lowered.contains("attachment") { kinds.insert(.attachmentRef) }
+        if lowered.contains("quoted") || lowered.contains("quote") { kinds.insert(.emailQuote) }
+        if lowered.contains("objection") { kinds.insert(.objection) }
+        if lowered.contains("deposition") || lowered.contains("question and answer") {
+            kinds.formUnion([.depositionQuestion, .depositionAnswer])
+        }
+        if lowered.contains("discovery request") || lowered.contains("production request") {
+            kinds.insert(.discoveryRequest)
+        }
+        if lowered.contains("discovery response") || lowered.contains("production response") {
+            kinds.insert(.discoveryResponse)
+        }
+        return Set(kinds.map(\.rawValue))
     }
 
     /// A compact "type · date" descriptor for a document, drawn from the classifier's

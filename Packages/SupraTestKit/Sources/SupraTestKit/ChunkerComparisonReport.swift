@@ -83,13 +83,63 @@ public struct ChunkerComparisonReport: Codable, Equatable, Sendable {
         }
 
         let regressed = metrics.contains { !$0.passesNoninferiority }
+        let structureMetrics = metrics.filter { $0.metricID == "B-RET-02" }
+        let structureImproved = structureMetrics.isEmpty || structureMetrics.contains { $0.delta > 0 }
+        let v1ListMeasurements = try listMeasurements(in: v1)
+        let v2ListMeasurements = try listMeasurements(in: v2)
+        let listGate: ChunkerDeferredGate
+        let listRegressed: Bool
+        if v1ListMeasurements.isEmpty, v2ListMeasurements.isEmpty {
+            listRegressed = false
+            listGate = ChunkerDeferredGate(
+                metricID: "B-LST-01",
+                status: "deferred_until_m6",
+                reason: "B-LST-01 observations were not supplied to this comparison."
+            )
+        } else {
+            guard Set(v1ListMeasurements.keys) == Set(v2ListMeasurements.keys),
+                  !v1ListMeasurements.isEmpty else {
+                throw ChunkerComparisonReportError.mismatchedListMeasurements
+            }
+            listRegressed = v1ListMeasurements.contains { key, before in
+                guard let after = v2ListMeasurements[key] else { return true }
+                if key.name == "duplicate_output_rate" {
+                    return after.value > before.value
+                }
+                return after.value < before.value
+            }
+            listGate = ChunkerDeferredGate(
+                metricID: "B-LST-01",
+                status: listRegressed ? "blocked_list_regression" : "measured_noninferior",
+                reason: listRegressed
+                    ? "At least one B-LST-01 quality metric regressed against v1."
+                    : "All measured B-LST-01 quality metrics are noninferior to v1."
+            )
+        }
+
         var reasons = ["D-06 requires explicit repo-owner approval."]
         if regressed {
             reasons.append("At least one B-RET metric regressed against the frozen v1 behavior.")
         } else {
             reasons.append("All measured B-RET metrics are noninferior to v1.")
         }
-        reasons.append("B-LST-01 remains deferred until the exhaustive list engine lands in M6.")
+        if !structureMetrics.isEmpty {
+            reasons.append(structureImproved
+                ? "At least one B-RET-02 structure-sensitive metric improved over v1."
+                : "No B-RET-02 structure-sensitive metric improved over v1.")
+        }
+        reasons.append(listGate.reason)
+
+        let decisionStatus: String
+        if regressed {
+            decisionStatus = "blocked_recall_regression"
+        } else if listRegressed {
+            decisionStatus = "blocked_list_regression"
+        } else if !structureImproved {
+            decisionStatus = "blocked_no_structure_improvement"
+        } else {
+            decisionStatus = "pending_owner_approval"
+        }
 
         return ChunkerComparisonReport(
             schemaVersion: 1,
@@ -102,14 +152,10 @@ public struct ChunkerComparisonReport: Codable, Equatable, Sendable {
                 v2Seconds: v2RetrievalSeconds,
                 ratio: v2RetrievalSeconds / v1RetrievalSeconds
             ),
-            exhaustiveList: ChunkerDeferredGate(
-                metricID: "B-LST-01",
-                status: "deferred_until_m6",
-                reason: "The exhaustive list engine does not exist before M6."
-            ),
+            exhaustiveList: listGate,
             decision: ChunkerDecision(
                 id: "D-06",
-                status: regressed ? "blocked_recall_regression" : "pending_owner_approval",
+                status: decisionStatus,
                 shippingDefault: 1,
                 reasons: reasons
             )
@@ -143,10 +189,30 @@ public struct ChunkerComparisonReport: Codable, Equatable, Sendable {
         }
         return values
     }
+
+    private static func listMeasurements(
+        in report: BenchmarkReport
+    ) throws -> [MeasurementKey: MeasuredValue] {
+        var values: [MeasurementKey: MeasuredValue] = [:]
+        for row in report.metrics where row.id == "B-LST-01" {
+            for measurement in row.measurements where measurement.status == .measured {
+                guard let value = measurement.value, value.isFinite else {
+                    throw ChunkerComparisonReportError.invalidListMeasurement("\(row.id)|\(measurement.name)")
+                }
+                values[MeasurementKey(metricID: row.id, name: measurement.name)] = MeasuredValue(
+                    unit: measurement.unit,
+                    value: value
+                )
+            }
+        }
+        return values
+    }
 }
 
 public enum ChunkerComparisonReportError: Error, Equatable {
     case invalidRetrievalLatency
     case invalidRetrievalMeasurement(String)
     case mismatchedRetrievalMeasurements
+    case invalidListMeasurement(String)
+    case mismatchedListMeasurements
 }

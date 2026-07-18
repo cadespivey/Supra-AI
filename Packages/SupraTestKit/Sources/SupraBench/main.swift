@@ -1569,6 +1569,18 @@ private struct DeterministicCorpusWorkload: Sendable {
             unit: "rate",
             result: BenchmarkMetrics.rate(numerator: completeEvidenceSets, denominator: tasks.count)
         ))
+        let structureCases = specification.answerKey.taskKeys.structures.map { task in
+            TypedStructureEvidenceCase(
+                expectedDocumentNames: task.evidence.map(\.sourceFilename),
+                candidates: (retrievedByTask[task.id] ?? []).prefix(40).map { source in
+                    TypedStructureEvidenceCandidate(
+                        documentName: source.documentName,
+                        unitKind: source.unitKind
+                    )
+                }
+            )
+        }
+        observations.append(TypedStructureEvidenceBenchmark.observation(cases: structureCases))
         return observations
     }
 
