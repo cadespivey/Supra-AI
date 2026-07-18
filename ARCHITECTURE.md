@@ -107,7 +107,7 @@ Managed model downloads are bound to a repository revision and verified manifest
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v059. Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v060. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -133,6 +133,10 @@ repository:
   prior-model vectors; saved text edits enqueue a full re-chunk/reindex pass.
   Extraction methods carry a toolchain-version suffix so launch-time capability
   drift can mark only older lineage stale and record a manual-reprocess reason.
+- Extraction text has immutable per-part revision candidates and append-only
+  selection decisions. The current part text remains a compatible materialized
+  projection, while chunks bind to the exact selected revision that they index;
+  v060 backfills existing parts without changing their text.
 
 Repositories are grouped by cohesion (e.g. `DocumentLibraryRepository`,
 `DocumentIndexRepository`, `DocumentJobRepository`) rather than one-per-table, matching the

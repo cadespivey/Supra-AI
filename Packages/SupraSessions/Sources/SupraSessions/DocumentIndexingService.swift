@@ -68,10 +68,16 @@ public final class DocumentIndexingService: @unchecked Sendable {
             )
         }
         let chunks = chunker.chunk(parts: chunkParts)
+        let revisionIDsByPartID = Dictionary(
+            uniqueKeysWithValues: parts.compactMap { part in
+                part.currentRevisionID.map { (part.id, $0) }
+            }
+        )
         let records = chunks.map { chunk in
             DocumentChunkRecord(
                 documentID: documentID,
                 pagePartID: chunk.partID,
+                revisionID: chunk.partID.flatMap { revisionIDsByPartID[$0] },
                 chunkIndex: chunk.chunkIndex,
                 sourceKind: chunk.sourceKind.rawValue,
                 pageIndex: chunk.pageIndex,

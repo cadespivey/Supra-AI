@@ -72,7 +72,7 @@ final class ShippingMigrationFixtureTests: XCTestCase {
         // T-MIG-01 expected RED: the migration registry still ends at v058 and
         // the import-source table / batch target columns do not exist.
         let migrator = SupraMigrator.makeMigrator()
-        XCTAssertEqual(migrator.migrations.last, "v059_create_document_import_sources")
+        XCTAssertTrue(migrator.migrations.contains("v059_create_document_import_sources"))
 
         let directory = try temporaryDirectory(prefix: "T-MIG-01-")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -98,6 +98,7 @@ final class ShippingMigrationFixtureTests: XCTestCase {
         try migrator.migrate(queue)
         try queue.read { db in
             try assertV059Schema(db)
+            try assertV060Schema(db)
             XCTAssertEqual(
                 try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_import_sources WHERE import_batch_id = ?", arguments: [batchID]),
                 0,
@@ -114,7 +115,7 @@ final class ShippingMigrationFixtureTests: XCTestCase {
 
         try migrator.migrate(queue)
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v059_create_document_import_sources")
+            XCTAssertEqual(try appliedMigrations(db).last, "v060_create_document_part_lineage")
             XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_import_sources"), 0)
         }
     }
@@ -207,6 +208,7 @@ final class ShippingMigrationFixtureTests: XCTestCase {
             XCTAssertEqual(try appliedMigrations(db), SupraMigrator.makeMigrator().migrations)
             XCTAssertEqual(try fixtureSeedVersion(db), seedVersion)
             try assertV059Schema(db)
+            try assertV060Schema(db)
             XCTAssertEqual(
                 try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_import_sources"),
                 0,
@@ -288,6 +290,15 @@ final class ShippingMigrationFixtureTests: XCTestCase {
             ),
             1
         )
+    }
+
+    private func assertV060Schema(_ db: Database) throws {
+        XCTAssertTrue(try db.tableExists("document_part_revisions"))
+        XCTAssertTrue(try db.tableExists("document_part_selections"))
+        let partColumns = Set(try db.columns(in: "document_pages_parts").map(\.name))
+        XCTAssertTrue(partColumns.contains("current_revision_id"))
+        XCTAssertTrue(partColumns.contains("current_selection_id"))
+        XCTAssertTrue(try db.columns(in: "document_chunks").map(\.name).contains("revision_id"))
     }
 
     private func testMigrator(includeFailingUpgrade: Bool) -> DatabaseMigrator {

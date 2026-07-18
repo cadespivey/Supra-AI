@@ -600,11 +600,19 @@ public final class DocumentImportService: @unchecked Sendable {
 
         // Extract, then OCR if needed.
         do {
-            var result = try await extraction.extract(fileURL: managedBlob.verifiedURL)
+            let parserResult = try await extraction.extract(fileURL: managedBlob.verifiedURL)
+            var result = parserResult
+            var ocrCandidates: [Int: OCRTextResult] = [:]
             var ocrApplied = false
             if result.needsOCR, ocr != nil, let format {
                 do {
-                    result = try await applyOCR(to: result, blobURL: managedBlob.verifiedURL, family: format.family)
+                    let application = try await applyOCR(
+                        to: result,
+                        blobURL: managedBlob.verifiedURL,
+                        family: format.family
+                    )
+                    result = application.result
+                    ocrCandidates = application.candidates
                     ocrApplied = true
                     _ = try? store.auditEvents.recordEvent(
                         matterID: matterID, eventType: "document_ocr_completed", actor: "system",
@@ -619,7 +627,13 @@ public final class DocumentImportService: @unchecked Sendable {
                 }
             }
             try ledger.consumeDecoded(result)
-            try persistExtraction(result, documentID: document.id, ocrApplied: ocrApplied)
+            try persistExtraction(
+                result,
+                parserResult: parserResult,
+                ocrCandidates: ocrCandidates,
+                documentID: document.id,
+                ocrApplied: ocrApplied
+            )
             let disposition: DocumentImportDisposition
             if result.needsOCR {
                 disposition = .ocrNeeded
@@ -905,11 +919,19 @@ public final class DocumentImportService: @unchecked Sendable {
         }
 
         do {
-            var result = try await extraction.extract(fileURL: verifiedURL)
+            let parserResult = try await extraction.extract(fileURL: verifiedURL)
+            var result = parserResult
+            var ocrCandidates: [Int: OCRTextResult] = [:]
             var ocrApplied = false
             if result.needsOCR, ocr != nil {
                 do {
-                    result = try await applyOCR(to: result, blobURL: verifiedURL, family: format.family)
+                    let application = try await applyOCR(
+                        to: result,
+                        blobURL: verifiedURL,
+                        family: format.family
+                    )
+                    result = application.result
+                    ocrCandidates = application.candidates
                     ocrApplied = true
                     _ = try? store.auditEvents.recordEvent(
                         matterID: document.matterID, eventType: "document_ocr_completed", actor: "system",
@@ -923,7 +945,13 @@ public final class DocumentImportService: @unchecked Sendable {
                     throw error
                 }
             }
-            try persistExtraction(result, documentID: documentID, ocrApplied: ocrApplied)
+            try persistExtraction(
+                result,
+                parserResult: parserResult,
+                ocrCandidates: ocrCandidates,
+                documentID: documentID,
+                ocrApplied: ocrApplied
+            )
             try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .stale)
             _ = try? store.auditEvents.recordEvent(
                 matterID: document.matterID, eventType: "document_reprocessed", actor: "user",
@@ -941,18 +969,25 @@ public final class DocumentImportService: @unchecked Sendable {
 
     // MARK: - OCR
 
+    private struct OCRApplication {
+        var result: ExtractionResult
+        var candidates: [Int: OCRTextResult]
+    }
+
     /// Runs OCR over a document that lacks embedded text and merges the results
     /// into the extraction (plan §6.2). Confidence flows to the page parts.
     private func applyOCR(
         to result: ExtractionResult,
         blobURL: URL,
         family: SupportedDocumentTypes.ExtractionFamily
-    ) async throws -> ExtractionResult {
-        guard let ocr else { return result }
+    ) async throws -> OCRApplication {
+        guard let ocr else { return OCRApplication(result: result, candidates: [:]) }
         var merged = result
+        var candidates: [Int: OCRTextResult] = [:]
         switch family {
         case .image:
             let ocrResult = try await ocr.recognizeImage(at: blobURL)
+            candidates[0] = ocrResult
             merged.parts = [ExtractedPart(
                 sourceKind: .image, text: ocrResult.text, pageIndex: 0, pageLabel: "1",
                 ocrConfidence: ocrResult.confidence, boundingBoxesJSON: ocrResult.boundingBoxesJSON
@@ -961,6 +996,7 @@ public final class DocumentImportService: @unchecked Sendable {
             merged.needsOCR = false
         case .pdf:
             let pageResults = try await ocr.recognizePDFPages(at: blobURL, pageIndices: result.ocrPageIndices)
+            candidates = pageResults
             let ocrTargets = Set(result.ocrPageIndices)
             merged.parts = result.parts.enumerated().map { index, part in
                 var updated = part
@@ -983,14 +1019,33 @@ public final class DocumentImportService: @unchecked Sendable {
         default:
             break
         }
-        return merged
+        return OCRApplication(result: merged, candidates: candidates)
     }
 
     // MARK: - Persistence
 
-    private func persistExtraction(_ result: ExtractionResult, documentID: String, ocrApplied: Bool = false) throws {
-        let parts = result.parts.enumerated().map { index, part in
-            DocumentPagePartRecord(
+    private struct V0RevisionSelectionDecision: Codable {
+        var candidateRevisionIDs: [String]
+        var chosenOrigin: String
+        var rule: String
+    }
+
+    private func persistExtraction(
+        _ result: ExtractionResult,
+        parserResult: ExtractionResult,
+        ocrCandidates: [Int: OCRTextResult],
+        documentID: String,
+        ocrApplied: Bool = false
+    ) throws {
+        var parts: [DocumentPagePartRecord] = []
+        var revisions: [DocumentPartRevisionRecord] = []
+        var selections: [DocumentPartSelectionRecord] = []
+
+        for (index, part) in result.parts.enumerated() {
+            let parserPart = parserResult.parts.indices.contains(index)
+                ? parserResult.parts[index]
+                : part
+            parts.append(DocumentPagePartRecord(
                 documentID: documentID,
                 partIndex: index,
                 sourceKind: part.sourceKind.rawValue,
@@ -1003,9 +1058,91 @@ public final class DocumentImportService: @unchecked Sendable {
                 charCount: part.text.count,
                 ocrConfidence: part.ocrConfidence,
                 boundingBoxesJSON: part.boundingBoxesJSON
+            ))
+
+            let parserOrigin = parserPart.sourceKind == .pdfPage ? "embedded_pdf" : "parser"
+            let parserRevision = try makeMachineRevision(
+                documentID: documentID,
+                partIndex: index,
+                origin: parserOrigin,
+                method: parserResult.method,
+                text: parserPart.text,
+                ocrConfidence: parserPart.ocrConfidence,
+                boundingBoxesJSON: parserPart.boundingBoxesJSON
             )
+            var candidates = [parserRevision]
+            var selectedRevision = parserRevision
+
+            let pageIndex = parserPart.pageIndex ?? index
+            if let ocrCandidate = ocrCandidates[pageIndex] {
+                let ocrMethod = parserPart.sourceKind == .pdfPage
+                    ? "vision-ocr-pdf"
+                    : "vision-ocr-image"
+                let ocrRevision = try makeMachineRevision(
+                    documentID: documentID,
+                    partIndex: index,
+                    origin: "ocr",
+                    method: ocrMethod,
+                    text: ocrCandidate.text,
+                    ocrConfidence: ocrCandidate.confidence,
+                    boundingBoxesJSON: ocrCandidate.boundingBoxesJSON
+                )
+                candidates.append(ocrRevision)
+                // M3-W1 records the shipping v0 decision without changing it.
+                // Images always materialize OCR; PDFs retain the longer-wins rule
+                // until M3-W2 replaces that policy with explainable scoring.
+                if parserPart.sourceKind == .image
+                    || (ocrCandidate.text.count > parserPart.text.count && part.text == ocrCandidate.text) {
+                    selectedRevision = ocrRevision
+                }
+            }
+            revisions.append(contentsOf: candidates)
+
+            let selectionKeyPayload = [
+                documentID,
+                String(index),
+                "policy-v0",
+                selectedRevision.derivationKey,
+                candidates.map(\.derivationKey).joined(separator: ","),
+            ].joined(separator: "|")
+            let selectionKey = DocumentStorage.sha256Hex(of: Data(selectionKeyPayload.utf8))
+            let priorSelections = try store.documentRevisions.fetchSelections(
+                documentID: documentID,
+                partIndex: index
+            )
+            let existingSelection = priorSelections.first { $0.selectionKey == selectionKey }
+            let supersedesSelectionID: String?
+            if let existingSelection {
+                supersedesSelectionID = existingSelection.supersedesSelectionID
+            } else {
+                supersedesSelectionID = priorSelections.last?.id
+            }
+            let decision = V0RevisionSelectionDecision(
+                candidateRevisionIDs: candidates.map(\.id),
+                chosenOrigin: selectedRevision.origin,
+                rule: candidates.count == 1 ? "parser_only_v0" : "longer_wins_v0"
+            )
+            let decisionEncoder = JSONEncoder()
+            decisionEncoder.outputFormatting = [.sortedKeys]
+            let decisionJSON = String(decoding: try decisionEncoder.encode(decision), as: UTF8.self)
+            selections.append(DocumentPartSelectionRecord(
+                id: "selection-\(DocumentStorage.sha256Hex(of: Data(selectionKeyPayload.utf8)))",
+                documentID: documentID,
+                partIndex: index,
+                selectedRevisionID: selectedRevision.id,
+                selectionKey: selectionKey,
+                selectedBy: "policy",
+                policyVersion: 0,
+                decisionJSON: decisionJSON,
+                supersedesSelectionID: supersedesSelectionID
+            ))
         }
-        try store.documentIndex.replaceParts(documentID: documentID, parts: parts)
+        try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: documentID,
+            parts: parts,
+            revisions: revisions,
+            selections: selections
+        )
 
         let checksum = DocumentStorage.sha256Hex(of: Data(result.combinedText.utf8))
 
@@ -1068,6 +1205,54 @@ public final class DocumentImportService: @unchecked Sendable {
             warningsJSON: warningsJSON,
             metadataCreatedAt: result.metadataCreatedAt,
             metadataModifiedAt: result.metadataModifiedAt
+        )
+    }
+
+    private func makeMachineRevision(
+        documentID: String,
+        partIndex: Int,
+        origin: String,
+        method: String,
+        text: String,
+        ocrConfidence: Double?,
+        boundingBoxesJSON: String?
+    ) throws -> DocumentPartRevisionRecord {
+        let contentDigest = DocumentStorage.sha256Hex(of: Data(text.utf8))
+        let derivationPayload = [
+            documentID,
+            String(partIndex),
+            origin,
+            method,
+            DocumentToolchain.version,
+            contentDigest,
+        ].joined(separator: "|")
+        let derivationKey = DocumentStorage.sha256Hex(of: Data(derivationPayload.utf8))
+        let existing = try store.documentRevisions.fetchRevisions(
+            documentID: documentID,
+            partIndex: partIndex
+        )
+        let existingSameKey = existing.first { $0.derivationKey == derivationKey }
+        let supersedesRevisionID: String?
+        if let existingSameKey {
+            supersedesRevisionID = existingSameKey.supersedesRevisionID
+        } else {
+            supersedesRevisionID = existing.last {
+                $0.origin == origin && $0.derivationKey != derivationKey
+            }?.id
+        }
+        return DocumentPartRevisionRecord(
+            id: "revision-\(DocumentStorage.sha256Hex(of: Data(derivationPayload.utf8)))",
+            documentID: documentID,
+            partIndex: partIndex,
+            derivationKey: derivationKey,
+            origin: origin,
+            method: method,
+            text: text,
+            charCount: text.count,
+            ocrConfidence: ocrConfidence,
+            boundingBoxesJSON: boundingBoxesJSON,
+            toolchainVersion: DocumentToolchain.version,
+            supersedesRevisionID: supersedesRevisionID
         )
     }
 

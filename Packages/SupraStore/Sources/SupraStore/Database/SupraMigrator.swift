@@ -1103,6 +1103,177 @@ public enum SupraMigrator {
             )
         }
 
+        migrator.registerMigration("v060_create_document_part_lineage") { db in
+            try db.create(table: "document_part_revisions") { table in
+                table.column("id", .text).primaryKey()
+                table.column("document_id", .text)
+                    .notNull()
+                    .references("matter_documents", onDelete: .cascade)
+                table.column("part_index", .integer).notNull()
+                table.column("derivation_key", .text).notNull()
+                table.column("origin", .text).notNull()
+                table.column("method", .text).notNull()
+                table.column("text", .text).notNull()
+                table.column("char_count", .integer).notNull()
+                table.column("ocr_confidence", .double)
+                table.column("bounding_boxes_json", .text)
+                table.column("toolchain_version", .text)
+                table.column("author", .text)
+                table.column("reason", .text)
+                table.column("supersedes_revision_id", .text)
+                    .references("document_part_revisions", onDelete: .setNull)
+                table.column("created_at", .datetime).notNull()
+            }
+            try db.create(
+                index: "idx_document_part_revisions_derivation",
+                on: "document_part_revisions",
+                columns: ["document_id", "part_index", "derivation_key"],
+                unique: true
+            )
+            try db.create(
+                index: "idx_document_part_revisions_part",
+                on: "document_part_revisions",
+                columns: ["document_id", "part_index", "created_at"]
+            )
+
+            try db.create(table: "document_part_selections") { table in
+                table.column("id", .text).primaryKey()
+                table.column("document_id", .text)
+                    .notNull()
+                    .references("matter_documents", onDelete: .cascade)
+                table.column("part_index", .integer).notNull()
+                table.column("selected_revision_id", .text)
+                    .notNull()
+                    .references("document_part_revisions", onDelete: .restrict)
+                table.column("selection_key", .text).notNull()
+                table.column("selected_by", .text).notNull()
+                table.column("policy_version", .integer)
+                table.column("decision_json", .text).notNull()
+                table.column("supersedes_selection_id", .text)
+                    .references("document_part_selections", onDelete: .setNull)
+                table.column("created_at", .datetime).notNull()
+            }
+            try db.create(
+                index: "idx_document_part_selections_key",
+                on: "document_part_selections",
+                columns: ["document_id", "part_index", "selection_key"],
+                unique: true
+            )
+            try db.create(
+                index: "idx_document_part_selections_part",
+                on: "document_part_selections",
+                columns: ["document_id", "part_index", "created_at"]
+            )
+
+            try db.alter(table: "document_pages_parts") { table in
+                table.add(column: "current_revision_id", .text)
+                    .references("document_part_revisions", onDelete: .setNull)
+                table.add(column: "current_selection_id", .text)
+                    .references("document_part_selections", onDelete: .setNull)
+            }
+            try db.alter(table: "document_chunks") { table in
+                table.add(column: "revision_id", .text)
+                    .references("document_part_revisions", onDelete: .setNull)
+            }
+
+            // Preserve every byte already selected in the compatible parts table.
+            // A document-level edited flag is the only historical proof available,
+            // so all of that document's parts receive user_edit origin together.
+            try db.execute(sql: """
+                INSERT INTO document_part_revisions (
+                    id, document_id, part_index, derivation_key, origin, method,
+                    text, char_count, ocr_confidence, bounding_boxes_json,
+                    toolchain_version, author, reason, supersedes_revision_id, created_at
+                )
+                SELECT
+                    'v060-revision:' || p.id,
+                    p.document_id,
+                    p.part_index,
+                    'migration:v060:' || p.id,
+                    CASE WHEN d.has_user_edited_text = 1 THEN 'user_edit' ELSE 'legacy_import' END,
+                    COALESCE(d.extraction_method, 'legacy_import'),
+                    p.normalized_text,
+                    p.char_count,
+                    p.ocr_confidence,
+                    p.bounding_boxes_json,
+                    NULL,
+                    NULL,
+                    'v060 compatible-text backfill',
+                    NULL,
+                    p.created_at
+                FROM document_pages_parts p
+                JOIN matter_documents d ON d.id = p.document_id
+                """)
+            try db.execute(sql: """
+                INSERT INTO document_part_selections (
+                    id, document_id, part_index, selected_revision_id,
+                    selection_key, selected_by, policy_version, decision_json,
+                    supersedes_selection_id, created_at
+                )
+                SELECT
+                    'v060-selection:' || p.id,
+                    p.document_id,
+                    p.part_index,
+                    'v060-revision:' || p.id,
+                    'migration:v060:' || p.id,
+                    'migration',
+                    NULL,
+                    '{"rule":"v060_compatible_text_backfill"}',
+                    NULL,
+                    p.created_at
+                FROM document_pages_parts p
+                """)
+            try db.execute(sql: """
+                UPDATE document_pages_parts
+                SET current_revision_id = 'v060-revision:' || id,
+                    current_selection_id = 'v060-selection:' || id
+                """)
+            try db.execute(sql: """
+                UPDATE document_chunks
+                SET revision_id = (
+                    SELECT p.current_revision_id
+                    FROM document_pages_parts p
+                    WHERE p.id = document_chunks.page_part_id
+                )
+                WHERE page_part_id IS NOT NULL
+                """)
+
+            // Direct mutation is forbidden while the owning document exists.
+            // Matter/document deletion still cascades the complete lineage graph.
+            try db.execute(sql: """
+                CREATE TRIGGER document_part_revisions_immutable_update
+                BEFORE UPDATE ON document_part_revisions
+                WHEN EXISTS (SELECT 1 FROM matter_documents WHERE id = OLD.document_id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'document_part_revisions are immutable');
+                END
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER document_part_revisions_immutable_delete
+                BEFORE DELETE ON document_part_revisions
+                WHEN EXISTS (SELECT 1 FROM matter_documents WHERE id = OLD.document_id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'document_part_revisions are immutable');
+                END
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER document_part_selections_immutable_update
+                BEFORE UPDATE ON document_part_selections
+                WHEN EXISTS (SELECT 1 FROM matter_documents WHERE id = OLD.document_id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'document_part_selections are append-only');
+                END
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER document_part_selections_immutable_delete
+                BEFORE DELETE ON document_part_selections
+                WHEN EXISTS (SELECT 1 FROM matter_documents WHERE id = OLD.document_id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'document_part_selections are append-only');
+                END
+                """)
+        }
+
         return migrator
     }
 
@@ -1129,6 +1300,8 @@ public enum SupraMigrator {
             "document_chunk_fts",
             "document_chunks",
             "document_pages_parts",
+            "document_part_selections",
+            "document_part_revisions",
             "document_tag_assignments",
             "document_tags",
             "matter_documents",
