@@ -5,6 +5,26 @@ import SupraDocuments
 import SupraStore
 import XCTest
 
+private struct Milestone3PromptSource: Decodable {
+    let label: String
+    let text: String
+}
+
+private func milestone3PromptSource(
+    containing needle: String,
+    in prompt: String
+) -> Milestone3PromptSource? {
+    guard let begin = prompt.range(of: "BEGIN_UNTRUSTED_SOURCE_DATA\n"),
+          let end = prompt.range(
+              of: "\nEND_UNTRUSTED_SOURCE_DATA",
+              range: begin.upperBound..<prompt.endIndex
+          ),
+          let data = String(prompt[begin.upperBound..<end.lowerBound]).data(using: .utf8),
+          let sources = try? JSONDecoder().decode([Milestone3PromptSource].self, from: data)
+    else { return nil }
+    return sources.first { $0.text.contains(needle) }
+}
+
 /// Milestone 3 deterministic pipeline validation (plan §15.3, §15.5). Builds the
 /// synthetic Validation Matter, runs import → OCR (mocked) → index (stub embedder)
 /// → search → Q&A → chronology → export, and asserts the §15.5 gates — all without
@@ -107,7 +127,17 @@ final class Milestone3ValidationTests: XCTestCase {
 
         // --- Q&A (stub model, cited) ---
         let runtime = StubRuntimeClient(outcome: { request in
-            .events([.event(request, 0, .token, token: "Indemnification survives termination [S1]."), .event(request, 1, .generationCompleted)])
+            // Expected RED after the approved v2 default flip: v2 retrieval ranks
+            // the exact agreement passage under a non-S1 label, while this legacy
+            // stub still cites S1 and therefore correctly fails export assurance.
+            XCTAssertEqual(
+                milestone3PromptSource(
+                    containing: "Indemnification survives termination",
+                    in: request.prompt
+                )?.label,
+                "S1"
+            )
+            return .events([.event(request, 0, .token, token: "Indemnification survives termination [S1]."), .event(request, 1, .generationCompleted)])
         })
         let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime, embedder: embedder)
         let qaGen = await qa.generate(
