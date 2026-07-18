@@ -120,6 +120,18 @@ final class BenchmarkBaselineContractTests: XCTestCase {
         XCTAssertEqual(falseNegatives.numerator, 0)
         XCTAssertEqual(falseNegatives.denominator, 2)
 
+        XCTAssertEqual(try measuredValue("B-VER-01", "precision", in: baseline), 1)
+        XCTAssertEqual(try measuredValue("B-VER-01", "recall", in: baseline), 1)
+        XCTAssertEqual(try measuredValue("B-VER-01", "f1", in: baseline), 1)
+        let operativeAccuracy = try measurement("B-VER-02", "operative_state_accuracy", in: baseline)
+        XCTAssertEqual(operativeAccuracy.value, 1)
+        XCTAssertEqual(operativeAccuracy.numerator, 3)
+        XCTAssertEqual(operativeAccuracy.denominator, 3)
+        let ambiguousBlockRate = try measurement("B-VER-02", "ambiguous_block_rate", in: baseline)
+        XCTAssertEqual(ambiguousBlockRate.value, 1)
+        XCTAssertEqual(ambiguousBlockRate.numerator, 1)
+        XCTAssertEqual(ambiguousBlockRate.denominator, 1)
+
         // B-OCR-01/B-OCR-02 expected RED: the frozen M2 baseline still reports
         // both metrics n/a because policy-v1 benchmark observations do not exist.
         XCTAssertEqual(try measuredValue("B-OCR-01", "selection_accuracy", in: baseline), 1)

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "baselinePath": "TestData/Benchmarks/baseline-46d1190b156e08a44b0bd8e8a2274f9c3442f9af.json",
-  "harnessSHA256": "fde8ea0df51ac9c4408e8b452cf2101665ace58c753ff8a60adc1ad96692558d",
+  "baselinePath": "TestData/Benchmarks/baseline-2b2438640ee452d5ebe4a0db537c6abc0ed9ad20.json",
+  "harnessSHA256": "733c0c65d641db7c0fcf75414bb3ca3bd445c3a4cff89ac8f5a5cf6b561d9e30",
   "decisions": [
     {
       "metricID": "B-ACC-01",
@@ -163,13 +163,13 @@
       "metricID": "B-VER-01",
       "owner": "repo_owner",
       "approvalStatus": "pending_owner_approval",
-      "proposal": "Set relation precision and recall bands by kind after the relation engine emits."
+      "proposal": "The deterministic baseline emits 1.0 precision and recall overall and by kind; owner approval is required before adopting quality bands."
     },
     {
       "metricID": "B-VER-02",
       "owner": "repo_owner",
       "approvalStatus": "pending_owner_approval",
-      "proposal": "Ambiguous unreviewed cases must be blocked at rate 1.0; set reviewed-state accuracy after baseline."
+      "proposal": "Ambiguous unreviewed cases must be blocked at rate 1.0; the deterministic reviewed-state baseline is 1.0, with its adoption pending owner and legal-fidelity review."
     }
   ]
 }
