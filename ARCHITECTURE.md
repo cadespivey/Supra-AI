@@ -107,7 +107,7 @@ Managed model downloads are bound to a repository revision and verified manifest
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v064. Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v065. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -150,6 +150,11 @@ repository:
   sources and omitted document names persist in reconciliation, and cancellation balances the
   run while retaining discard-all semantics for output/version/source rows. Full output UX lands
   in later work orders.
+- Document-version intelligence begins with the v065 `document_relations` table. Exact shared-blob
+  pairs and complete normalized-text digest pairs are backfilled and reproposed deterministically
+  within one matter only. Symmetric kinds use a canonical sorted pair; directional kinds preserve
+  their arrow. Every automatic match remains `proposed` regardless of confidence, and confirmed-only
+  consumers therefore see nothing until the later audited review workflow makes a decision.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the

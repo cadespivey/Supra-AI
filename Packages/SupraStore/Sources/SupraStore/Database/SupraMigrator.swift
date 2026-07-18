@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 import SupraCore
@@ -1454,7 +1455,208 @@ public enum SupraMigrator {
                 """)
         }
 
+        migrator.registerMigration("v065_create_document_relations") { db in
+            try db.create(table: "document_relations") { table in
+                table.column("id", .text).primaryKey()
+                table.column("matter_id", .text).notNull()
+                    .references("matters", onDelete: .cascade)
+                table.column("relation_key", .text).notNull()
+                table.column("from_document_id", .text).notNull()
+                    .references("matter_documents", onDelete: .cascade)
+                table.column("to_document_id", .text).notNull()
+                    .references("matter_documents", onDelete: .cascade)
+                table.column("kind", .text).notNull()
+                table.column("evidence_json", .text).notNull()
+                table.column("confidence", .double)
+                table.column("proposed_by", .text)
+                table.column("review_state", .text).notNull().defaults(to: "proposed")
+                table.column("reviewed_by", .text)
+                table.column("reviewed_at", .datetime)
+                table.column("created_at", .datetime).notNull()
+            }
+            try db.create(
+                index: "idx_document_relations_matter_key_kind",
+                on: "document_relations",
+                columns: ["matter_id", "relation_key", "kind"],
+                unique: true
+            )
+            try db.create(
+                index: "idx_document_relations_matter_review",
+                on: "document_relations",
+                columns: ["matter_id", "review_state", "kind", "created_at"]
+            )
+            try db.create(
+                index: "idx_document_relations_from",
+                on: "document_relations",
+                columns: ["matter_id", "from_document_id", "kind"]
+            )
+            try db.create(
+                index: "idx_document_relations_to",
+                on: "document_relations",
+                columns: ["matter_id", "to_document_id", "kind"]
+            )
+            try backfillDocumentRelations(db)
+        }
+
         return migrator
+    }
+
+    private struct RelationBackfillDocument: Sendable {
+        var id: String
+        var matterID: String
+        var blobID: String
+        var createdAt: Date
+    }
+
+    private struct RelationBackfillGroupKey: Hashable {
+        var matterID: String
+        var value: String
+    }
+
+    /// v065 backfill is intentionally deterministic and proposal-only. It uses
+    /// the same SHA-256 text key as retrieval duplicate collapse, but hashes the
+    /// complete ordered chunk text for each document instance.
+    private static func backfillDocumentRelations(_ db: Database) throws {
+        let documents = try Row.fetchAll(
+            db,
+            sql: """
+            SELECT id, matter_id, blob_id, created_at
+            FROM matter_documents
+            WHERE deleted_at IS NULL
+            ORDER BY matter_id, id
+            """
+        ).map { row in
+            RelationBackfillDocument(
+                id: row["id"],
+                matterID: row["matter_id"],
+                blobID: row["blob_id"],
+                createdAt: row["created_at"]
+            )
+        }
+        let documentByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0) })
+
+        let exactGroups = Dictionary(grouping: documents) {
+            RelationBackfillGroupKey(matterID: $0.matterID, value: $0.blobID)
+        }
+        for key in exactGroups.keys.sorted(by: backfillGroupLessThan) {
+            let group = exactGroups[key, default: []].sorted { $0.id < $1.id }
+            for (from, to) in relationPairs(group) {
+                try insertBackfillRelation(
+                    db,
+                    matterID: key.matterID,
+                    from: from,
+                    to: to,
+                    kind: .exactDuplicate,
+                    evidence: [
+                        "basis": "shared_blob",
+                        "blob_id": key.value,
+                        "schema_version": 1,
+                    ]
+                )
+            }
+        }
+
+        let chunkRows = try Row.fetchAll(
+            db,
+            sql: """
+            SELECT d.id AS document_id, c.normalized_text
+            FROM matter_documents d
+            JOIN document_chunks c ON c.document_id = d.id
+            WHERE d.deleted_at IS NULL
+            ORDER BY d.matter_id, d.id, c.chunk_index, c.id
+            """
+        )
+        var chunkTextsByDocumentID: [String: [String]] = [:]
+        for row in chunkRows {
+            let documentID: String = row["document_id"]
+            let text: String = row["normalized_text"]
+            chunkTextsByDocumentID[documentID, default: []].append(text)
+        }
+        var normalizedGroups: [RelationBackfillGroupKey: [RelationBackfillDocument]] = [:]
+        for (documentID, chunkTexts) in chunkTextsByDocumentID {
+            guard let document = documentByID[documentID] else { continue }
+            let fullText = chunkTexts.joined(separator: "\n\n")
+            guard !fullText.isEmpty else { continue }
+            let digest = SHA256.hash(data: Data(fullText.utf8))
+                .map { String(format: "%02x", $0) }
+                .joined()
+            normalizedGroups[
+                RelationBackfillGroupKey(matterID: document.matterID, value: digest),
+                default: []
+            ].append(document)
+        }
+        for key in normalizedGroups.keys.sorted(by: backfillGroupLessThan) {
+            let group = normalizedGroups[key, default: []].sorted { $0.id < $1.id }
+            for (from, to) in relationPairs(group) where from.blobID != to.blobID {
+                try insertBackfillRelation(
+                    db,
+                    matterID: key.matterID,
+                    from: from,
+                    to: to,
+                    kind: .normalizedDuplicate,
+                    evidence: [
+                        "basis": "normalized_text_digest",
+                        "digest": key.value,
+                        "schema_version": 1,
+                    ]
+                )
+            }
+        }
+    }
+
+    private static func insertBackfillRelation(
+        _ db: Database,
+        matterID: String,
+        from: RelationBackfillDocument,
+        to: RelationBackfillDocument,
+        kind: DocumentRelationKind,
+        evidence: [String: Any]
+    ) throws {
+        let ordered = [from, to].sorted { $0.id < $1.id }
+        let relationKey = "\(ordered[0].id)|\(ordered[1].id)"
+        let identity = "\(matterID)|\(relationKey)|\(kind.rawValue)"
+        let id = SHA256.hash(data: Data(identity.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let evidenceData = try JSONSerialization.data(
+            withJSONObject: evidence,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        try db.execute(
+            sql: """
+            INSERT OR IGNORE INTO document_relations (
+                id, matter_id, relation_key, from_document_id, to_document_id,
+                kind, evidence_json, confidence, proposed_by, review_state, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1.0, 'system', 'proposed', ?)
+            """,
+            arguments: [
+                id,
+                matterID,
+                relationKey,
+                ordered[0].id,
+                ordered[1].id,
+                kind.rawValue,
+                String(decoding: evidenceData, as: UTF8.self),
+                max(from.createdAt, to.createdAt),
+            ]
+        )
+    }
+
+    private static func relationPairs<T>(_ values: [T]) -> [(T, T)] {
+        guard values.count > 1 else { return [] }
+        return values.indices.flatMap { firstIndex in
+            values.indices.compactMap { secondIndex in
+                guard secondIndex > firstIndex else { return nil }
+                return (values[firstIndex], values[secondIndex])
+            }
+        }
+    }
+
+    private static func backfillGroupLessThan(
+        _ lhs: RelationBackfillGroupKey,
+        _ rhs: RelationBackfillGroupKey
+    ) -> Bool {
+        (lhs.matterID, lhs.value) < (rhs.matterID, rhs.value)
     }
 
     #if DEBUG
@@ -1470,6 +1672,7 @@ public enum SupraMigrator {
             "matter_billing_profiles",
             // Milestone 3 document intelligence tables: drop children before parents.
             "document_exports",
+            "document_relations",
             "corpus_analysis_partitions",
             "corpus_analysis_runs",
             "document_output_sources",
