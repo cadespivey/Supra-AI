@@ -38,13 +38,13 @@ pass records fast/deep retrieval, exhaustive-ledger and structure-write p50/p95,
 throughput, peak RSS, and one-document incremental rows/bytes/work. It immediately fails when
 incremental work touches any unaffected document.
 
-Statistical B-PERF bands remain `pending_owner_approval`. Pending runs capture measurements
-and enforce deterministic safety only; `Scripts/run-benchmarks.sh
---performance-release-gate` fails closed until the repo owner records the memory ceiling and
-incremental wall-time band, approves the default 10% latency/throughput proposals, and names
-the approver/date. Once approved, comparisons are valid only when hardware identifier, macOS,
-Xcode, Swift, thermal state, and protocol exactly match the recorded baseline. GitHub-hosted
-runs therefore remain safety gates unless they match the approved release-candidate environment.
+The repo owner approved the fixed-hardware B-PERF envelope on July 18, 2026: a 10% latency
+regression ceiling, a 10% throughput regression floor, a 48 MiB peak-RSS ceiling, a 25%
+incremental wall-time regression ceiling, and zero unaffected documents touched.
+`Scripts/run-benchmarks.sh --performance-release-gate` enforces that complete envelope.
+Comparisons are valid only when hardware identifier, macOS, Xcode, Swift, thermal state, and
+protocol exactly match the recorded baseline. GitHub-hosted runs therefore remain safety gates
+unless they match the approved release-candidate environment.
 
 ## Third-party Action pins and licenses
 

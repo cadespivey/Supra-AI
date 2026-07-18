@@ -55,8 +55,9 @@ They sharpen what already ships:
   ledgers; reviewed document relations; tokenizer-aware packets; output lineage, verification
   dimensions, shared assurance/export gates, and atomic grounded-chat promotion. The fixed
   10/50/200-document performance harness and deterministic zero-unaffected-work gate are also
-  implemented. Owner-approved statistical thresholds and the protected real-model/UI/Vision/
-  bookmark matrix remain release sign-off gates; chunker v2 remains default-off.
+  implemented, and the repo owner approved the fixed-hardware statistical performance envelope
+  on July 18, 2026. The protected real-model/UI/Vision/bookmark matrix remains a release sign-off
+  gate; chunker v2 remains default-off.
 
 - **Index-lineage hardening (implemented in source)** — readiness is evaluated against the
   active embedding model; switching models or saving corrected extracted text queues the

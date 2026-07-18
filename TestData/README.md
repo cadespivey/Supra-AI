@@ -81,9 +81,9 @@ bash Scripts/run-benchmarks.sh --performance
 ```
 
 That command always gates the deterministic requirement that zero unaffected documents are
-touched. `--performance-release-gate` additionally requires complete, explicit owner approval
-in `Benchmarks/performance-thresholds.json`; while its status is
-`pending_owner_approval`, release-gate mode intentionally fails closed.
+touched. `--performance-release-gate` additionally enforces the complete owner-approved
+fixed-hardware envelope in `Benchmarks/performance-thresholds.json`; missing approval or any
+incomplete threshold fails closed.
 
 ## Manual / model validation
 See `VALIDATION-PLAN.md` for the per-matter Q&A, chronology, and CourtListener

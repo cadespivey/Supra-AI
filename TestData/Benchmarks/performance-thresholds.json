@@ -1,7 +1,7 @@
 {
-  "approvalStatus": "pending_owner_approval",
-  "approvedAt": null,
-  "approvedBy": null,
+  "approvalStatus": "approved",
+  "approvedAt": "2026-07-18",
+  "approvedBy": "Cade Spivey",
   "baseline": {
     "documentsPerMinute": 5399.947080508554,
     "environment": {
@@ -25,9 +25,9 @@
     "structureWriteP95Milliseconds": 1.1313333525322378
   },
   "baselinePath": "TestData/Benchmarks/performance-baseline-adc4a2da712d51dca7ab61bb3c37e8b2388e6303.json",
-  "incrementalWallClockRegressionFraction": null,
+  "incrementalWallClockRegressionFraction": 0.25,
   "latencyRegressionFraction": 0.1,
-  "peakRSSCeilingMiB": null,
+  "peakRSSCeilingMiB": 48,
   "requireZeroUnaffectedDocumentsTouched": true,
   "schemaVersion": 1,
   "throughputRegressionFraction": 0.1

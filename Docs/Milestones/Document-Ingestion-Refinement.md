@@ -37,9 +37,9 @@ output UX.
 - Protected CI tests the exact 14-package inventory, Debug and Release app/XPC builds,
   shipping migration fixtures, deterministic document baselines, and the fixed-scale rule that
   incremental work touches zero unaffected documents.
-- Statistical B-PERF thresholds use the recorded fixed hardware/toolchain fingerprint. The
-  proposed 10% latency and throughput bands, memory ceiling, and incremental wall-time band do
-  not become release gates until the repo owner explicitly approves them.
+- Statistical B-PERF thresholds use the recorded fixed hardware/toolchain fingerprint. Cade
+  Spivey approved the 10% latency and throughput bands, 48 MiB memory ceiling, 25% incremental
+  wall-time band, and zero-unaffected-work rule on July 18, 2026.
 - Product and security wording is synchronized through `Docs/Verified-Product-Claims.yml`.
   Fixtures remain synthetic and no new document-processing network path was added.
 
@@ -48,7 +48,7 @@ output UX.
 The source implementation is not by itself the complete protected-tier acceptance record. A
 release candidate still needs the recorded Vision/PDFKit fixtures, force-quit/relaunch bookmark
 drill, Debug and Release hosted-XPC tokenizer check, chosen real local-model tasks, app/UI flows,
-fixed-hardware performance comparison after threshold approval, and any designated manual legal
+fixed-hardware performance comparison under the approved envelope, and any designated manual legal
 fidelity review. Chunker v2 stays default-off until its separate retrieval decision gate is
 approved. ANN/vector indexing is not justified by the current 200-document baseline and remains
 out of scope.
