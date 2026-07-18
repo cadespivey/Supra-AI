@@ -226,6 +226,58 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(parts[2].ocrConfidence ?? 0, 0.9, accuracy: 0.001)
     }
 
+    func testTSTR09OCRRegionsPersistAgainstTheSelectedPageRevision() async throws {
+        // T-STR-09 integration expected RED: OCR replaces the selected page text,
+        // then structure persistence falls back to the universal wrapper and
+        // discards the Vision boxes instead of emitting revision-bound regions.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic OCR region persistence")
+        let pdfURL = sourceRoot.appendingPathComponent("Scans/ocr-regions.pdf")
+        try FileManager.default.createDirectory(
+            at: pdfURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try makePDF(at: pdfURL, pages: [.empty])
+        let ocrText = "OCR-LINE-742 recovered contract language\nOCR-LINE-913 recovered signature clause"
+        let boxes = """
+        [
+          {"x":0.10,"y":0.72,"w":0.60,"h":0.04,"confidence":0.94},
+          {"x":0.10,"y":0.64,"w":0.67,"h":0.04,"confidence":0.92}
+        ]
+        """
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: storageRoot),
+            ocr: MockOCRService(pageResults: [
+                0: OCRTextResult(text: ocrText, confidence: 0.93, boundingBoxesJSON: boxes),
+            ])
+        )
+
+        _ = try await service.importSources([pdfURL], matterID: matter.id)
+
+        let document = try XCTUnwrap(store.documentLibrary.fetchDocuments(matterID: matter.id).first)
+        let selectedPart = try XCTUnwrap(store.documentIndex.fetchParts(documentID: document.id).first)
+        let selectedRevisionID = try XCTUnwrap(selectedPart.currentRevisionID)
+        let nodes = try store.documentStructure.fetchNodes(documentID: document.id)
+        let page = try XCTUnwrap(nodes.first { $0.kind == "page" })
+        XCTAssertEqual(page.revisionID, selectedRevisionID)
+        let regions = nodes.filter { $0.kind == "region" }
+        XCTAssertEqual(regions.count, 2)
+        XCTAssertEqual(Set(regions.map(\.revisionID)), [selectedRevisionID])
+        XCTAssertEqual(
+            try regions.map { try XCTUnwrap(store.documentStructure.resolveText(nodeID: $0.id)) },
+            ["OCR-LINE-742 recovered contract language", "OCR-LINE-913 recovered signature clause"]
+        )
+        let payloads = try regions.map { region -> [String: Any] in
+            let json = try XCTUnwrap(region.payloadJSON)
+            return try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+            )
+        }
+        XCTAssertTrue(payloads.allSatisfy { $0["semanticKind"] as? String == "ocr_line" })
+        XCTAssertEqual((payloads[0]["box"] as? [String: Any])?["x"] as? Double, 0.10)
+    }
+
     func testTREV03MixedPDFRetainsEmbeddedAndOCRCandidatesAndIndexesSelection() async throws {
         // T-REV-03 expected RED: applyOCR currently overwrites the embedded part
         // when the OCR candidate is longer, and no immutable revision store or
