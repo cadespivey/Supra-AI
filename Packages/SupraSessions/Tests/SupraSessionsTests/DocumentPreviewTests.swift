@@ -139,7 +139,11 @@ final class DocumentPreviewTests: XCTestCase {
             storage: DocumentStorage(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         )
         let recorded = loader.load(outputSource: boundSource)
-        XCTAssertNil(recorded.revisionNotice)
+        XCTAssertEqual(recorded.revisionID, revisionA.id)
+        XCTAssertEqual(recorded.revisionOrigin, "parser")
+        XCTAssertEqual(recorded.revisionCreatedAt, revisionA.createdAt)
+        XCTAssertNotNil(recorded.revisionNotice)
+        XCTAssertTrue(recorded.revisionNotice?.contains("parser") == true)
         if case let .text(content, start, end) = recorded.kind {
             XCTAssertEqual(content, "REVISION-A repeated anchor")
             XCTAssertEqual(start, 0)
@@ -159,6 +163,7 @@ final class DocumentPreviewTests: XCTestCase {
             rank: 1
         )
         let legacy = loader.load(outputSource: legacySource)
+        XCTAssertNil(legacy.revisionID)
         XCTAssertEqual(legacy.revisionNotice, "revision unknown (pre-lineage)")
     }
 
