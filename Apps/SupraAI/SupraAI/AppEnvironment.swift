@@ -68,6 +68,11 @@ final class AppEnvironment: ObservableObject {
         pendingCount: 0,
         pendingByKind: [:]
     )
+    /// D-06's persisted internal flag, exposed in Diagnostics for the required
+    /// operational rollback/rebuild drill.
+    @Published private(set) var documentChunkerVersion = DocumentChunkerRolloutService.approvedDefaultVersion
+    @Published private(set) var documentChunkerStatusMessage = "Chunker v2 is the approved default."
+    @Published private(set) var isChangingDocumentChunker = false
 
     /// App-settings key recording when first-run onboarding was completed/skipped.
     private static let onboardingCompletedKey = "onboarding.completedAt"
@@ -100,6 +105,7 @@ final class AppEnvironment: ObservableObject {
     let documentQueue: DocumentProcessingQueue
 
     private let runtimeStatusController: RuntimeStatusController
+    private let runtimeClient: RuntimeClient
     /// Fires a classification-only pass for the selected matter whenever a model
     /// finishes loading, so documents imported while no model was available get
     /// classified once one is ready (the queue de-dupes and no-ops when nothing is
@@ -118,6 +124,7 @@ final class AppEnvironment: ObservableObject {
         self.usingFallbackStore = storeResult.isFallback
         self.databaseRecoveryState = storeResult.recoveryState
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
+        self.runtimeClient = runtimeClient
         self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
             store: store,
@@ -290,6 +297,14 @@ final class AppEnvironment: ObservableObject {
         modelLibrary.reconcileLoadedModel(runtimeStatusController.loadedModelID)
         autoLoadStartupModelIfNeeded()
         await documentSetupController.refreshAll()
+        documentChunkerVersion = (try? store.documentSettings.loadSettings().chunkerVersion)
+            ?? DocumentChunkerRolloutService.approvedDefaultVersion
+        // D-06: upgrade existing stores exactly once after setup is readable but
+        // before the interrupted-job queue resumes. The marker survives an
+        // explicit later rollback, so bootstrap never silently overrides it.
+        if !Self.isUITestMode, !Self.isDemoMode, !usingFallbackStore {
+            await promoteApprovedDocumentChunkerDefaultIfNeeded()
+        }
         // Warm the embedding model now that its selection/verification is known. It
         // lives in a separate runtime slot from the chat model, so this never evicts
         // the chat model — and it removes the first-use wait on Document Q&A, semantic
@@ -310,6 +325,52 @@ final class AppEnvironment: ObservableObject {
         // Start Sparkle: scheduled background checks + silent download, surfacing a
         // single "Install and Relaunch" prompt. Skipped in UI tests.
         if !Self.isUITestMode, !Self.isDemoMode { sparkleUpdater.start() }
+    }
+
+    func switchDocumentChunker(to targetVersion: Int) async {
+        guard !isChangingDocumentChunker else { return }
+        isChangingDocumentChunker = true
+        documentChunkerStatusMessage = "Rebuilding documents with chunker v\(targetVersion)…"
+        defer { isChangingDocumentChunker = false }
+
+        do {
+            let result = try await makeDocumentChunkerRolloutService().switchAllMatters(
+                to: targetVersion,
+                actor: "user"
+            )
+            documentChunkerVersion = targetVersion
+            documentChunkerStatusMessage = chunkerCompletionMessage(result)
+        } catch {
+            documentChunkerVersion = (try? store.documentSettings.loadSettings().chunkerVersion)
+                ?? documentChunkerVersion
+            documentChunkerStatusMessage = error.localizedDescription
+        }
+    }
+
+    private func promoteApprovedDocumentChunkerDefaultIfNeeded() async {
+        isChangingDocumentChunker = true
+        defer { isChangingDocumentChunker = false }
+        do {
+            if let result = try await makeDocumentChunkerRolloutService()
+                .promoteApprovedDefaultIfNeeded(actor: "system — approved by Cade Spivey") {
+                documentChunkerStatusMessage = chunkerCompletionMessage(result)
+            }
+            documentChunkerVersion = try store.documentSettings.loadSettings().chunkerVersion
+        } catch {
+            documentChunkerVersion = (try? store.documentSettings.loadSettings().chunkerVersion)
+                ?? documentChunkerVersion
+            documentChunkerStatusMessage = "Approved chunker migration paused: \(error.localizedDescription)"
+        }
+    }
+
+    private func makeDocumentChunkerRolloutService() -> DocumentChunkerRolloutService {
+        let selectedModel = try? store.documentSettings.fetchSelectedEmbeddingModel()
+        let embedder = selectedModel.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+        return DocumentChunkerRolloutService(store: store, embedder: embedder)
+    }
+
+    private func chunkerCompletionMessage(_ result: DocumentChunkerRolloutResult) -> String {
+        "Chunker v\(result.targetVersion) rebuilt \(result.reindexedDocuments) document(s): \(result.readyDocuments) ready, \(result.textIndexedDocuments) text-indexed, 0 pending."
     }
 
     /// Records that first-run onboarding was completed or skipped and dismisses it.

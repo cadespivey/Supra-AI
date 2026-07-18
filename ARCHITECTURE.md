@@ -133,11 +133,15 @@ repository:
   structure nodes and matter-scoped edges. Formats without specialized adapters emit a
   deterministic document/part wrapper tree; pre-v062 documents acquire wrappers lazily
   on their next extraction or indexing pass rather than through fabricated backfill.
-- Chunker v2 is an internal, default-off rollout path that aligns retrieval chunks to
-  revision-bound structure nodes and preserves table headers and linked legal units as
-  context. Persisted chunks record their node, structural unit kind, and chunker version;
-  retrieval prefers same-revision parent context and explicitly discloses hidden-derived
-  spreadsheet evidence. Legacy v1 text, locators, and packed source JSON remain unchanged.
+- Chunker v2 is the owner-approved default and aligns retrieval chunks to revision-bound
+  structure nodes while preserving table headers and linked legal units as context. Existing
+  stores receive one all-matter rebuild; the v2 setting and completion marker are persisted
+  only after terminal readiness with zero pending documents. Diagnostics retains an explicit
+  v1 rebuild/rollback control, and its completion marker prevents bootstrap from overriding a
+  later operator rollback. Persisted chunks record their node, structural unit kind, and
+  chunker version; retrieval prefers same-revision parent context and explicitly discloses
+  hidden-derived spreadsheet evidence. Legacy v1 text, locators, packed source JSON, immutable
+  revisions, and denormalized citation display data remain available for rollback and history.
 - Exhaustive corpus work uses a separate v064 coverage ledger rather than ranked retrieval.
   Each run freezes the exact selected revision IDs plus failed/review-required/import-source
   exclusions, plans deterministic part-range partitions with the shared chronology batching

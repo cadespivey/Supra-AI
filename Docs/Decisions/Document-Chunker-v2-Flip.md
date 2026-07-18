@@ -1,19 +1,21 @@
 # D-06 — Document Chunker v2 Default Flip
 
-Status: **quality gates passed — pending explicit repo-owner approval**
+Status: **approved by repo owner Cade Spivey on July 18, 2026 — implementation complete; exact-Release live drill pending**
 Evidence source: `932622be28ea784fb37881ce1aea5e0cbb337f15`
 Benchmark artifact: `TestData/Benchmarks/chunker-v2-comparison-932622be28ea784fb37881ce1aea5e0cbb337f15.json`
 
 ## Decision
 
-Keep `documents.chunkerVersion` at 1 until explicit repo-owner approval is recorded. The
-deterministic comparison now passes the ordinary-retrieval, structure-sensitive, and
-exhaustive-list quality gates; this document does not itself record the required approval.
+Cade Spivey explicitly approved the D-06 chunker-v2 default flip and one-time existing-matter
+re-chunk on July 18, 2026. New stores now default `documents.chunkerVersion` to 2. Existing
+stores run the same all-matter rebuild once during bootstrap, then persist the v2 flag and a
+completion marker only after every eligible document reaches a terminal text-indexed or ready
+state with zero pending documents.
 
-The one-time matter re-chunk path exists and T-CHK-07 proves that it reaches a terminal text
-index, preserves revision-bound locator/excerpt display for citations to deleted v1 chunks,
-and does not mutate the shipping default. It must not be scheduled as a default migration
-while D-06 remains pending owner approval.
+The Diagnostics surface retains an explicit v1 rollback control. A rollback uses the same
+complete rebuild coordinator, preserves immutable revisions and denormalized citation
+locators/excerpts, and leaves the one-time promotion marker in place so a later launch cannot
+silently undo the operator's rollback choice.
 
 ## Recorded comparison
 
@@ -42,15 +44,16 @@ post-M6 list gate is measured and passes.
 - B-RET ordinary retrieval parity: GREEN at Recall@8, Recall@12, and Recall@40.
 - B-RET structure-sensitive win: GREEN; typed-structure evidence recall improves from 0 to 1.
 - B-LST post-M6 comparison: GREEN; all measured list-quality values are noninferior.
-- T-CHK-07 migration/citation recovery: GREEN in deterministic package tests.
-- Default-flip live drill and rollback drill: pending approval because it changes the shipping
-  default and schedules the existing one-time re-chunk path.
-- Repo-owner approval: not yet recorded.
+- T-CHK-07 forward migration, rollback, restore, readiness, and historical citation display:
+  GREEN in deterministic package tests.
+- Hermetic signed-app UI flip/revert drill: GREEN (`DocumentChunkerRolloutUITests`, v2 → v1 →
+  v2, 1 test and 0 failures).
+- Repo-owner approval: **approved by Cade Spivey on July 18, 2026**.
+- Exact signed-Release existing-store drill: pending final qualification evidence.
 
 ## Required follow-up to complete D-06
 
-1. Record explicit repo-owner approval before changing the default or scheduling matter
-   migrations.
-2. Flip the default to v2, run the one-time re-chunk path, and execute the live flip/revert
-   drill while confirming terminal readiness and old-citation display.
-3. Retain the v1 rollback path and record the completed drill in the qualification evidence.
+Run the exact signed-Release existing-store v2 migration and live v1 rollback/v2 restore,
+confirm zero pending documents and historical citation display after each rebuild, and record
+the completed drill in the private qualification evidence. The v1 implementation and operator
+control remain the supported rollback path.

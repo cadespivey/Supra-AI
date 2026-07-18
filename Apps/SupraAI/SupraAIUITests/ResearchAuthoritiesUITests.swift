@@ -30,7 +30,7 @@ final class DocumentChunkerRolloutUITests: XCTestCase {
         diagnosticsRoute.click()
 
         func assertVersion(_ expected: String, timeout: TimeInterval = 20) {
-            let version = app.descendants(matching: .any)["diagnostics.chunker.version"]
+            let version = app.staticTexts["diagnostics.chunker.version"]
             XCTAssertTrue(version.waitForExistence(timeout: timeout))
             let predicate = NSPredicate(format: "value == %@", expected)
             let expectation = XCTNSPredicateExpectation(predicate: predicate, object: version)

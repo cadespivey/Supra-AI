@@ -52,6 +52,40 @@ struct DiagnosticsView: View {
             }
 
             Section {
+                HStack {
+                    Text("Active version")
+                    Spacer()
+                    Text("v\(environment.documentChunkerVersion)")
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("v\(environment.documentChunkerVersion)")
+                        .accessibilityIdentifier("diagnostics.chunker.version")
+                }
+
+                if environment.isChangingDocumentChunker {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(environment.documentChunkerStatusMessage)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text(environment.documentChunkerStatusMessage)
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Button(chunkerSwitchTitle) {
+                    let target = environment.documentChunkerVersion == 2 ? 1 : 2
+                    Task { await environment.switchDocumentChunker(to: target) }
+                }
+                .disabled(environment.isChangingDocumentChunker)
+                .accessibilityIdentifier("diagnostics.chunker.switch")
+            } header: {
+                Text("Document Chunker").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
+            } footer: {
+                Text("Chunker v2 is the approved default. The v1 rollback rebuilds chunks only; persisted revisions and historical citation display remain intact.")
+            }
+
+            Section {
                 Button("Remove Stored Query Fingerprints") {
                     do {
                         let count = try environment.store.networkRequests.removeStoredQueryMetadata()
@@ -95,6 +129,12 @@ struct DiagnosticsView: View {
     private func refreshTimings() {
         let recent = (try? environment.store.diagnostics.fetchRecentDiagnostics(limit: 100)) ?? []
         timings = recent.filter { $0.category == "performance" }.prefix(8).map { $0 }
+    }
+
+    private var chunkerSwitchTitle: String {
+        environment.documentChunkerVersion == 2
+            ? "Rebuild with Chunker v1"
+            : "Restore Chunker v2"
     }
 
     private var nextStep: String {
