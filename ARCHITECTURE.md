@@ -315,6 +315,24 @@ existing convention where a repository owns several related tables.
 5. The answer is saved as a versioned structured output with its source set; regeneration
    creates a new version with a fresh source set, preserving the old one for auditability.
 
+### Document benchmark and performance gates
+
+`SupraBench` has two deliberately separate protocols. The deterministic protocol runs the
+frozen synthetic corpus and safety metrics byte-for-byte apart from timestamp and checkout
+SHA. The fixed performance protocol creates fresh 10-, 50-, and 200-document matters, imports
+and indexes them through the real services, exercises brute-force fast/deep cosine retrieval,
+persists corpus-ledger batches and revision-bound structure nodes, and measures p50/p95,
+throughput, peak RSS, and one-document incremental work. Its report records the hardware,
+operating system, Xcode, Swift, thermal state, and protocol version needed to compare like with
+like.
+
+The zero-unaffected-document incremental rule is an immediate deterministic gate. Statistical
+latency, throughput, memory, and incremental-time comparisons stay fail-closed for release use
+until the repo owner approves the recorded baseline and completes every proposed threshold.
+An approved comparison rejects an environment mismatch rather than treating unlike machines as
+a regression. The harness lives in `SupraTestKit`; it adds no production package dependency or
+runtime telemetry.
+
 ## Security & privacy posture
 
 - **On-device generation**; default-deny network with a fixed legal-data allow-list

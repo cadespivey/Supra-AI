@@ -135,12 +135,9 @@ need an explicit, documented justification.
   moved/stale, mismatched, missing, and managed-root-escaping targets fail before model
   parsing; raw paths are not authority. A signer-stale cross-process bookmark is usable
   only when its canonical target still matches exactly and every containment check passes.
-- Imported originals are opened read-only and are not modified; managed copies are written inside the sandbox, while exports use destinations selected by the user.
-  External file access uses security-scoped URLs chosen through the
-  system picker; import paths are treated as read-only. A top-level import
-  bookmark is retained only while its source is unfinished and is cleared in the
-  same transaction that records a terminal source state; child sources never
-  retain bookmarks.
+- Imported originals are opened read-only and are not modified; managed copies are written inside the sandbox, while exports use destinations selected by the user. A top-level import bookmark is retained only while its source is unfinished and is cleared atomically with a terminal source state; child sources never retain bookmarks.
+  External file access uses security-scoped URLs chosen through the system picker;
+  import paths are treated as read-only.
 - The app retains `com.apple.security.files.user-selected.read-write` because
   user-selected export destinations must be created or replaced and selected
   imports may require coordinated reads. The entitlement grants no ambient path:

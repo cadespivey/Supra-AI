@@ -1,7 +1,7 @@
 # Roadmap
 
 This roadmap describes where Supra AI has been and where it may go next. It is
-forward-looking as of the **1.5.x** line — a plan, not a record of past commitments.
+forward-looking as of the **2.3.x** line — a plan, not a record of past commitments.
 Dated, completed history lives in [CHANGELOG.md](CHANGELOG.md) and the per-milestone
 plans in [`Docs/Milestones/`](Docs/Milestones/).
 
@@ -49,6 +49,15 @@ These are concrete follow-ups already identified in the Milestone 3 handoff note
 ([`Docs/Milestones/Milestone3.md`](Docs/Milestones/Milestone3.md), "known limitations").
 They sharpen what already ships:
 
+- **Document-ingestion refinement (implemented in source; protected sign-off pending)** —
+  durable per-source import accounting and recovery; immutable extraction revisions; typed
+  DOCX/PDF/XLSX/EML/legal structure; a default-off structure-aware chunker; exhaustive corpus
+  ledgers; reviewed document relations; tokenizer-aware packets; output lineage, verification
+  dimensions, shared assurance/export gates, and atomic grounded-chat promotion. The fixed
+  10/50/200-document performance harness and deterministic zero-unaffected-work gate are also
+  implemented. Owner-approved statistical thresholds and the protected real-model/UI/Vision/
+  bookmark matrix remain release sign-off gates; chunker v2 remains default-off.
+
 - **Index-lineage hardening (implemented in source)** — readiness is evaluated against the
   active embedding model; switching models or saving corrected extracted text queues the
   normal background indexing workflow. Converter-version drift marks affected documents
@@ -74,8 +83,9 @@ They sharpen what already ships:
   OOXML; improve formatting fidelity.
 - **XLSX sheet-by-relationship-id** — map worksheets by `xl/_rels` relationship id rather than
   position (affects locators only for reordered/deleted multi-sheet workbooks).
-- **Performance benchmarking** — exercise the documented §13 targets at the ~200-document
-  scale, and benchmark semantic/OCR quality against the chosen embedding model and Vision.
+- **Live semantic/OCR benchmarking** — the deterministic and fixed-scale performance protocols
+  are implemented; record the protected Vision and chosen-model quality runs on release-candidate
+  hardware before approving their statistical bands.
 - **App-run validation with live models** — the deterministic SwiftPM suite is green; run the
   model-dependent Diagnostics scenarios against loaded chat + embedding models on-device.
 
