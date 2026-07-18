@@ -91,6 +91,8 @@ public enum SignedReleaseSmokeRunnerError: Error, Sendable {
     case loadedModelIdentityMismatch
     case loadedModelContentMismatch
     case invalidLoadMetrics
+    case tokenizerTransportFailed
+    case tokenizerContractViolation
     case generationTransportFailed
     case eventContractViolation
     case cancellationTransportFailed
@@ -102,8 +104,9 @@ public enum SignedReleaseSmokeRunnerError: Error, Sendable {
     case internalInvariantFailed
 }
 
-/// Executes the single production-shaped generation used to qualify release
-/// bytes. Every value that could change model behavior is fixed here.
+/// Executes the production-shaped tokenizer and generation checks used to
+/// qualify release bytes. Every value that could change model behavior is
+/// fixed here.
 public struct SignedReleaseSmokeRunner: Sendable {
     private static let appBundleIdentifier = "ai.supra.SupraAI"
     private static let xpcBundleIdentifier = "ai.supra.SupraAI.SupraRuntimeService"
@@ -111,6 +114,11 @@ public struct SignedReleaseSmokeRunner: Sendable {
         "Return one short sentence confirming that local model inference is operational."
     private static let systemPrompt =
         "This is a local release validation. Reply briefly and do not repeat sensitive data."
+    private static let tokenizerPackets = [
+        "T-TOK-01 α.",
+        "B-CTX-01 deliberately longer synthetic packet: seven authorities, forty-three pages, zero client data.",
+        "§§ 12–14 — naïve façade; 2026-07-18.",
+    ]
     private static let modelDisplayName = "Protected release smoke model"
 
     private let runtimeClient: any RuntimeClientProtocol
@@ -166,6 +174,7 @@ public struct SignedReleaseSmokeRunner: Sendable {
                 loadRequest: loadRequest,
                 modelID: modelID
             )
+            try await validateTokenizer(modelID: modelID)
             let generationID = GenerationID()
             generationIDForCleanup = generationID
             evidence = try await generateAndValidate(
@@ -267,6 +276,60 @@ public struct SignedReleaseSmokeRunner: Sendable {
         }
 
         return loadTimeMs
+    }
+
+    private func validateTokenizer(modelID: ModelID) async throws {
+        let batched: CountTokensResponse
+        do {
+            batched = try await runtimeClient.countTokens(
+                CountTokensRequest(modelID: modelID, texts: Self.tokenizerPackets)
+            )
+        } catch {
+            throw SignedReleaseSmokeRunnerError.tokenizerTransportFailed
+        }
+        guard Self.isValidTokenCountResponse(
+            batched,
+            modelID: modelID,
+            expectedCardinality: Self.tokenizerPackets.count
+        ) else {
+            throw SignedReleaseSmokeRunnerError.tokenizerContractViolation
+        }
+
+        var individualCounts: [Int] = []
+        individualCounts.reserveCapacity(Self.tokenizerPackets.count)
+        for packet in Self.tokenizerPackets {
+            let individual: CountTokensResponse
+            do {
+                individual = try await runtimeClient.countTokens(
+                    CountTokensRequest(modelID: modelID, texts: [packet])
+                )
+            } catch {
+                throw SignedReleaseSmokeRunnerError.tokenizerTransportFailed
+            }
+            guard Self.isValidTokenCountResponse(
+                individual,
+                modelID: modelID,
+                expectedCardinality: 1
+            ) else {
+                throw SignedReleaseSmokeRunnerError.tokenizerContractViolation
+            }
+            individualCounts.append(individual.counts[0])
+        }
+
+        guard individualCounts == batched.counts else {
+            throw SignedReleaseSmokeRunnerError.tokenizerContractViolation
+        }
+    }
+
+    private static func isValidTokenCountResponse(
+        _ response: CountTokensResponse,
+        modelID: ModelID,
+        expectedCardinality: Int
+    ) -> Bool {
+        response.modelID == modelID
+            && response.error == nil
+            && response.counts.count == expectedCardinality
+            && response.counts.allSatisfy { $0 > 0 }
     }
 
     private static func constantTimeEqualSHA256(_ lhs: String, _ rhs: String) -> Bool {

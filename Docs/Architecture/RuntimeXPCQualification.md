@@ -64,6 +64,22 @@ qualification must separately exercise a real process kill/relaunch, load the pr
 smoke model and supported large-model scenario on the isolated release runner, and use
 Developer-ID/Team-ID signatures. Weights and signing credentials remain outside the repo.
 
+## Signed real-model tokenizer gate
+
+`Scripts/run-signed-release-smoke.sh` drives the production-capable app host and embedded XPC
+service against the protected real model. After the content-bound load and before generation,
+the runner sends one fixed three-element Unicode batch through `countTokens`, repeats each packet
+as an independent one-element request, and requires the ordered positive counts to match exactly.
+Wrong model identity, error-bearing replies, wrong cardinality, nonpositive counts, transport
+failure, or batch/single disagreement fail before generation; the runner still unloads and
+rehashes the protected model tree.
+
+The same host can be compiled and exercised in Debug and Release for local qualification. A local
+ad-hoc run proves the built app/XPC/tokenizer path but is not a protected release attestation;
+only the isolated Developer-ID/Team-ID run can discharge the release-signing gate. The fixed
+packets are synthetic and the content-free attestation does not retain prompt text or tokenizer
+input.
+
 ## Sanitizer and resource matrix
 
 Run:
