@@ -101,7 +101,17 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             .filter { docIDs.contains($0.id) }
             .filter { $0.extractionStatus != DocumentExtractionStatus.failed.rawValue && $0.status != MatterDocumentStatus.failed.rawValue }
         let requiresSemantic = embedder != nil
-        let ready = documents.filter { Self.isReady($0, requiresSemantic: requiresSemantic) }.count
+        var ready = 0
+        for document in documents {
+            guard Self.isTextReady(document) else { continue }
+            if let embedder {
+                guard try store.documentIndex.hasCompleteEmbeddings(
+                    documentID: document.id,
+                    embeddingModelID: embedder.modelID
+                ) else { continue }
+            }
+            ready += 1
+        }
         return ScopeReadiness(
             totalDocuments: documents.count,
             readyDocuments: ready,
@@ -330,12 +340,12 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         )
     }
 
-    private static func isReady(_ document: MatterDocumentRecord, requiresSemantic: Bool) -> Bool {
+    private static func isTextReady(_ document: MatterDocumentRecord) -> Bool {
         switch DocumentIndexStatus(rawValue: document.indexStatus) {
         case .ready:
             return true
         case .textIndexed:
-            return !requiresSemantic
+            return true
         default:
             return false
         }

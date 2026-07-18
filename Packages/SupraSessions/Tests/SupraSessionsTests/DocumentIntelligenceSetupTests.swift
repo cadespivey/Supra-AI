@@ -103,7 +103,7 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
             minSemanticSimilarity: 0.5
         ).retrieve(
             matterID: matter.id,
-            query: "ORTHOGONAL_QUERY_CANARY",
+            query: "NEUTRINO_Z9_QUERY",
             scope: .wholeMatter
         )
         XCTAssertTrue(result.sources.contains {
@@ -425,7 +425,7 @@ private struct OrthogonalTestEmbedder: TextEmbedder {
         counter.record(texts.count)
         return texts.map { text in
             let normalized = text.uppercased()
-            if normalized.contains("B_VECTOR_CANARY") || normalized.contains("ORTHOGONAL_QUERY_CANARY") {
+            if normalized.contains("B_VECTOR_CANARY") || normalized.contains("NEUTRINO_Z9_QUERY") {
                 return [1, 0]
             }
             return [0, 1]

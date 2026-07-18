@@ -198,9 +198,10 @@ final class AppEnvironment: ObservableObject {
         self.embeddingDownloadController.onModelRegistered = { [weak documentSetup] in
             documentSetup?.handleEmbeddingModelDownloaded()
         }
+        let importService = DocumentImportService(store: store)
         let queue = DocumentProcessingQueue(
             store: store,
-            importService: DocumentImportService(store: store),
+            importService: importService,
             makeIndexingService: {
                 // Build a fresh indexing service per job using the currently
                 // selected embedding model (if any).
@@ -214,6 +215,12 @@ final class AppEnvironment: ObservableObject {
                 store: store, modelLibrary: modelLibrary, runtimeClient: runtimeClient
             )
         )
+        documentSetup.setReindexEnqueuer { [weak queue] matterID in
+            _ = queue?.enqueueReindex(matterID: matterID)
+        }
+        importService.setReindexEnqueuer { [weak queue] matterID in
+            _ = queue?.enqueueReindex(matterID: matterID)
+        }
         self.documentQueue = queue
         self.mattersController = MattersController(
             store: store,

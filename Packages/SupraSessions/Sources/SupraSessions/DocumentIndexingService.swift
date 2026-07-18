@@ -26,6 +26,32 @@ public final class DocumentIndexingService: @unchecked Sendable {
     /// configured. Returns the number of chunks produced.
     @discardableResult
     public func indexDocument(documentID: String) async throws -> Int {
+        let document = try store.documentLibrary.fetchDocument(id: documentID)
+        let existingChunks = try store.documentIndex.fetchChunks(documentID: documentID)
+        let canReuseTextIndex = !existingChunks.isEmpty
+            && (document?.indexStatus == DocumentIndexStatus.ready.rawValue
+                || document?.indexStatus == DocumentIndexStatus.textIndexed.rawValue)
+
+        // A model switch changes only semantic lineage. Reuse the current chunks
+        // and FTS rows so adding model-B vectors neither repeats text work nor
+        // cascades away still-valid model-A vectors.
+        if let embedder, canReuseTextIndex {
+            if try !store.documentIndex.hasCompleteEmbeddings(
+                documentID: documentID,
+                embeddingModelID: embedder.modelID
+            ) {
+                try await embedChunks(existingChunks, documentID: documentID, embedder: embedder)
+                try recordSemanticCompletion(documentID: documentID, chunkCount: existingChunks.count)
+            }
+            try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .ready)
+            try store.documentLibrary.promoteStatus(
+                documentID: documentID,
+                to: .ready,
+                whenCurrentIn: [.indexing, .embedding]
+            )
+            return existingChunks.count
+        }
+
         let parts = try store.documentIndex.fetchParts(documentID: documentID)
         let chunkParts = parts.map { part in
             ChunkPart(
@@ -69,10 +95,7 @@ public final class DocumentIndexingService: @unchecked Sendable {
         if let embedder, !records.isEmpty {
             try await embedChunks(records, documentID: documentID, embedder: embedder)
             try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .ready)
-            _ = try? store.auditEvents.recordEvent(
-                eventType: "semantic_indexing_completed", actor: "system",
-                summary: "Embedded \(records.count) chunks", relatedTable: "matter_documents", relatedID: documentID
-            )
+            try recordSemanticCompletion(documentID: documentID, chunkCount: records.count)
         }
         // Without an embedder the document remains text-indexed (searchable);
         // semantic readiness requires embeddings.
@@ -89,7 +112,8 @@ public final class DocumentIndexingService: @unchecked Sendable {
     public func indexMatter(matterID: String) async throws -> Int {
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
         var indexed = 0
-        for document in documents where Self.needsIndexing(document, embedderAvailable: embedder != nil) {
+        for document in documents {
+            guard try needsIndexing(document) else { continue }
             // Honor cancellation between documents so stopping a large re-index (or an
             // app quit) doesn't keep churning through the remaining queue.
             try Task.checkCancellation()
@@ -127,7 +151,17 @@ public final class DocumentIndexingService: @unchecked Sendable {
         }
     }
 
-    private static func needsIndexing(_ document: MatterDocumentRecord, embedderAvailable: Bool) -> Bool {
+    private func recordSemanticCompletion(documentID: String, chunkCount: Int) throws {
+        _ = try? store.auditEvents.recordEvent(
+            eventType: "semantic_indexing_completed",
+            actor: "system",
+            summary: "Embedded \(chunkCount) chunks",
+            relatedTable: "matter_documents",
+            relatedID: documentID
+        )
+    }
+
+    private func needsIndexing(_ document: MatterDocumentRecord) throws -> Bool {
         // Skip documents still importing/needing OCR or that failed extraction.
         let extractionDone = document.extractionStatus == DocumentExtractionStatus.extracted.rawValue
             || document.extractionStatus == DocumentExtractionStatus.ocrComplete.rawValue
@@ -135,11 +169,19 @@ public final class DocumentIndexingService: @unchecked Sendable {
         guard extractionDone else { return false }
         switch DocumentIndexStatus(rawValue: document.indexStatus) {
         case .ready:
-            return false
+            guard let embedder else { return false }
+            return try !store.documentIndex.hasCompleteEmbeddings(
+                documentID: document.id,
+                embeddingModelID: embedder.modelID
+            )
         case .textIndexed:
             // Already chunked + FTS-indexed; only re-index to add embeddings when
             // an embedder is now available (otherwise it is fully indexed).
-            return embedderAvailable
+            guard let embedder else { return false }
+            return try !store.documentIndex.hasCompleteEmbeddings(
+                documentID: document.id,
+                embeddingModelID: embedder.modelID
+            )
         case .notIndexed, .stale, .failed, .none:
             return true
         }

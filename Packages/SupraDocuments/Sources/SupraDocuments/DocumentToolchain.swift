@@ -47,9 +47,29 @@ public struct DocumentToolchainCapabilities: Codable, Sendable, Equatable {
 }
 
 public enum DocumentToolchain {
+    private static let extractionStampSeparator = "@toolchain:"
+
     /// Toolchain capability version. Bump when bundled converters change so
     /// existing setup is re-validated (plan §2.3 "converter toolchain version").
     public static let version = "m3-apple-frameworks-1"
+
+    /// Persists the extraction method and converter lineage without a schema
+    /// migration. The base method stays the prefix for backward-compatible
+    /// display and policy checks; the suffix is parsed only by staleness logic.
+    public static func stamp(extractionMethod: String, version: String = DocumentToolchain.version) -> String {
+        let base = extractionMethod.components(separatedBy: extractionStampSeparator).first
+            ?? extractionMethod
+        return "\(base)\(extractionStampSeparator)\(version)"
+    }
+
+    public static func stampedVersion(from extractionMethod: String?) -> String? {
+        guard let extractionMethod,
+              let range = extractionMethod.range(of: extractionStampSeparator, options: .backwards) else {
+            return nil
+        }
+        let value = String(extractionMethod[range.upperBound...])
+        return value.isEmpty ? nil : value
+    }
 
     /// Detects locally-available extraction/OCR capabilities.
     public static func detectCapabilities() -> DocumentToolchainCapabilities {

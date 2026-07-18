@@ -75,6 +75,7 @@ public final class DocumentImportService: @unchecked Sendable {
     private let ocr: (any DocumentOCRService)?
     private let traversalFaultInjector: ImportTraversalFaultInjector
     private let sourceStateObserver: ImportSourceStateObserver
+    @MainActor private var reindexEnqueuer: (@MainActor @Sendable (String) -> Void)?
 
     public init(
         store: SupraStore,
@@ -815,12 +816,24 @@ public final class DocumentImportService: @unchecked Sendable {
 
     // MARK: - Editable extracted text
 
+    /// Connects saved text corrections to the app-wide FIFO queue. This is
+    /// composed after queue construction to avoid a service/queue init cycle.
+    @MainActor
+    public func setReindexEnqueuer(
+        _ enqueuer: @escaping @MainActor @Sendable (String) -> Void
+    ) {
+        reindexEnqueuer = enqueuer
+    }
+
     /// Applies a user edit to one extracted part's text and marks the document
     /// edited + index-stale so a later indexing pass re-chunks/re-embeds it
     /// (plan §6.2). The OCR/extraction text is the editable source of truth.
+    @MainActor
     public func updateExtractedText(documentID: String, partID: String, text: String) throws {
+        let matterID = try store.documentLibrary.fetchDocument(id: documentID)?.matterID
         try store.documentIndex.updatePartText(partID: partID, text: TextNormalization.normalize(text))
         try store.documentLibrary.markTextEdited(documentID: documentID)
+        if let matterID { reindexEnqueuer?(matterID) }
     }
 
     // MARK: - Reprocess (re-extract from the managed blob)
@@ -1036,7 +1049,7 @@ public final class DocumentImportService: @unchecked Sendable {
             documentID: documentID,
             status: status,
             extractionStatus: extractionStatus,
-            method: result.method,
+            method: DocumentToolchain.stamp(extractionMethod: result.method),
             checksum: checksum,
             pagePartCount: parts.count,
             ocrConfidenceSummary: ocrSummary,

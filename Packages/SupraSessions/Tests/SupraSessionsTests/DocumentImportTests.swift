@@ -153,7 +153,7 @@ final class DocumentImportTests: XCTestCase {
         XCTAssertEqual(parts.first?.ocrConfidence ?? 1, 0.40, accuracy: 0.001)
 
         // Editing the OCR text marks the doc edited + stale for re-index.
-        try service.updateExtractedText(documentID: doc.id, partID: parts[0].id, text: "Notice of default dated May 1, 2024.")
+        try await service.updateExtractedText(documentID: doc.id, partID: parts[0].id, text: "Notice of default dated May 1, 2024.")
         let edited = try XCTUnwrap(store.documentLibrary.fetchDocument(id: doc.id))
         XCTAssertEqual(edited.indexStatus, DocumentIndexStatus.stale.rawValue)
         XCTAssertTrue(edited.hasUserEditedText)

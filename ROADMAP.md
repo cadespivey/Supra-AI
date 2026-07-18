@@ -49,6 +49,10 @@ These are concrete follow-ups already identified in the Milestone 3 handoff note
 ([`Docs/Milestones/Milestone3.md`](Docs/Milestones/Milestone3.md), "known limitations").
 They sharpen what already ships:
 
+- **Index-lineage hardening (implemented in source)** — readiness is evaluated against the
+  active embedding model; switching models or saving corrected extracted text queues the
+  normal background indexing workflow. Converter-version drift marks affected documents
+  stale for explicit manual reprocessing instead of silently claiming current readiness.
 - **Documents tab UX** — nested folder tree presentation and drag-between-folders (move/copy
   already exists at the controller/repository level; the v1 sidebar is a flat list).
 - **Guided Q&A in the UI** — manual source selection is supported in `DocumentQAController`

@@ -127,6 +127,12 @@ repository:
   persisted ledger. Resume and discard consume that ledger directly: resume
   reopens top-level bookmarks and the durable target-folder identity, while
   discard terminalizes only unfinished rows.
+- Document semantic readiness is derived from complete chunk-vector coverage for
+  the active embedding model, not the document's generic `ready` string alone.
+  Model switches enqueue semantic-only work that reuses current chunks and keeps
+  prior-model vectors; saved text edits enqueue a full re-chunk/reindex pass.
+  Extraction methods carry a toolchain-version suffix so launch-time capability
+  drift can mark only older lineage stale and record a manual-reprocess reason.
 
 Repositories are grouped by cohesion (e.g. `DocumentLibraryRepository`,
 `DocumentIndexRepository`, `DocumentJobRepository`) rather than one-per-table, matching the
