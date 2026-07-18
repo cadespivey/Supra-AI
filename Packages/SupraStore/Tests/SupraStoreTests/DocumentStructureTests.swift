@@ -74,6 +74,80 @@ final class DocumentStructureTests: XCTestCase {
         XCTAssertEqual(try store.documentStructure.fetchEdges(documentID: fixture.document.id), edges)
     }
 
+    func testMatterEdgeReplacementKeepsCanonicalFetchOrderAcrossTimestampRefresh() throws {
+        // Release-regression expected RED: fetchEdges orders by refreshed creation
+        // timestamps, so replacing the same edge IDs can reverse their visible order.
+        let store = try SupraStore.inMemory()
+        let fixture = try makeFixture(store: store, matterName: "Synthetic canonical edge order")
+        let nodes = validNodes(documentID: fixture.document.id, revisionID: fixture.revision.id)
+        try store.documentStructure.replaceStructure(
+            documentID: fixture.document.id,
+            revisionID: fixture.revision.id,
+            nodes: nodes,
+            edges: []
+        )
+
+        let earlier = Self.fixedDate
+        let later = Self.fixedDate.addingTimeInterval(1)
+        let firstPass = [
+            DocumentStructureEdgeRecord(
+                id: "edge-a-canonical",
+                matterID: fixture.matter.id,
+                fromNodeID: "node-body-alpha",
+                toNodeID: "node-root-alpha",
+                kind: "in_reply_to",
+                createdAt: earlier
+            ),
+            DocumentStructureEdgeRecord(
+                id: "edge-z-canonical",
+                matterID: fixture.matter.id,
+                fromNodeID: "node-body-alpha",
+                toNodeID: "node-root-alpha",
+                kind: "thread_member",
+                createdAt: later
+            ),
+        ]
+        try store.documentStructure.replaceMatterEdges(
+            matterID: fixture.matter.id,
+            kinds: ["in_reply_to", "thread_member"],
+            edges: firstPass
+        )
+        let expectedIDs = ["edge-a-canonical", "edge-z-canonical"]
+        XCTAssertEqual(
+            try store.documentStructure.fetchEdges(documentID: fixture.document.id).map(\.id),
+            expectedIDs
+        )
+
+        let replay = [
+            DocumentStructureEdgeRecord(
+                id: "edge-a-canonical",
+                matterID: fixture.matter.id,
+                fromNodeID: "node-body-alpha",
+                toNodeID: "node-root-alpha",
+                kind: "in_reply_to",
+                createdAt: later
+            ),
+            DocumentStructureEdgeRecord(
+                id: "edge-z-canonical",
+                matterID: fixture.matter.id,
+                fromNodeID: "node-body-alpha",
+                toNodeID: "node-root-alpha",
+                kind: "thread_member",
+                createdAt: earlier
+            ),
+        ]
+        try store.documentStructure.replaceMatterEdges(
+            matterID: fixture.matter.id,
+            kinds: ["in_reply_to", "thread_member"],
+            edges: replay
+        )
+        XCTAssertEqual(
+            try store.documentStructure.fetchEdges(documentID: fixture.document.id).map(\.id),
+            expectedIDs,
+            "replacement must not let refreshed timestamps reorder stable edge identities"
+        )
+    }
+
     func testTSTR03RevisionRangesAndOutOfFlowTextRoundTripExactly() throws {
         // T-STR-03 expected RED: there is no revision-bound structure node text
         // resolver or validator for ranged versus out-of-flow node content.
