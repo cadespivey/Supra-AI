@@ -324,11 +324,7 @@ private struct DeterministicCorpusWorkload: Sendable {
             metricID: "B-ISO-01",
             name: "cross_matter_leak_count",
             unit: "count",
-            result: .measured(
-                value: Double(leakedSources.count),
-                numerator: leakedSources.count,
-                denominator: retrievedSources.count
-            )
+            result: BenchmarkMetrics.count(leakedSources.count)
         ))
         observations.append(contentsOf: try await recoveryObservations(temporaryRoot: temporaryRoot))
         observations.append(contentsOf: try await exhaustiveTaskObservations(temporaryRoot: temporaryRoot))

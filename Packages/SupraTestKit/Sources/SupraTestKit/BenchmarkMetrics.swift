@@ -126,6 +126,11 @@ public enum BenchmarkMetrics {
         )
     }
 
+    public static func count(_ value: Int) -> BenchmarkResult {
+        precondition(value >= 0, "count must be nonnegative")
+        return .measured(value: Double(value), numerator: value)
+    }
+
     public static func setScore(expected: Set<String>, predicted: [String]) -> BenchmarkSetScore {
         let predictedSet = Set(predicted)
         let truePositive = expected.intersection(predictedSet).count

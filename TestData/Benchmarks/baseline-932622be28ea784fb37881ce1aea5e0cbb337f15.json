@@ -223,7 +223,6 @@
       "id" : "B-ISO-01",
       "measurements" : [
         {
-          "denominator" : 151,
           "name" : "cross_matter_leak_count",
           "numerator" : 0,
           "status" : "measured",
