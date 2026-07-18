@@ -125,6 +125,13 @@ final class DocumentQATests: XCTestCase {
         XCTAssertEqual(sources.count, 1)
         XCTAssertEqual(sources.first?.citationLabel, "S1")
         XCTAssertNotNil(sources.first?.chunkID)
+        let sourceSet = try XCTUnwrap(store.documentSources.fetchSourceSet(structuredOutputVersionID: result.versionID))
+        XCTAssertNotNil(sourceSet.embeddingModelID, "T-LIN-01: QA source sets stamp embedding lineage")
+        XCTAssertNotNil(sourceSet.embeddingModelRevision)
+        XCTAssertNotNil(sourceSet.chunkerVersion)
+        XCTAssertNotNil(sourceSet.retrievalConfigJSON)
+        XCTAssertNotNil(sourceSet.corpusSnapshotHash)
+        XCTAssertNotNil(sourceSet.packingReportJSON)
     }
 
     func testTieredDepthPersistsOnSourceSetAndKeepsPreliminaryVersion() async throws {

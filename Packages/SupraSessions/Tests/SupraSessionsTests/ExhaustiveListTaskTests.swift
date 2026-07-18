@@ -77,6 +77,12 @@ final class ExhaustiveListTaskTests: XCTestCase {
             structuredOutputVersionID: result.version.id
         ))
         XCTAssertEqual(sourceSet.status, DocumentSourceSetStatus.attached.rawValue)
+        XCTAssertNotNil(sourceSet.embeddingModelID, "T-LIN-01: engine source sets stamp embedding lineage")
+        XCTAssertNotNil(sourceSet.embeddingModelRevision)
+        XCTAssertNotNil(sourceSet.chunkerVersion)
+        XCTAssertNotNil(sourceSet.retrievalConfigJSON)
+        XCTAssertNotNil(sourceSet.corpusSnapshotHash)
+        XCTAssertNotNil(sourceSet.packingReportJSON)
         let outputSources = try store.documentSources.fetchSources(sourceSetID: sourceSet.id)
         XCTAssertEqual(Set(outputSources.compactMap(\.revisionID)), Set(fixture.revisionIDs))
         XCTAssertTrue(result.version.contentMarkdown.contains("invoice-c"))

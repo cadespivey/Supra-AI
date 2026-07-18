@@ -58,6 +58,13 @@ final class DocumentChronologyTests: XCTestCase {
         XCTAssertEqual(run.status, CorpusAnalysisRunStatus.persisted.rawValue)
         XCTAssertEqual(run.structuredOutputVersionID, result.versionID)
         XCTAssertEqual(run.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+        let sourceSet = try XCTUnwrap(store.documentSources.fetchSourceSet(structuredOutputVersionID: result.versionID))
+        XCTAssertNotNil(sourceSet.embeddingModelID, "T-LIN-01: chronology source sets stamp embedding lineage")
+        XCTAssertNotNil(sourceSet.embeddingModelRevision)
+        XCTAssertNotNil(sourceSet.chunkerVersion)
+        XCTAssertNotNil(sourceSet.retrievalConfigJSON)
+        XCTAssertNotNil(sourceSet.corpusSnapshotHash)
+        XCTAssertNotNil(sourceSet.packingReportJSON)
 
         let coverage = try JSONDecoder().decode(
             CorpusAnalysisCoverage.self,

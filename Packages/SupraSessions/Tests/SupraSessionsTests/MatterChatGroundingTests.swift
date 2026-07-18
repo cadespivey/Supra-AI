@@ -352,6 +352,89 @@ final class MatterChatGroundingTests: XCTestCase {
         )
     }
 
+    func testTLIN02GroundedTurnPersistsExactMessageLinkedPacketAndVerification() async throws {
+        // T-LIN-02 expected RED: grounded chat persists message citations only;
+        // its complete candidate packet and verifier result disappear after send.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Lineage Matter")
+        try store.documentSettings.updateSettings { $0.chunkerVersion = 2 }
+        let embeddingModel = DocumentEmbeddingModelRecord(
+            repoID: "synthetic/embedding-lineage",
+            displayName: "Synthetic Embedding Lineage",
+            dimension: 384,
+            runtimeFamily: "mlx",
+            revision: "embedding-revision-nondefault",
+            isSelected: true
+        )
+        try store.documentSettings.upsertEmbeddingModel(embeddingModel)
+        try store.documentSettings.selectEmbeddingModel(id: embeddingModel.id)
+        for index in 1...3 {
+            try await indexDocument(
+                store,
+                matterID: matter.id,
+                name: "lineage-source-\(index).txt",
+                text: "LINEAGE_SOURCE_\(index). The indemnification clause covers synthetic claims."
+            )
+        }
+        let runtime = StubRuntimeClient(
+            tokenCountOutcome: { request in
+                CountTokensResponse(
+                    modelID: request.modelID,
+                    counts: request.texts.indices.map { $0 < 2 ? 100 + ($0 * 100) : 10_000 }
+                )
+            },
+            outcome: { request in
+                .events([
+                    .event(request, 0, .token, token: "The clauses cover synthetic claims [S1] [S2]."),
+                    .event(request, 1, .generationCompleted),
+                ])
+            }
+        )
+        let controller = makeGlobalChatController(
+            store: store,
+            runtimeClient: runtime,
+            scope: .matter(id: matter.id),
+            embedder: nil
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What do my documents say about indemnification?",
+            modelID: ModelID(),
+            systemPrompt: nil,
+            options: GenerationOptions(maxContextTokens: 1_024, maxOutputTokens: 128)
+        )
+
+        let assistant = try XCTUnwrap(controller.messages.last)
+        let sourceSet = try XCTUnwrap(store.documentSources.fetchSourceSet(messageID: assistant.id))
+        XCTAssertEqual(sourceSet.status, DocumentSourceSetStatus.pending.rawValue)
+        XCTAssertNil(sourceSet.structuredOutputVersionID)
+        XCTAssertEqual(sourceSet.messageID, assistant.id)
+        XCTAssertEqual(sourceSet.embeddingModelID, "synthetic/embedding-lineage")
+        XCTAssertEqual(sourceSet.embeddingModelRevision, "embedding-revision-nondefault")
+        XCTAssertEqual(sourceSet.chunkerVersion, 2)
+        XCTAssertNotNil(sourceSet.retrievalConfigJSON)
+        XCTAssertNotNil(sourceSet.corpusSnapshotHash)
+        let report = try JSONDecoder().decode(
+            DocumentPackingReport.self,
+            from: Data(try XCTUnwrap(sourceSet.packingReportJSON).utf8)
+        )
+        XCTAssertEqual(report.candidates.count, 3)
+        XCTAssertEqual(report.packedSourceIDs.count, 2)
+        XCTAssertEqual(report.candidates.filter { $0.disposition == .omitted }.count, 1)
+
+        let packetSources = try store.documentSources.fetchSources(sourceSetID: sourceSet.id)
+        XCTAssertEqual(packetSources.map(\.citationLabel), ["S1", "S2"])
+        XCTAssertEqual(packetSources.compactMap(\.documentID).count, 2)
+        XCTAssertEqual(packetSources.compactMap(\.revisionID).count, 2)
+        XCTAssertTrue(packetSources.allSatisfy { $0.warningsJSON != nil }, "verification JSON must survive with the packet")
+        XCTAssertEqual(
+            report.packedSourceIDs,
+            packetSources.compactMap(\.chunkID).map { "\(matter.id)/\($0)" }
+        )
+        XCTAssertTrue(try store.structuredOutputs.fetchOutputs(matterID: matter.id).isEmpty)
+    }
+
     func testGroundedStreamingOverflowPersistsRefusalAndNoAnswerOrCitations() async throws {
         // T-TOK-05 expected RED: the streaming chat completion path ignores
         // contextOverflowed and persists the model's partial grounded answer.
