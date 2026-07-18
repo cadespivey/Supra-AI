@@ -12,6 +12,42 @@ public enum OutputAssuranceState: String, Codable, CaseIterable, Hashable, Senda
     case stale
 }
 
+/// One shared copy and eligibility contract for every assurance-bearing surface.
+/// Keeping these strings beside the persisted enum prevents output rows, chat,
+/// chronology, and exports from silently assigning different meanings to a state.
+public enum OutputAssurancePresentation {
+    public static func text(for state: OutputAssuranceState) -> String {
+        switch state {
+        case .preliminary:
+            "Preliminary — ranked sources only"
+        case .supportNeedsReview:
+            "Support needs review"
+        case .propositionSupported:
+            "Propositions supported — completeness not assessed"
+        case .corpusIncomplete:
+            "Corpus incomplete — review gaps"
+        case .corpusComplete:
+            "Corpus complete for this task and scope"
+        case .negativeBlocked:
+            "Negative conclusion blocked"
+        case .stale:
+            "Stale — sources or processing changed"
+        }
+    }
+
+    public static func isExportEligible(_ state: OutputAssuranceState) -> Bool {
+        state == .propositionSupported || state == .corpusComplete
+    }
+
+    public static func state(
+        rawValue: String?,
+        verificationStatus: OutputVerificationStatus
+    ) -> OutputAssuranceState {
+        rawValue.flatMap(OutputAssuranceState.init(rawValue:))
+            ?? (verificationStatus == .allSupported ? .propositionSupported : .supportNeedsReview)
+    }
+}
+
 public enum CorpusAnalysisTaskKind: String, Codable, CaseIterable, Hashable, Sendable {
     case exhaustiveList = "exhaustive_list"
     case chronology

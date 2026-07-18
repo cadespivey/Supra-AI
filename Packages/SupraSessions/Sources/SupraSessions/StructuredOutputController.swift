@@ -18,6 +18,8 @@ public final class StructuredOutputController: ObservableObject {
         public let title: String
         public let outputType: String
         public let status: String
+        public let assuranceState: OutputAssuranceState
+        public let assuranceText: String
         public let missingCount: Int
         public let createdAt: Date
         public let updatedAt: Date
@@ -36,6 +38,8 @@ public final class StructuredOutputController: ObservableObject {
         public let verificationVersion: String?
         public let verificationDimensions: [VerificationDimensionRow]
         public let verifiedAt: Date?
+        public let assuranceState: OutputAssuranceState
+        public let assuranceText: String
     }
 
     @Published public private(set) var outputs: [OutputItem] = []
@@ -126,9 +130,10 @@ public final class StructuredOutputController: ObservableObject {
     public func exportOutput(outputID: String, format: DocumentExportFormat) -> URL? {
         guard let record = outputRecord(outputID),
               let active = activeVersion(for: record),
-              active.verificationStatus == OutputVerificationStatus.allSupported.rawValue
+              active.verificationStatus == OutputVerificationStatus.allSupported.rawValue,
+              OutputAssurancePresentation.isExportEligible(Self.assurance(for: active))
         else {
-            message = "Reverify this output from retained sources or regenerate it from fresh sources before export."
+            message = "This output's assurance state does not permit export. Reverify or regenerate it from fresh sources."
             return nil
         }
         do {
@@ -141,11 +146,14 @@ public final class StructuredOutputController: ObservableObject {
 
     public func loadOutputs() {
         outputs = ((try? store.structuredOutputs.fetchOutputs(matterID: matterID)) ?? []).map { record in
-            OutputItem(
+            let assurance = activeVersion(for: record).map(Self.assurance(for:)) ?? .supportNeedsReview
+            return OutputItem(
                 id: record.id,
                 title: record.title,
                 outputType: record.outputType,
                 status: record.status,
+                assuranceState: assurance,
+                assuranceText: OutputAssurancePresentation.text(for: assurance),
                 missingCount: missingCount(for: record),
                 createdAt: record.createdAt,
                 updatedAt: record.updatedAt,
@@ -160,7 +168,8 @@ public final class StructuredOutputController: ObservableObject {
         return ((try? store.structuredOutputs.fetchVersions(structuredOutputID: outputID)) ?? [])
             .sorted { $0.versionIndex < $1.versionIndex }
             .map { version in
-                VersionItem(
+                let assurance = Self.assurance(for: version)
+                return VersionItem(
                     id: version.id,
                     index: version.versionIndex,
                     isActive: version.id == record.activeVersionID,
@@ -172,9 +181,21 @@ public final class StructuredOutputController: ObservableObject {
                     verificationDimensions: VerificationDimensionPresenter.rows(
                         from: version.verificationDimensions
                     ),
-                    verifiedAt: version.verifiedAt
+                    verifiedAt: version.verifiedAt,
+                    assuranceState: assurance,
+                    assuranceText: OutputAssurancePresentation.text(for: assurance)
                 )
             }
+    }
+
+    private nonisolated static func assurance(
+        for version: StructuredOutputVersionRecord
+    ) -> OutputAssuranceState {
+        OutputAssurancePresentation.state(
+            rawValue: version.assuranceState,
+            verificationStatus: OutputVerificationStatus(rawValue: version.verificationStatus)
+                ?? .legacyUnverified
+        )
     }
 
     /// True when the active version predates the proposition-support contract.

@@ -236,6 +236,7 @@ public final class GlobalChatController: ObservableObject {
             if message.role == .assistant, !message.isStreaming {
                 let citations = (try? store.chats.fetchCitations(messageID: message.id)) ?? []
                 message.citations = citations.map(MessageCitation.init)
+                message.assuranceState = groundedAssurance(messageID: message.id)
             }
             return message
         }
@@ -942,6 +943,13 @@ public final class GlobalChatController: ObservableObject {
                             question: prompt,
                             context: grounded,
                             verification: groundingVerification
+                        )
+                        updateMessageAssurance(
+                            id: assistant.id,
+                            state: Self.groundedAssurance(
+                                depth: grounded.depth,
+                                verificationStatus: groundingVerification?.verificationStatus
+                            )
                         )
                     }
                     let citations = persistSourceCitations(
@@ -3272,6 +3280,38 @@ public final class GlobalChatController: ObservableObject {
         guard !citations.isEmpty,
               let index = messages.firstIndex(where: { $0.id == id }) else { return }
         messages[index].citations = citations
+    }
+
+    private func updateMessageAssurance(id: String, state: OutputAssuranceState) {
+        guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        messages[index].assuranceState = state
+    }
+
+    private func groundedAssurance(messageID: String) -> OutputAssuranceState? {
+        guard let sourceSet = try? store.documentSources.fetchSourceSet(messageID: messageID) else {
+            return nil
+        }
+        if sourceSet.retrievalDepth == RetrievalDepth.fast.rawValue {
+            return .preliminary
+        }
+        let rows = (try? store.documentSources.fetchSources(sourceSetID: sourceSet.id)) ?? []
+        let results = rows.compactMap(\.warningsJSON).compactMap { json in
+            try? JSONDecoder().decode([PropositionSupportResult].self, from: Data(json.utf8))
+        }.first
+        let status: OutputVerificationStatus? = if let results, !results.isEmpty {
+            results.allSatisfy { $0.status == .supported } ? .allSupported : .needsReview
+        } else {
+            nil
+        }
+        return Self.groundedAssurance(depth: .deep, verificationStatus: status)
+    }
+
+    private nonisolated static func groundedAssurance(
+        depth: RetrievalDepth,
+        verificationStatus: OutputVerificationStatus?
+    ) -> OutputAssuranceState {
+        if depth == .fast { return .preliminary }
+        return verificationStatus == .allSupported ? .propositionSupported : .supportNeedsReview
     }
 
     // MARK: - Authority reader ([A#], spec §2.5)

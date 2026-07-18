@@ -115,7 +115,9 @@ struct OutputDetailView: View {
                     .font(.supraCaption).foregroundStyle(.secondary)
             }
             Spacer()
-            if selected?.verificationStatus == OutputVerificationStatus.allSupported.rawValue {
+            if let selected,
+               selected.verificationStatus == OutputVerificationStatus.allSupported.rawValue,
+               OutputAssurancePresentation.isExportEligible(selected.assuranceState) {
                 Menu {
                     Section("Format") {
                         ForEach(DocumentExportFormat.allCases, id: \.self) { format in
@@ -134,7 +136,7 @@ struct OutputDetailView: View {
                 .accessibilityIdentifier("output.export")
                 .accessibilityLabel("Export output, available")
                 .accessibilityHint("Choose an export format")
-                .help("Export verified output")
+                .help("Export output with its assurance state and source appendix")
             } else {
                 Button(action: {}) {
                     Label("Export", systemImage: "square.and.arrow.up")
@@ -162,49 +164,55 @@ struct OutputDetailView: View {
 
     @ViewBuilder
     private func verificationBar(_ version: StructuredOutputController.VersionItem) -> some View {
-        if version.verificationStatus != OutputVerificationStatus.allSupported.rawValue {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
-                        ? "Previous output needs revalidation"
-                        : "Output support needs review")
-                        .font(.supraHeadline)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
-                        ? "This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
-                        : "One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active.")
-                        .font(.supraCaption)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer()
-                if version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue {
-                    Button("Reverify Sources") {
-                        _ = controller.reverifyOutput(outputID)
+        VStack(alignment: .leading, spacing: 8) {
+            AssuranceBadge(state: version.assuranceState)
+                .accessibilityIdentifier("output.assurance.\(version.assuranceState.rawValue)")
+            if version.verificationStatus != OutputVerificationStatus.allSupported.rawValue {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
+                            ? "Previous output needs revalidation"
+                            : "Output support needs review")
+                            .font(.supraHeadline)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
+                            ? "This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
+                            : "One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active.")
+                            .font(.supraCaption)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .fixedSize()
-                    .layoutPriority(1)
-                    .accessibilityHint("Checks this version against its retained source packet without deleting the original")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Spacer()
+                    if version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue {
+                        Button("Reverify Sources") {
+                            _ = controller.reverifyOutput(outputID)
+                        }
+                        .fixedSize()
+                        .layoutPriority(1)
+                        .accessibilityHint("Checks this version against its retained source packet without deleting the original")
+                    }
                 }
+                .padding(10)
+                .background(Color.orange.opacity(0.12))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("output.verificationWarning")
+                .accessibilityLabel(
+                    version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
+                        ? "Output verification status. Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
+                        : "Output verification status. Output support needs review. One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active."
+                )
+                .accessibilityValue(
+                    version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
+                        ? "Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
+                        : "Output support needs review. One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active."
+                )
             }
-            .padding(10)
-            .background(Color.orange.opacity(0.12))
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("output.verificationWarning")
-            .accessibilityLabel(
-                version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
-                    ? "Output verification status. Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
-                    : "Output verification status. Output support needs review. One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active."
-            )
-            .accessibilityValue(
-                version.verificationStatus == OutputVerificationStatus.legacyUnverified.rawValue
-                    ? "Previous output needs revalidation. This version predates proposition verification. Reverify its retained sources or regenerate from fresh sources before relying on or exporting it."
-                    : "Output support needs review. One or more propositions are unsupported or unverifiable. Export remains unavailable until a supported replacement is active."
-            )
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -275,6 +283,43 @@ struct OutputDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
         .padding(.bottom, 8)
+    }
+}
+
+/// Compact assurance row shared by Outputs, grounded chat, and chronology.
+/// The label is the exact domain-pinned string; color and icon never substitute
+/// a second, potentially conflicting state description.
+struct AssuranceBadge: View {
+    let state: OutputAssuranceState
+
+    var body: some View {
+        Label(OutputAssurancePresentation.text(for: state), systemImage: icon)
+            .font(.supraCaption.weight(.semibold))
+            .foregroundStyle(color)
+            .accessibilityLabel(OutputAssurancePresentation.text(for: state))
+    }
+
+    private var color: Color {
+        switch state {
+        case .propositionSupported, .corpusComplete:
+            .green
+        case .preliminary:
+            .secondary
+        case .supportNeedsReview, .corpusIncomplete, .negativeBlocked, .stale:
+            .orange
+        }
+    }
+
+    private var icon: String {
+        switch state {
+        case .preliminary: "hare"
+        case .supportNeedsReview: "exclamationmark.triangle"
+        case .propositionSupported: "checkmark.seal"
+        case .corpusIncomplete: "square.dashed"
+        case .corpusComplete: "checkmark.shield"
+        case .negativeBlocked: "nosign"
+        case .stale: "clock.arrow.circlepath"
+        }
     }
 }
 

@@ -860,8 +860,12 @@ struct DocumentChronologySheet: View {
                     Toggle("Limit to the selected folder", isOn: $scopeThisFolder)
                 }
                 if let readiness = chronology.scopeReadiness(scope: scope) {
-                    Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) documents indexed")
+                    Text(readiness.summaryText)
                         .font(.supraCaption).foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
+                    if !readiness.blockingReasons.isEmpty {
+                        Text(readiness.blockingReasons.joined(separator: " · "))
+                            .font(.supraCaption).foregroundStyle(.orange)
+                    }
                 }
                 routeStatus
                 if let routingMessage {
@@ -880,6 +884,9 @@ struct DocumentChronologySheet: View {
                 Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
+                        if let assurance = result.assuranceState {
+                            AssuranceBadge(state: assurance)
+                        }
                         if result.status == StructuredOutputStatus.needsReview.rawValue {
                             Label("Needs review — \(result.warnings.joined(separator: " "))", systemImage: "exclamationmark.triangle")
                                 .font(.supraCaption).foregroundStyle(.orange)
@@ -999,11 +1006,11 @@ struct DocumentPreviewView: View {
             }
             if let revisionNotice = model.revisionNotice {
                 HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "clock.badge.questionmark")
-                        .foregroundStyle(.orange)
+                    Image(systemName: model.revisionID == nil ? "clock.badge.questionmark" : "clock.badge.checkmark")
+                        .foregroundStyle(model.revisionID == nil ? Color.orange : Color.secondary)
                     Text(revisionNotice)
                         .font(.supraCaption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(model.revisionID == nil ? Color.orange : Color.secondary)
                     Spacer()
                 }
                 .padding(.horizontal)
@@ -1128,11 +1135,23 @@ struct PDFKitView: NSViewRepresentable {
         }
         if let highlightText, !highlightText.isEmpty {
             let snippet = String(highlightText.prefix(80))
-            if let selection = document.findString(snippet, withOptions: [.caseInsensitive]).first {
+            let selections = document.findString(snippet, withOptions: [.caseInsensitive])
+            let candidatePageIndexes = selections.map { selection in
+                selection.pages.first.map(document.index(for:)) ?? NSNotFound
+            }
+            if let index = PDFLocatorHighlightPolicy.selectionIndex(
+                targetPageIndex: pageIndex,
+                candidatePageIndexes: candidatePageIndexes
+            ) {
+                let selection = selections[index]
                 selection.color = .yellow
                 view.highlightedSelections = [selection]
                 view.go(to: selection)
+            } else {
+                view.highlightedSelections = []
             }
+        } else {
+            view.highlightedSelections = []
         }
     }
 }

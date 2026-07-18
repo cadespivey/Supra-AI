@@ -30,6 +30,7 @@ public final class DocumentQAController: ObservableObject {
         /// Which retrieval tier grounded this answer — `.fast` answers are
         /// preliminary and the UI offers "search all documents" (spec §3.2).
         public var depth: RetrievalDepth = .deep
+        public var assuranceState: OutputAssuranceState? = nil
     }
 
     public let matterID: String
@@ -395,7 +396,8 @@ public final class DocumentQAController: ObservableObject {
             warnings: verification.warnings,
             citationLabels: verification.usedLabels,
             unsupported: verification.appearsUnsupported,
-            depth: depth
+            depth: depth,
+            assuranceState: version.assuranceState.flatMap(OutputAssuranceState.init(rawValue:))
         )
     }
 
@@ -500,7 +502,8 @@ public final class DocumentQAController: ObservableObject {
                 warnings: verification.warnings,
                 citationLabels: verification.usedLabels,
                 unsupported: verification.appearsUnsupported,
-                depth: depth
+                depth: depth,
+                assuranceState: version.assuranceState.flatMap(OutputAssuranceState.init(rawValue:))
             )
             lastResult = result
             return result

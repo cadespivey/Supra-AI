@@ -69,6 +69,17 @@ claims:
     last_reviewed: "2026-07-18"
     publication_anchor: "ARCHITECTURE.md"
 
+  - id: "DOCUMENT-OUTPUT-ASSURANCE-UX"
+    topic: "document-output-assurance-ux"
+    wording: "Saved output, grounded chat, chronology, and export surfaces render one shared seven-state assurance vocabulary; export is permitted only for proposition-supported or corpus-complete artifacts, and exports embed the state."
+    owner: "Document reliability engineering"
+    code_anchor: "Packages/SupraCore/Sources/SupraCore/CorpusAnalysisDomainTypes.swift"
+    verification: "Packages/SupraCore/Tests/SupraCoreTests/OutputAssurancePresentationTests.swift"
+    ci_job: "macos-ci/swift-packages"
+    applicable_version: "2.3.0 and later"
+    last_reviewed: "2026-07-18"
+    publication_anchor: "README.md"
+
   - id: "STORE-SUPPORTED-UPGRADES"
     topic: "supported-releases"
     wording: "Upgrade tests cover v1.4.1, v1.5.2, v1.8.0, v2.0.0, v2.1.0, v2.1.3, v2.2.0, and the latest-minus-one schema fixture."
@@ -189,8 +200,8 @@ claims:
     code_anchor: "Packages/SupraResearch/Sources/SupraResearch/LegalResearch/LegalCitationVerifier.swift"
     verification: "Packages/SupraResearch/Tests/SupraResearchTests/LegalPropositionSupportTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "2.2.0 and later"
-    last_reviewed: "2026-07-13"
+    applicable_version: "2.3.0 and later"
+    last_reviewed: "2026-07-18"
     publication_anchor: "README.md"
 
   - id: "DRAFTING-PREFILE-GATE"

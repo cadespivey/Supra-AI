@@ -28,10 +28,46 @@ public struct DocumentPreviewModel: Sendable, Equatable {
     public var documentName: String
     public var locatorDisplay: String
     public var warnings: [String]
+    public var revisionID: String?
+    public var revisionOrigin: String?
+    public var revisionCreatedAt: Date?
     /// Explicit provenance state for a cited output source. Nil means the
     /// preview was not opened from a persisted output citation.
     public var revisionNotice: String?
     public var kind: Kind
+
+    public init(
+        documentName: String,
+        locatorDisplay: String,
+        warnings: [String],
+        revisionID: String? = nil,
+        revisionOrigin: String? = nil,
+        revisionCreatedAt: Date? = nil,
+        revisionNotice: String? = nil,
+        kind: Kind
+    ) {
+        self.documentName = documentName
+        self.locatorDisplay = locatorDisplay
+        self.warnings = warnings
+        self.revisionID = revisionID
+        self.revisionOrigin = revisionOrigin
+        self.revisionCreatedAt = revisionCreatedAt
+        self.revisionNotice = revisionNotice
+        self.kind = kind
+    }
+}
+
+/// Pure policy used by the PDFKit adapter and deterministic locator benchmark.
+/// It never falls back to a different page when the persisted page has no match.
+public enum PDFLocatorHighlightPolicy {
+    public static func selectionIndex(
+        targetPageIndex: Int?,
+        candidatePageIndexes: [Int]
+    ) -> Int? {
+        guard !candidatePageIndexes.isEmpty else { return nil }
+        guard let targetPageIndex else { return 0 }
+        return candidatePageIndexes.firstIndex(of: targetPageIndex)
+    }
 }
 
 /// Resolves a document + locator into a `DocumentPreviewModel`, reading managed
@@ -151,7 +187,10 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
             documentName: document.displayName,
             locatorDisplay: locator.displayString,
             warnings: Self.warnings(for: document),
-            revisionNotice: nil,
+            revisionID: revision.id,
+            revisionOrigin: revision.origin,
+            revisionCreatedAt: revision.createdAt,
+            revisionNotice: "Recorded revision — \(revision.origin) — \(revision.createdAt.ISO8601Format())",
             kind: .text(
                 content: revision.text,
                 highlightStart: locator.charStart,

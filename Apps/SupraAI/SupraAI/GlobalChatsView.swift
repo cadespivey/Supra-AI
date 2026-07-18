@@ -492,8 +492,8 @@ struct GlobalChatsView: View {
                         HStack(spacing: 8) {
                             Label(
                                 offer.kind == .documents
-                                    ? "Preliminary — searched the most relevant passages."
-                                    : "Preliminary — answered from this matter's saved authorities.",
+                                    ? "Broader document search available"
+                                    : "Network authority search available",
                                 systemImage: "hare"
                             )
                             .font(.supraCaption).foregroundStyle(.secondary)
@@ -1241,6 +1241,9 @@ private struct MessageRow: View {
                     if message.isStreaming {
                         ProgressView().controlSize(.small)
                     }
+                    if let assurance = message.assuranceState {
+                        AssuranceBadge(state: assurance)
+                    }
                     statusBadge
                 }
             }
@@ -1312,7 +1315,7 @@ private struct MessageRow: View {
     /// Only show a header row when there's something to say — a system tag, the
     /// streaming spinner, or a status badge. Plain answers get no heading.
     private var showsHeader: Bool {
-        message.role == .system || message.isStreaming || hasStatusBadge
+        message.role == .system || message.isStreaming || hasStatusBadge || message.assuranceState != nil
     }
 
     private var showsCopy: Bool {

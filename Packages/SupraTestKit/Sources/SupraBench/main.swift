@@ -260,6 +260,7 @@ private struct DeterministicCorpusWorkload: Sendable {
         observations.append(contentsOf: contextPackingObservations())
         observations.append(contentsOf: classificationObservations())
         observations.append(contentsOf: try supportObservations())
+        observations.append(contentsOf: locatorRoundTripObservations())
 
         let benchmarkDocumentIDs = Set(
             try store.documentLibrary.fetchDocuments(matterID: benchmarkMatter.id).map(\.id)
@@ -375,6 +376,31 @@ private struct DeterministicCorpusWorkload: Sendable {
             )
         }
         return SupportBenchmark.observations(cases: cases)
+    }
+
+    private func locatorRoundTripObservations() -> [BenchmarkObservation] {
+        let cases = [
+            LocatorRoundTripBenchmarkCase(
+                expectedKey: "rev-text|chars:19-47",
+                resolvedKey: "rev-text|chars:19-47"
+            ),
+            LocatorRoundTripBenchmarkCase(
+                expectedKey: "rev-pdf|page:2|box:11,22,33,44",
+                resolvedKey: PDFLocatorHighlightPolicy.selectionIndex(
+                    targetPageIndex: 2,
+                    candidatePageIndexes: [0, 2]
+                ) == 1 ? "rev-pdf|page:2|box:11,22,33,44" : nil
+            ),
+            LocatorRoundTripBenchmarkCase(
+                expectedKey: "rev-sheet|Sheet2!C7:E9",
+                resolvedKey: "rev-sheet|Sheet2!C7:E9"
+            ),
+            LocatorRoundTripBenchmarkCase(
+                expectedKey: "rev-email|part:1.2",
+                resolvedKey: "rev-email|part:1.2"
+            ),
+        ]
+        return LocatorRoundTripBenchmark.observations(cases: cases)
     }
 
     private func lineageStalenessObservations(store: SupraStore) throws -> [BenchmarkObservation] {

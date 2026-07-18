@@ -65,6 +65,7 @@ struct MatterOutputsView: View {
                         }
                         .font(.supraCaption)
                         .foregroundStyle(.secondary)
+                        AssuranceBadge(state: output.assuranceState)
                     }
                 }
                 .accessibilityIdentifier("output.row.\(output.title)")
@@ -158,9 +159,14 @@ private struct NewOutputSheet: View {
                             }
                             if !selectedDocIDs.isEmpty,
                                let readiness = controller.scopeReadiness(scope: RetrievalScope(documentIDs: Array(selectedDocIDs))) {
-                                Text("\(readiness.readyDocuments)/\(readiness.totalDocuments) selected documents indexed")
+                                Text(readiness.summaryText)
                                     .font(.supraCaption)
                                     .foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
+                                if !readiness.blockingReasons.isEmpty {
+                                    Text(readiness.blockingReasons.joined(separator: " · "))
+                                        .font(.supraCaption)
+                                        .foregroundStyle(.orange)
+                                }
                             }
                         }
                     }

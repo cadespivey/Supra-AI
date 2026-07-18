@@ -373,7 +373,8 @@ public final class DocumentChronologyController: ObservableObject {
                 outputID: persisted.outputID, versionID: persisted.version.id, markdown: markdown, status: status.rawValue,
                 warnings: resultWarnings,
                 citationLabels: verification.usedLabels,
-                unsupported: verification.appearsUnsupported
+                unsupported: verification.appearsUnsupported,
+                assuranceState: persisted.version.assuranceState.flatMap(OutputAssuranceState.init(rawValue:))
             )
             lastResult = result
             return result

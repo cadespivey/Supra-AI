@@ -69,8 +69,35 @@ public struct ScopeReadiness: Sendable, Equatable {
     public var totalDocuments: Int
     public var readyDocuments: Int
     public var pendingDocuments: Int
+    public var failedDocuments: Int
+    public var needsReviewDocuments: Int
     public var requiresSemanticIndex: Bool
     public var isFullyReady: Bool
+    public var blockingReasons: [String]
+
+    public init(
+        totalDocuments: Int,
+        readyDocuments: Int,
+        pendingDocuments: Int,
+        failedDocuments: Int = 0,
+        needsReviewDocuments: Int = 0,
+        requiresSemanticIndex: Bool,
+        isFullyReady: Bool,
+        blockingReasons: [String] = []
+    ) {
+        self.totalDocuments = totalDocuments
+        self.readyDocuments = readyDocuments
+        self.pendingDocuments = pendingDocuments
+        self.failedDocuments = failedDocuments
+        self.needsReviewDocuments = needsReviewDocuments
+        self.requiresSemanticIndex = requiresSemanticIndex
+        self.isFullyReady = isFullyReady
+        self.blockingReasons = blockingReasons
+    }
+
+    public var summaryText: String {
+        "\(readyDocuments) ready, \(failedDocuments) failed, \(needsReviewDocuments) needs review"
+    }
 }
 
 public struct RetrievalResult: Sendable {
@@ -118,14 +145,25 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     /// embedder is configured). Immediate; no model work (plan §13.3).
     public func scopeReadiness(matterID: String, scope: RetrievalScope) throws -> ScopeReadiness {
         let docIDs = Set(try resolveScope(matterID: matterID, scope: scope))
-        // Terminally-failed/unsupported documents can never be indexed, so they
-        // are excluded from the readiness denominator rather than blocking forever.
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
             .filter { docIDs.contains($0.id) }
-            .filter { $0.extractionStatus != DocumentExtractionStatus.failed.rawValue && $0.status != MatterDocumentStatus.failed.rawValue }
         let requiresSemantic = embedder != nil
         var ready = 0
+        var failed = 0
+        var needsReview = 0
+        var blockers: [String] = []
         for document in documents {
+            if document.extractionStatus == DocumentExtractionStatus.failed.rawValue
+                || document.status == MatterDocumentStatus.failed.rawValue {
+                failed += 1
+                blockers.append("\(document.displayName): \(Self.readinessDetail(for: document, fallback: "failed processing"))")
+                continue
+            }
+            if document.status == MatterDocumentStatus.needsReview.rawValue {
+                needsReview += 1
+                blockers.append("\(document.displayName): \(Self.readinessDetail(for: document, fallback: "needs review"))")
+                continue
+            }
             guard Self.isTextReady(document) else { continue }
             guard document.extractionMethod?.hasPrefix("converted_lossy@toolchain:") != true else { continue }
             if let embedder {
@@ -139,9 +177,19 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         return ScopeReadiness(
             totalDocuments: documents.count,
             readyDocuments: ready,
-            pendingDocuments: documents.count - ready,
+            // `pendingDocuments` retains its historical meaning: every admitted
+            // document that is not ready and has not terminally failed. A
+            // needs-review member is therefore both pending user resolution and
+            // named separately in `needsReviewDocuments` for honest UI copy.
+            pendingDocuments: max(0, documents.count - ready - failed),
+            failedDocuments: failed,
+            needsReviewDocuments: needsReview,
             requiresSemanticIndex: requiresSemantic,
-            isFullyReady: !documents.isEmpty && ready == documents.count
+            isFullyReady: !documents.isEmpty
+                && ready == documents.count
+                && failed == 0
+                && needsReview == 0,
+            blockingReasons: blockers
         )
     }
 
@@ -417,6 +465,25 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         default:
             return false
         }
+    }
+
+    private static func readinessDetail(
+        for document: MatterDocumentRecord,
+        fallback: String
+    ) -> String {
+        if let summary = document.ocrConfidenceSummary,
+           !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return summary
+        }
+        for json in [document.extractionErrorsJSON, document.extractionWarningsJSON] {
+            guard let json,
+                  let data = json.data(using: .utf8),
+                  let values = try? JSONDecoder().decode([String].self, from: data),
+                  let first = values.first,
+                  !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            return first
+        }
+        return fallback
     }
 }
 

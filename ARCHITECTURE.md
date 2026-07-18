@@ -218,6 +218,13 @@ repository:
   dimension evidence alongside both positions. Negative conclusions use an explicit method gate:
   ranked retrieval, any positive finding, incomplete coverage, or an excluded/review-required
   source blocks persistence of clean absence wording. Corpus-backed verification independently records contrary evidence, list completeness, corpus coverage, and negative validity; ranked retrieval and low-confidence or incomplete corpus members cannot authorize a clean negative conclusion.
+  The shared assurance presenter pins one distinct string for each of the seven persisted states
+  and is consumed by output rows/details, grounded-chat banners, chronology results, and export
+  headers. Only `proposition_supported` and `corpus_complete` enable export. Citation preview
+  loads the recorded immutable revision with its origin/time provenance, and PDF text matching is
+  restricted to the locator page rather than accepting the first document-wide occurrence.
+  Scope readiness keeps failed and review-required documents in its disclosed denominator and
+  names each blocker. Saved output, grounded chat, chronology, and export surfaces render one shared seven-state assurance vocabulary; export is permitted only for proposition-supported or corpus-complete artifacts, and exports embed the state.
 - Specialized structure adapters are intentionally format-bounded. DOCX preserves Word
   numbering, tables, notes/comments, tracked changes, and section stories. PDF preserves
   pages, PDFKit line regions, Vision OCR boxes, form values, annotation text, and the
