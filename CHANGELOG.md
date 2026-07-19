@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.3.2] - 2026-07-19
+
+### Fixed
+
+- **Accurate verification on caption-structured documents** — document-grounded answers no
+  longer draw false verification warnings when the supporting facts sit in pleading captions
+  or signature blocks. Names with middle initials stay bound to their inline citations,
+  facts stated across adjacent caption lines (name / role / party) verify correctly, words
+  split by line-break hyphens in extracted PDF text are matched, and verification warnings
+  quote the claim under review instead of an internal proposition identifier.
+- **Models load on demand** — generating a chronology, draft, billing entry, or any other
+  model-backed output now loads its assigned model automatically when the runtime is not
+  already holding it (including after macOS reclaims the idle runtime service), instead of
+  failing with a "no runtime model is loaded" error. A generation started while that model
+  is still loading now waits for the load instead of failing.
+
 ## [2.3.1] - 2026-07-18
 
 Document intelligence is now safer, more complete, and easier to audit from import through export.
