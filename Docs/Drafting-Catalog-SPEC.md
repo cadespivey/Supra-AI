@@ -1,7 +1,7 @@
 # Drafting Catalog — Specification
 
 > **Status:** Design catalog plus reconciliation notes. The implementation specs are authoritative for code-level signatures and golden-locked renderer details; this catalog supplies product/design context.
-> **Home module:** `FutureModules/SupraDrafting` (logic) + `FutureModules/SupraExports` (Layer 1 renderer).
+> **Home module:** `Packages/SupraDrafting` (logic, with shared types in `Packages/SupraDraftingCore`) + `Packages/SupraExports` (Layer 1 renderer).
 > **Confidentiality:** This spec contains only abstract document-family taxonomy and
 > building-block design. It contains **no client content, party names, facts, or
 > verbatim work product**. The source corpus (`~/Documents/Drafts`,

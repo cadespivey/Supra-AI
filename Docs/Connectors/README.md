@@ -24,5 +24,3 @@ Shared rules (see each doc's Security invariants):
 - Configuration comes from `SUPRA_`-prefixed environment variables (see
   `.env.example`); the SEC connector additionally requires
   `SUPRA_SEC_EDGAR_USER_AGENT` for live use.
-
-Plan and amendments: `Docs/Government-Data-Connectors-Claude-Plan.md`.

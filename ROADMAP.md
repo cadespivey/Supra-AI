@@ -120,7 +120,6 @@ milestone plan before implementation.
 - **Drafting assistance (`SupraDrafting`).** A `/draft` chat route and drafting/critique
   model roles already ship; the future work is a dedicated package for attorney-editable
   drafting grounded in a matter's authorities and documents, with research-needed flags.
-  (Reserved package namespace already exists under `FutureModules/`.)
 - **Citator / negative-treatment signals.** v1.0.0 deliberately makes **no** automatic citator
   claims. A future milestone could integrate genuine treatment data rather than inferring it.
 - **Dockets / RECAP.** Federal docket and filing retrieval via CourtListener's RECAP data,
