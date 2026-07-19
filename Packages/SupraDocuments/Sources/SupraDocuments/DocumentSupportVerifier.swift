@@ -149,14 +149,14 @@ public enum DocumentSupportVerifier {
             return try result(.unverifiable, ["Proposition \(proposition.id) came from an incompletely indexed scope."])
         }
         guard !proposition.citationLabels.isEmpty else {
-            return try result(.unverifiable, ["Proposition \(proposition.id) has no citation in the same proposition."])
+            return try result(.unverifiable, ["Proposition \(quotedSnippet(proposition.text)) has no citation in the same proposition."])
         }
 
         var citedSources: [DocumentSupportSource] = []
         for label in proposition.citationLabels {
             try Task.checkCancellation()
             guard let source = sourceByLabel[label] else {
-                return try result(.unverifiable, ["Proposition \(proposition.id) cites unresolved source \(label)."])
+                return try result(.unverifiable, ["Proposition \(quotedSnippet(proposition.text)) cites unresolved source \(label)."])
             }
             guard !source.sourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !source.locator.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -179,7 +179,7 @@ public enum DocumentSupportVerifier {
         for source in citedSources {
             try Task.checkCancellation()
             guard try !hasMaterialContradiction(to: proposition.text, in: source.text) else {
-                return try result(.unsupported, ["Cited source text contains materially contradictory evidence for proposition \(proposition.id)."])
+                return try result(.unsupported, ["Cited source text contains materially contradictory evidence for \(quotedSnippet(proposition.text))."])
             }
             guard let excerpt = try supportingExcerpt(for: proposition.text, in: source.text) else { continue }
             let evidence = SupportEvidence(
@@ -193,15 +193,19 @@ public enum DocumentSupportVerifier {
             return try result(.supported, ["Cited source text supports the proposition."], evidence: [evidence])
         }
 
-        return try result(.unsupported, ["No cited source text supports proposition \(proposition.id)."])
+        return try result(.unsupported, ["No cited source text supports \(quotedSnippet(proposition.text))."])
     }
 
     /// Extracts sentence/row propositions and binds citations only within the same
     /// sentence or Markdown table row. A citation on a neighboring sentence cannot
-    /// retroactively support an uncited claim.
+    /// retroactively support an uncited claim. Periods that punctuate initials or
+    /// legal abbreviations ("Steven W. Ritcheson", "Fed. R. Civ. P.") are spelling,
+    /// not boundaries — splitting there would decapitate a claim from its citation.
     static func extractPropositions(from answer: String) -> [CitedProposition] {
         var spans: [(text: String, range: NSRange)] = []
         let nsAnswer = answer as NSString
+        // Length-preserving, so ranges found in the masked string index the original.
+        let maskedAnswer = maskingNonBoundaryPeriods(answer)
         var lineStart = 0
 
         for rawLine in answer.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -222,9 +226,13 @@ public enum DocumentSupportVerifier {
                 continue
             }
 
+            // A list introducer ("The attorneys of record are:") only announces the
+            // cited items that follow; it carries no independently citable fact.
+            if trimmed.hasSuffix(":") { continue }
+
             let lineRange = NSRange(location: lineStart, length: lineLength)
             guard let sentenceRegex = try? NSRegularExpression(pattern: #"[^.!?]+(?:[.!?]+|$)"#) else { continue }
-            for match in sentenceRegex.matches(in: answer, range: lineRange) {
+            for match in sentenceRegex.matches(in: maskedAnswer, range: lineRange) {
                 let raw = nsAnswer.substring(with: match.range).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !raw.isEmpty { spans.append((raw, match.range)) }
             }
@@ -255,14 +263,21 @@ public enum DocumentSupportVerifier {
         let propositionQualifiers = limitingQualifiers(in: proposition)
         let propositionNegated = containsNegation(proposition)
 
-        let nsSource = sourceText as NSString
+        // Candidates come from the rejoined (de-hyphenated) text with abbreviation
+        // periods masked, so "Ritche-\nson" reads as one word and "W." does not end
+        // a sentence. The mask is length-preserving; substrings come from the
+        // readable text so evidence excerpts keep their real periods.
+        let readableSource = dehyphenated(sourceText)
+        let maskedSource = maskingNonBoundaryPeriods(readableSource)
+        let nsSource = readableSource as NSString
         let fullRange = NSRange(location: 0, length: nsSource.length)
         let sentenceRegex = try? NSRegularExpression(pattern: #"[^.!?\n]+(?:[.!?]+|\n|$)"#)
-        let candidates = sentenceRegex?.matches(in: sourceText, range: fullRange).compactMap { match -> String? in
+        var candidates = sentenceRegex?.matches(in: maskedSource, range: fullRange).compactMap { match -> String? in
             let candidate = nsSource.substring(with: match.range).trimmingCharacters(in: .whitespacesAndNewlines)
             return candidate.isEmpty ? nil : candidate
         } ?? []
-        let searchCandidates = candidates.isEmpty ? [sourceText] : candidates
+        candidates.append(contentsOf: lineBlockCandidates(in: readableSource))
+        let searchCandidates = candidates.isEmpty ? [readableSource] : candidates
 
         var best: (text: String, extraTokenCount: Int)?
         for candidate in searchCandidates {
@@ -428,6 +443,107 @@ public enum DocumentSupportVerifier {
         return values
     }
 
+    // MARK: - Text structure helpers
+
+    /// Length-preserving mask for periods that punctuate single-letter initials
+    /// ("Steven W. Ritcheson") or common legal abbreviations ("Fed. R. Civ. P.
+    /// 12(b)(6)", "Inc."): they are spelling, not sentence boundaries. Because every
+    /// replacement is one UTF-16 unit for one, ranges found in the masked string are
+    /// valid in the string it was made from. Masking can only merge sentences —
+    /// a merged candidate must satisfy strictly more containment, never less.
+    private static let maskedPeriod = "\u{F8FF}"
+    private static let nonBoundaryPeriodRegexes: [NSRegularExpression] = {
+        let abbreviations = [
+            "Mr", "Mrs", "Ms", "Dr", "Jr", "Sr", "Esq", "Hon",
+            "v", "vs", "No", "Nos", "Inc", "Corp", "Ltd", "Co", "LLC", "LLP", "PLC",
+            "Fed", "Civ", "Crim", "Proc", "Evid", "Bankr", "Sec", "Stat", "Supp",
+            "Cir", "Ct", "App", "Dist", "Div", "Ch", "Art", "Cl", "Ex", "Exh",
+            "Id", "Cf", "Reg", "Rev", "St", "Ave", "Blvd", "Rd", "Ste", "Dept",
+        ]
+        let patterns = [
+            #"(?<=\b[A-Za-z])\."#,
+            "(?<=\\b(?:" + abbreviations.joined(separator: "|") + "))\\.",
+        ]
+        return patterns.compactMap { try? NSRegularExpression(pattern: $0) }
+    }()
+
+    private static func maskingNonBoundaryPeriods(_ text: String) -> String {
+        var masked = text
+        for regex in nonBoundaryPeriodRegexes {
+            masked = regex.stringByReplacingMatches(
+                in: masked,
+                range: NSRange(location: 0, length: (masked as NSString).length),
+                withTemplate: maskedPeriod
+            )
+        }
+        return masked
+    }
+
+    /// PDF text extraction splits words at line-break hyphens and soft hyphens
+    /// ("Ritche-\nson"). Readers — and the model — see one word, so support
+    /// candidates are built from the rejoined text.
+    private static func dehyphenated(_ text: String) -> String {
+        text.replacingOccurrences(of: "\u{00AD}", with: "")
+            .replacingOccurrences(
+                of: #"([A-Za-z])-[ \t]*\n[ \t]*([A-Za-z])"#,
+                with: "$1$2",
+                options: .regularExpression
+            )
+    }
+
+    /// Caption and signature blocks state one fact across several short adjacent
+    /// lines ("Steven W. Ritcheson (SBN 174062)" / "Attorney for Plaintiff" /
+    /// "OPTIMUM VECTOR DYNAMICS LLC, …, Plaintiff,"). Sentence candidates cannot see
+    /// across those line breaks, so bounded windows of consecutive short lines are
+    /// also offered as candidates. A long (prose) line breaks the run, and the span
+    /// and size limits keep distant facts from being smeared into one context; every
+    /// window remains subject to the same ordering and containment guards.
+    private static let blockWindowLineLimit = 12
+    private static let blockWindowCharacterLimit = 900
+    private static let blockEligibleLineLength = 100
+
+    private static func lineBlockCandidates(in sourceText: String) -> [String] {
+        let lines = sourceText
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        var candidates: [String] = []
+        var run: [String] = []
+        func flushRun() {
+            defer { run = [] }
+            guard run.count >= 2 else { return }
+            for windowSize in 2...min(blockWindowLineLimit, run.count) {
+                for start in 0...(run.count - windowSize) {
+                    let window = run[start..<(start + windowSize)].joined(separator: " ")
+                    if window.count <= blockWindowCharacterLimit {
+                        candidates.append(window)
+                    }
+                }
+            }
+        }
+        for line in lines {
+            if line.count <= blockEligibleLineLength {
+                run.append(line)
+            } else {
+                flushRun()
+            }
+        }
+        flushRun()
+        return candidates
+    }
+
+    /// A short quoted form of the claim for user-facing warnings — internal
+    /// proposition IDs must not leak into the banner.
+    private static func quotedSnippet(_ text: String) -> String {
+        let collapsed = text
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let limit = 80
+        guard collapsed.count > limit else { return "“\(collapsed)”" }
+        let prefix = String(collapsed.prefix(limit)).trimmingCharacters(in: .whitespaces)
+        return "“\(prefix)…”"
+    }
+
     private static func materialText(_ text: String) -> String {
         let withoutCitations = text.replacingOccurrences(
             of: #"\[[A-Za-z]{1,3}\d{1,4}\]"#,
@@ -540,12 +656,14 @@ public enum DocumentSupportVerifier {
         let terms = Set(significantTokens(in: proposition))
         guard terms.count >= 2 else { return false }
         let propositionNegated = containsNegation(proposition)
-        let nsSource = sourceText as NSString
+        let readableSource = dehyphenated(sourceText)
+        let maskedSource = maskingNonBoundaryPeriods(readableSource)
+        let nsSource = readableSource as NSString
         let fullRange = NSRange(location: 0, length: nsSource.length)
         guard let regex = try? NSRegularExpression(pattern: #"[^.!?\n]+(?:[.!?]+|\n|$)"#) else {
             return false
         }
-        for match in regex.matches(in: sourceText, range: fullRange) {
+        for match in regex.matches(in: maskedSource, range: fullRange) {
             try Task.checkCancellation()
             let sentence = nsSource.substring(with: match.range)
             guard containsNegation(sentence) != propositionNegated else { continue }
