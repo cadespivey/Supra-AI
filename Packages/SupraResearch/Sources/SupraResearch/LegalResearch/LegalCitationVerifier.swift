@@ -275,9 +275,14 @@ public enum LegalCitationVerifier {
     /// absent from the source as a whole word; structural/organizational words are
     /// excluded so headings and entity names are not mistaken for people.
     public static func verifyGroundedEntities(answer: String, sourceText: String) -> [LegalVerificationIssue] {
-        let sourceWords = wordTokenSet(sourceText)
-        let sourceLower = sourceText.lowercased()
-        let sourceDigits = sourceLower.filter(\.isNumber)
+        // PDF text extraction splits words at line-break hyphens and soft hyphens
+        // ("Ritche-\nson"); the model reads through the split, so the whole-word
+        // haystack must include the rejoined text too or a name plainly on the page
+        // gets flagged as inferred.
+        let rejoinedSource = dehyphenatedText(sourceText)
+        let sourceWords = wordTokenSet(sourceText).union(wordTokenSet(rejoinedSource))
+        let sourceLower = (sourceText + "\n" + rejoinedSource).lowercased()
+        let sourceDigits = sourceText.lowercased().filter(\.isNumber)
         var issues: [LegalVerificationIssue] = []
         var seen = Set<String>()
 
@@ -308,6 +313,17 @@ public enum LegalCitationVerifier {
         }
 
         return issues
+    }
+
+    /// Rejoins words that PDF extraction split at a line-break hyphen, and strips
+    /// invisible soft hyphens.
+    private static func dehyphenatedText(_ text: String) -> String {
+        text.replacingOccurrences(of: "\u{00AD}", with: "")
+            .replacingOccurrences(
+                of: #"([A-Za-z])-[ \t]*\n[ \t]*([A-Za-z])"#,
+                with: "$1$2",
+                options: .regularExpression
+            )
     }
 
     /// Whole-word, lowercased alphanumeric token set (≥2 chars) — the haystack a name
