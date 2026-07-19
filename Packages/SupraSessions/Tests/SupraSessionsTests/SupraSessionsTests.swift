@@ -3799,7 +3799,17 @@ final class StubRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     }
 
     func runtimeStatus() async throws -> RuntimeStatus {
-        RuntimeStatus(state: .modelLoaded, loadedModelID: loadResult.modelID, activeGenerationID: nil, message: nil, metrics: nil)
+        // Report the truth the way the real service does: the model from the last
+        // load request. Before any load, fall back to the fixed loadResult id so
+        // fixtures that only need "some model is loaded" keep working.
+        let lastLoaded = lock.withLock { _loadRequests.last?.modelID }
+        return RuntimeStatus(
+            state: .modelLoaded,
+            loadedModelID: lastLoaded ?? loadResult.modelID,
+            activeGenerationID: nil,
+            message: nil,
+            metrics: nil
+        )
     }
 
     func restartRuntimeService() async throws {}
