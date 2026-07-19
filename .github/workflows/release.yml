@@ -3,14 +3,6 @@ name: Protected production release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: Semantic marketing version
-        required: true
-        type: string
-      build:
-        description: Monotonic positive build number
-        required: true
-        type: string
       expected_sha:
         description: Exact 40-character origin/main SHA with green protected CI
         required: true
@@ -61,11 +53,14 @@ jobs:
         run: git switch -C main --track origin/main
       - name: Execute protected release transaction
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_BUILD: ${{ inputs.build }}
           RELEASE_SHA: ${{ inputs.expected_sha }}
           RELEASE_CI_RUN_ID: ${{ inputs.ci_run_id }}
         run: |
+          # The reviewed commit is the only statement of release version
+          # intent; the preflight re-verifies these values against the same
+          # checked-out source fail-closed.
+          RELEASE_VERSION="$(bash Scripts/reviewed-release-metadata.sh Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj version)"
+          RELEASE_BUILD="$(bash Scripts/reviewed-release-metadata.sh Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj build)"
           bash Scripts/release.sh \
             --repository "${GITHUB_REPOSITORY}" \
             --version "${RELEASE_VERSION}" \

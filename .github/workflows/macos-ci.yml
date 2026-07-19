@@ -26,6 +26,12 @@ jobs:
         run: bash Tests/Scripts/test-macos-ci-gates.sh
       - name: Test SupraSessions Swift 6 portability guards
         run: bash Tests/Scripts/test-supra-sessions-swift6-portability.sh
+      - name: Test release ceremony gates
+        run: |
+          bash Tests/Scripts/test-reviewed-release-metadata.sh
+          bash Tests/Scripts/test-release-workflow-dispatch-inputs.sh
+          bash Tests/Scripts/test-release-dispatch.sh
+          bash Tests/Scripts/test-release-finish.sh
       - name: Verify repository facts
         run: bash Scripts/verify-repo-facts.sh
 

@@ -26,76 +26,70 @@ stop and fix the cause — never weaken a gate to proceed.
 
 ## Per-release procedure
 
-### 1. Candidate readiness (developer account)
+The release candidate commit (version + build bump in the pbxproj, `CHANGELOG.md`
+entry — advancing SECURITY.md's supported line and `Docs/Verified-Product-Claims.yml`
+when the covered wording changes) must be on `main` with `Protected macOS CI` green on
+its exact SHA. The reviewed commit is the only statement of the release version and
+build; nothing is hand-typed at dispatch time. Then, from a logged-in owner session
+(login Keychain unlocked, as it is during normal use):
 
-1. The release candidate commit (version + build bump in the pbxproj, `CHANGELOG.md`
-   entry) is on `main`, and `origin/main` == the candidate SHA.
-2. `Protected macOS CI` is green on that exact SHA. Record the run id:
-   `gh run list --branch main --workflow "Protected macOS CI" --limit 1 \
-    --json databaseId,headSha,conclusion`
-3. The live public-asset audit passes:
-   `bash Scripts/verify-public-repository-assets.sh cadespivey/Supra-AI`
-   If it reports prohibited font paths/blobs in any advertised ref, the release is
-   blocked until GitHub Support removes those refs. Do not weaken the gate.
-4. No release or tag exists yet for the version:
-   `gh release view vX.Y.Z` must fail; `git ls-remote --tags origin vX.Y.Z` must be empty.
-
-### 2. Start the runner
-
-1. From a logged-in owner session (login Keychain unlocked, as it is during normal use),
-   start the runner in the foreground for this run only:
-   `cd ~/actions-runner && ./run.sh`
-2. Confirm the runner shows **Idle** under repository Settings → Actions → Runners.
-
-### 3. Rehearse first (developer account)
-
-Every release is preceded by a green rehearsal of the same inputs — real signing,
-notarization, stapling, and the signed model/XPC smoke, with publication structurally
-impossible (`--no-publish`):
+### 1. Dispatch
 
 ```sh
-gh workflow run "Protected signed release rehearsal" \
-  -f version=X.Y.Z -f build=NNN \
-  -f expected_sha=<40-hex origin/main SHA> -f ci_run_id=<green CI run id>
+bash Scripts/release-dispatch.sh
 ```
 
-Approve the `production-release` deployment when GitHub prompts, then watch the run to
-completion. After it finishes, run step 5 (evidence + reset) before anything else.
+This verifies readiness (green `Protected macOS CI` on origin/main's exact SHA, unused
+version/tag, live public-asset audit), starts the runner for this run only, and
+dispatches `Protected production release` bound to that SHA and CI run. Every check it
+performs is re-verified fail-closed inside the protected transaction; the script only
+assembles inputs and fails fast. If the public-asset audit reports prohibited font
+paths/blobs in any advertised ref, the release is blocked until GitHub Support removes
+those refs — do not weaken the gate.
 
-### 4. Produce (developer account)
+### 2. Approve
 
-Same inputs, production workflow:
+Approve the `production-release` deployment when GitHub prompts. The transaction creates
+a draft release, uploads and re-verifies artifacts, signs the ZIP downloaded back from
+the draft, publishes, opens and merges the appcast PR (two files:
+`website/public/appcast.xml`, `website/lib/constants.ts`), waits for the Pages
+deployment, and re-downloads everything unauthenticated for digest comparison.
+`origin/main` must not move during the run — do not push anything until it completes.
+
+### 3. Finish
 
 ```sh
-gh workflow run "Protected production release" \
-  -f version=X.Y.Z -f build=NNN \
-  -f expected_sha=<same SHA> -f ci_run_id=<same run id>
+bash Scripts/release-finish.sh
 ```
 
-Approve the environment deployment. The transaction creates a draft release, uploads and
-re-verifies artifacts, signs the ZIP downloaded back from the draft, publishes, opens and
-merges the appcast PR (two files: `website/public/appcast.xml`, `website/lib/constants.ts`),
-waits for the Pages deployment, and re-downloads everything unauthenticated for digest
-comparison. `origin/main` must not move during the run — do not push anything until it
-completes.
+This watches the run to completion, stops the runner, archives evidence via
+`Scripts/reset-release-runner.sh` (including `release-result-vX.Y.Z.json`, whose
+recorded appcast merge commit the emergency rollback workflow requires) into
+`~/ReleaseEvidence/<timestamp>/`, and re-verifies the published release and
+https://supralegal.ai/appcast.xml as a user would. Evidence is archived for every
+completed run, green or red; a run that never completes leaves the runner and workspace
+untouched for investigation. The runner stays offline until the next approved run.
 
-On success, verify as a user would: the GitHub release page shows the notarized
-`SupraAI-X.Y.Z.dmg`/`.zip`, https://supralegal.ai serves the new version, and
-https://supralegal.ai/appcast.xml lists the new item.
+## Signed rehearsal policy
 
-### 5. Evidence and reset
+A signed rehearsal — the same build, signing, notarization, stapling, and signed
+model/XPC smoke with publication structurally impossible (`--no-publish`) — is required
+before the next production release whenever release machinery has changed since the last
+green signed run on this runner: `.github/workflows/release*.yml`, `Scripts/release*`,
+`Scripts/publish-release*`, `Scripts/prepare-release-appcast.sh`,
+`Scripts/lib/release-common.sh`, runner provisioning, the signing/notarization
+toolchain or Xcode, or a Sparkle update. Routine releases that change only product code
+proceed directly to production (owner decision, 2026-07-19); the hermetic mock
+transaction (`bash Tests/Scripts/test-release-transaction.sh`) continues to cover the
+transaction logic on every change.
 
-Immediately after every rehearsal or release run:
+To rehearse:
 
 ```sh
-bash Scripts/reset-release-runner.sh
+bash Scripts/release-dispatch.sh --rehearsal
+# approve the deployment, then
+bash Scripts/release-finish.sh --rehearsal
 ```
-
-This archives `build/release/` (manifests, signed-smoke result, and
-`release-result-vX.Y.Z.json` — the emergency rollback workflow requires its recorded
-appcast merge commit) into `~/ReleaseEvidence/<timestamp>/`, then clears the runner
-workspace. Then stop the runner (Ctrl-C on `run.sh`). The runner stays offline until the
-next approved run.
 
 ## Emergency withdrawal
 
