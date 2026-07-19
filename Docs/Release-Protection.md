@@ -163,6 +163,12 @@ GitHub, Apple, Sparkle infrastructure, or the public website. A signed release-c
 rehearsal is a separate, approved `Protected signed release rehearsal` run and must retain its
 manifest and log evidence; it is never performed from a developer checkout.
 
+Signed rehearsals are required whenever release machinery has changed since the last green
+signed run, and are not required for routine releases that change only product code (owner
+decision, 2026-07-19). The operative trigger list and procedure live in
+[Release-Runbook.md](Release-Runbook.md); the mock transaction above runs on every change
+regardless.
+
 ## Emergency withdrawal
 
 Use the rollback workflow with the release result's version, source SHA, and exact appcast
