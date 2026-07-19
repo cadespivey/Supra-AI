@@ -141,7 +141,8 @@ public final class ModelLibrary: ObservableObject {
         guard let uuid = UUID(uuidString: preferred.id) else {
             return .failure(.assignedModelMissing(role: role, modelID: preferred.id))
         }
-        if loadedModelID?.rawValue == uuid {
+        await settleInFlightLoad()
+        if loadedModelID?.rawValue == uuid, await runtimeConfirmsLoaded(uuid) {
             return .success(ModelID(uuid))
         }
 
@@ -216,7 +217,8 @@ public final class ModelLibrary: ObservableObject {
             setForcedModel(nil)
             return await ensureLoadedRoutedModelID(for: role, configuration: configuration)
         }
-        if loadedModelID?.rawValue == forced.rawValue {
+        await settleInFlightLoad()
+        if loadedModelID?.rawValue == forced.rawValue, await runtimeConfirmsLoaded(forced.rawValue) {
             return .success(forced)
         }
         await activateAndLoad(modelID: model.id)
@@ -408,6 +410,37 @@ public final class ModelLibrary: ObservableObject {
     /// disk) versus a user-registered folder (delete only unregisters it).
     public func isManagedDownload(_ model: ModelSummary) -> Bool {
         ManagedModelStorage.isManaged(path: model.path, roots: managedModelRoots)
+    }
+
+    /// Waits out a load another caller already started (a prewarm, the Models tab,
+    /// a concurrent feature) instead of failing because the runtime is busy. Every
+    /// generation surface funnels through the ensure functions, and the user's
+    /// expectation is "clicking Generate loads what it needs" — so an in-flight
+    /// load of any model is settled before deciding what to do next. Bounded well
+    /// above the largest local model's load time; a load RPC always resolves the
+    /// state to loaded or failed.
+    private func settleInFlightLoad() async {
+        var iterations = 0
+        while case .loading = loadState, iterations < 6000 {
+            iterations += 1
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
+    /// True when the runtime service itself confirms it currently holds `uuid`.
+    /// The published `loadState` is an app-side cache that goes stale whenever the
+    /// XPC service is reclaimed, crashes, or restarts between uses — trusting it
+    /// alone hands generation a model the service no longer has, which then fails
+    /// with the runtime's "No matching runtime model is loaded." A status probe is
+    /// a millisecond RPC next to a multi-second generate; an unreachable service
+    /// reports unconfirmed, and the caller falls through to a real load.
+    private func runtimeConfirmsLoaded(_ uuid: UUID) async -> Bool {
+        guard let status = try? await runtimeClient.runtimeStatus() else { return false }
+        if status.loadedModelID?.rawValue == uuid { return true }
+        // The cache lied — resynchronize it so status surfaces (Models tab, chat
+        // footer) stop reporting a model the runtime does not hold.
+        if case .loaded = loadState { loadState = .idle }
+        return false
     }
 
     /// Marks the given model active in the store and loads it into the runtime service.
