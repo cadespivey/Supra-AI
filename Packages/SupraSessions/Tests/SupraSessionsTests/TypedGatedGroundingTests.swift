@@ -96,6 +96,31 @@ final class TypedGatedGroundingTests: XCTestCase {
         XCTAssertEqual(controller.messages.last?.status, .completed)
     }
 
+    func testFlagOnEmptyTypedDraftFallsBackToProse() async throws {
+        // A weak model that emits a structurally-valid but EMPTY draft must not produce a blank
+        // completed answer — it falls back to the prose streaming path.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "McKernon Motors")
+        try await indexDoc(store, matter.id, "agreement.txt", "The service agreement was signed on March 3, 2024.")
+        try enableTypedGeneration(store)
+
+        let stub = splitStub(
+            typed: #"{"insufficient_evidence": false, "segments": []}"#,
+            prose: "PROSE FALLBACK ANSWER [S1]."
+        )
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What do my documents say about the agreement date?",
+            modelID: ModelID(), systemPrompt: nil, options: GenerationOptions()
+        )
+
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertTrue(answer.contains("PROSE FALLBACK ANSWER"), "an empty typed draft must fall back to prose; got: \(answer)")
+        XCTAssertFalse(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "must never persist a blank completed answer")
+    }
+
     func testFlagOnInventoryQuestionStaysDeterministic() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors")
