@@ -200,17 +200,42 @@ public final class AuthoritiesController: ObservableObject {
         }
         let summary = Self.cappedSummary(answer)
         guard !summary.isEmpty else { return "The model returned an empty summary." }
+        // Proportionate grounding: an abstractive summary isn't held to the citation
+        // contract, but a party/judge NAME it invents (absent from the opinion) is the one
+        // fabrication a blurb can smuggle in — flag it in an out-of-band caveat that
+        // travels with the persisted summary. Advisory, never a gate.
+        let annotation = Self.groundedSummaryAnnotation(summary: summary, opinionText: opinionText)
         do {
-            try store.authorities.updateCaseSummary(authorityID: authorityID, summary: summary)
+            try store.authorities.updateCaseSummary(authorityID: authorityID, summary: annotation.annotated)
         } catch {
             return "Couldn't save the summary: \(error.localizedDescription)"
         }
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "authority_summary_generated", actor: "runtime",
             summary: "Generated case summary for “\(item.caseName)”"
+                + (annotation.flaggedEntities.isEmpty ? "" : " (flagged \(annotation.flaggedEntities.count) ungrounded entity term(s))")
         )
         load()
         return nil
+    }
+
+    /// Annotates a model-generated case summary with an out-of-band caveat when it names a
+    /// person/entity (or email/phone) that does not appear verbatim in the source opinion.
+    /// A summary is abstractive — it legitimately paraphrases — so it is NOT held to the
+    /// citation/quote contract; this reuses the entity-grounding check that grounded chat
+    /// answers already run, as a proportionate advisory signal. Pure and deterministic so
+    /// it is unit-testable without the runtime. Never blocks.
+    nonisolated static func groundedSummaryAnnotation(
+        summary: String, opinionText: String
+    ) -> (annotated: String, flaggedEntities: [String]) {
+        let issues = LegalCitationVerifier.verifyGroundedEntities(answer: summary, sourceText: opinionText)
+        var seen = Set<String>()
+        let flagged = issues.compactMap(\.excerpt).filter { seen.insert($0.lowercased()).inserted }
+        guard !flagged.isEmpty else { return (summary, []) }
+        let list = flagged.prefix(5).joined(separator: ", ")
+        let caveat = "\n\n⚠️ Unverified: this AI summary references terms not found verbatim in the "
+            + "opinion (\(list)). Confirm against the source before relying."
+        return (summary + caveat, flagged)
     }
 
     /// Hard 100-word cap — the prompt asks, this enforces.
