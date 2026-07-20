@@ -248,6 +248,53 @@ final class MatterChatGroundingTests: XCTestCase {
         )
     }
 
+    func testSubstanceStemsDoNotFalseMatchInsideOrdinaryWords() {
+        // A procedural/status question whose words merely CONTAIN a substance stem
+        // ("issue for" ⊃ "sue for", "issued" ⊃ "sued", "pursuing" ⊃ "suing") plus a
+        // common this-case anchor must NOT be pulled into document grounding — it is
+        // a legal-route question. Whole-word matching is what keeps it .none.
+        for question in [
+            "What sanctions can the court issue for discovery abuse in this case?",
+            "Has the summons been issued in this action?",
+            "Was the motion reissued in this litigation?",
+        ] {
+            XCTAssertEqual(
+                MatterChatDocumentIntent.classify(question, folderNames: [], partyAnchors: ["ovd", "lowes"]),
+                MatterChatDocumentIntent.none,
+                "\"\(question)\" must not be document-grounded"
+            )
+        }
+    }
+
+    func testGenericGovernmentAndPlaceholderPartiesAreNotAnchors() {
+        // A government/placeholder plaintiff must not become a this-case anchor, or a
+        // general legal question mentioning it would over-trigger grounding.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.partyAnchors(matterName: "United States v. $50,000", clientNames: nil),
+            [],
+            "generic 'United States' and a numeric party must not anchor"
+        )
+        // A single-word matter nicknamed after a generic legal noun is not an anchor.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.partyAnchors(matterName: "Contract", clientNames: nil),
+            []
+        )
+        // The distinctive defendant is still an anchor even next to a generic plaintiff.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.partyAnchors(matterName: "State v. Rodriguez", clientNames: nil),
+            ["rodriguez"]
+        )
+    }
+
+    func testEstateVersusCaptionYieldsBothCleanPartyNames() {
+        // "Estate of Smith v. Jones" must split on " v. " and strip the "Estate of"
+        // prefix from the left side — not return a single malformed "smith v jones".
+        XCTAssertEqual(
+            MatterChatDocumentIntent.partyAnchors(matterName: "Estate of Smith v. Jones", clientNames: nil),
+            ["smith", "jones"]
+        )
+    }
+
     func testCanonicalRefusalConstantMatchesPromptContract() {
         // T-GRND-ESC-03 expected RED: compile error — DocumentQAPromptBuilder has
         // no `unsupportedAnswerReply` / `isUnsupportedAnswerReply`; the sentence

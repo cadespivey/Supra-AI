@@ -201,7 +201,7 @@ claims:
     verification: "Packages/SupraDocuments/Tests/SupraDocumentsTests/DocumentSupportVerifierTests.swift"
     ci_job: "macos-ci/swift-packages"
     applicable_version: "2.3.0 and later"
-    last_reviewed: "2026-07-18"
+    last_reviewed: "2026-07-20"
     publication_anchor: "README.md"
 
   - id: "DRAFTING-PREFILE-GATE"

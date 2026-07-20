@@ -58,6 +58,39 @@ enum MatterChatDocumentIntent: Equatable {
         "who signed", "who served", "who filed", "signatory", "signed by", "served by", "filed by"
     ]
 
+    /// Questions about the SUBSTANCE of the matter's own case — the cause(s) of
+    /// action, legal theory, what one party is suing another for, the relief sought,
+    /// the specific allegations. In a matter chat these are answered from the
+    /// matter's documents (the complaint, the pleadings), not the model's memory,
+    /// which otherwise confabulates claims. These only route to documents when the
+    /// question ALSO anchors to this case (see `caseAnchorPhrases` / `partyAnchors`),
+    /// so a general-law question ("elements of a negligence cause of action") still
+    /// reaches the CourtListener-grounded legal route.
+    static let caseSubstancePhrases = [
+        "cause of action", "causes of action",
+        "theory of law", "theory of liability", "theories of liability", "legal theory", "legal theories",
+        "claim against", "claims against", "claims alleged", "claim alleged", "claims asserted", "asserted claims",
+        "allege", "alleges", "alleged", "alleging", "allegation", "allegations",
+        "suing", "sued", "sue for", "sued for", "suing for", "sue over",
+        "relief sought", "seeking relief", "what relief", "prayer for relief",
+        "damages sought", "seeking damages", "claim for damages",
+        "accused of", "accuses", "accusing",
+        "infringe", "infringes", "infringed", "infringing", "infringement",
+        "breach of", "breached", "liable for", "liability for",
+        "counterclaim", "cross-claim", "crossclaim", "counts of the complaint",
+    ]
+
+    /// Phrases that anchor a question to THIS matter's case (as distinct from a
+    /// general legal question). Deliberately excludes bare "this matter" — it appears
+    /// in ordinary procedural questions ("the deadline in this matter") that must
+    /// reach the legal route — and bare "case"/"a case" ("remove a case to federal
+    /// court"). A `partyAnchors` hit (a party name from the matter record) is the
+    /// other anchor.
+    static let caseAnchorPhrases = [
+        "this case", "this lawsuit", "this action", "this suit", "this litigation",
+        "this dispute", "the complaint", "operative complaint", "the pleadings",
+    ]
+
     /// Phrases that mean "enumerate what exists" rather than "tell me what it says".
     static let inventoryPhrases = [
         "list ", "a list of", "list all", "list the", "list every",
@@ -68,7 +101,11 @@ enum MatterChatDocumentIntent: Equatable {
         "what do i have", "everything in", "all documents", "all the files", "all cases located"
     ]
 
-    static func classify(_ message: String, folderNames: [String]) -> MatterChatDocumentIntent {
+    static func classify(
+        _ message: String,
+        folderNames: [String],
+        partyAnchors: [String] = []
+    ) -> MatterChatDocumentIntent {
         let lower = message.lowercased()
 
         // Collection gate. "folder" is the strongest anchor (folders exist only in
@@ -91,16 +128,147 @@ enum MatterChatDocumentIntent: Equatable {
         let asksAboutMatterEntities = matterEntityPhrases.contains { lower.contains($0) }
             || lower.contains("@")
 
-        guard referencesCollection || asksAboutMatterEntities else { return .none }
+        // Case-substance questions ("what cause of action is OVD suing Lowe's for?")
+        // ground in the matter's own record, but ONLY when the question also anchors
+        // to this case — a this-case phrase, or a party name from the matter record.
+        // The conjunction keeps a general-law question ("elements of negligence")
+        // on the legal route while pulling a question about THIS case's claims into
+        // the documents. Whole-word matching (not substring) so the short "sue*"
+        // stems don't false-fire inside "issued" / "pursuing" / "issue for".
+        let asksCaseSubstance = caseSubstancePhrases.contains { containsWholeWord(lower, $0) }
+        let anchorsToThisCase = caseAnchorPhrases.contains { containsWholeWord(lower, $0) }
+            || anchorsMatchParty(lower, partyAnchors: partyAnchors)
+        let asksAboutCaseSubstance = asksCaseSubstance && anchorsToThisCase
+
+        guard referencesCollection || asksAboutMatterEntities || asksAboutCaseSubstance else {
+            return .none
+        }
 
         let folderHint = Self.folderHint(in: lower, folderNames: folderNames)
 
         // Only the "enumerate what exists" phrasing is an inventory listing; an identity
-        // question ("who are the parties?") wants the content path (retrieved passages).
+        // or case-substance question wants the content path (retrieved passages).
         if referencesCollection, inventoryPhrases.contains(where: { lower.contains($0) }) {
             return .inventory(folderHint: folderHint)
         }
         return .content(folderHint: folderHint)
+    }
+
+    /// Whether the message names one of the matter's parties. The message is
+    /// apostrophe-stripped so a party anchor derived from "Lowe's" ("lowes") matches
+    /// the user typing "lowes" or "Lowe's". Anchors match on a word boundary so a
+    /// short party name ("OVD") can't false-match mid-word.
+    static func anchorsMatchParty(_ lower: String, partyAnchors: [String]) -> Bool {
+        guard !partyAnchors.isEmpty else { return false }
+        let normalized = Self.stripApostrophes(lower)
+        return partyAnchors.contains { anchor in
+            !anchor.isEmpty && Self.containsWholeWord(normalized, anchor)
+        }
+    }
+
+    /// Party-name anchors from the matter's caption and client names — lowercased,
+    /// apostrophe-stripped, and free of corporate suffixes — used to tell a question
+    /// about THIS case's substance apart from a general legal question. Order:
+    /// caption parties first, then client names; deduplicated; short/noise tokens
+    /// dropped. E.g. ("OVD v. Lowe's", "Lowe's Home Centers LLC") →
+    /// ["ovd", "lowes", "lowes home centers"].
+    static func partyAnchors(matterName: String, clientNames: String?) -> [String] {
+        var raw = captionParties(matterName)
+        if let clientNames {
+            raw.append(contentsOf: clientNames
+                .split(whereSeparator: { $0 == "," || $0 == ";" })
+                .map(String.init))
+        }
+        var seen = Set<String>()
+        var anchors: [String] = []
+        for candidate in raw {
+            let normalized = normalizedAnchor(candidate)
+            // Skip too-short, purely-numeric, and generic party designations: a
+            // government/placeholder plaintiff ("United States", "State", "Doe") or a
+            // generic legal noun a matter is nicknamed after ("Contract") appears in
+            // countless general questions and would over-trigger document grounding.
+            guard normalized.count >= 3,
+                  normalized.contains(where: \.isLetter),
+                  !genericPartyAnchors.contains(normalized),
+                  seen.insert(normalized).inserted
+            else { continue }
+            anchors.append(normalized)
+        }
+        return anchors
+    }
+
+    /// Generic party designations that must NOT act as this-case anchors: government
+    /// and placeholder parties (in a huge share of captions) and generic legal nouns
+    /// a single-word matter might be nicknamed after.
+    static let genericPartyAnchors: Set<String> = [
+        "united states", "united states of america", "usa", "united states of",
+        "state", "the state", "people", "the people", "commonwealth",
+        "county", "the county", "city", "the city", "town", "village",
+        "board", "department", "district", "government", "agency", "commission",
+        "doe", "does", "john doe", "jane doe", "roe", "roes", "unknown",
+        "contract", "agreement", "matter", "case", "claim", "dispute",
+        "estate", "trust", "will", "lease", "note", "settlement", "appeal",
+    ]
+
+    /// The party names in a caption. Splits "A v. B" (and vs./versus variants) FIRST,
+    /// then strips an "In re / In the Matter of / Ex parte / Estate of" prefix from
+    /// each side — so "Estate of Smith v. Jones" yields ["Smith", "Jones"], not a
+    /// single malformed "Smith v Jones". A caption with no "v." yields its single
+    /// prefix-stripped party.
+    private static func captionParties(_ caption: String) -> [String] {
+        let text = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        for separator in [" v. ", " v ", " vs. ", " vs ", " versus "] {
+            if let range = text.range(of: separator, options: .caseInsensitive) {
+                return [
+                    strippingCaptionPrefix(String(text[..<range.lowerBound])),
+                    strippingCaptionPrefix(String(text[range.upperBound...])),
+                ]
+            }
+        }
+        return [strippingCaptionPrefix(text)]
+    }
+
+    private static func strippingCaptionPrefix(_ side: String) -> String {
+        let trimmed = side.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        for prefix in ["in re ", "in the matter of ", "ex parte ", "estate of "] {
+            if lower.hasPrefix(prefix) {
+                return String(trimmed.dropFirst(prefix.count))
+            }
+        }
+        return trimmed
+    }
+
+    /// Normalizes a party/client name to an anchor: lowercase, apostrophes removed
+    /// ("Lowe's" → "lowes"), "et al." dropped, punctuation collapsed to spaces, and
+    /// trailing corporate suffixes (LLC, Inc, Corp, …) removed.
+    private static func normalizedAnchor(_ name: String) -> String {
+        var text = stripApostrophes(name.lowercased())
+        text = text.replacingOccurrences(of: "et al.", with: " ")
+            .replacingOccurrences(of: "et al", with: " ")
+        text = text.replacingOccurrences(of: #"[^a-z0-9 ]+"#, with: " ", options: .regularExpression)
+        var tokens = text.split(separator: " ").map(String.init)
+        let suffixes: Set<String> = [
+            "llc", "inc", "corp", "corporation", "co", "company", "lp", "llp",
+            "pllc", "ltd", "na", "plc", "pc", "gmbh", "sa", "ag", "pa",
+        ]
+        while let last = tokens.last, suffixes.contains(last) { tokens.removeLast() }
+        return tokens.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func stripApostrophes(_ text: String) -> String {
+        text.replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "\u{2019}", with: "")
+    }
+
+    /// Whole-word (or whole-phrase) containment, so a 3-letter party anchor can't
+    /// match inside a longer word.
+    private static func containsWholeWord(_ haystack: String, _ needle: String) -> Bool {
+        let pattern = "\\b" + NSRegularExpression.escapedPattern(for: needle) + "\\b"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return haystack.contains(needle)
+        }
+        return regex.firstMatch(in: haystack, range: NSRange(haystack.startIndex..., in: haystack)) != nil
     }
 
     /// The folder a message refers to, if any. Matches only explicit folder syntax
@@ -228,7 +396,16 @@ final class MatterChatDocumentGrounding {
         guard !trimmed.isEmpty else { return nil }
 
         let folders = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
-        switch MatterChatDocumentIntent.classify(trimmed, folderNames: folders.map(\.name)) {
+        // Party names from the matter's caption / client list let a question about
+        // THIS case's substance ("what did OVD sue Lowe's for?") ground in the
+        // matter's documents instead of falling through to CourtListener research.
+        let matter = (try? store.matters.fetchMatter(id: matterID)) ?? nil
+        let partyAnchors: [String] = matter
+            .map { MatterChatDocumentIntent.partyAnchors(matterName: $0.name, clientNames: $0.clientNames) }
+            ?? []
+        switch MatterChatDocumentIntent.classify(
+            trimmed, folderNames: folders.map(\.name), partyAnchors: partyAnchors
+        ) {
         case .none:
             return nil
         case let .inventory(folderHint):
