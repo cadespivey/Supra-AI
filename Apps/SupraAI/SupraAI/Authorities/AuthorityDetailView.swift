@@ -148,6 +148,12 @@ struct AuthorityDetailView: View {
                     }
                 } else if let summary = authority.caseSummary {
                     Text(summary).supraReadingBody().textSelection(.enabled)
+                    Label(
+                        "AI-generated summary — verify against the opinion before relying.",
+                        systemImage: "sparkles"
+                    )
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
                     Button("Regenerate Summary") { generateSummary(authority) }
                         .disabled(library == nil)
                 } else {
