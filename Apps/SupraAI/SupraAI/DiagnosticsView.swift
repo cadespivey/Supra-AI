@@ -1,5 +1,6 @@
 import SupraCore
 import SupraRuntimeInterface
+import SupraSessions
 import SupraStore
 import SwiftUI
 
@@ -12,6 +13,9 @@ struct DiagnosticsView: View {
     /// message's first-token latency no longer includes a multi-second load.
     @State private var timings: [DiagnosticEventRecord] = []
     @State private var networkCleanupMessage: String?
+    @State private var capabilityReport: CapabilityReport?
+    @State private var runningCapabilityProbe = false
+    @State private var capabilityProbeMessage: String?
 
     var body: some View {
         List {
@@ -116,6 +120,46 @@ struct DiagnosticsView: View {
             }
 
             Section {
+                if let report = capabilityReport {
+                    LabeledContent("Generated", value: "\(report.generated)/\(report.total) cases")
+                    LabeledContent("Success rate", value: Self.percent(report.successRate))
+                    LabeledContent("First-attempt rate", value: Self.percent(report.firstAttemptRate))
+                    LabeledContent("Fallback rate", value: Self.percent(report.fallbackRate))
+                    LabeledContent("Avg attempts", value: String(format: "%.2f", report.avgAttempts))
+                    LabeledContent("Refusal accuracy", value: Self.percent(report.refusalAccuracy))
+                }
+                if runningCapabilityProbe {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Running probe…").foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("Run Reasoning Capability Probe") {
+                        Task {
+                            runningCapabilityProbe = true
+                            capabilityProbeMessage = nil
+                            let report = await environment.runReasoningCapabilityProbe()
+                            capabilityReport = report
+                            if report == nil {
+                                capabilityProbeMessage = "Load a model in the Models tab first."
+                            }
+                            runningCapabilityProbe = false
+                        }
+                    }
+                    .disabled(environment.modelLibrary.loadedModelID == nil
+                        || environment.runtimeServiceState == .generating)
+                    .accessibilityIdentifier("diagnostics.capability.run")
+                }
+                if let capabilityProbeMessage {
+                    Text(capabilityProbeMessage).font(.supraCaption).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Reasoning Capability").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
+            } footer: {
+                Text("Measures how reliably the loaded model emits the typed AnswerDraft schema over synthetic grounded fixtures — the Phase 1 typed-generation go/no-go. Synthetic text only; runs several generations, so it takes a moment.")
+            }
+
+            Section {
                 Text(nextStep)
                     .foregroundStyle(.secondary)
             } header: {
@@ -131,6 +175,10 @@ struct DiagnosticsView: View {
                 try? await Task.sleep(for: .seconds(10))
             }
         }
+    }
+
+    private static func percent(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
     }
 
     private func refreshTimings() {
