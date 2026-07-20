@@ -68,6 +68,25 @@ final class TypedGroundedGeneratorTests: XCTestCase {
         XCTAssertEqual(reason, .unparseable)
     }
 
+    func testEmptyNonRefusalDraftIsNotSuccessAndFallsBack() async {
+        // A non-refusal draft with no answer content is degenerate — the weak-model failure the
+        // fallback exists for. It must NOT be reported as a clean .generated; it re-asks and
+        // then falls back, rather than surfacing a blank "answer".
+        let empty = #"{"insufficient_evidence": false, "segments": []}"#
+        let outcome = await generate([empty, empty, empty], maxRepairs: 2)
+        guard case let .fallback(reason, attempts) = outcome else { return XCTFail("expected fallback, got \(outcome)") }
+        XCTAssertEqual(reason, .unvalidated)
+        XCTAssertEqual(attempts, 3)
+    }
+
+    func testEmptyDraftThenValidAnswerRecovers() async {
+        // An empty first reply re-asks; a real answer on the retry succeeds.
+        let empty = #"{"insufficient_evidence": false, "segments": []}"#
+        let outcome = await generate([empty, validJSON])
+        guard case let .generated(result) = outcome else { return XCTFail("expected generated, got \(outcome)") }
+        XCTAssertEqual(result.attempts, 2)
+    }
+
     func testTypedRefusalIsAcceptedNotRepaired() async {
         let refusal = #"{"insufficient_evidence": true, "reason": "no_coverage"}"#
         let outcome = await generate([refusal, validJSON])
