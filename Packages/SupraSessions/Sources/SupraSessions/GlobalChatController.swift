@@ -65,10 +65,11 @@ public final class GlobalChatController: ObservableObject {
     /// address laches?") still resolve to the case under discussion.
     private var activeNamedCaseByChatID: [String: String] = [:]
     private var activeGenerationID: GenerationID?
-    /// Set by `cancel()`, checked cooperatively at the fast→deep escalation boundary
-    /// where the in-flight work (a deep-retrieval LLM rerank) runs under its own
-    /// untracked generation ID that `cancelGeneration(activeGenerationID)` can't reach.
-    /// Reset at the start of every send.
+    /// Set by `cancel()`, checked cooperatively where in-flight work runs under its own
+    /// untracked generation ID that `cancelGeneration(activeGenerationID)` can't reach: the
+    /// fast→deep escalation boundary (a deep-retrieval LLM rerank) and the typed-generation
+    /// boundary (P1-T4, TypedGroundedGenerator's own untracked generations). Reset at the start
+    /// of every send.
     private var cancelRequested = false
 
     /// Top-level jurisdiction options (Federal courts plus each state's aggregate
@@ -746,8 +747,9 @@ public final class GlobalChatController: ObservableObject {
     /// Requests cancellation of the active generation. The runtime emits a
     /// `generationCancelled` event which the stream loop persists.
     public func cancel() {
-        // Record the request even when no generation is registered yet (during a
-        // retrieval/escalation await), so the escalation boundary can honor it.
+        // Record the request even when no runtime generation is registered yet (during a
+        // retrieval/escalation await or typed generation), so the escalation and
+        // typed-generation boundaries can honor it.
         cancelRequested = true
         guard let activeGenerationID else { return }
         let runtimeClient = runtimeClient
@@ -783,6 +785,16 @@ public final class GlobalChatController: ObservableObject {
             question: question, spans: spans, modelID: modelID,
             options: options, systemPrompt: systemPrompt, runtimeClient: runtimeClient
         )
+        // A Cancel pressed during the (bounded) typed generation can't reach its untracked
+        // generations; honor it here by discarding the result and marking the turn cancelled
+        // rather than committing a completed answer.
+        if cancelRequested {
+            try? store.chats.markVariantCancelled(variant.id)
+            try? store.generation.cancelGeneration(generationID: session.id)
+            updateMessage(id: assistant.id, content: "", status: .cancelled)
+            reloadMessages()
+            return true
+        }
         // A clean fallback: let the caller run the prose streaming path. Nothing was persisted.
         guard case let .generated(result) = outcome else { return false }
 
@@ -790,6 +802,12 @@ public final class GlobalChatController: ObservableObject {
             spans.map { (SpanID($0.sourceID), $0.label) }, uniquingKeysWith: { first, _ in first }
         )
         let answerText = AnswerDraftRenderer.render(result.draft, labelForSpanID: labelForSpanID)
+        // Defense in depth (the generator already prevents this): an empty non-refusal render
+        // is not a usable answer — fall back to the prose streaming path rather than persist a
+        // blank completed message.
+        if result.draft.refusal == nil, answerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return false
+        }
         var content = answerText
 
         do {
