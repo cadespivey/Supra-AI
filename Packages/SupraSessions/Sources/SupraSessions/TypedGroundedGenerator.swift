@@ -14,15 +14,21 @@ import SupraRuntimeInterface
 /// preserving the "no model-judges-model" guarantee. A clean typed refusal is a valid outcome
 /// and is never re-asked. The caller (or capability harness) decides what a `.fallback` means
 /// for its surface (e.g. degrade to the prose path).
-enum TypedGroundedGenerator {
-    struct Generated: Equatable {
-        let draft: AnswerDraft
-        let validation: ValidationResult
+public enum TypedGroundedGenerator {
+    public struct Generated: Equatable, Sendable {
+        public let draft: AnswerDraft
+        public let validation: ValidationResult
         /// 1-based number of model calls it took to reach this result.
-        let attempts: Int
+        public let attempts: Int
+
+        public init(draft: AnswerDraft, validation: ValidationResult, attempts: Int) {
+            self.draft = draft
+            self.validation = validation
+            self.attempts = attempts
+        }
     }
 
-    enum FallbackReason: String, Sendable, Equatable {
+    public enum FallbackReason: String, Sendable, Equatable {
         /// Every attempt failed to parse into the schema.
         case unparseable
         /// Parsed, but never passed exact attribution validation within the repair budget.
@@ -31,12 +37,12 @@ enum TypedGroundedGenerator {
         case modelError
     }
 
-    enum Outcome: Equatable {
+    public enum Outcome: Equatable, Sendable {
         case generated(Generated)
         case fallback(FallbackReason, attempts: Int)
     }
 
-    static func generate(
+    public static func generate(
         question: String,
         spans: [GroundedSpanInput],
         modelID: ModelID,
