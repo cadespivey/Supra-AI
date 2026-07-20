@@ -2,14 +2,21 @@ import Foundation
 import os
 import SupraDocuments
 
-/// The minimal projection of a retrieved grounded source the shadow adapter needs: its
+/// The minimal projection of a retrieved grounded source the reasoning pipeline needs: its
 /// inline `[S#]` label, its STABLE `sourceID` ("matter/chunk"), its packed text, and OCR
-/// confidence. Decouples the adapter from the heavier `GroundedSourceRef`.
-struct GroundedSpanInput: Equatable {
-    let label: String
-    let sourceID: String
-    let text: String
-    let lowConfidence: Bool
+/// confidence. Decouples the adapter/generator from the heavier `GroundedSourceRef`.
+public struct GroundedSpanInput: Equatable, Sendable {
+    public let label: String
+    public let sourceID: String
+    public let text: String
+    public let lowConfidence: Bool
+
+    public init(label: String, sourceID: String, text: String, lowConfidence: Bool) {
+        self.label = label
+        self.sourceID = sourceID
+        self.text = text
+        self.lowConfidence = lowConfidence
+    }
 }
 
 /// Phase 0 SHADOW adapter for the reasoning-framework reorg. It projects a grounded chat
