@@ -86,14 +86,18 @@ public enum TypedGroundedGenerator {
             }
 
             let validation = AttributionValidator.validate(draft: draft, evidence: evidence)
-            if validation.isClean {
+            // A refusal or a non-empty validated answer is a usable result. A non-refusal draft
+            // with no answer content (empty/blank segments) is degenerate — the weak-model
+            // failure the fallback exists for — so it re-asks and ultimately falls back rather
+            // than surfacing a blank "answer" that AttributionValidator finds no violation in.
+            if validation.isClean, Self.hasRenderableContent(draft) {
                 return .generated(Generated(draft: draft, validation: validation, attempts: attempt))
             }
             lastFailure = .unvalidated
-            prompt = Self.repairPrompt(
-                base: basePrompt,
-                problem: "Your previous JSON cited or quoted evidence that does not match the provided labels. Cite ONLY the labels shown, copy any quote text exactly, and reply with ONLY the JSON object."
-            )
+            let problem = Self.hasRenderableContent(draft)
+                ? "Your previous JSON cited or quoted evidence that does not match the provided labels. Cite ONLY the labels shown, copy any quote text exactly, and reply with ONLY the JSON object."
+                : "Your previous reply had no answer content. Provide one or more segments that answer the question (each citing a shown label), or set insufficient_evidence to true. Reply with ONLY the JSON object."
+            prompt = Self.repairPrompt(base: basePrompt, problem: problem)
         }
 
         return .fallback(lastFailure, attempts: totalAttempts)
@@ -101,5 +105,12 @@ public enum TypedGroundedGenerator {
 
     private static func repairPrompt(base: String, problem: String) -> String {
         "\(problem)\n\n\(base)"
+    }
+
+    /// Whether the draft carries something to show the reader: a typed refusal, or at least one
+    /// segment with non-whitespace text. An empty/blank-segment non-refusal draft renders to "".
+    private static func hasRenderableContent(_ draft: AnswerDraft) -> Bool {
+        if draft.refusal != nil { return true }
+        return draft.segments.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 }
