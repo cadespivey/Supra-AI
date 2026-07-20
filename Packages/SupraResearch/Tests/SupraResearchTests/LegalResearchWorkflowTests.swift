@@ -200,6 +200,71 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertTrue(stateReport.issues.contains { $0.kind == .jurisdictionMismatch })
     }
 
+    func testVerifierNeverFlagsFederalCircuitAuthorityAsJurisdictionMismatch() {
+        // T-JURIS-CAFC-01 expected RED: a Federal Circuit patent case saved to a
+        // Ninth Circuit patent matter is flagged "jurisdiction_mismatch"
+        // (2026-07-20 matter-chat screenshot). The Federal Circuit's appellate
+        // jurisdiction is subject-matter national (28 U.S.C. § 1295): its law
+        // applies in every regional circuit, so it is never a forum mismatch.
+        let cafc = LegalAuthority(
+            id: "courtlistener:opinion:4",
+            authorityType: .case,
+            caseName: "In re Bilski",
+            citation: "545 F.3d 943",
+            citations: ["545 F.3d 943"],
+            court: "United States Court of Appeals for the Federal Circuit",
+            courtID: "cafc",
+            text: "The court held that the machine-or-transformation test governs patent eligibility of process claims."
+        )
+        let report = LegalCitationVerifier.verify(
+            answer: "In re Bilski, 545 F.3d 943, applied the machine-or-transformation test to process claims [A1].",
+            authorities: [cafc],
+            expectedJurisdiction: "United States Court of Appeals for the Ninth Circuit"
+        )
+        XCTAssertFalse(
+            report.issues.contains { $0.kind == .jurisdictionMismatch },
+            report.issues.map(\.message).joined(separator: "; ")
+        )
+
+        // Metadata-poor saved records still qualify via the court name alone.
+        let namedOnly = LegalAuthority(
+            id: "courtlistener:opinion:5",
+            authorityType: .case,
+            caseName: "Named v. Only",
+            citation: "100 F.4th 1",
+            citations: ["100 F.4th 1"],
+            court: "Court of Appeals for the Federal Circuit",
+            text: "Holding."
+        )
+        let namedReport = LegalCitationVerifier.verify(
+            answer: "Named v. Only, 100 F.4th 1, so holds [A1].",
+            authorities: [namedOnly],
+            expectedJurisdiction: "United States Court of Appeals for the Ninth Circuit"
+        )
+        XCTAssertFalse(
+            namedReport.issues.contains { $0.kind == .jurisdictionMismatch },
+            namedReport.issues.map(\.message).joined(separator: "; ")
+        )
+
+        // The exemption stays narrow: a sister regional circuit is still a mismatch.
+        let sisterCircuit = LegalAuthority(
+            id: "courtlistener:opinion:6",
+            authorityType: .case,
+            caseName: "Sister v. Circuit",
+            citation: "999 F.3d 100",
+            citations: ["999 F.3d 100"],
+            court: "United States Court of Appeals for the Fifth Circuit",
+            courtID: "ca5",
+            text: "Holding."
+        )
+        let sisterReport = LegalCitationVerifier.verify(
+            answer: "Sister v. Circuit, 999 F.3d 100, so holds.",
+            authorities: [sisterCircuit],
+            expectedJurisdiction: "United States Court of Appeals for the Ninth Circuit"
+        )
+        XCTAssertTrue(sisterReport.issues.contains { $0.kind == .jurisdictionMismatch })
+    }
+
     func testVerifierRejectsWrongReporterAttachedToKnownCaseName() {
         let authority = LegalAuthority(
             id: "courtlistener:opinion:1",
