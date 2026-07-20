@@ -16,6 +16,7 @@ struct DiagnosticsView: View {
     @State private var capabilityReport: CapabilityReport?
     @State private var runningCapabilityProbe = false
     @State private var capabilityProbeMessage: String?
+    @State private var typedGenerationEnabled = false
 
     var body: some View {
         List {
@@ -153,10 +154,17 @@ struct DiagnosticsView: View {
                 if let capabilityProbeMessage {
                     Text(capabilityProbeMessage).font(.supraCaption).foregroundStyle(.secondary)
                 }
+                Toggle("Use typed generation for document Q&A (experimental)", isOn: $typedGenerationEnabled)
+                    .accessibilityIdentifier("diagnostics.typedGeneration.toggle")
+                    .onChange(of: typedGenerationEnabled) { _, enabled in
+                        try? environment.store.appSettings.setSetting(
+                            GlobalChatController.typedGroundedGenerationKey, value: enabled
+                        )
+                    }
             } header: {
                 Text("Reasoning Capability").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
             } footer: {
-                Text("Measures how reliably the loaded model emits the typed AnswerDraft schema over synthetic grounded fixtures — the Phase 1 typed-generation go/no-go. Synthetic text only; runs several generations, so it takes a moment.")
+                Text("Measures how reliably the loaded model emits the typed AnswerDraft schema over synthetic grounded fixtures — the Phase 1 typed-generation go/no-go. Synthetic text only; runs several generations, so it takes a moment. When the toggle is on, a matter's document Q&A is answered by typed generation (validated exactly), falling back to the prose path if the model can't hold the schema.")
             }
 
             Section {
@@ -169,6 +177,9 @@ struct DiagnosticsView: View {
         // Refresh on appear, then poll every 10 seconds while visible; the task is
         // cancelled automatically when the tab goes away.
         .task {
+            typedGenerationEnabled = (try? environment.store.appSettings.getSetting(
+                GlobalChatController.typedGroundedGenerationKey, as: Bool.self
+            )) ?? false
             while !Task.isCancelled {
                 await environment.refreshRuntimeStatus()
                 refreshTimings()

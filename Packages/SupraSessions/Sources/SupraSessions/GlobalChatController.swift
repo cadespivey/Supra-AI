@@ -108,6 +108,16 @@ public final class GlobalChatController: ObservableObject {
     static let jurisdictionOverrideKey = "globalChat.jurisdictionOverride"
     static let includeRelatedFederalKey = "globalChat.includeRelatedFederal"
 
+    /// Phase 1 gate switch (P1-T4): when true, a matter-document CONTENT question is answered
+    /// by typed generation (an AnswerDraft validated exactly by AttributionValidator, rendered
+    /// to [S#]-prose) instead of the prose Q&A path, with a clean fallback to prose streaming
+    /// when the model can't hold the schema. Default off; toggled in Diagnostics.
+    public static let typedGroundedGenerationKey = "reasoning.typedGroundedGeneration.enabled"
+
+    private var typedGroundedGenerationEnabled: Bool {
+        (try? store.appSettings.getSetting(Self.typedGroundedGenerationKey, as: Bool.self)) ?? false
+    }
+
     public init(
         store: SupraStore,
         runtimeClient: any RuntimeClientProtocol,
@@ -744,6 +754,109 @@ public final class GlobalChatController: ObservableObject {
         Task { _ = try? await runtimeClient.cancelGeneration(activeGenerationID) }
     }
 
+    /// Phase 1 gate switch (P1-T4): generate a typed AnswerDraft for a matter-document CONTENT
+    /// question, render it to `[S#]`-prose, and finalize it through the SAME persistence and
+    /// verification as the streamed path (reusing the existing helpers). Returns true when it
+    /// produced an answer; false on a clean fallback (the caller then uses the prose streaming
+    /// path, unchanged). The exact `AttributionValidator` has already gated the draft; the
+    /// extractive `DocumentSupportVerifier` still runs here as the versioned trust check, and
+    /// every out-of-band banner (entity, support) is appended exactly as on the streamed path.
+    private func finalizeTypedGroundedContentAnswer(
+        question: String,
+        grounded: GroundedChatContext,
+        groundingSources: [GroundedSourceRef],
+        groundingSourceTexts: [String],
+        groundingTrailer: String?,
+        groundingScopeFullyIndexed: Bool,
+        modelID: ModelID,
+        options: GenerationOptions,
+        systemPrompt: String?,
+        chatID: String,
+        assistant: MessageRecord,
+        variant: MessageVariantRecord,
+        session: GenerationSessionRecord
+    ) async -> Bool {
+        let spans = groundingSources.map {
+            GroundedSpanInput(label: $0.label, sourceID: $0.sourceID, text: $0.supportText, lowConfidence: $0.lowConfidence)
+        }
+        let outcome = await TypedGroundedGenerator.generate(
+            question: question, spans: spans, modelID: modelID,
+            options: options, systemPrompt: systemPrompt, runtimeClient: runtimeClient
+        )
+        // A clean fallback: let the caller run the prose streaming path. Nothing was persisted.
+        guard case let .generated(result) = outcome else { return false }
+
+        let labelForSpanID = Dictionary(
+            spans.map { (SpanID($0.sourceID), $0.label) }, uniquingKeysWith: { first, _ in first }
+        )
+        let answerText = AnswerDraftRenderer.render(result.draft, labelForSpanID: labelForSpanID)
+        var content = answerText
+
+        do {
+            try store.chats.appendToken(to: variant.id, token: answerText)
+            // Source-key trailer, entity-grounding banner, and support-verification banner are
+            // appended out-of-band exactly as on the streamed path.
+            if let groundingTrailer, !groundingTrailer.isEmpty {
+                try? store.chats.appendToken(to: variant.id, token: groundingTrailer)
+                content += groundingTrailer
+            }
+            if !groundingSourceTexts.isEmpty {
+                let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
+                    answer: answerText, sourceText: groundingSourceTexts.joined(separator: "\n\n")
+                )
+                if let banner = Self.entityGroundingBanner(entityIssues) {
+                    try? store.chats.appendToken(to: variant.id, token: banner)
+                    content += banner
+                }
+            }
+            let verification = try? DocumentSupportVerifier.verify(
+                answer: answerText,
+                sources: groundingSources.map {
+                    DocumentSupportSource(
+                        sourceID: $0.sourceID, label: $0.label, locator: $0.locator.encodedJSON(),
+                        text: $0.supportText, lowConfidence: $0.lowConfidence
+                    )
+                },
+                scopeFullyIndexed: groundingScopeFullyIndexed
+            )
+            let banner = verification.flatMap(Self.documentSupportBanner) ?? """
+
+            ---
+
+            ⚠️ **Document support check — verify before relying on this answer.**
+            - Proposition verification could not be completed.
+            """
+            if verification == nil || verification?.requiresReview == true {
+                try? store.chats.appendToken(to: variant.id, token: banner)
+                content += banner
+            }
+            try store.chats.completeVariant(variant.id)
+            try store.generation.completeGeneration(generationID: session.id)
+            try persistGroundedDocumentPacket(
+                messageID: assistant.id, question: question, context: grounded, verification: verification
+            )
+            updateMessageAssurance(
+                id: assistant.id,
+                state: Self.groundedAssurance(depth: grounded.depth, verificationStatus: verification?.verificationStatus)
+            )
+            let citations = persistSourceCitations(messageID: assistant.id, answer: answerText, sources: groundingSources)
+            updateMessage(id: assistant.id, content: content, status: .completed)
+            attachCitations(citations, toMessage: assistant.id)
+            if grounded.depth == .fast, !groundingSources.isEmpty {
+                deeperSearchOffer = DeeperSearchOffer(kind: .documents, chatID: chatID, question: question)
+            }
+        } catch {
+            try? store.chats.markVariantFailed(variant.id, reason: error.localizedDescription)
+            try? store.generation.failGeneration(
+                generationID: session.id, errorSummary: error.localizedDescription, diagnosticEventID: nil
+            )
+            errorMessage = error.localizedDescription
+            updateMessage(id: assistant.id, content: content, status: .failed)
+        }
+        reloadMessages()
+        return true
+    }
+
     /// The full persist-and-stream flow. Internal so tests can await it directly.
     func performSend(
         prompt: String,
@@ -893,6 +1006,23 @@ public final class GlobalChatController: ObservableObject {
                     )
                     reloadMessages()
                     return
+                }
+
+                // Phase 1 gate switch: a matter-document CONTENT question (grounded with packed
+                // [S#] sources) may be answered by typed generation — an AnswerDraft validated
+                // exactly and rendered to [S#]-prose — when enabled. A clean fallback drops
+                // through to the prose streaming path below (no regression). Inventory / no-source
+                // contexts and the flag-off case stream as before. Runs per grounding pass, so an
+                // escalated deep pass gets the same typed attempt with its richer sources.
+                if typedGroundedGenerationEnabled, let grounded, !groundingSources.isEmpty {
+                    let handled = await finalizeTypedGroundedContentAnswer(
+                        question: prompt, grounded: grounded, groundingSources: groundingSources,
+                        groundingSourceTexts: groundingSourceTexts, groundingTrailer: groundingTrailer,
+                        groundingScopeFullyIndexed: groundingScopeFullyIndexed,
+                        modelID: modelID, options: effectiveOptions, systemPrompt: effectiveSystemPrompt,
+                        chatID: chatID, assistant: assistant, variant: activeVariant, session: session
+                    )
+                    if handled { return }
                 }
 
                 let request = GenerateRequest(
