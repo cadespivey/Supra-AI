@@ -68,7 +68,6 @@ public enum AttributionValidator {
             return ValidationResult(status: .refused, violations: [])
         }
 
-        let ids = evidence.ids
         var violations: [AttributionViolation] = []
 
         for segment in draft.segments {
