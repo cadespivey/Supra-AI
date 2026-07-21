@@ -71,7 +71,14 @@ final class LegalResearchWorkflowTests: XCTestCase {
             LegalAuthority(id: "a1", authorityType: .case, caseName: "Big", text: longText)
         ])
         XCTAssertTrue(packet.contains("[text truncated to fit the context window]"))
-        XCTAssertLessThan(packet.count, longText.count, "an overlong authority must be trimmed to its budget")
+        // Supersedes the former `packet.count < longText.count` proxy, which the fixed
+        // fencing overhead (SECURITY BOUNDARY preamble + markers) invalidated without any
+        // change to trimming. Assert the trim directly: the untrimmed body must be absent.
+        XCTAssertFalse(packet.contains(longText), "the untrimmed authority text must not appear")
+        XCTAssertLessThan(
+            LegalResearchPromptBuilder.maxAuthorityTextChars, longText.count,
+            "sanity: the fixture is longer than the budget"
+        )
     }
 
     func testShortBarePacketLabelIsUnverifiableAndFailsReport() throws {
