@@ -559,6 +559,117 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertTrue(report.issues.contains { $0.kind == .jurisdictionMismatch && ($0.excerpt?.contains("N.Y.3d") ?? false) })
     }
 
+    // MARK: - Jurisdiction-as-data (Phase 3a)
+    //
+    // These four run through the production `verify(...)` entry point, so they prove the
+    // court-hierarchy resolver is *wired* into both jurisdiction call sites — not merely
+    // present. Unit coverage of the resolver itself lives in
+    // `JurisdictionScopeResolverTests`.
+
+    /// T-JVER-01. Expected RED: `jurisdictionMatches` compares by containment and
+    /// `"arkansas".contains("kansas")` is true, so today the Arkansas authority passes
+    /// as Kansas authority and NO `.jurisdictionMismatch` issue is emitted. This is the
+    /// fail-OPEN direction — the safety flag is silently removed.
+    func testSubstringStateNameIsFlaggedAsJurisdictionMismatch() {
+        let arkansas = LegalAuthority(
+            id: "courtlistener:opinion:ar",
+            authorityType: .case,
+            caseName: "Ark v. Ansas",
+            citation: "500 S.W.3d 100",
+            citations: ["500 S.W.3d 100"],
+            court: "Supreme Court of Arkansas",
+            jurisdiction: "Arkansas"
+        )
+        let report = LegalCitationVerifier.verify(
+            answer: "Ark v. Ansas, 500 S.W.3d 100, states the controlling rule.",
+            authorities: [arkansas],
+            expectedJurisdiction: "Kansas"
+        )
+        XCTAssertTrue(
+            report.issues.contains {
+                $0.kind == .jurisdictionMismatch && ($0.excerpt?.contains("S.W.3d") ?? false)
+            },
+            "an Arkansas authority must not satisfy a Kansas jurisdiction requirement"
+        )
+    }
+
+    /// T-JVER-02. Expected RED: `"west virginia".contains("virginia")`, so no issue is
+    /// emitted today.
+    func testWestVirginiaAuthorityIsFlaggedInVirginiaMatter() {
+        let westVirginia = LegalAuthority(
+            id: "courtlistener:opinion:wv",
+            authorityType: .case,
+            caseName: "West v. Virginia",
+            citation: "800 S.E.2d 200",
+            citations: ["800 S.E.2d 200"],
+            court: "Supreme Court of Appeals of West Virginia",
+            jurisdiction: "West Virginia"
+        )
+        let report = LegalCitationVerifier.verify(
+            answer: "West v. Virginia, 800 S.E.2d 200, states the controlling rule.",
+            authorities: [westVirginia],
+            expectedJurisdiction: "Virginia"
+        )
+        XCTAssertTrue(
+            report.issues.contains {
+                $0.kind == .jurisdictionMismatch && ($0.excerpt?.contains("S.E.2d") ?? false)
+            },
+            "a West Virginia authority must not satisfy a Virginia jurisdiction requirement"
+        )
+    }
+
+    /// T-JVER-03. Expected RED: the abbreviated court name, the spelled-out expected
+    /// jurisdiction, and the `ca11` courtID share no substring in either direction, so
+    /// today a correct Eleventh Circuit authority IS flagged in an Eleventh Circuit
+    /// matter. This is the fail-CLOSED direction the `isNationallyBinding` needle list
+    /// has been patched for one court at a time.
+    func testAbbreviatedCircuitNotationIsNotFlagged() {
+        let eleventh = LegalAuthority(
+            id: "courtlistener:opinion:ca11",
+            authorityType: .case,
+            caseName: "Eleven v. Circuit",
+            citation: "900 F.3d 1100",
+            citations: ["900 F.3d 1100"],
+            court: "U.S. Court of Appeals for the 11th Circuit",
+            courtID: "ca11"
+        )
+        let report = LegalCitationVerifier.verify(
+            answer: "Eleven v. Circuit, 900 F.3d 1100, states the controlling rule.",
+            authorities: [eleventh],
+            expectedJurisdiction: "United States Court of Appeals for the Eleventh Circuit"
+        )
+        XCTAssertFalse(
+            report.issues.contains { $0.kind == .jurisdictionMismatch },
+            report.issues.map(\.message).joined(separator: "; ")
+        )
+    }
+
+    /// T-JVER-04. The same authority cited by `[A#]` packet label rather than by
+    /// reporter citation. The jurisdiction check has two separate call sites; a fix
+    /// applied only to the citation site leaves this one RED. Expected RED: same
+    /// containment failure as T-JVER-03, reached through the label path.
+    func testAbbreviatedCircuitNotationIsNotFlaggedViaPacketLabel() {
+        let eleventh = LegalAuthority(
+            id: "courtlistener:opinion:ca11-label",
+            authorityType: .case,
+            caseName: "Eleven v. Circuit",
+            citation: "900 F.3d 1100",
+            citations: ["900 F.3d 1100"],
+            court: "U.S. Court of Appeals for the 11th Circuit",
+            courtID: "ca11",
+            text: "The court held that the claim accrues on discovery."
+        )
+        let report = LegalCitationVerifier.verify(
+            answer: "The claim accrues on discovery [A1].",
+            authorities: [eleventh],
+            expectedJurisdiction: "United States Court of Appeals for the Eleventh Circuit"
+        )
+        XCTAssertFalse(
+            report.issues.contains { $0.kind == .jurisdictionMismatch },
+            report.issues.map(\.message).joined(separator: "; ")
+        )
+    }
+
     // MARK: - Precedential ranking (audit [31])
 
     func testUnpublishedAuthorityRanksBelowPublished() {
@@ -589,6 +700,81 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertEqual(ranked.first?.authority.id, published.id)
         XCTAssertTrue(ranked.first?.reasons.contains("precedential") ?? false)
         XCTAssertTrue(ranked.last?.reasons.contains("non_precedential") ?? false)
+    }
+
+    // MARK: - Jurisdiction-as-data in ranking (Phase 3a)
+    //
+    // `LegalAuthorityRanker` carried its own copy of the containment comparison the
+    // verifier just retired, awarding a +40 "jurisdiction_match" from the same broken
+    // relation. Retrieval ranking and citation verification must answer "is this
+    // authority in the requested jurisdiction?" the same way.
+
+    /// T-JRANK-01. Expected RED: `matches` compares by containment, so
+    /// `"arkansas".contains("kansas")` awards the Arkansas authority a
+    /// `jurisdiction_match` in a Kansas matter — ranking non-binding authority level
+    /// with, and by recency above, the genuinely binding Kansas case.
+    ///
+    /// The two authorities are identical apart from jurisdiction and court, so
+    /// `jurisdiction_match` is the only score that can separate them.
+    func testRankerDoesNotCreditSubstringJurisdictionMatch() {
+        let arkansas = LegalAuthority(
+            id: "courtlistener:opinion:rank-ar",
+            authorityType: .case,
+            caseName: "Ark v. Ansas",
+            citation: "500 S.W.3d 100",
+            citations: ["500 S.W.3d 100"],
+            court: "Supreme Court of Arkansas",
+            jurisdiction: "Arkansas",
+            dateFiled: "2024-01-01"
+        )
+        let kansas = LegalAuthority(
+            id: "courtlistener:opinion:rank-ks",
+            authorityType: .case,
+            caseName: "Kan v. Sas",
+            citation: "500 P.3d 200",
+            citations: ["500 P.3d 200"],
+            court: "Supreme Court of Kansas",
+            jurisdiction: "Kansas",
+            dateFiled: "2020-01-01"
+        )
+        let classification = LegalQueryClassification(jurisdiction: "Kansas", legalIssue: "general")
+        let ranked = LegalAuthorityRanker.rank([arkansas, kansas], for: classification)
+
+        let arkansasReasons = ranked.first { $0.authority.id == arkansas.id }?.reasons ?? []
+        XCTAssertFalse(
+            arkansasReasons.contains("jurisdiction_match"),
+            "an Arkansas authority must not score a jurisdiction match in a Kansas matter"
+        )
+        XCTAssertEqual(
+            ranked.first?.authority.id,
+            kansas.id,
+            "binding Kansas authority must outrank the out-of-forum case despite being older"
+        )
+    }
+
+    /// T-JRANK-02. Expected RED: the abbreviated court name and the spelled-out
+    /// jurisdiction share no substring, and neither contains the `ca11` courtID, so
+    /// genuinely binding circuit authority is denied its `jurisdiction_match` and
+    /// ranks below less relevant results.
+    func testRankerCreditsAbbreviatedCircuitNotation() {
+        let eleventh = LegalAuthority(
+            id: "courtlistener:opinion:rank-ca11",
+            authorityType: .case,
+            caseName: "Eleven v. Circuit",
+            citation: "900 F.3d 1100",
+            citations: ["900 F.3d 1100"],
+            court: "U.S. Court of Appeals for the 11th Circuit",
+            courtID: "ca11"
+        )
+        let classification = LegalQueryClassification(
+            jurisdiction: "United States Court of Appeals for the Eleventh Circuit",
+            legalIssue: "general"
+        )
+        let ranked = LegalAuthorityRanker.rank([eleventh], for: classification)
+        XCTAssertTrue(
+            ranked.first?.reasons.contains("jurisdiction_match") ?? false,
+            "Eleventh Circuit authority must score a jurisdiction match in an Eleventh Circuit matter"
+        )
     }
 
     // MARK: - Source planning
