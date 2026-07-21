@@ -266,6 +266,14 @@ final class AppEnvironment: ObservableObject {
 
     /// Loads persisted state and refreshes runtime status on launch.
     func bootstrap() async {
+        // Headless Phase 2 coverage-routing evidence run (`-runCoverageShadowProbe`): runs FIRST,
+        // on the freshly-opened real store, before any bootstrap writes or the XPC/model-warm
+        // work — so it is genuinely read-only and does not depend on the runtime service. No-op
+        // without the flag; skipped on a fallback/recovery store so an empty tally is not mistaken
+        // for real evidence.
+        if !usingFallbackStore, databaseRecoveryState == nil {
+            await runCoverageShadowProbeIfRequested()
+        }
         // Reconcile any validation run abandoned by a previous quit/crash so it
         // surfaces as cancelled rather than lingering as in-progress.
         try? store.validation.markUnfinishedRunsCancelled()
@@ -310,11 +318,6 @@ final class AppEnvironment: ObservableObject {
         // the chat model — and it removes the first-use wait on Document Q&A, semantic
         // search, and import indexing.
         if !Self.isUITestMode { documentSetupController.prewarmEmbeddingModel() }
-        // Headless Phase 2 coverage-routing evidence run (`-runCoverageShadowProbe`): read-only,
-        // prints the tally and exits. No-op without the flag. Placed after the runtime/embedding
-        // model are known so the probe can use real semantic coverage, and before the queue/backup
-        // work so a probe launch does no extra writes.
-        await runCoverageShadowProbeIfRequested()
         // Reconcile any document job interrupted by a previous quit (plan §5.4).
         documentQueue.bootstrap()
         // Auto-purge documents and chats soft-deleted past the retention window
@@ -388,13 +391,16 @@ final class AppEnvironment: ObservableObject {
     }
 
     /// Headless evidence run (`-runCoverageShadowProbe`): runs the coverage-routing probe over the
-    /// real store, emits the tally as delimited JSON on stdout and to a file in the app container,
+    /// real store and emits the tally as delimited JSON — to the general pasteboard (readable via
+    /// `pbpaste`, the sandbox-crossing channel `-dumpChats` uses), stdout, and a container file —
     /// then exits. Read-only, so it is safe on the real store (Release only, per the
-    /// launch-correct-build rule). No-op unless the flag is present. Lets the probe run without the
-    /// GUI, since the on-disk store cannot be safely opened by a separate process (migrations).
+    /// launch-correct-build rule). No-op unless the flag is present. Uses FTS-only coverage
+    /// (`embedder: nil`) so it does not depend on the runtime XPC/embedding model: a reliable,
+    /// clearly-labeled lower bound (`usedSemantic: false`). The Diagnostics button runs the same
+    /// probe with the real embedder for the full semantic signal.
     func runCoverageShadowProbeIfRequested() async {
         guard ProcessInfo.processInfo.arguments.contains("-runCoverageShadowProbe") else { return }
-        let report = await runCoverageRoutingShadowProbe()
+        let report = await CoverageRoutingProbe.run(store: store, embedder: nil)
         let payload: [String: Any] = [
             "matterCount": report.matterCount,
             "questionsScanned": report.questionsScanned,
@@ -415,6 +421,11 @@ final class AppEnvironment: ObservableObject {
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("coverage-shadow-report.json")
         try? json.data(using: .utf8)?.write(to: fileURL)
+        // Pasteboard is the reliable channel out of the sandbox for a headless run (a GUI app's
+        // stdout is not captured, and the container file is TCC-protected from other processes).
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("===COVERAGE_SHADOW_REPORT===\n\(json)", forType: .string)
         print("===COVERAGE_SHADOW_REPORT_BEGIN===")
         print(json)
         print("===COVERAGE_SHADOW_REPORT_END===")
