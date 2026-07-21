@@ -28,5 +28,8 @@
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3"
   },
-  "type": "module"
+  "type": "module",
+  "overrides": {
+    "sharp": "^0.35.3"
+  }
 }
