@@ -347,6 +347,24 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
+    /// Runs the reasoning-framework capability probe against the currently loaded model:
+    /// measures how reliably it emits the typed `AnswerDraft` schema over synthetic grounded
+    /// fixtures (the Phase 1 typed-generation go/no-go). Returns nil when no model is loaded.
+    /// Greedy, thinking-off decoding — mirroring how typed grounded generation will run.
+    func runReasoningCapabilityProbe() async -> CapabilityReport? {
+        guard let modelID = modelLibrary.loadedModelID else { return nil }
+        var options = ModelRouter(configuration: .fromEnvironment())
+            .route(forStructuredOutput: .documentQA)?.options ?? GenerationOptions()
+        options.thinkingBudget = .off
+        return await CapabilityHarness.run(
+            fixtures: CapabilityHarness.standardFixtures(),
+            modelID: modelID,
+            options: options,
+            systemPrompt: nil,
+            runtimeClient: runtimeClient
+        )
+    }
+
     private func promoteApprovedDocumentChunkerDefaultIfNeeded() async {
         isChangingDocumentChunker = true
         defer { isChangingDocumentChunker = false }

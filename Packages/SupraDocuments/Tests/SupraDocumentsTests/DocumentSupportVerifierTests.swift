@@ -148,6 +148,154 @@ final class DocumentSupportVerifierTests: XCTestCase {
         XCTAssertTrue(incomplete.requiresReview)
     }
 
+    func testIncompleteScopeWarningQuotesClaimTextWithoutInternalID() throws {
+        // Expected RED: the scopeFullyIndexed guard still interpolates the internal
+        // proposition ID — "Proposition document-proposition-1 came from an
+        // incompletely indexed scope." — so the quoted claim text is absent and the
+        // internal ID leaks into the user-facing warning.
+        let report = try verify(
+            "Payment was due March 3, 2025 [S1].",
+            sources: [source(text: "Payment was due March 3, 2025.")],
+            scopeFullyIndexed: false
+        )
+
+        let warning = try XCTUnwrap(
+            report.warnings.first { $0.hasSuffix("came from an incompletely indexed scope.") },
+            "the per-proposition incomplete-scope warning must be present"
+        )
+        XCTAssertTrue(
+            warning.contains("“Payment was due March 3, 2025”"),
+            "the warning must quote the claim text; got: \(warning)"
+        )
+        XCTAssertFalse(
+            warning.contains("document-proposition-1"),
+            "the internal proposition ID must not appear in the user-facing warning; got: \(warning)"
+        )
+    }
+
+    func testIncompleteScopeWarningTruncatesLongClaimQuote() throws {
+        // Expected RED: no quoted snippet exists at all — the warning names the
+        // internal ID, so the truncated quote with its trailing ellipsis is absent.
+        let claim = "The switching yard maintenance contractor delivered the amended brake "
+            + "inspection report to the McKernon Motors compliance office on March 3, 2025"
+        let report = try verify(
+            claim + " [S1].",
+            sources: [source(text: claim + ".")],
+            scopeFullyIndexed: false
+        )
+
+        let warning = try XCTUnwrap(
+            report.warnings.first { $0.hasSuffix("came from an incompletely indexed scope.") },
+            "the per-proposition incomplete-scope warning must be present"
+        )
+        XCTAssertTrue(
+            warning.contains("“The switching yard maintenance contractor delivered the amended brake inspection…”"),
+            "claims past eighty characters must be truncated with an ellipsis; got: \(warning)"
+        )
+        XCTAssertFalse(
+            warning.contains(claim),
+            "the full untruncated claim must not flood the warning banner; got: \(warning)"
+        )
+    }
+
+    func testMissingCitationWarningQuotesClaimTextWithoutInternalID() throws {
+        // Gating history: observed RED before PR #80's quoted-warning conversion as
+        // "Proposition document-proposition-1 has no citation in the same
+        // proposition." Pins the quoted-claim contract so the internal ID cannot
+        // return to the user-facing warning.
+        let report = try verify(
+            "Payment was due March 3, 2025.",
+            sources: [source(text: "Payment was due March 3, 2025.")]
+        )
+
+        let warning = try XCTUnwrap(
+            report.warnings.first { $0.hasSuffix("has no citation in the same proposition.") },
+            "the per-proposition missing-citation warning must be present"
+        )
+        XCTAssertTrue(
+            warning.contains("“Payment was due March 3, 2025”"),
+            "the warning must quote the claim text; got: \(warning)"
+        )
+        XCTAssertFalse(
+            warning.contains("document-proposition-1"),
+            "the internal proposition ID must not appear in the user-facing warning; got: \(warning)"
+        )
+    }
+
+    func testUnresolvedSourceWarningQuotesClaimTextWithoutInternalID() throws {
+        // Gating history: observed RED before PR #80's quoted-warning conversion as
+        // "Proposition document-proposition-1 cites unresolved source S9." Pins the
+        // quoted-claim contract so the internal ID cannot return to the
+        // user-facing warning.
+        let report = try verify(
+            "Payment was due March 3, 2025 [S9].",
+            sources: [source(text: "Payment was due March 3, 2025.")]
+        )
+
+        let warning = try XCTUnwrap(
+            report.warnings.first { $0.hasSuffix("cites unresolved source S9.") },
+            "the per-proposition unresolved-source warning must be present"
+        )
+        XCTAssertTrue(
+            warning.contains("“Payment was due March 3, 2025”"),
+            "the warning must quote the claim text; got: \(warning)"
+        )
+        XCTAssertFalse(
+            warning.contains("document-proposition-1"),
+            "the internal proposition ID must not appear in the user-facing warning; got: \(warning)"
+        )
+    }
+
+    func testContradictionWarningQuotesClaimTextWithoutInternalID() throws {
+        // Gating history: observed RED before PR #80's quoted-warning conversion as
+        // "Cited source text contains materially contradictory evidence for
+        // proposition document-proposition-1." Pins the quoted-claim contract so
+        // the internal ID cannot return to the user-facing warning.
+        let report = try verify(
+            "A late fee applied [S1].",
+            sources: [source(text: "Payment was due March 3, 2025, and no late fee applied.")]
+        )
+
+        XCTAssertEqual(report.results.map(\.status), [.unsupported])
+        let warning = try XCTUnwrap(
+            report.warnings.first { $0.hasPrefix("Cited source text contains materially contradictory evidence") },
+            "the per-proposition contradiction warning must be present"
+        )
+        XCTAssertTrue(
+            warning.contains("“A late fee applied”"),
+            "the warning must quote the claim text; got: \(warning)"
+        )
+        XCTAssertFalse(
+            warning.contains("document-proposition-1"),
+            "the internal proposition ID must not appear in the user-facing warning; got: \(warning)"
+        )
+    }
+
+    func testUnsupportedWarningQuotesClaimTextWithoutInternalID() throws {
+        // Gating history: observed RED before PR #80's quoted-warning conversion as
+        // "No cited source text supports proposition document-proposition-1." Pins
+        // the quoted-claim contract so the internal ID cannot return to the
+        // user-facing warning.
+        let report = try verify(
+            "The contract renewed automatically [S1].",
+            sources: [source(text: "Payment was due March 3, 2025, and no late fee applied.")]
+        )
+
+        XCTAssertEqual(report.results.map(\.status), [.unsupported])
+        let warning = try XCTUnwrap(
+            report.warnings.first { $0.hasPrefix("No cited source text supports") },
+            "the per-proposition unsupported warning must be present"
+        )
+        XCTAssertTrue(
+            warning.contains("“The contract renewed automatically”"),
+            "the warning must quote the claim text; got: \(warning)"
+        )
+        XCTAssertFalse(
+            warning.contains("document-proposition-1"),
+            "the internal proposition ID must not appear in the user-facing warning; got: \(warning)"
+        )
+    }
+
     func testInstructionBearingSourceCannotProduceCleanDecision() throws {
         // ACR-DOCSUP-09 expected RED: source instructions are currently raw prompt text.
         let malicious = source(

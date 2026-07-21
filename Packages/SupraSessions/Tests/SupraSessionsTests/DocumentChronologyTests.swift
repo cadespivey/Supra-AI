@@ -44,7 +44,7 @@ final class DocumentChronologyTests: XCTestCase {
         ))
 
         let expectedMarkdown = """
-        > ⚠️ **DOCUMENT SUPPORT NEEDS REVIEW — DO NOT RELY.** Proposition document-proposition-1 came from an incompletely indexed scope. Generated from an incompletely indexed scope.
+        > ⚠️ **DOCUMENT SUPPORT NEEDS REVIEW — DO NOT RELY.** Proposition “2023-11-02 Complaint filed” came from an incompletely indexed scope. Generated from an incompletely indexed scope.
 
         > ⚠️ **CHRONOLOGY NEEDS REVIEW — DO NOT RELY.** One or more extraction passes omitted source labels; their dated facts may be uncovered.
 

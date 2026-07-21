@@ -146,7 +146,7 @@ public enum DocumentSupportVerifier {
         }
 
         guard scopeFullyIndexed else {
-            return try result(.unverifiable, ["Proposition \(proposition.id) came from an incompletely indexed scope."])
+            return try result(.unverifiable, ["Proposition \(quotedSnippet(proposition.text)) came from an incompletely indexed scope."])
         }
         guard !proposition.citationLabels.isEmpty else {
             return try result(.unverifiable, ["Proposition \(quotedSnippet(proposition.text)) has no citation in the same proposition."])

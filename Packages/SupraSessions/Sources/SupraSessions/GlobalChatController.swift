@@ -1033,6 +1033,21 @@ public final class GlobalChatController: ObservableObject {
                                 scopeFullyIndexed: groundingScopeFullyIndexed
                             )
                             groundingVerification = report
+                            // Phase 0 SHADOW: run the exact AttributionValidator alongside the
+                            // lexical verifier and log its verdict (metadata only). Changes
+                            // nothing user-visible; surfaces where exact attribution validation
+                            // would fire — and where it diverges from the lexical check.
+                            let shadow = GroundedAttributionAdapter.shadowValidate(
+                                answer: answerText,
+                                sources: groundingSources.map {
+                                    GroundedSpanInput(
+                                        label: $0.label, sourceID: $0.sourceID,
+                                        text: $0.supportText, lowConfidence: $0.lowConfidence
+                                    )
+                                },
+                                isRefusal: report?.appearsUnsupported ?? false
+                            )
+                            GroundedAttributionAdapter.logShadow(shadow, lexicalRequiresReview: report?.requiresReview)
                             let banner = report.flatMap(Self.documentSupportBanner) ?? """
 
                             ---
