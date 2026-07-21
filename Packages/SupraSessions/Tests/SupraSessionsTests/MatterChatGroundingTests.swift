@@ -487,6 +487,86 @@ final class MatterChatGroundingTests: XCTestCase {
         XCTAssertTrue(answer.localizedCaseInsensitiveContains("instruction"))
     }
 
+    /// A reasoning model streams `<think>…</think>` before its answer. The support check must
+    /// inspect only the answer — otherwise every chain-of-thought step becomes an uncited
+    /// "proposition" and the banner fills with reasoning noise on an otherwise well-grounded
+    /// answer. Expected RED: verification runs over the raw streamed content, so the reasoning
+    /// steps are flagged "has no citation in the same proposition" and a banner appears.
+    func testReasoningTraceIsStrippedBeforeSupportCheck() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Reasoning Strip Matter")
+        try await indexDocument(
+            store, matterID: matter.id, name: "fee.txt", text: "The engagement fee was $900."
+        )
+        // Realistic reasoning: multi-line, material sentences — exactly what the extractive
+        // verifier would otherwise mine as uncited propositions.
+        let reasoning = """
+        <think>
+        Okay, so I need to figure out the engagement fee from the provided sources.
+        Let me go through each source one by one.
+        Looking at S1, it mentions the engagement fee was $900.
+        That seems like the correct amount.
+        So the engagement fee is $900 based on S1.
+        </think>
+
+        """
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: reasoning),
+                .event(request, 2, .token, token: "The engagement fee was $900 [S1]."),
+                .event(request, 3, .generationCompleted),
+            ])
+        }
+        let controller = makeGlobalChatController(
+            store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
+        )
+        controller.loadChats()
+        await controller.performSend(
+            prompt: "What do my documents say about the engagement fee?",
+            modelID: ModelID(), systemPrompt: nil, options: GenerationOptions()
+        )
+        let content = try XCTUnwrap(controller.messages.last?.content)
+        // The stripped answer is fully supported, so no support-check banner appears — and no
+        // reasoning step is flagged as an uncited proposition.
+        XCTAssertFalse(
+            content.contains("Document support check"),
+            "the reasoning trace must be stripped before verification; content:\n\(content)"
+        )
+        XCTAssertFalse(
+            content.contains("has no citation in the same proposition"),
+            "no reasoning step should be verified as an uncited proposition"
+        )
+    }
+
+    /// A grounded answer whose model wrote a non-canonical citation marker (`[CITE: S1]`) is
+    /// normalized to `[S1]` in the persisted content — so it renders as a clickable link and the
+    /// verifier sees the citation instead of a bogus "CITE: S1" proposition.
+    func testModelCitationVariantIsNormalizedInGroundedAnswer() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Citation Normalize Matter")
+        try await indexDocument(
+            store, matterID: matter.id, name: "case.txt",
+            text: "The case number is 2:26-cv-00856-MWC-PVC."
+        )
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "The case number is 2:26-cv-00856-MWC-PVC [CITE: S1]."),
+                .event(request, 2, .generationCompleted),
+            ])
+        }
+        let controller = makeGlobalChatController(
+            store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
+        )
+        controller.loadChats()
+        await controller.performSend(
+            prompt: "What do my documents say about the case number?",
+            modelID: ModelID(), systemPrompt: nil, options: GenerationOptions()
+        )
+        let content = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertTrue(content.contains("[S1]"), "the model's [CITE: S1] renders as a canonical [S1]; content:\n\(content)")
+        XCTAssertFalse(content.contains("[CITE:"), "the raw [CITE: …] marker should be normalized away")
+    }
+
     func testInflatedExactCountsPackOnlyFirstSourceAndRecordBudgetOmissions() async throws {
         // T-TOK-02 expected RED: matter grounding is count-capped and never asks
         // the runtime tokenizer which serialized source prefixes actually fit.
@@ -930,6 +1010,86 @@ final class MatterChatGroundingTests: XCTestCase {
             .groundedContext(forQuestion: question, depth: .fast, modelID: ModelID())
         XCTAssertNotNil(off)
         XCTAssertEqual(off, on)
+    }
+
+    // MARK: - Phase 2 additive coverage routing
+
+    /// A seeded matter with a June-meeting corpus and a keyword-MISS question
+    /// ("What happened at the June meeting?", `classify` → `.none`) that the corpus strongly
+    /// covers. Helper returns a fresh store + matter for the additive tests.
+    private func makeKeywordMissMatter() async throws -> (SupraStore, String) {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Additive Meeting Matter")
+        for index in 1...2 {
+            try await indexDocument(
+                store, matterID: matter.id, name: "meeting-\(index).txt",
+                text: "MEETING_\(index). The June board meeting approved the budget and the merger timeline."
+            )
+        }
+        // Precondition: the keyword classifier leaves this ungrounded.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify("What happened at the June meeting?", folderNames: []),
+            .none
+        )
+        return (store, matter.id)
+    }
+
+    /// Additive routing ON: a keyword-miss the corpus STRONGLY covers is now grounded as a
+    /// whole-matter content answer (with real sources) instead of dropping to the legal route.
+    /// This is the Phase 2 grounding gain. Expected RED: `additiveRoutingEnabledKey` does not exist
+    /// and the routing does not promote `.none`, so the context is nil.
+    func testAdditiveRoutingGroundsKeywordMissWithStrongCoverage() async throws {
+        let (store, matterID) = try await makeKeywordMissMatter()
+        try store.appSettings.setSetting(CoverageRoutingShadow.additiveRoutingEnabledKey, value: true)
+        let context = await makeGrounding(store, matterID: matterID)
+            .groundedContext(forQuestion: "What happened at the June meeting?", depth: .fast, modelID: ModelID())
+        let grounded = try XCTUnwrap(context, "strong coverage should additively ground the keyword miss")
+        XCTAssertFalse(grounded.sources.isEmpty, "the additively-grounded answer packs real matter sources")
+    }
+
+    /// Additive routing OFF (default): the same keyword-miss stays ungrounded — no behavior change
+    /// unless the flag is on. Expected RED: the key does not exist.
+    func testAdditiveRoutingOffLeavesKeywordMissUngrounded() async throws {
+        let (store, matterID) = try await makeKeywordMissMatter()
+        try store.appSettings.setSetting(CoverageRoutingShadow.additiveRoutingEnabledKey, value: false)
+        let context = await makeGrounding(store, matterID: matterID)
+            .groundedContext(forQuestion: "What happened at the June meeting?", depth: .fast, modelID: ModelID())
+        XCTAssertNil(context, "additive routing OFF must not change keyword routing")
+    }
+
+    /// Additive routing ON but coverage is only WEAK (a single marginal passage): the keyword miss
+    /// is NOT grounded — additive routing grounds only on STRONG evidence. Expected RED.
+    func testAdditiveRoutingDoesNotGroundWeakCoverage() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Additive Weak Matter")
+        // A single loosely-related document → weak (not strong) coverage under the nil-embedder path.
+        try await indexDocument(
+            store, matterID: matter.id, name: "solo.txt",
+            text: "A lone note that mentions the June meeting once, in passing."
+        )
+        try store.appSettings.setSetting(CoverageRoutingShadow.additiveRoutingEnabledKey, value: true)
+        let context = await makeGrounding(store, matterID: matter.id)
+            .groundedContext(forQuestion: "What happened at the June meeting?", depth: .fast, modelID: ModelID())
+        XCTAssertNil(context, "weak coverage must not additively ground a keyword miss")
+    }
+
+    /// Additive routing never REMOVES grounding: a keyword-grounded content question stays grounded
+    /// (additive only promotes `.none`). Expected RED: the key does not exist.
+    func testAdditiveRoutingNeverUngroundsKeywordContent() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Additive Content Matter")
+        for index in 1...2 {
+            try await indexDocument(
+                store, matterID: matter.id, name: "indemnity-\(index).txt",
+                text: "SOURCE_\(index). The indemnification clause covers synthetic claims."
+            )
+        }
+        try store.appSettings.setSetting(CoverageRoutingShadow.additiveRoutingEnabledKey, value: true)
+        let context = await makeGrounding(store, matterID: matter.id)
+            .groundedContext(
+                forQuestion: "What do my documents say about indemnification?", depth: .fast, modelID: ModelID()
+            )
+        XCTAssertNotNil(context, "a keyword-grounded content question stays grounded under additive routing")
     }
 
     private func indexDocument(

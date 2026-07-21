@@ -414,12 +414,13 @@ final class MatterChatDocumentGrounding {
             trimmed, folderNames: folders.map(\.name), partyAnchors: partyAnchors
         )
 
-        // Phase 2 shadow (retrieve-before-route): when enabled, grade the evidence-based corpus
-        // coverage against the keyword decision and log the divergence. Metadata only; the keyword
-        // `intent` still decides, so nothing below changes.
-        await runCoverageRoutingShadow(question: trimmed, keywordIntent: intent)
+        // Phase 2 (retrieve-before-route): assess corpus coverage once (only when shadow logging or
+        // additive routing needs it), log the keyword-vs-coverage divergence, and let strong
+        // coverage ADD grounding for a keyword miss. Additive routing only promotes `.none`; it
+        // never un-grounds a keyword-grounded question, so it cannot regress the keyword path.
+        let effectiveIntent = await effectiveRoutingIntent(question: trimmed, keywordIntent: intent)
 
-        switch intent {
+        switch effectiveIntent {
         case .none:
             return nil
         case let .inventory(folderHint):
@@ -436,24 +437,43 @@ final class MatterChatDocumentGrounding {
         }
     }
 
-    /// Phase 2 shadow probe. No-op unless `CoverageRoutingShadow.shadowEnabledKey` is on; then it
-    /// runs the fast-tier coverage assessment, grades it against the keyword decision, records the
-    /// comparison for measurement (`lastShadowComparison`), and logs it (metadata only). Never
-    /// affects the returned grounded context.
-    private func runCoverageRoutingShadow(question: String, keywordIntent: MatterChatDocumentIntent) async {
-        let enabled = (try? store.appSettings.getSetting(
-            CoverageRoutingShadow.shadowEnabledKey, as: Bool.self
-        )) ?? false
-        guard enabled else { return }
+    /// Phase 2 (retrieve-before-route). Assesses corpus coverage at most once — only when shadow
+    /// logging or additive routing is enabled — records/logs the shadow comparison, and returns the
+    /// intent the router should act on. With additive routing ON, a keyword `.none` whose corpus
+    /// coverage is STRONG is promoted to a whole-matter content question, so coverage ADDS grounding
+    /// the keyword lists miss. It never changes a `.content`/`.inventory` intent, so it can only add
+    /// grounding, never remove it. With both flags off it returns the keyword intent unchanged.
+    private func effectiveRoutingIntent(
+        question: String, keywordIntent: MatterChatDocumentIntent
+    ) async -> MatterChatDocumentIntent {
+        let shadowEnabled = boolSetting(CoverageRoutingShadow.shadowEnabledKey)
+        let additiveEnabled = boolSetting(CoverageRoutingShadow.additiveRoutingEnabledKey)
+        guard shadowEnabled || additiveEnabled else { return keywordIntent }
+
         let coverage = await MatterCorpusCoverage.assess(
             matterID: matterID, question: question, store: store, embedder: embedder
         )
         let keywordGrounds = keywordIntent != .none
-        let comparison = CoverageRoutingShadow.compare(keywordGrounds: keywordGrounds, coverage: coverage)
-        lastShadowComparison = comparison
-        CoverageRoutingShadow.logShadow(
-            comparison: comparison, keywordGrounds: keywordGrounds, coverage: coverage
-        )
+
+        if shadowEnabled {
+            let comparison = CoverageRoutingShadow.compare(keywordGrounds: keywordGrounds, coverage: coverage)
+            lastShadowComparison = comparison
+            CoverageRoutingShadow.logShadow(
+                comparison: comparison, keywordGrounds: keywordGrounds, coverage: coverage
+            )
+        }
+
+        // Additive routing: strong coverage grounds a keyword miss as a whole-matter content
+        // question (no folder hint — the miss did not name a folder). Only `.none` is promoted;
+        // an already-grounded intent is returned untouched, so grounding is only ever added.
+        if additiveEnabled, case .none = keywordIntent, coverage.strength == .strong {
+            return .content(folderHint: nil)
+        }
+        return keywordIntent
+    }
+
+    private func boolSetting(_ key: String) -> Bool {
+        (try? store.appSettings.getSetting(key, as: Bool.self)) ?? false
     }
 
     // MARK: - Inventory
