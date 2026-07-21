@@ -45,6 +45,18 @@ final class CoverageRoutingProbeTests: XCTestCase {
         XCTAssertFalse(report.usedSemantic)
     }
 
+    func testReadErrorsSurfaceAndFlagIncompleteScan() {
+        let clean = CoverageRoutingProbe.report(comparisons: [.agreeGround], matterCount: 1, usedSemantic: false)
+        XCTAssertEqual(clean.readErrors, 0)
+        XCTAssertTrue(clean.completedCleanly)
+        // A store read failure must be visible: an under-counted tally is not clean go/no-go evidence.
+        let partial = CoverageRoutingProbe.report(
+            comparisons: [.agreeGround], matterCount: 1, usedSemantic: false, readErrors: 2
+        )
+        XCTAssertEqual(partial.readErrors, 2)
+        XCTAssertFalse(partial.completedCleanly)
+    }
+
     // MARK: - Store-backed run over real chat history
 
     /// Seeds one matter with an indemnification corpus AND a June-meeting corpus, plus a chat
@@ -75,6 +87,7 @@ final class CoverageRoutingProbeTests: XCTestCase {
         XCTAssertEqual(report.agreeGround, 1)
         XCTAssertEqual(report.coverageWouldGround, 1)
         XCTAssertFalse(report.usedSemantic)
+        XCTAssertTrue(report.completedCleanly, "a healthy store scan reports no read errors")
     }
 
     /// A matter with no chat history contributes nothing (no questions to replay), and matters

@@ -19,6 +19,11 @@ public struct CoverageRoutingReport: Sendable, Equatable {
     /// Whether a real embedder backed the coverage probe. When false the coverage retrieval was
     /// FTS-only (no semantic bucket), so the divergence figures are a conservative lower bound.
     public let usedSemantic: Bool
+    /// Store reads that failed during the scan (matters/folders/chats/messages). Non-zero means the
+    /// tally is under-counted — some matters or questions were silently dropped — so the report is
+    /// NOT trustworthy go/no-go evidence. A read failure is otherwise indistinguishable from an
+    /// empty result, so this is the only signal that the run was incomplete.
+    public let readErrors: Int
 
     public init(
         matterCount: Int,
@@ -28,7 +33,8 @@ public struct CoverageRoutingReport: Sendable, Equatable {
         coverageWouldGround: Int,
         coverageWouldSkip: Int,
         marginal: Int,
-        usedSemantic: Bool
+        usedSemantic: Bool,
+        readErrors: Int
     ) {
         self.matterCount = matterCount
         self.questionsScanned = questionsScanned
@@ -38,7 +44,12 @@ public struct CoverageRoutingReport: Sendable, Equatable {
         self.coverageWouldSkip = coverageWouldSkip
         self.marginal = marginal
         self.usedSemantic = usedSemantic
+        self.readErrors = readErrors
     }
+
+    /// The scan completed with no store read failures — the tally covers every live matter and
+    /// question. When false, treat the figures as a floor, not evidence.
+    public var completedCleanly: Bool { readErrors == 0 }
 
     private func rate(_ count: Int) -> Double {
         questionsScanned == 0 ? 0 : Double(count) / Double(questionsScanned)
@@ -62,11 +73,13 @@ public struct CoverageRoutingReport: Sendable, Equatable {
 /// SupraSessions because the keyword classifier is internal to this module; the app calls the
 /// public entrypoint.
 public enum CoverageRoutingProbe {
-    /// Pure aggregation: fold a flat list of per-question comparisons into a report.
+    /// Pure aggregation: fold a flat list of per-question comparisons into a report. `readErrors`
+    /// carries the count of store reads that failed during the scan (0 on a clean run).
     public static func report(
         comparisons: [CoverageRoutingComparison],
         matterCount: Int,
-        usedSemantic: Bool
+        usedSemantic: Bool,
+        readErrors: Int = 0
     ) -> CoverageRoutingReport {
         var agreeGround = 0, agreeSkip = 0, wouldGround = 0, wouldSkip = 0, marginal = 0
         for comparison in comparisons {
@@ -86,7 +99,8 @@ public enum CoverageRoutingProbe {
             coverageWouldGround: wouldGround,
             coverageWouldSkip: wouldSkip,
             marginal: marginal,
-            usedSemantic: usedSemantic
+            usedSemantic: usedSemantic,
+            readErrors: readErrors
         )
     }
 
@@ -100,14 +114,30 @@ public enum CoverageRoutingProbe {
         embedder: (any TextEmbedder)?,
         maxQuestionsPerMatter: Int? = nil
     ) async -> CoverageRoutingReport {
-        let matters = (try? store.matters.fetchMatters()) ?? []
+        var readErrors = 0
+        let matters: [MatterRecord]
+        do {
+            matters = try store.matters.fetchMatters()
+        } catch {
+            // A top-level failure means nothing could be scanned; flag it so an all-zero report is
+            // not mistaken for an empty store.
+            return report(comparisons: [], matterCount: 0, usedSemantic: embedder != nil, readErrors: 1)
+        }
         var comparisons: [CoverageRoutingComparison] = []
         var mattersWithQuestions = 0
         for matter in matters {
-            let questions = userQuestions(store: store, matterID: matter.id, cap: maxQuestionsPerMatter)
+            let questions = userQuestions(
+                store: store, matterID: matter.id, cap: maxQuestionsPerMatter, readErrors: &readErrors
+            )
             guard !questions.isEmpty else { continue }
             mattersWithQuestions += 1
-            let folderNames = ((try? store.documentLibrary.fetchFolders(matterID: matter.id)) ?? []).map(\.name)
+            let folderNames: [String]
+            do {
+                folderNames = try store.documentLibrary.fetchFolders(matterID: matter.id).map(\.name)
+            } catch {
+                folderNames = []
+                readErrors += 1
+            }
             let partyAnchors = MatterChatDocumentIntent.partyAnchors(
                 matterName: matter.name, clientNames: matter.clientNames
             )
@@ -126,19 +156,35 @@ public enum CoverageRoutingProbe {
         return report(
             comparisons: comparisons,
             matterCount: mattersWithQuestions,
-            usedSemantic: embedder != nil
+            usedSemantic: embedder != nil,
+            readErrors: readErrors
         )
     }
 
     /// The distinct, non-empty user questions for a matter (soft-deleted rows already excluded by
     /// the repository), newest chats first, optionally capped. De-duplicated case-insensitively so
-    /// a repeated ask does not skew the tally.
-    static func userQuestions(store: SupraStore, matterID: String, cap: Int?) -> [String] {
-        let chats = (try? store.chats.fetchMatterChats(matterID: matterID)) ?? []
+    /// a repeated ask does not skew the tally. A failed chat/message read increments `readErrors`
+    /// rather than being silently swallowed, so an incomplete scan is visible in the report.
+    static func userQuestions(
+        store: SupraStore, matterID: String, cap: Int?, readErrors: inout Int
+    ) -> [String] {
+        let chats: [ChatRecord]
+        do {
+            chats = try store.chats.fetchMatterChats(matterID: matterID)
+        } catch {
+            readErrors += 1
+            return []
+        }
         var seen = Set<String>()
         var questions: [String] = []
         for chat in chats {
-            let messages = (try? store.chats.fetchMessages(chatID: chat.id)) ?? []
+            let messages: [MessageRecord]
+            do {
+                messages = try store.chats.fetchMessages(chatID: chat.id)
+            } catch {
+                readErrors += 1
+                continue
+            }
             for message in messages where message.role == MessageRole.user.rawValue {
                 let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty, seen.insert(trimmed.lowercased()).inserted else { continue }

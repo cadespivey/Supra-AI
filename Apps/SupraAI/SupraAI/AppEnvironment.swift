@@ -404,6 +404,8 @@ final class AppEnvironment: ObservableObject {
             "coverageWouldSkip": report.coverageWouldSkip,
             "marginal": report.marginal,
             "usedSemantic": report.usedSemantic,
+            "readErrors": report.readErrors,
+            "completedCleanly": report.completedCleanly,
             "agreementRate": report.agreementRate,
             "divergenceRate": report.divergenceRate,
             "wouldGroundRate": report.wouldGroundRate,

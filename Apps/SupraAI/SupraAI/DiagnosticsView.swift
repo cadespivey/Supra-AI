@@ -178,6 +178,10 @@ struct DiagnosticsView: View {
                     LabeledContent("Would-skip (over-ground)", value: Self.percent(report.wouldSkipRate))
                     LabeledContent("Agreement", value: Self.percent(report.agreementRate))
                     LabeledContent("Coverage retrieval", value: report.usedSemantic ? "Semantic" : "Keyword-only")
+                    if !report.completedCleanly {
+                        LabeledContent("Scan status", value: "Incomplete — \(report.readErrors) read error(s)")
+                            .foregroundStyle(.orange)
+                    }
                 }
                 if runningCoverageProbe {
                     HStack(spacing: 8) {
