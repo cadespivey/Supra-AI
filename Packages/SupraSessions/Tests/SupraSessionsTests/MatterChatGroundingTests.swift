@@ -487,6 +487,57 @@ final class MatterChatGroundingTests: XCTestCase {
         XCTAssertTrue(answer.localizedCaseInsensitiveContains("instruction"))
     }
 
+    /// A reasoning model streams `<think>…</think>` before its answer. The support check must
+    /// inspect only the answer — otherwise every chain-of-thought step becomes an uncited
+    /// "proposition" and the banner fills with reasoning noise on an otherwise well-grounded
+    /// answer. Expected RED: verification runs over the raw streamed content, so the reasoning
+    /// steps are flagged "has no citation in the same proposition" and a banner appears.
+    func testReasoningTraceIsStrippedBeforeSupportCheck() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Reasoning Strip Matter")
+        try await indexDocument(
+            store, matterID: matter.id, name: "fee.txt", text: "The engagement fee was $900."
+        )
+        // Realistic reasoning: multi-line, material sentences — exactly what the extractive
+        // verifier would otherwise mine as uncited propositions.
+        let reasoning = """
+        <think>
+        Okay, so I need to figure out the engagement fee from the provided sources.
+        Let me go through each source one by one.
+        Looking at S1, it mentions the engagement fee was $900.
+        That seems like the correct amount.
+        So the engagement fee is $900 based on S1.
+        </think>
+
+        """
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: reasoning),
+                .event(request, 2, .token, token: "The engagement fee was $900 [S1]."),
+                .event(request, 3, .generationCompleted),
+            ])
+        }
+        let controller = makeGlobalChatController(
+            store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
+        )
+        controller.loadChats()
+        await controller.performSend(
+            prompt: "What do my documents say about the engagement fee?",
+            modelID: ModelID(), systemPrompt: nil, options: GenerationOptions()
+        )
+        let content = try XCTUnwrap(controller.messages.last?.content)
+        // The stripped answer is fully supported, so no support-check banner appears — and no
+        // reasoning step is flagged as an uncited proposition.
+        XCTAssertFalse(
+            content.contains("Document support check"),
+            "the reasoning trace must be stripped before verification; content:\n\(content)"
+        )
+        XCTAssertFalse(
+            content.contains("has no citation in the same proposition"),
+            "no reasoning step should be verified as an uncited proposition"
+        )
+    }
+
     func testInflatedExactCountsPackOnlyFirstSourceAndRecordBudgetOmissions() async throws {
         // T-TOK-02 expected RED: matter grounding is count-capped and never asks
         // the runtime tokenizer which serialized source prefixes actually fit.
