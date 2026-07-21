@@ -1120,6 +1120,14 @@ public final class GlobalChatController: ObservableObject {
                             updateMessage(id: assistant.id, content: streamedContent, status: .completed)
                             break generationEvents
                         }
+                        // Normalize the model's citation-marker variants ([CITE: S1, S8], [S1, S8],
+                        // [Source S1]) to canonical [S#] so they render as clickable links and
+                        // register with the verifier instead of showing as literal text and bogus
+                        // uncited propositions. Applied to the whole content (display + persistence);
+                        // it only touches recognizable citation brackets.
+                        if context != nil {
+                            streamedContent = CitationNormalizer.normalize(streamedContent)
+                        }
                         // The model's answer, before the source trailer — what the entity-grounding
                         // and document-support checks inspect. A reasoning model streams its
                         // chain-of-thought first (`<think>…</think>`); verifying the raw stream

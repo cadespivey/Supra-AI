@@ -538,6 +538,35 @@ final class MatterChatGroundingTests: XCTestCase {
         )
     }
 
+    /// A grounded answer whose model wrote a non-canonical citation marker (`[CITE: S1]`) is
+    /// normalized to `[S1]` in the persisted content — so it renders as a clickable link and the
+    /// verifier sees the citation instead of a bogus "CITE: S1" proposition.
+    func testModelCitationVariantIsNormalizedInGroundedAnswer() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Citation Normalize Matter")
+        try await indexDocument(
+            store, matterID: matter.id, name: "case.txt",
+            text: "The case number is 2:26-cv-00856-MWC-PVC."
+        )
+        let stub = StubRuntimeClient { request in
+            .events([
+                .event(request, 1, .token, token: "The case number is 2:26-cv-00856-MWC-PVC [CITE: S1]."),
+                .event(request, 2, .generationCompleted),
+            ])
+        }
+        let controller = makeGlobalChatController(
+            store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
+        )
+        controller.loadChats()
+        await controller.performSend(
+            prompt: "What do my documents say about the case number?",
+            modelID: ModelID(), systemPrompt: nil, options: GenerationOptions()
+        )
+        let content = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertTrue(content.contains("[S1]"), "the model's [CITE: S1] renders as a canonical [S1]; content:\n\(content)")
+        XCTAssertFalse(content.contains("[CITE:"), "the raw [CITE: …] marker should be normalized away")
+    }
+
     func testInflatedExactCountsPackOnlyFirstSourceAndRecordBudgetOmissions() async throws {
         // T-TOK-02 expected RED: matter grounding is count-capped and never asks
         // the runtime tokenizer which serialized source prefixes actually fit.
