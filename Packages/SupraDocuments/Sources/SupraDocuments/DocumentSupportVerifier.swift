@@ -240,6 +240,13 @@ public enum DocumentSupportVerifier {
 
         var propositions: [CitedProposition] = []
         for span in spans {
+            // The canonical refusal sentence ("The provided sources do not support an
+            // answer…") asserts no material claim, so it is never a proposition. Left
+            // in, it extracts as an uncited proposition and the answer is warned
+            // "has no citation in the same proposition" — a false flag on every honest
+            // refusal. A pure refusal instead flows to verify()'s empty-proposition
+            // branch, which emits the accurate "a refusal cannot prove absence" note.
+            guard !DocumentQAPromptBuilder.isUnsupportedAnswerReply(span.text) else { continue }
             let labels = CitationCoverage.usedLabels(in: span.text)
             let material = materialText(span.text)
             guard isMaterial(material) else { continue }

@@ -22,6 +22,27 @@ private final class RequestCapture: @unchecked Sendable {
     var lastSystemPrompt: String? { lock.withLock { systemPrompts.last ?? nil } }
 }
 
+/// Counts and retains the grounded-QA prompts (the ones carrying a source packet)
+/// a stub runtime was asked to answer, so escalation tests can prove how many
+/// grounded passes ran and inspect each packet.
+private final class QAPromptCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var prompts: [String] = []
+
+    /// Records a prompt and returns its 1-based ordinal.
+    func record(_ prompt: String) -> Int {
+        lock.withLock {
+            prompts.append(prompt)
+            return prompts.count
+        }
+    }
+
+    var count: Int { lock.withLock { prompts.count } }
+    func prompt(_ ordinal: Int) -> String {
+        lock.withLock { ordinal >= 1 && ordinal <= prompts.count ? prompts[ordinal - 1] : "" }
+    }
+}
+
 @MainActor
 final class MatterChatGroundingTests: XCTestCase {
 
@@ -136,6 +157,168 @@ final class MatterChatGroundingTests: XCTestCase {
             folderNames: []
         )
         XCTAssertEqual(intent, MatterChatDocumentIntent.none)
+    }
+
+    // MARK: - Case-substance routing (2026-07-20 matter-chat screenshot bugs)
+
+    func testCauseOfActionQuestionNamingPartiesGroundsInDocuments() {
+        // T-GRND-SUBST-01 expected RED: compile error — `classify` takes no
+        // `partyAnchors:` parameter; the question about the matter's own case
+        // falls through to the legal-research route.
+        let question = "under what theory of law or cause of action is OVD suing Lowes?"
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify(
+                question, folderNames: [], partyAnchors: ["ovd", "lowes"]
+            ),
+            .content(folderHint: nil)
+        )
+        // Wire-proof: the same question WITHOUT party anchors has no case anchor
+        // and must keep flowing to the legal route — proves the non-default
+        // anchors are actually read, not merely accepted.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify(question, folderNames: []),
+            MatterChatDocumentIntent.none
+        )
+    }
+
+    func testCauseOfActionFollowUpMatchesApostropheNormalizedParties() {
+        // T-GRND-SUBST-02 expected RED: compile error (same missing parameter);
+        // anchors derived from the matter record must let "lowes" — typed
+        // without the apostrophe — match the caption's "Lowe's".
+        let anchors = MatterChatDocumentIntent.partyAnchors(
+            matterName: "OVD v. Lowe's", clientNames: "Lowe's Home Centers LLC"
+        )
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify(
+                "what cause of action did OVD sue lowes for?", folderNames: [], partyAnchors: anchors
+            ),
+            .content(folderHint: nil)
+        )
+    }
+
+    func testClaimsInThisCaseGroundsWithoutPartyNames() {
+        // T-GRND-SUBST-03 expected RED: returns .none — no case-substance routing
+        // exists, so "the claims alleged in this case" reaches the legal route.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify(
+                "what are the claims alleged in this case?", folderNames: []
+            ),
+            .content(folderHint: nil)
+        )
+    }
+
+    func testPartyAnchorsAloneDoNotHijackGeneralLegalQuestions() {
+        // Standing guard (green once the parameter exists): a general-law question
+        // asked inside a party-anchored matter must still reach the legal route.
+        // Pins that party anchors reroute nothing without a case-substance phrase.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify(
+                "what is the standard for summary judgment in Florida?",
+                folderNames: [], partyAnchors: ["ovd", "lowes"]
+            ),
+            MatterChatDocumentIntent.none
+        )
+    }
+
+    func testSubstancePhraseWithoutAnyAnchorStaysOnLegalRoute() {
+        // Standing guard (green from day one): "cause of action" with no this-case
+        // or party anchor is classic legal research and must not be pulled into
+        // document retrieval. Documents the deliberate anchor requirement.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify(
+                "what are the elements of a negligence cause of action?", folderNames: []
+            ),
+            MatterChatDocumentIntent.none
+        )
+    }
+
+    func testPartyAnchorsDeriveFromCaptionAndClientNames() {
+        // T-GRND-PARTY-01 expected RED: compile error — `partyAnchors` does not exist.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.partyAnchors(
+                matterName: "OVD v. Lowe's", clientNames: "Lowe's Home Centers LLC"
+            ),
+            ["ovd", "lowes", "lowes home centers"]
+        )
+        // "In re" captions anchor on the estate/party name; corporate suffixes and
+        // short noise tokens never become anchors on their own.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.partyAnchors(matterName: "In re Marchetti", clientNames: nil),
+            ["marchetti"]
+        )
+    }
+
+    func testSubstanceStemsDoNotFalseMatchInsideOrdinaryWords() {
+        // A procedural/status question whose words merely CONTAIN a substance stem
+        // ("issue for" ⊃ "sue for", "issued" ⊃ "sued", "pursuing" ⊃ "suing") plus a
+        // common this-case anchor must NOT be pulled into document grounding — it is
+        // a legal-route question. Whole-word matching is what keeps it .none.
+        for question in [
+            "What sanctions can the court issue for discovery abuse in this case?",
+            "Has the summons been issued in this action?",
+            "Was the motion reissued in this litigation?",
+        ] {
+            XCTAssertEqual(
+                MatterChatDocumentIntent.classify(question, folderNames: [], partyAnchors: ["ovd", "lowes"]),
+                MatterChatDocumentIntent.none,
+                "\"\(question)\" must not be document-grounded"
+            )
+        }
+    }
+
+    func testGenericGovernmentAndPlaceholderPartiesAreNotAnchors() {
+        // A government/placeholder plaintiff must not become a this-case anchor, or a
+        // general legal question mentioning it would over-trigger grounding.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.partyAnchors(matterName: "United States v. $50,000", clientNames: nil),
+            [],
+            "generic 'United States' and a numeric party must not anchor"
+        )
+        // A single-word matter nicknamed after a generic legal noun is not an anchor.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.partyAnchors(matterName: "Contract", clientNames: nil),
+            []
+        )
+        // The distinctive defendant is still an anchor even next to a generic plaintiff.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.partyAnchors(matterName: "State v. Rodriguez", clientNames: nil),
+            ["rodriguez"]
+        )
+    }
+
+    func testEstateVersusCaptionYieldsBothCleanPartyNames() {
+        // "Estate of Smith v. Jones" must split on " v. " and strip the "Estate of"
+        // prefix from the left side — not return a single malformed "smith v jones".
+        XCTAssertEqual(
+            MatterChatDocumentIntent.partyAnchors(matterName: "Estate of Smith v. Jones", clientNames: nil),
+            ["smith", "jones"]
+        )
+    }
+
+    func testCanonicalRefusalConstantMatchesPromptContract() {
+        // T-GRND-ESC-03 expected RED: compile error — DocumentQAPromptBuilder has
+        // no `unsupportedAnswerReply` / `isUnsupportedAnswerReply`; the sentence
+        // lives only as a literal inside the prompt rules, so the chat controller
+        // has no detector to key escalation off.
+        XCTAssertEqual(
+            DocumentQAPromptBuilder.unsupportedAnswerReply,
+            "The provided sources do not support an answer to this question."
+        )
+        XCTAssertTrue(
+            DocumentQAPromptBuilder.buildQAPrompt(question: "Q", sources: [], mode: .short)
+                .contains(DocumentQAPromptBuilder.unsupportedAnswerReply)
+        )
+        XCTAssertTrue(DocumentQAPromptBuilder.isUnsupportedAnswerReply(
+            "  \"The provided sources do not support an answer to this question.\"  "
+        ))
+        XCTAssertTrue(DocumentQAPromptBuilder.isUnsupportedAnswerReply(
+            "the provided sources do not support an answer to this question"
+        ))
+        // A substantive answer that merely opens with the refusal sentence is NOT
+        // a pure refusal — escalation must not discard its content.
+        XCTAssertFalse(DocumentQAPromptBuilder.isUnsupportedAnswerReply(
+            "The provided sources do not support an answer to this question. But the fee was $900 [S1]."
+        ))
     }
 
     // MARK: - performSend grounding
@@ -477,6 +660,177 @@ final class MatterChatGroundingTests: XCTestCase {
         XCTAssertEqual(assistant.status, .completed)
         XCTAssertFalse(assistant.content.contains("UNSAFE PARTIAL ANSWER"))
         XCTAssertTrue(assistant.citations.isEmpty)
+    }
+
+    func testCauseOfActionQuestionRoutesToDocumentGroundingNotLegalResearch() async throws {
+        // T-GRND-ROUTE-01 expected RED: the keyword-routed legal path wins — the
+        // captured prompt is the research planner's (no grounded source packet)
+        // and the persisted answer is the canned CourtListener miss.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(
+            name: "OVD v. Lowe's",
+            jurisdiction: "Federal",
+            court: "United States Court of Appeals for the Ninth Circuit",
+            clientNames: "Lowe's Home Centers LLC"
+        )
+        try await indexDocument(
+            store,
+            matterID: matter.id,
+            name: "complaint.pdf",
+            text: "COMPLAINT. COUNT I — INFRINGEMENT OF U.S. PATENT NO. 6,144,702. "
+                + "OVD alleges that Lowe's infringed the patent by selling the accused product."
+        )
+
+        let capture = RequestCapture()
+        let stub = StubRuntimeClient { request in
+            capture.record(request)
+            return .events([
+                .event(request, 0, .token, token: "OVD sued for patent infringement [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        }
+        let controller = makeGlobalChatController(
+            store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
+        )
+        controller.loadChats()
+
+        let routed = ModelRouter(configuration: .fromEnvironment())
+            .routePrompt("what cause of action did OVD sue lowes for?")
+        XCTAssertEqual(routed.route.mode, .legalQA, "precondition: the raw prompt keyword-routes legal")
+
+        await controller.performSend(
+            prompt: routed.prompt,
+            modelID: ModelID(),
+            systemPrompt: nil,
+            options: GenerationOptions(),
+            route: routed.route
+        )
+
+        let prompt = try XCTUnwrap(capture.lastPrompt)
+        XCTAssertTrue(
+            prompt.contains("BEGIN_UNTRUSTED_SOURCE_DATA"),
+            "expected a grounded source packet, got: \(prompt.prefix(200))"
+        )
+        XCTAssertTrue(prompt.contains("COUNT I"), "the complaint's counts must reach the model")
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertFalse(
+            answer.contains("I searched CourtListener"),
+            "a question about the matter's own case must not fall through to network research"
+        )
+    }
+
+    // MARK: - Fast-refusal deep escalation
+
+    /// Ten FTS-matching documents: the fast tier packs 8, the deep tier packs all
+    /// 10, so the two grounded prompts are provably different packets.
+    private func indexEscalationFixture(_ store: SupraStore, matterID: String) async throws {
+        for index in 1...9 {
+            try await indexDocument(
+                store, matterID: matterID, name: "filing-\(index).txt",
+                text: "Filing note \(index). The parties exchanged filings in this lawsuit; service addresses pending."
+            )
+        }
+        try await indexDocument(
+            store, matterID: matterID, name: "service-list.txt",
+            text: "Service list. The parties' addresses are 100 Main Street, Los Angeles, California 90001."
+        )
+    }
+
+    func testFastTierRefusalAutoEscalatesToDeepPass() async throws {
+        // T-GRND-ESC-01 expected RED: no escalation exists — exactly one grounded
+        // generate call runs and the canonical refusal persists as the answer.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "OVD v. Lowe's")
+        try await indexEscalationFixture(store, matterID: matter.id)
+
+        let qaPrompts = QAPromptCapture()
+        let stub = StubRuntimeClient { request in
+            guard request.prompt.contains("BEGIN_UNTRUSTED_SOURCE_DATA") else {
+                return .events([.event(request, 0, .generationCompleted)])
+            }
+            let call = qaPrompts.record(request.prompt)
+            let answer = call == 1
+                ? "The provided sources do not support an answer to this question."
+                : "The parties' addresses are 100 Main Street, Los Angeles, California 90001 [S1]."
+            return .events([
+                .event(request, 0, .token, token: answer),
+                .event(request, 1, .generationCompleted),
+            ])
+        }
+        let controller = makeGlobalChatController(
+            store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What are the addresses for the parties to this lawsuit?",
+            modelID: ModelID(),
+            systemPrompt: nil,
+            options: GenerationOptions()
+        )
+
+        XCTAssertEqual(qaPrompts.count, 2, "the fast refusal must trigger exactly one deep re-run")
+        // The deep pass must actually search wider: more packed [S#] sources than fast.
+        func labelCount(_ prompt: String) -> Int {
+            prompt.components(separatedBy: "\"label\":\"S").count - 1
+        }
+        XCTAssertGreaterThan(
+            labelCount(qaPrompts.prompt(2)), labelCount(qaPrompts.prompt(1)),
+            "the deep packet must pack more sources than the fast packet"
+        )
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertTrue(answer.contains("100 Main Street"), "the deep answer must replace the refusal")
+        XCTAssertFalse(
+            answer.contains("The provided sources do not support an answer"),
+            "the discarded fast refusal must not surface anywhere in the final message"
+        )
+        XCTAssertNil(controller.deeperSearchOffer, "a deep answer leaves nothing deeper to offer")
+        XCTAssertEqual(controller.messages.last?.status, .completed)
+    }
+
+    func testDeepRefusalDoesNotLoopAndKeepsHonestBanner() async throws {
+        // T-GRND-ESC-02 expected RED: only one grounded generate call runs, and the
+        // support banner mis-flags the refusal sentence as an uncited proposition
+        // ("has no citation in the same proposition").
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "OVD v. Lowe's")
+        try await indexEscalationFixture(store, matterID: matter.id)
+
+        let qaPrompts = QAPromptCapture()
+        let stub = StubRuntimeClient { request in
+            guard request.prompt.contains("BEGIN_UNTRUSTED_SOURCE_DATA") else {
+                return .events([.event(request, 0, .generationCompleted)])
+            }
+            _ = qaPrompts.record(request.prompt)
+            return .events([
+                .event(request, 0, .token, token: "The provided sources do not support an answer to this question."),
+                .event(request, 1, .generationCompleted),
+            ])
+        }
+        let controller = makeGlobalChatController(
+            store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
+        )
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What are the addresses for the parties to this lawsuit?",
+            modelID: ModelID(),
+            systemPrompt: nil,
+            options: GenerationOptions()
+        )
+
+        XCTAssertEqual(qaPrompts.count, 2, "a deep refusal must finalize, never re-escalate")
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertTrue(answer.contains("The provided sources do not support an answer to this question."))
+        XCTAssertFalse(
+            answer.contains("has no citation in the same proposition"),
+            "an honest refusal must not be flagged as an uncited proposition"
+        )
+        XCTAssertTrue(
+            answer.contains("refusal cannot prove absence"),
+            "the honest refusal advisory must remain"
+        )
+        XCTAssertEqual(controller.messages.last?.status, .completed)
     }
 
     // MARK: - Helpers

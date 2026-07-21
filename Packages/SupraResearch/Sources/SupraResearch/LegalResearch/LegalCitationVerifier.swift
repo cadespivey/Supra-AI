@@ -807,19 +807,34 @@ public enum LegalCitationVerifier {
     /// Fuzzy jurisdiction comparison: exact normalized match, or substring overlap
     /// only when both sides are long enough to be meaningful (avoids spurious
     /// 1–3 character matches like "ca" matching "California").
-    /// Whether the authority binds nationwide (the U.S. Supreme Court), making any
-    /// forum-specific jurisdiction expectation moot for it.
+    /// Whether the authority is exempt from a regional-forum jurisdiction-mismatch
+    /// flag because its precedent is not bounded by the matter's regional circuit:
+    /// the U.S. Supreme Court (binds every U.S. jurisdiction) and the U.S. Court of
+    /// Appeals for the Federal Circuit (nationwide appellate jurisdiction over its
+    /// subject matter — patents and the other categories of 28 U.S.C. § 1295 — so its
+    /// law applies in every regional circuit; e.g. a Federal Circuit patent case
+    /// saved to a Ninth Circuit matter is not a forum mismatch). Matches on courtID
+    /// OR a normalized court/jurisdiction name, because saved authorities often carry
+    /// the name but not the courtID.
     static func isNationallyBinding(_ authority: LegalAuthority) -> Bool {
-        if authority.courtID?.lowercased() == "scotus" { return true }
-        let court = normalized(authority.court ?? "")
-        if court.contains("supreme court of the united states")
-            || court == "united states supreme court"
-            || court == "us supreme court" {
-            return true
+        switch authority.courtID?.lowercased() {
+        case "scotus", "cafc": return true
+        default: break
         }
-        let jurisdiction = normalized(authority.jurisdiction ?? "")
-        return jurisdiction.contains("united states supreme court")
-            || jurisdiction.contains("supreme court of the united states")
+        // `normalized` strips whitespace and punctuation, so the needles are too.
+        // Each needle is unambiguous as a substring — no bare "ussupremecourt" (it
+        // would false-match a foreign "…us Supreme Court", e.g. "Cyprus Supreme
+        // Court"); real SCOTUS carries courtID "scotus" or the full name below.
+        let fields = [authority.court, authority.jurisdiction].compactMap { $0 }.map(normalized)
+        let nationalNeedles = [
+            "supremecourtoftheunitedstates",
+            "unitedstatessupremecourt",
+            "courtofappealsforthefederalcircuit",
+            "federalcircuitcourtofappeals",
+        ]
+        return fields.contains { field in
+            nationalNeedles.contains { field.contains($0) }
+        }
     }
 
     private static func jurisdictionMatches(_ lhs: String, _ rhs: String) -> Bool {

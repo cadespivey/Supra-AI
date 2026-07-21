@@ -65,6 +65,11 @@ public final class GlobalChatController: ObservableObject {
     /// address laches?") still resolve to the case under discussion.
     private var activeNamedCaseByChatID: [String: String] = [:]
     private var activeGenerationID: GenerationID?
+    /// Set by `cancel()`, checked cooperatively at the fast→deep escalation boundary
+    /// where the in-flight work (a deep-retrieval LLM rerank) runs under its own
+    /// untracked generation ID that `cancelGeneration(activeGenerationID)` can't reach.
+    /// Reset at the start of every send.
+    private var cancelRequested = false
 
     /// Top-level jurisdiction options (Federal courts plus each state's aggregate
     /// court group), Federal first. Internal — the UI uses `federalCircuits` and
@@ -731,6 +736,9 @@ public final class GlobalChatController: ObservableObject {
     /// Requests cancellation of the active generation. The runtime emits a
     /// `generationCancelled` event which the stream loop persists.
     public func cancel() {
+        // Record the request even when no generation is registered yet (during a
+        // retrieval/escalation await), so the escalation boundary can honor it.
+        cancelRequested = true
         guard let activeGenerationID else { return }
         let runtimeClient = runtimeClient
         Task { _ = try? await runtimeClient.cancelGeneration(activeGenerationID) }
@@ -751,6 +759,7 @@ public final class GlobalChatController: ObservableObject {
         isGenerating = true
         errorMessage = nil
         deeperSearchOffer = nil
+        cancelRequested = false
         defer {
             isGenerating = false
             activeGenerationID = nil
@@ -800,17 +809,6 @@ public final class GlobalChatController: ObservableObject {
                 return
             }
 
-            // Grounded answers must stay faithful to the supplied sources, so decode
-            // greedily (mirroring the Documents-tab Q&A route) rather than with the
-            // chat's creative sampling.
-            let effectiveModelPrompt = grounded?.modelPrompt ?? modelPrompt
-            let effectiveSystemPrompt = grounded.map { $0.systemPrompt } ?? systemPrompt
-            let effectiveOptions = grounded == nil ? options : Self.groundedOptions(options)
-            let groundingTrailer = grounded?.trailer
-            let groundingSourceTexts = grounded?.sourceTexts ?? []
-            let groundingSources = grounded?.sources ?? []
-            let groundingScopeFullyIndexed = grounded?.scopeFullyIndexed ?? true
-
             guard let modelID else {
                 errorMessage = "Load or register a local MLX model in the Models tab."
                 return
@@ -829,240 +827,313 @@ public final class GlobalChatController: ObservableObject {
 
             _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
             let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
-            let generationID = GenerationID()
-            let session = try store.generation.createGenerationSession(
-                chatID: chatID,
-                messageID: assistant.id,
-                modelID: modelID.rawValue.uuidString,
-                prompt: effectiveModelPrompt,
-                systemPrompt: effectiveSystemPrompt,
-                options: effectiveOptions
-            )
-            let variant = try store.chats.createVariant(messageID: assistant.id, generationSessionID: session.id)
-            try store.generation.linkVariant(generationID: session.id, variantID: variant.id)
-            variantID = variant.id
-            sessionID = session.id
-            activeGenerationID = generationID
 
-            reloadMessages()
+            // A fast-tier grounded answer whose small packet doesn't cover the question
+            // is the canonical refusal. Rather than surface it, re-run the SAME question
+            // at the deep tier once — into this SAME assistant message (one visible
+            // turn) — since the wide candidate pool + rerank often reaches content the
+            // fast packet missed. The discarded probe never persists (grounded tokens
+            // stay transient until completion), so the deep pass writes the only stored
+            // answer, reusing the one variant. `context` is the current pass's grounding
+            // (nil = ordinary ungrounded chat, which never loops).
+            var context = grounded
+            var variant: MessageVariantRecord?
+            var didEscalate = false
 
-            if grounded?.packingReport?.canPack == false {
-                try store.chats.appendToken(
-                    to: variant.id,
-                    token: Self.groundedContextOverflowRefusal
+            groundedPasses: while true {
+                // Grounded answers must stay faithful to the supplied sources, so decode
+                // greedily (mirroring the Documents-tab Q&A route) rather than with the
+                // chat's creative sampling.
+                let effectiveModelPrompt = context?.modelPrompt ?? modelPrompt
+                let effectiveSystemPrompt = context.map { $0.systemPrompt } ?? systemPrompt
+                let effectiveOptions = context == nil ? options : Self.groundedOptions(options)
+                let groundingTrailer = context?.trailer
+                let groundingSourceTexts = context?.sourceTexts ?? []
+                let groundingSources = context?.sources ?? []
+                let groundingScopeFullyIndexed = context?.scopeFullyIndexed ?? true
+
+                let generationID = GenerationID()
+                let session = try store.generation.createGenerationSession(
+                    chatID: chatID,
+                    messageID: assistant.id,
+                    modelID: modelID.rawValue.uuidString,
+                    prompt: effectiveModelPrompt,
+                    systemPrompt: effectiveSystemPrompt,
+                    options: effectiveOptions
                 )
-                try store.chats.completeVariant(variant.id)
-                try store.generation.completeGeneration(generationID: session.id)
-                updateMessage(
-                    id: assistant.id,
-                    content: Self.groundedContextOverflowRefusal,
-                    status: .completed
-                )
+                // One variant carries the message across an escalation; the fast probe
+                // never appended to it, so the deep pass writes the message's only text.
+                let activeVariant: MessageVariantRecord
+                if let variant {
+                    activeVariant = variant
+                } else {
+                    activeVariant = try store.chats.createVariant(
+                        messageID: assistant.id, generationSessionID: session.id
+                    )
+                    variant = activeVariant
+                }
+                try store.generation.linkVariant(generationID: session.id, variantID: activeVariant.id)
+                variantID = activeVariant.id
+                sessionID = session.id
+                activeGenerationID = generationID
+
                 reloadMessages()
-                return
-            }
 
-            let request = GenerateRequest(
-                generationID: generationID,
-                modelID: modelID,
-                prompt: effectiveModelPrompt,
-                systemPrompt: effectiveSystemPrompt,
-                history: history,
-                options: effectiveOptions
-            )
+                if context?.packingReport?.canPack == false {
+                    try store.chats.appendToken(
+                        to: activeVariant.id,
+                        token: Self.groundedContextOverflowRefusal
+                    )
+                    try store.chats.completeVariant(activeVariant.id)
+                    try store.generation.completeGeneration(generationID: session.id)
+                    updateMessage(
+                        id: assistant.id,
+                        content: Self.groundedContextOverflowRefusal,
+                        status: .completed
+                    )
+                    reloadMessages()
+                    return
+                }
 
-            var streamedContent = ""
-            var sawFirstToken = false
-            var sawTerminal = false
-            var finalMetrics: RuntimeMetrics?
-            var groundingVerification: DocumentSupportReport?
+                let request = GenerateRequest(
+                    generationID: generationID,
+                    modelID: modelID,
+                    prompt: effectiveModelPrompt,
+                    systemPrompt: effectiveSystemPrompt,
+                    history: history,
+                    options: effectiveOptions
+                )
 
-            generationEvents: for try await event in try runtimeClient.generate(request) {
-                switch event.type {
-                case .token:
-                    guard let token = event.tokenText else { break }
-                    // Grounded tokens stay transient until the terminal metrics
-                    // prove the packet did not overflow. This lets the refusal
-                    // replace discarded model output instead of following it.
-                    if grounded == nil {
-                        try store.chats.appendToken(to: variant.id, token: token)
-                    }
-                    if !sawFirstToken {
-                        sawFirstToken = true
-                        try? store.generation.markFirstToken(generationID: session.id)
-                    }
-                    streamedContent += token
-                    updateMessage(id: assistant.id, content: streamedContent, status: .pending)
+                var streamedContent = ""
+                var sawFirstToken = false
+                var sawTerminal = false
+                var finalMetrics: RuntimeMetrics?
+                var groundingVerification: DocumentSupportReport?
 
-                case .metrics:
-                    finalMetrics = event.metrics
+                generationEvents: for try await event in try runtimeClient.generate(request) {
+                    switch event.type {
+                    case .token:
+                        guard let token = event.tokenText else { break }
+                        // Grounded tokens stay transient until the terminal metrics
+                        // prove the packet did not overflow (and the answer is not a
+                        // fast refusal to be re-run). This lets the refusal or the deep
+                        // answer replace discarded model output instead of following it.
+                        if context == nil {
+                            try store.chats.appendToken(to: activeVariant.id, token: token)
+                        }
+                        if !sawFirstToken {
+                            sawFirstToken = true
+                            try? store.generation.markFirstToken(generationID: session.id)
+                        }
+                        streamedContent += token
+                        updateMessage(id: assistant.id, content: streamedContent, status: .pending)
 
-                case .generationCompleted:
-                    sawTerminal = true
-                    finalMetrics = event.metrics ?? finalMetrics
-                    if grounded != nil, finalMetrics?.contextOverflowed == true {
-                        streamedContent = Self.groundedContextOverflowRefusal
-                        try store.chats.appendToken(to: variant.id, token: streamedContent)
-                        try store.chats.completeVariant(variant.id)
+                    case .metrics:
+                        finalMetrics = event.metrics
+
+                    case .generationCompleted:
+                        sawTerminal = true
+                        finalMetrics = event.metrics ?? finalMetrics
+                        if context != nil, finalMetrics?.contextOverflowed == true {
+                            streamedContent = Self.groundedContextOverflowRefusal
+                            try store.chats.appendToken(to: activeVariant.id, token: streamedContent)
+                            try store.chats.completeVariant(activeVariant.id)
+                            try store.generation.completeGeneration(
+                                generationID: session.id,
+                                metrics: storedMetrics(from: finalMetrics)
+                            )
+                            logGenerationTiming(finalMetrics, generationID: session.id)
+                            updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                            break generationEvents
+                        }
+                        // The model's answer, before the source trailer — what the
+                        // entity-grounding check inspects.
+                        let answerText = streamedContent
+                        // Fast-tier refusal → escalate to the deep tier once, into this
+                        // same message. Only when a genuinely different deeper packet
+                        // exists (more/other sources than the fast one); otherwise the
+                        // fast refusal stands. A deep refusal never re-escalates.
+                        if !didEscalate, let fast = context, fast.depth == .fast,
+                           DocumentQAPromptBuilder.isUnsupportedAnswerReply(answerText) {
+                            // May run an LLM rerank (several seconds) under its own
+                            // untracked generation ID — hold the await outside the
+                            // escalation decision so a Cancel pressed during it is honored.
+                            let deep = await documentGrounding?.groundedContext(
+                                forQuestion: prompt, depth: .deep, modelID: modelID, options: options
+                            )
+                            if cancelRequested {
+                                try store.chats.markVariantCancelled(activeVariant.id)
+                                try store.generation.cancelGeneration(
+                                    generationID: session.id,
+                                    metrics: storedMetrics(from: finalMetrics)
+                                )
+                                updateMessage(id: assistant.id, content: streamedContent, status: .cancelled)
+                                break generationEvents
+                            }
+                            if let deep, deep.depth == .deep, !deep.sources.isEmpty,
+                               deep.modelPrompt != fast.modelPrompt {
+                                didEscalate = true
+                                context = deep
+                                // The probe produced no stored content (transient);
+                                // record its session as done and re-run at the deep tier.
+                                try store.generation.completeGeneration(
+                                    generationID: session.id,
+                                    metrics: storedMetrics(from: finalMetrics)
+                                )
+                                logGenerationTiming(finalMetrics, generationID: session.id)
+                                continue groundedPasses
+                            }
+                            // No genuinely deeper packet — fall through and finalize the
+                            // fast refusal as the answer.
+                        }
+                        if context != nil, !streamedContent.isEmpty {
+                            try store.chats.appendToken(to: activeVariant.id, token: streamedContent)
+                        }
+                        // The runtime dropped oldest turns to fit the window — tell the
+                        // user (persist it too) rather than silently losing context.
+                        if finalMetrics?.contextTrimmed == true {
+                            try? store.chats.appendToken(to: activeVariant.id, token: Self.contextTrimmedNotice)
+                            streamedContent += Self.contextTrimmedNotice
+                        }
+                        // Append the grounded answer's source key so inline [S#] citations
+                        // resolve to document names for the reader. Only on success.
+                        if let groundingTrailer, !groundingTrailer.isEmpty {
+                            try? store.chats.appendToken(to: activeVariant.id, token: groundingTrailer)
+                            streamedContent += groundingTrailer
+                        }
+                        // Post-generation grounding check: flag any name / email / phone the
+                        // answer asserts that is absent from the cited sources (e.g. a full
+                        // name reconstructed from an email prefix). Surfaced as a warning,
+                        // never suppressed — the reader sees both the answer and the caveat.
+                        if !groundingSourceTexts.isEmpty {
+                            let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
+                                answer: answerText,
+                                sourceText: groundingSourceTexts.joined(separator: "\n\n")
+                            )
+                            if let banner = Self.entityGroundingBanner(entityIssues) {
+                                try? store.chats.appendToken(to: activeVariant.id, token: banner)
+                                streamedContent += banner
+                            }
+                        }
+                        // Proposition support check — resolved labels are structural only.
+                        // The warning is appended and persisted out-of-band so source text
+                        // cannot instruct the model to suppress it.
+                        if !groundingSources.isEmpty {
+                            let report = try? DocumentSupportVerifier.verify(
+                                answer: answerText,
+                                sources: groundingSources.map { source in
+                                    DocumentSupportSource(
+                                        sourceID: source.sourceID,
+                                        label: source.label,
+                                        locator: source.locator.encodedJSON(),
+                                        text: source.supportText,
+                                        lowConfidence: source.lowConfidence
+                                    )
+                                },
+                                scopeFullyIndexed: groundingScopeFullyIndexed
+                            )
+                            groundingVerification = report
+                            // Phase 0 SHADOW: run the exact AttributionValidator alongside the
+                            // lexical verifier and log its verdict (metadata only). Changes
+                            // nothing user-visible; surfaces where exact attribution validation
+                            // would fire — and where it diverges from the lexical check.
+                            let shadow = GroundedAttributionAdapter.shadowValidate(
+                                answer: answerText,
+                                sources: groundingSources.map {
+                                    GroundedSpanInput(
+                                        label: $0.label, sourceID: $0.sourceID,
+                                        text: $0.supportText, lowConfidence: $0.lowConfidence
+                                    )
+                                },
+                                isRefusal: report?.appearsUnsupported ?? false
+                            )
+                            GroundedAttributionAdapter.logShadow(shadow, lexicalRequiresReview: report?.requiresReview)
+                            let banner = report.flatMap(Self.documentSupportBanner) ?? """
+
+                            ---
+
+                            ⚠️ **Document support check — verify before relying on this answer.**
+                            - Proposition verification could not be completed.
+                            """
+                            if report == nil || report?.requiresReview == true {
+                                try? store.chats.appendToken(to: activeVariant.id, token: banner)
+                                streamedContent += banner
+                            }
+                        }
+                        try store.chats.completeVariant(activeVariant.id)
                         try store.generation.completeGeneration(
                             generationID: session.id,
                             metrics: storedMetrics(from: finalMetrics)
                         )
                         logGenerationTiming(finalMetrics, generationID: session.id)
-                        updateMessage(id: assistant.id, content: streamedContent, status: .completed)
-                        break generationEvents
-                    }
-                    if grounded != nil, !streamedContent.isEmpty {
-                        try store.chats.appendToken(to: variant.id, token: streamedContent)
-                    }
-                    // The runtime dropped oldest turns to fit the window — tell the
-                    // user (persist it too) rather than silently losing context.
-                    if finalMetrics?.contextTrimmed == true {
-                        try? store.chats.appendToken(to: variant.id, token: Self.contextTrimmedNotice)
-                        streamedContent += Self.contextTrimmedNotice
-                    }
-                    // The model's answer, before the source trailer — what the
-                    // entity-grounding check inspects.
-                    let answerText = streamedContent
-                    // Append the grounded answer's source key so inline [S#] citations
-                    // resolve to document names for the reader. Only on success.
-                    if let groundingTrailer, !groundingTrailer.isEmpty {
-                        try? store.chats.appendToken(to: variant.id, token: groundingTrailer)
-                        streamedContent += groundingTrailer
-                    }
-                    // Post-generation grounding check: flag any name / email / phone the
-                    // answer asserts that is absent from the cited sources (e.g. a full
-                    // name reconstructed from an email prefix). Surfaced as a warning,
-                    // never suppressed — the reader sees both the answer and the caveat.
-                    if !groundingSourceTexts.isEmpty {
-                        let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
-                            answer: answerText,
-                            sourceText: groundingSourceTexts.joined(separator: "\n\n")
-                        )
-                        if let banner = Self.entityGroundingBanner(entityIssues) {
-                            try? store.chats.appendToken(to: variant.id, token: banner)
-                            streamedContent += banner
-                        }
-                    }
-                    // Proposition support check — resolved labels are structural only.
-                    // The warning is appended and persisted out-of-band so source text
-                    // cannot instruct the model to suppress it.
-                    if !groundingSources.isEmpty {
-                        let report = try? DocumentSupportVerifier.verify(
-                            answer: answerText,
-                            sources: groundingSources.map { source in
-                                DocumentSupportSource(
-                                    sourceID: source.sourceID,
-                                    label: source.label,
-                                    locator: source.locator.encodedJSON(),
-                                    text: source.supportText,
-                                    lowConfidence: source.lowConfidence
-                                )
-                            },
-                            scopeFullyIndexed: groundingScopeFullyIndexed
-                        )
-                        groundingVerification = report
-                        // Phase 0 SHADOW: run the exact AttributionValidator alongside the
-                        // lexical verifier and log its verdict (metadata only). Changes
-                        // nothing user-visible; surfaces where exact attribution validation
-                        // would fire — and where it diverges from the lexical check — before
-                        // Phase 1 makes it a gate, and exercises the stable-SpanID citation
-                        // mapping on real answers.
-                        let shadow = GroundedAttributionAdapter.shadowValidate(
-                            answer: answerText,
-                            sources: groundingSources.map {
-                                GroundedSpanInput(
-                                    label: $0.label, sourceID: $0.sourceID,
-                                    text: $0.supportText, lowConfidence: $0.lowConfidence
-                                )
-                            },
-                            isRefusal: report?.appearsUnsupported ?? false
-                        )
-                        GroundedAttributionAdapter.logShadow(shadow, lexicalRequiresReview: report?.requiresReview)
-                        let banner = report.flatMap(Self.documentSupportBanner) ?? """
-
-                        ---
-
-                        ⚠️ **Document support check — verify before relying on this answer.**
-                        - Proposition verification could not be completed.
-                        """
-                        if report == nil || report?.requiresReview == true {
-                            try? store.chats.appendToken(to: variant.id, token: banner)
-                            streamedContent += banner
-                        }
-                    }
-                    try store.chats.completeVariant(variant.id)
-                    try store.generation.completeGeneration(
-                        generationID: session.id,
-                        metrics: storedMetrics(from: finalMetrics)
-                    )
-                    logGenerationTiming(finalMetrics, generationID: session.id)
-                    if let grounded {
-                        try persistGroundedDocumentPacket(
-                            messageID: assistant.id,
-                            question: prompt,
-                            context: grounded,
-                            verification: groundingVerification
-                        )
-                        updateMessageAssurance(
-                            id: assistant.id,
-                            state: Self.groundedAssurance(
-                                depth: grounded.depth,
-                                verificationStatus: groundingVerification?.verificationStatus
+                        if let context {
+                            try persistGroundedDocumentPacket(
+                                messageID: assistant.id,
+                                question: prompt,
+                                context: context,
+                                verification: groundingVerification
                             )
+                            updateMessageAssurance(
+                                id: assistant.id,
+                                state: Self.groundedAssurance(
+                                    depth: context.depth,
+                                    verificationStatus: groundingVerification?.verificationStatus
+                                )
+                            )
+                        }
+                        let citations = persistSourceCitations(
+                            messageID: assistant.id,
+                            answer: answerText,
+                            sources: groundingSources
                         )
-                    }
-                    let citations = persistSourceCitations(
-                        messageID: assistant.id,
-                        answer: answerText,
-                        sources: groundingSources
-                    )
-                    updateMessage(id: assistant.id, content: streamedContent, status: .completed)
-                    attachCitations(citations, toMessage: assistant.id)
-                    // A fast-tier grounded answer is preliminary: offer the deep pass
-                    // for the same question (spec §3.2). Auto-escalated or deep passes
-                    // carry .deep and offer nothing.
-                    if grounded?.depth == .fast, !groundingSources.isEmpty {
-                        deeperSearchOffer = DeeperSearchOffer(kind: .documents, chatID: chatID, question: prompt)
-                    }
+                        updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                        attachCitations(citations, toMessage: assistant.id)
+                        // A fast-tier grounded answer is preliminary: offer the deep pass
+                        // for the same question (spec §3.2). Auto-escalated or deep passes
+                        // carry .deep and offer nothing.
+                        if context?.depth == .fast, !groundingSources.isEmpty {
+                            deeperSearchOffer = DeeperSearchOffer(kind: .documents, chatID: chatID, question: prompt)
+                        }
 
-                case .generationCancelled:
-                    sawTerminal = true
-                    try store.chats.markVariantCancelled(variant.id)
-                    try store.generation.cancelGeneration(
-                        generationID: session.id,
-                        metrics: storedMetrics(from: event.metrics)
-                    )
-                    updateMessage(id: assistant.id, content: streamedContent, status: .cancelled)
+                    case .generationCancelled:
+                        sawTerminal = true
+                        try store.chats.markVariantCancelled(activeVariant.id)
+                        try store.generation.cancelGeneration(
+                            generationID: session.id,
+                            metrics: storedMetrics(from: event.metrics)
+                        )
+                        updateMessage(id: assistant.id, content: streamedContent, status: .cancelled)
 
-                case .generationFailed:
-                    sawTerminal = true
-                    let reason = event.error?.message ?? "Generation failed."
-                    try store.chats.markVariantFailed(variant.id, reason: reason)
-                    try store.generation.failGeneration(
+                    case .generationFailed:
+                        sawTerminal = true
+                        let reason = event.error?.message ?? "Generation failed."
+                        try store.chats.markVariantFailed(activeVariant.id, reason: reason)
+                        try store.generation.failGeneration(
+                            generationID: session.id,
+                            errorSummary: reason,
+                            diagnosticEventID: nil
+                        )
+                        errorMessage = reason
+                        updateMessage(id: assistant.id, content: streamedContent, status: .failed)
+
+                    case .queued, .modelLoading, .modelLoaded, .generationStarted:
+                        break
+                    }
+                }
+
+                // The stream finished without a terminal event; never leave the
+                // assistant message stuck rendering as "still generating".
+                if !sawTerminal {
+                    let reason = "Generation ended unexpectedly."
+                    try store.chats.markVariantInterrupted(activeVariant.id, reason: reason)
+                    try store.generation.interruptGeneration(
                         generationID: session.id,
-                        errorSummary: reason,
+                        reason: reason,
                         diagnosticEventID: nil
                     )
-                    errorMessage = reason
-                    updateMessage(id: assistant.id, content: streamedContent, status: .failed)
-
-                case .queued, .modelLoading, .modelLoaded, .generationStarted:
-                    break
+                    updateMessage(id: assistant.id, content: streamedContent, status: .interrupted)
                 }
-            }
-
-            // The stream finished without a terminal event; never leave the
-            // assistant message stuck rendering as "still generating".
-            if !sawTerminal {
-                let reason = "Generation ended unexpectedly."
-                try store.chats.markVariantInterrupted(variant.id, reason: reason)
-                try store.generation.interruptGeneration(
-                    generationID: session.id,
-                    reason: reason,
-                    diagnosticEventID: nil
-                )
-                updateMessage(id: assistant.id, content: streamedContent, status: .interrupted)
+                break groundedPasses
             }
         } catch {
             errorMessage = error.localizedDescription
