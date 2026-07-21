@@ -20,6 +20,7 @@ struct DiagnosticsView: View {
     @State private var coverageReport: CoverageRoutingReport?
     @State private var runningCoverageProbe = false
     @State private var shadowLoggingEnabled = false
+    @State private var additiveRoutingEnabled = false
 
     var body: some View {
         List {
@@ -205,10 +206,17 @@ struct DiagnosticsView: View {
                             CoverageRoutingShadow.shadowEnabledKey, value: enabled
                         )
                     }
+                Toggle("Additive coverage routing (ground keyword misses the corpus covers)", isOn: $additiveRoutingEnabled)
+                    .accessibilityIdentifier("diagnostics.additiveRouting.toggle")
+                    .onChange(of: additiveRoutingEnabled) { _, enabled in
+                        try? environment.store.appSettings.setSetting(
+                            CoverageRoutingShadow.additiveRoutingEnabledKey, value: enabled
+                        )
+                    }
             } header: {
                 Text("Coverage Routing Shadow").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
             } footer: {
-                Text("Replays this matter set's real chat questions through the keyword router and the corpus-coverage signal, tallying where they diverge — the Phase 2 go/no-go for making coverage the primary router. “Would-ground” is the share of questions the keyword router skipped that the corpus actually covers; “would-skip” is keyword over-grounding. Reads only; runs a retrieval per question. The toggle logs the same comparison live during matter chat (metadata only).")
+                Text("Replays this matter set's real chat questions through the keyword router and the corpus-coverage signal, tallying where they diverge — the Phase 2 go/no-go for making coverage the primary router. “Would-ground” is the share of questions the keyword router skipped that the corpus actually covers; “would-skip” is keyword over-grounding. Reads only; runs a retrieval per question. The first toggle logs the comparison live during matter chat (metadata only). The second turns on additive routing: a question the keyword router misses but the corpus strongly covers is grounded in your documents — it only adds grounding, never removes it.")
             }
 
             Section {
@@ -226,6 +234,9 @@ struct DiagnosticsView: View {
             )) ?? false
             shadowLoggingEnabled = (try? environment.store.appSettings.getSetting(
                 CoverageRoutingShadow.shadowEnabledKey, as: Bool.self
+            )) ?? false
+            additiveRoutingEnabled = (try? environment.store.appSettings.getSetting(
+                CoverageRoutingShadow.additiveRoutingEnabledKey, as: Bool.self
             )) ?? false
             while !Task.isCancelled {
                 await environment.refreshRuntimeStatus()
