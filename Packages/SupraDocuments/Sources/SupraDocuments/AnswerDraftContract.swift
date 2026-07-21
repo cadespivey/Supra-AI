@@ -33,11 +33,21 @@ public enum AnswerDraftContract {
         lines.append("- A `quotes[].verbatim` value must be copied character-for-character from the cited evidence.")
         lines.append("- If the evidence does not support an answer, return {\"insufficient_evidence\": true, \"reason\": \"no_coverage\"} and no segments.")
         lines.append("- Do not use outside knowledge; do not invent labels, names, dates, or quotations.")
+        lines.append("- Each evidence item is a JSON object in the untrusted block below; its `label` is the label to cite and its `text` is the evidence.")
         lines.append("")
-        lines.append("EVIDENCE:")
-        for span in labeledSpans {
-            lines.append("[\(span.label)] \(span.text)")
-        }
+        // Same envelope the prose grounded path uses. Its builder exists precisely so a
+        // structured-output prompt cannot revert to raw source interpolation — which is
+        // what this function did, emitting "[S1] <text>" and letting a span body open a
+        // forged block at column 0.
+        lines.append(DocumentQAPromptBuilder.buildSourceDataBlock(sources: labeledSpans.map {
+            GroundingSource(
+                label: $0.label,
+                documentName: "",
+                locatorDisplay: "",
+                text: $0.text,
+                excerpt: ""
+            )
+        }))
         lines.append("")
         lines.append("QUESTION: \(question)")
         lines.append("")
