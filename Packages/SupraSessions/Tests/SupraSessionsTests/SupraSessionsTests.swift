@@ -2867,6 +2867,33 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(answer.contains("could not retrieve the governing primary law"), answer)
     }
 
+    /// T-JANA-05 (I-FIXME-1). A named case must not switch the jurisdiction gate off
+    /// for the whole answer.
+    ///
+    /// `jurisdiction_mismatch` is a HARD verification failure on the default legal
+    /// routes, and `classificationInheritingNamedCase` can synthesize `citationLookup`
+    /// from prior turns — so under the old rule an anaphora misfire silently disabled a
+    /// hard gate for every authority in the answer. The exemption belongs to the named
+    /// case (and its own forum), which the verifier now scopes; the caller must keep
+    /// passing the matter's jurisdiction either way.
+    ///
+    /// Expected RED: `verificationJurisdiction(for:)` returns nil whenever
+    /// `citationLookup` is set, so the first assertion fails.
+    func testNamedCaseDoesNotDisableTheJurisdictionGate() {
+        var named = LegalQueryClassification(jurisdiction: "Florida", legalIssue: "general")
+        named.citationLookup = "Sixth v. Circuit, 900 F.2d 100"
+        XCTAssertEqual(
+            GlobalChatController.verificationJurisdiction(for: named),
+            "Florida",
+            "a named-case question must still verify against the matter's forum"
+        )
+
+        // Unchanged for ordinary questions.
+        let ordinary = LegalQueryClassification(jurisdiction: "Florida", legalIssue: "general")
+        XCTAssertNil(ordinary.citationLookup)
+        XCTAssertEqual(GlobalChatController.verificationJurisdiction(for: ordinary), "Florida")
+    }
+
     func testSurnameFollowUpInheritsActiveCaseAndBoilerplateDoesNot() {
         func user(_ text: String) -> GenerateRequest.Turn { .init(role: .user, content: text) }
         let base = LegalQueryClassifier.classify("Did Peacock address laches?")

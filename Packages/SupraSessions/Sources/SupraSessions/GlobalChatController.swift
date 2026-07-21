@@ -1816,14 +1816,13 @@ public final class GlobalChatController: ObservableObject {
             ranked[index].authority = authorities[index]
         }
         lastLegalPacketsByChatID[chatID] = verificationPacket
-        // A question that NAMES its authority ("What is the holding of X?") is about
-        // that case wherever it sits — the matter's forum must not veto quoting it.
-        let verificationJurisdiction = classification.citationLookup == nil ? classification.jurisdiction : nil
+        let verificationJurisdiction = Self.verificationJurisdiction(for: classification)
         var verification = legalConfiguration.verifyCitations
             ? LegalCitationVerifier.verify(
                 answer: output,
                 authorities: authorities,
                 expectedJurisdiction: verificationJurisdiction,
+                namedAuthorityLookup: classification.citationLookup,
                 requiresSupportedAuthority: route.requiresCitations,
                 sourceFailuresByAuthorityID: hydration.failuresByAuthorityID
             )
@@ -1858,6 +1857,7 @@ public final class GlobalChatController: ObservableObject {
                     answer: revised,
                     authorities: authorities,
                     expectedJurisdiction: verificationJurisdiction,
+                    namedAuthorityLookup: classification.citationLookup,
                     requiresSupportedAuthority: route.requiresCitations,
                     sourceFailuresByAuthorityID: hydration.failuresByAuthorityID
                 )
@@ -2012,6 +2012,19 @@ public final class GlobalChatController: ObservableObject {
     static let contextTrimmedNotice = "\n\n---\n_Note: this conversation exceeded the model's context window, so the earliest messages were dropped from view for this reply. Start a new chat to reset the context._"
 
     static let groundedContextOverflowRefusal = "I can’t provide a source-grounded answer because the complete instruction and evidence packet does not fit this model’s context window. Use fewer sources or a model with a larger context window, then try again."
+
+    /// The jurisdiction the citation verifier should enforce for this turn.
+    ///
+    /// Always the matter's jurisdiction. A question that NAMES its authority ("What is
+    /// the holding of X?") is about that case wherever it sits, so the forum must not
+    /// veto quoting it — but that exemption belongs to the named case and its own line
+    /// of authority, and the verifier scopes it there (`namedAuthorityLookup`).
+    /// Expressing it here by withholding the jurisdiction disabled a hard gate for
+    /// every authority in the answer, including on turns where `citationLookup` was
+    /// inferred from history rather than asked for (I-FIXME-1).
+    static func verificationJurisdiction(for classification: LegalQueryClassification) -> String? {
+        classification.jurisdiction
+    }
 
     /// A hard verification failure: a fabricated/unsupported citation or quotation,
     /// or — when the route requires jurisdiction — a jurisdiction mismatch.
