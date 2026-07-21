@@ -34,6 +34,12 @@ public enum CoverageRoutingShadow {
     /// so the app's Diagnostics surface can flip it.
     public static let shadowEnabledKey = "reasoning.corpusCoverageShadow.enabled"
 
+    /// The app setting that turns ADDITIVE coverage routing on. Default OFF. When on, a matter-chat
+    /// question the keyword router leaves ungrounded (`.none`) but whose corpus coverage is STRONG
+    /// is grounded as a whole-matter content question — coverage ADDS grounding the keyword lists
+    /// miss. It never un-grounds a keyword-grounded question, so it cannot regress the keyword path.
+    public static let additiveRoutingEnabledKey = "reasoning.additiveCoverageRouting.enabled"
+
     /// The candidate primary rule under test: coverage would ground iff its evidence is strong.
     /// `keywordGrounds` is the legacy decision (intent is `.content`/`.inventory`, not `.none`).
     static func compare(keywordGrounds: Bool, coverage: CoverageSignal) -> CoverageRoutingComparison {

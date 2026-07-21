@@ -932,6 +932,86 @@ final class MatterChatGroundingTests: XCTestCase {
         XCTAssertEqual(off, on)
     }
 
+    // MARK: - Phase 2 additive coverage routing
+
+    /// A seeded matter with a June-meeting corpus and a keyword-MISS question
+    /// ("What happened at the June meeting?", `classify` → `.none`) that the corpus strongly
+    /// covers. Helper returns a fresh store + matter for the additive tests.
+    private func makeKeywordMissMatter() async throws -> (SupraStore, String) {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Additive Meeting Matter")
+        for index in 1...2 {
+            try await indexDocument(
+                store, matterID: matter.id, name: "meeting-\(index).txt",
+                text: "MEETING_\(index). The June board meeting approved the budget and the merger timeline."
+            )
+        }
+        // Precondition: the keyword classifier leaves this ungrounded.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify("What happened at the June meeting?", folderNames: []),
+            .none
+        )
+        return (store, matter.id)
+    }
+
+    /// Additive routing ON: a keyword-miss the corpus STRONGLY covers is now grounded as a
+    /// whole-matter content answer (with real sources) instead of dropping to the legal route.
+    /// This is the Phase 2 grounding gain. Expected RED: `additiveRoutingEnabledKey` does not exist
+    /// and the routing does not promote `.none`, so the context is nil.
+    func testAdditiveRoutingGroundsKeywordMissWithStrongCoverage() async throws {
+        let (store, matterID) = try await makeKeywordMissMatter()
+        try store.appSettings.setSetting(CoverageRoutingShadow.additiveRoutingEnabledKey, value: true)
+        let context = await makeGrounding(store, matterID: matterID)
+            .groundedContext(forQuestion: "What happened at the June meeting?", depth: .fast, modelID: ModelID())
+        let grounded = try XCTUnwrap(context, "strong coverage should additively ground the keyword miss")
+        XCTAssertFalse(grounded.sources.isEmpty, "the additively-grounded answer packs real matter sources")
+    }
+
+    /// Additive routing OFF (default): the same keyword-miss stays ungrounded — no behavior change
+    /// unless the flag is on. Expected RED: the key does not exist.
+    func testAdditiveRoutingOffLeavesKeywordMissUngrounded() async throws {
+        let (store, matterID) = try await makeKeywordMissMatter()
+        try store.appSettings.setSetting(CoverageRoutingShadow.additiveRoutingEnabledKey, value: false)
+        let context = await makeGrounding(store, matterID: matterID)
+            .groundedContext(forQuestion: "What happened at the June meeting?", depth: .fast, modelID: ModelID())
+        XCTAssertNil(context, "additive routing OFF must not change keyword routing")
+    }
+
+    /// Additive routing ON but coverage is only WEAK (a single marginal passage): the keyword miss
+    /// is NOT grounded — additive routing grounds only on STRONG evidence. Expected RED.
+    func testAdditiveRoutingDoesNotGroundWeakCoverage() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Additive Weak Matter")
+        // A single loosely-related document → weak (not strong) coverage under the nil-embedder path.
+        try await indexDocument(
+            store, matterID: matter.id, name: "solo.txt",
+            text: "A lone note that mentions the June meeting once, in passing."
+        )
+        try store.appSettings.setSetting(CoverageRoutingShadow.additiveRoutingEnabledKey, value: true)
+        let context = await makeGrounding(store, matterID: matter.id)
+            .groundedContext(forQuestion: "What happened at the June meeting?", depth: .fast, modelID: ModelID())
+        XCTAssertNil(context, "weak coverage must not additively ground a keyword miss")
+    }
+
+    /// Additive routing never REMOVES grounding: a keyword-grounded content question stays grounded
+    /// (additive only promotes `.none`). Expected RED: the key does not exist.
+    func testAdditiveRoutingNeverUngroundsKeywordContent() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Additive Content Matter")
+        for index in 1...2 {
+            try await indexDocument(
+                store, matterID: matter.id, name: "indemnity-\(index).txt",
+                text: "SOURCE_\(index). The indemnification clause covers synthetic claims."
+            )
+        }
+        try store.appSettings.setSetting(CoverageRoutingShadow.additiveRoutingEnabledKey, value: true)
+        let context = await makeGrounding(store, matterID: matter.id)
+            .groundedContext(
+                forQuestion: "What do my documents say about indemnification?", depth: .fast, modelID: ModelID()
+            )
+        XCTAssertNotNil(context, "a keyword-grounded content question stays grounded under additive routing")
+    }
+
     private func indexDocument(
         _ store: SupraStore,
         matterID: String,
