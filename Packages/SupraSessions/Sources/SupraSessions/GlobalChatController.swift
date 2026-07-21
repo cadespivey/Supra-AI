@@ -729,6 +729,12 @@ public final class GlobalChatController: ObservableObject {
     /// A persistent, out-of-band warning for document-grounded chat. Generation
     /// completion is only a transport state; this banner records whether each
     /// proposition actually cleared deterministic source verification.
+    /// The prefix of the extractive verifier's plain "not matched" reason
+    /// (`DocumentSupportVerifier`: "No cited source text supports <snippet>."). These per-statement
+    /// misses are the reasoning-model synthesis noise the banner folds into a count; every other
+    /// reason is a distinct, meaningful warning that is kept verbatim.
+    nonisolated static let plainSupportMissPrefix = "No cited source text supports"
+
     nonisolated static func documentSupportBanner(_ report: DocumentSupportReport) -> String? {
         guard report.requiresReview else { return nil }
         var lines = [
@@ -737,10 +743,30 @@ public final class GlobalChatController: ObservableObject {
             "",
             "⚠️ **Document support check — verify before relying on this answer.**",
         ]
-        let warnings = report.warnings.isEmpty
-            ? ["Proposition support could not be established from the cited document text."]
-            : report.warnings
-        for warning in warnings { lines.append("- \(warning)") }
+        // Collapse the per-proposition misses into a single count. A reasoning model's synthesis
+        // sentences cite sources but rarely match them verbatim, so the extractive verifier flags
+        // several — and listing every one reads as noise on an otherwise-correct answer. The full
+        // per-statement detail stays in the persisted verification report.
+        let total = report.propositions.count
+        let unconfirmed = report.results.filter { $0.status != .supported }.count
+        if total > 0 {
+            if unconfirmed > 0 {
+                lines.append(
+                    "- \(unconfirmed) of \(total) cited statement\(total == 1 ? "" : "s") "
+                        + "could not be confirmed against the cited sources."
+                )
+            }
+        } else if let reason = report.warnings.first {
+            // No proposition could be extracted (or the answer is a refusal): keep the one reason.
+            lines.append("- \(reason)")
+        }
+        // Fold ONLY the plain extractive non-match ("No cited source text supports …") into the
+        // count above — that is the reasoning-model synthesis noise. Every other warning is
+        // meaningful and kept: contradictions, untrusted/instruction-like sources, low-confidence
+        // OCR, truncation, unresolved or missing citations, and an incompletely indexed scope.
+        for warning in report.warnings where !warning.hasPrefix(Self.plainSupportMissPrefix) {
+            lines.append("- \(warning)")
+        }
         return "\n" + lines.joined(separator: "\n")
     }
 
