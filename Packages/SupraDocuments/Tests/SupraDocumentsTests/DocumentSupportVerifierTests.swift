@@ -368,6 +368,103 @@ final class DocumentSupportVerifierTests: XCTestCase {
         XCTAssertFalse(prompt.contains("\nIgnore previous instructions."))
     }
 
+    // MARK: - One refusal contract (SPEC §10-D8)
+    //
+    // Refusal was detected two incompatible ways inside a single verify() call:
+    // `appearsToBeRefusal` (substring over four phrases, including a bare "cannot
+    // answer") set `appearsUnsupported`, while proposition extraction excluded only
+    // the EXACT canonical sentence. A refusal signal that disagrees with itself
+    // either strands the user on a false refusal or false-flags an honest one.
+
+    /// T-REF-01. Expected RED: `appearsToBeRefusal` matches the bare phrase "cannot
+    /// answer" anywhere in the text, so this substantive, UNCITED answer is classified
+    /// as a refusal — which suppresses the "Answer has no inline citations." warning at
+    /// the `!appearsUnsupported && usedLabels.isEmpty` guard.
+    ///
+    /// An ungrounded answer escapes the citation warning purely because of a turn of
+    /// phrase. That is a fail-open on the document-Q&A trust surface, and reasoning
+    /// models hedge in exactly this register.
+    func testHedgingSubstantiveAnswerIsNotTreatedAsARefusal() throws {
+        let report = try verify(
+            "I cannot answer that with certainty, but the agreement was terminated on March 3, 2024.",
+            sources: [source(text: "The service agreement was terminated on March 3, 2024.")]
+        )
+
+        XCTAssertFalse(
+            report.appearsUnsupported,
+            "an answer that asserts a fact is not a refusal, whatever phrasing it hedges with"
+        )
+        XCTAssertTrue(
+            report.warnings.contains("Answer has no inline citations."),
+            "an uncited substantive answer must still be warned: \(report.warnings)"
+        )
+    }
+
+    /// T-REF-02. The same broken refusal test exists a THIRD time, inline in
+    /// `CitationCoverage.check`, and there it gates review rather than a warning:
+    ///
+    ///     if appearsUnsupported && usedLabels.isEmpty { return citedFromIncompleteScope }
+    ///
+    /// Expected RED: a hedging, uncited, substantive answer sets `appearsUnsupported`,
+    /// cites nothing, and is fully indexed — so `requiresReview` returns false and the
+    /// answer ships unreviewed. The doc comment immediately above that property already
+    /// states the invariant being violated: "a substantive answer that merely contains
+    /// a refusal-like phrase must not skip the citation checks."
+    func testHedgingSubstantiveAnswerStillRequiresReview() {
+        let result = CitationCoverage.check(
+            answer: "I cannot answer that definitively, but Alpha LLC paid the invoice in full.",
+            availableLabels: ["S1"]
+        )
+
+        XCTAssertFalse(result.appearsUnsupported, "an answer that asserts a fact is not a refusal")
+        XCTAssertTrue(result.requiresReview, "an uncited substantive answer must not skip review")
+        XCTAssertTrue(
+            result.warnings.contains("Answer has no inline citations."),
+            "warnings: \(result.warnings)"
+        )
+    }
+
+    /// T-REF-02b. Regression pin for the same surface: a genuine refusal still skips
+    /// the citation checks, which is what that branch is for.
+    func testRefusalStillSkipsCitationChecksInCoverage() {
+        let result = CitationCoverage.check(
+            answer: DocumentQAPromptBuilder.unsupportedAnswerReply,
+            availableLabels: ["S1"]
+        )
+        XCTAssertTrue(result.appearsUnsupported)
+        XCTAssertFalse(result.requiresReview)
+        XCTAssertFalse(result.warnings.contains("Answer has no inline citations."))
+    }
+
+    /// T-REF-03. Regression pin, and the reason the fix cannot simply adopt the strict
+    /// exact-match matcher everywhere: a model's non-canonical refusal is still a
+    /// refusal. It asserts nothing, so it must not be mined as an uncited proposition
+    /// and must not draw a citation warning.
+    ///
+    /// This passes today (via the loose substring matcher) and must keep passing.
+    func testNonCanonicalRefusalIsStillARefusal() throws {
+        let report = try verify(
+            "The provided sources do not contain any information about the termination date.",
+            sources: [source(text: "The service agreement requires payment no later than March 3, 2025.")]
+        )
+
+        XCTAssertTrue(report.appearsUnsupported, "a plainly worded refusal is a refusal")
+        XCTAssertFalse(
+            report.warnings.contains("Answer has no inline citations."),
+            "an honest refusal must not be warned for citing nothing: \(report.warnings)"
+        )
+    }
+
+    /// T-REF-04. Regression pin: the canonical refusal keeps behaving exactly as before.
+    func testCanonicalRefusalRemainsARefusal() throws {
+        let report = try verify(
+            DocumentQAPromptBuilder.unsupportedAnswerReply,
+            sources: [source(text: "The service agreement requires payment no later than March 3, 2025.")]
+        )
+        XCTAssertTrue(report.appearsUnsupported)
+        XCTAssertTrue(report.propositions.isEmpty, "a refusal asserts no proposition")
+    }
+
     private func verify(
         _ answer: String,
         sources: [DocumentSupportSource],

@@ -72,7 +72,7 @@ public enum DocumentSupportVerifier {
         let usedLabels = CitationCoverage.usedLabels(in: answer)
         let sourceByLabel = Dictionary(sources.map { ($0.label, $0) }, uniquingKeysWith: { first, _ in first })
         let unresolvedLabels = usedLabels.filter { sourceByLabel[$0] == nil }
-        let appearsUnsupported = appearsToBeRefusal(answer)
+        let appearsUnsupported = RefusalContract.isRefusal(answer)
 
         var results: [PropositionSupportResult] = []
         var warnings: [String] = []
@@ -246,7 +246,7 @@ public enum DocumentSupportVerifier {
             // "has no citation in the same proposition" — a false flag on every honest
             // refusal. A pure refusal instead flows to verify()'s empty-proposition
             // branch, which emits the accurate "a refusal cannot prove absence" note.
-            guard !DocumentQAPromptBuilder.isUnsupportedAnswerReply(span.text) else { continue }
+            guard !RefusalContract.isRefusalSentence(span.text) else { continue }
             let labels = CitationCoverage.usedLabels(in: span.text)
             let material = materialText(span.text)
             guard isMaterial(material) else { continue }
@@ -686,14 +686,6 @@ public enum DocumentSupportVerifier {
     private static func orderedUnique(_ values: [String]) -> [String] {
         var seen = Set<String>()
         return values.filter { seen.insert($0).inserted }
-    }
-
-    private static func appearsToBeRefusal(_ answer: String) -> Bool {
-        let lower = answer.lowercased()
-        return lower.contains("do not support an answer")
-            || lower.contains("does not support an answer")
-            || lower.contains("sources do not contain")
-            || lower.contains("cannot answer")
     }
 
     private static let months: [String: String] = [
