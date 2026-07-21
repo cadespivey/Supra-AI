@@ -1822,6 +1822,7 @@ public final class GlobalChatController: ObservableObject {
                 answer: output,
                 authorities: authorities,
                 expectedJurisdiction: verificationJurisdiction,
+                namedAuthorityLookup: classification.citationLookup,
                 requiresSupportedAuthority: route.requiresCitations,
                 sourceFailuresByAuthorityID: hydration.failuresByAuthorityID
             )
@@ -1856,6 +1857,7 @@ public final class GlobalChatController: ObservableObject {
                     answer: revised,
                     authorities: authorities,
                     expectedJurisdiction: verificationJurisdiction,
+                    namedAuthorityLookup: classification.citationLookup,
                     requiresSupportedAuthority: route.requiresCitations,
                     sourceFailuresByAuthorityID: hydration.failuresByAuthorityID
                 )
@@ -2013,10 +2015,15 @@ public final class GlobalChatController: ObservableObject {
 
     /// The jurisdiction the citation verifier should enforce for this turn.
     ///
-    /// A question that NAMES its authority ("What is the holding of X?") is about that
-    /// case wherever it sits — the matter's forum must not veto quoting it.
+    /// Always the matter's jurisdiction. A question that NAMES its authority ("What is
+    /// the holding of X?") is about that case wherever it sits, so the forum must not
+    /// veto quoting it — but that exemption belongs to the named case and its own line
+    /// of authority, and the verifier scopes it there (`namedAuthorityLookup`).
+    /// Expressing it here by withholding the jurisdiction disabled a hard gate for
+    /// every authority in the answer, including on turns where `citationLookup` was
+    /// inferred from history rather than asked for (I-FIXME-1).
     static func verificationJurisdiction(for classification: LegalQueryClassification) -> String? {
-        classification.citationLookup == nil ? classification.jurisdiction : nil
+        classification.jurisdiction
     }
 
     /// A hard verification failure: a fabricated/unsupported citation or quotation,

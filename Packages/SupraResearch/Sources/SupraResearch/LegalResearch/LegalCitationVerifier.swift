@@ -72,6 +72,7 @@ public enum LegalCitationVerifier {
         answer: String,
         authorities: [LegalAuthority],
         expectedJurisdiction: String? = nil,
+        namedAuthorityLookup: String? = nil,
         requiresSupportedAuthority: Bool = false,
         sourceFailuresByAuthorityID: [String: LegalAuthorityTextFailure] = [:]
     ) -> LegalVerificationReport {
@@ -203,9 +204,18 @@ public enum LegalCitationVerifier {
             // backing authority sits in a different jurisdiction than requested,
             // rather than a single packet-wide any-of (which passed as long as
             // *some* unrelated authority matched).
+            // A question that NAMES its authority is about that case wherever it sits,
+            // so the matter's forum must not veto quoting it — nor the line of
+            // authority it belongs to. That exemption is scoped to those authorities
+            // here rather than by disabling the whole check at the call site.
+            let exemptAuthorityIDs = jurisdictionExemptAuthorityIDs(
+                namedAuthorityLookup: namedAuthorityLookup,
+                among: authorities
+            )
             var flaggedExcerpts = Set<String>()
             for citation in extracted {
                 guard let authority = supportingAuthority(for: citation, among: authorities) else { continue }
+                guard !exemptAuthorityIDs.contains(authority.id) else { continue }
                 if isOutOfJurisdiction(authority, expected: expectedJurisdiction),
                    flaggedExcerpts.insert(citation).inserted {
                     issues.append(
@@ -224,6 +234,7 @@ public enum LegalCitationVerifier {
                 for label in proposition.citationLabels {
                     for index in packetLabelIndices(in: label) where index >= 1 && index <= packetSize {
                         let authority = authorities[index - 1]
+                        guard !exemptAuthorityIDs.contains(authority.id) else { continue }
                         if isOutOfJurisdiction(authority, expected: expectedJurisdiction),
                            flaggedExcerpts.insert(label).inserted {
                             issues.append(LegalVerificationIssue(
@@ -793,6 +804,54 @@ public enum LegalCitationVerifier {
                 .components(separatedBy: CharacterSet.alphanumerics.inverted)
                 .filter { !$0.isEmpty && !genericPartyTokens.contains($0) }
         )
+    }
+
+    /// The authorities exempt from the jurisdiction check because the question named
+    /// one of them: the named authority itself, plus any authority sharing its forum.
+    ///
+    /// The exemption used to be expressed by the caller passing no expected
+    /// jurisdiction at all, which switched a HARD gate off for every authority in the
+    /// answer. Since a named-case lookup can be *synthesized* from prior turns by the
+    /// anaphora heuristic, a misfire silently disabled jurisdiction verification
+    /// wholesale (I-FIXME-1). Anchoring the exemption to authorities actually present
+    /// in the packet bounds the damage: a lookup that resolves to nothing now exempts
+    /// nothing.
+    ///
+    /// The named case's own forum is included because that is what the blanket
+    /// exemption was really protecting — asking about a Sixth Circuit case has to let
+    /// the answer cite that case's line of authority. Membership is decided by
+    /// `JurisdictionScopeResolver`, the same hierarchy relation used everywhere else,
+    /// so the neighborhood is the named court's actual scope rather than a name match.
+    private static func jurisdictionExemptAuthorityIDs(
+        namedAuthorityLookup: String?,
+        among authorities: [LegalAuthority]
+    ) -> Set<String> {
+        guard
+            let lookup = namedAuthorityLookup?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !lookup.isEmpty,
+            let named = supportingAuthority(for: lookup, among: authorities)
+        else {
+            return []
+        }
+        var exempt: Set<String> = [named.id]
+        // Describe the named case's forum with whatever metadata it carries; saved
+        // authorities often have the court name but not the courtID, or vice versa.
+        let forums = [named.courtID, named.court, named.jurisdiction]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !forums.isEmpty else { return exempt }
+        for authority in authorities where authority.id != named.id {
+            let sharesForum = forums.contains { forum in
+                JurisdictionScopeResolver.shared.verdict(
+                    expected: forum,
+                    authorityCourt: authority.court,
+                    authorityJurisdiction: authority.jurisdiction,
+                    authorityCourtID: authority.courtID
+                ) == .withinScope
+            }
+            if sharesForum { exempt.insert(authority.id) }
+        }
+        return exempt
     }
 
     /// Whether a cited authority sits outside the requested jurisdiction.
