@@ -846,7 +846,7 @@ public final class GlobalChatController: ObservableObject {
             }
             if !groundingSourceTexts.isEmpty {
                 let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
-                    answer: answerText, sourceText: groundingSourceTexts.joined(separator: "\n\n")
+                    answer: answerText, sourceTexts: groundingSourceTexts
                 )
                 if let banner = Self.entityGroundingBanner(entityIssues) {
                     try? store.chats.appendToken(to: variant.id, token: banner)
@@ -1194,7 +1194,7 @@ public final class GlobalChatController: ObservableObject {
                         if !groundingSourceTexts.isEmpty {
                             let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
                                 answer: answerText,
-                                sourceText: groundingSourceTexts.joined(separator: "\n\n")
+                                sourceTexts: groundingSourceTexts
                             )
                             if let banner = Self.entityGroundingBanner(entityIssues) {
                                 try? store.chats.appendToken(to: activeVariant.id, token: banner)
