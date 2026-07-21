@@ -1816,9 +1816,7 @@ public final class GlobalChatController: ObservableObject {
             ranked[index].authority = authorities[index]
         }
         lastLegalPacketsByChatID[chatID] = verificationPacket
-        // A question that NAMES its authority ("What is the holding of X?") is about
-        // that case wherever it sits — the matter's forum must not veto quoting it.
-        let verificationJurisdiction = classification.citationLookup == nil ? classification.jurisdiction : nil
+        let verificationJurisdiction = Self.verificationJurisdiction(for: classification)
         var verification = legalConfiguration.verifyCitations
             ? LegalCitationVerifier.verify(
                 answer: output,
@@ -2012,6 +2010,14 @@ public final class GlobalChatController: ObservableObject {
     static let contextTrimmedNotice = "\n\n---\n_Note: this conversation exceeded the model's context window, so the earliest messages were dropped from view for this reply. Start a new chat to reset the context._"
 
     static let groundedContextOverflowRefusal = "I can’t provide a source-grounded answer because the complete instruction and evidence packet does not fit this model’s context window. Use fewer sources or a model with a larger context window, then try again."
+
+    /// The jurisdiction the citation verifier should enforce for this turn.
+    ///
+    /// A question that NAMES its authority ("What is the holding of X?") is about that
+    /// case wherever it sits — the matter's forum must not veto quoting it.
+    static func verificationJurisdiction(for classification: LegalQueryClassification) -> String? {
+        classification.citationLookup == nil ? classification.jurisdiction : nil
+    }
 
     /// A hard verification failure: a fabricated/unsupported citation or quotation,
     /// or — when the route requires jurisdiction — a jurisdiction mismatch.
