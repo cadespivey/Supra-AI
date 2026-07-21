@@ -206,12 +206,8 @@ public enum LegalCitationVerifier {
             var flaggedExcerpts = Set<String>()
             for citation in extracted {
                 guard let authority = supportingAuthority(for: citation, among: authorities) else { continue }
-                // U.S. Supreme Court authority binds every U.S. jurisdiction — it can
-                // never be a jurisdiction mismatch, whatever the matter's forum.
-                guard !isNationallyBinding(authority) else { continue }
-                let jurisdictionStrings = [authority.jurisdiction, authority.court, authority.courtID].compactMap { $0 }
-                let matchesJurisdiction = jurisdictionStrings.contains { jurisdictionMatches(expectedJurisdiction, $0) }
-                if !matchesJurisdiction, flaggedExcerpts.insert(citation).inserted {
+                if isOutOfJurisdiction(authority, expected: expectedJurisdiction),
+                   flaggedExcerpts.insert(citation).inserted {
                     issues.append(
                         LegalVerificationIssue(
                             kind: .jurisdictionMismatch,
@@ -228,13 +224,8 @@ public enum LegalCitationVerifier {
                 for label in proposition.citationLabels {
                     for index in packetLabelIndices(in: label) where index >= 1 && index <= packetSize {
                         let authority = authorities[index - 1]
-                        guard !isNationallyBinding(authority) else { continue }
-                        let jurisdictionStrings = [authority.jurisdiction, authority.court, authority.courtID]
-                            .compactMap { $0 }
-                        let matches = jurisdictionStrings.contains {
-                            jurisdictionMatches(expectedJurisdiction, $0)
-                        }
-                        if !matches, flaggedExcerpts.insert(label).inserted {
+                        if isOutOfJurisdiction(authority, expected: expectedJurisdiction),
+                           flaggedExcerpts.insert(label).inserted {
                             issues.append(LegalVerificationIssue(
                                 kind: .jurisdictionMismatch,
                                 message: "The cited authority does not clearly belong to the requested jurisdiction (\(expectedJurisdiction)).",
@@ -804,45 +795,37 @@ public enum LegalCitationVerifier {
         )
     }
 
-    /// Fuzzy jurisdiction comparison: exact normalized match, or substring overlap
-    /// only when both sides are long enough to be meaningful (avoids spurious
-    /// 1–3 character matches like "ca" matching "California").
-    /// Whether the authority is exempt from a regional-forum jurisdiction-mismatch
-    /// flag because its precedent is not bounded by the matter's regional circuit:
-    /// the U.S. Supreme Court (binds every U.S. jurisdiction) and the U.S. Court of
-    /// Appeals for the Federal Circuit (nationwide appellate jurisdiction over its
-    /// subject matter — patents and the other categories of 28 U.S.C. § 1295 — so its
-    /// law applies in every regional circuit; e.g. a Federal Circuit patent case
-    /// saved to a Ninth Circuit matter is not a forum mismatch). Matches on courtID
-    /// OR a normalized court/jurisdiction name, because saved authorities often carry
-    /// the name but not the courtID.
-    static func isNationallyBinding(_ authority: LegalAuthority) -> Bool {
-        switch authority.courtID?.lowercased() {
-        case "scotus", "cafc": return true
-        default: break
+    /// Whether a cited authority sits outside the requested jurisdiction.
+    ///
+    /// Decided from the court hierarchy (`JurisdictionScopeResolver`), which resolves
+    /// both sides to catalog courts and answers from their relations — nationally
+    /// binding authority, the same court under a different notation, the same state, a
+    /// federal court sitting in the requested state, a district court under the
+    /// requested circuit. This replaces a substring comparison that both accepted an
+    /// Arkansas authority for a Kansas matter and rejected "…for the 11th Circuit" for
+    /// an "…for the Eleventh Circuit" matter, along with the hand-maintained
+    /// nationally-binding needle list it forced.
+    ///
+    /// When the hierarchy cannot resolve a side, the check falls back to *exact*
+    /// normalized equality — never containment — so an unrecognized court is flagged
+    /// rather than waved through. That is the fail-closed direction: this issue is a
+    /// safety flag, and the message says the authority does not *clearly* belong.
+    private static func isOutOfJurisdiction(_ authority: LegalAuthority, expected: String) -> Bool {
+        switch JurisdictionScopeResolver.shared.verdict(
+            expected: expected,
+            authorityCourt: authority.court,
+            authorityJurisdiction: authority.jurisdiction,
+            authorityCourtID: authority.courtID
+        ) {
+        case .withinScope:
+            return false
+        case .outsideScope:
+            return true
+        case .indeterminate:
+            let expectedKey = normalized(expected)
+            let fields = [authority.jurisdiction, authority.court, authority.courtID].compactMap { $0 }
+            return !fields.contains { normalized($0) == expectedKey }
         }
-        // `normalized` strips whitespace and punctuation, so the needles are too.
-        // Each needle is unambiguous as a substring — no bare "ussupremecourt" (it
-        // would false-match a foreign "…us Supreme Court", e.g. "Cyprus Supreme
-        // Court"); real SCOTUS carries courtID "scotus" or the full name below.
-        let fields = [authority.court, authority.jurisdiction].compactMap { $0 }.map(normalized)
-        let nationalNeedles = [
-            "supremecourtoftheunitedstates",
-            "unitedstatessupremecourt",
-            "courtofappealsforthefederalcircuit",
-            "federalcircuitcourtofappeals",
-        ]
-        return fields.contains { field in
-            nationalNeedles.contains { field.contains($0) }
-        }
-    }
-
-    private static func jurisdictionMatches(_ lhs: String, _ rhs: String) -> Bool {
-        let a = normalized(lhs)
-        let b = normalized(rhs)
-        if a == b { return true }
-        guard a.count >= 4, b.count >= 4 else { return false }
-        return a.contains(b) || b.contains(a)
     }
 
     private static func caseNamePart(from citation: String) -> String? {
