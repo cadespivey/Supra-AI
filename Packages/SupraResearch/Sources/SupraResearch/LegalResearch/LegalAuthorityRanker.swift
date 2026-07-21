@@ -30,7 +30,7 @@ public enum LegalAuthorityRanker {
         var reasons: [String] = []
 
         if let jurisdiction = classification.jurisdiction,
-           matches(jurisdiction, authority.jurisdiction) || matches(jurisdiction, authority.court) || matches(jurisdiction, authority.courtID) {
+           matchesJurisdiction(authority, requested: jurisdiction) {
             score += 40
             reasons.append("jurisdiction_match")
         }
@@ -103,11 +103,34 @@ public enum LegalAuthorityRanker {
         return RankedLegalAuthority(authority: authority, score: score, reasons: reasons)
     }
 
-    private static func matches(_ lhs: String, _ rhs: String?) -> Bool {
-        guard let rhs else { return false }
-        let a = normalized(lhs)
-        let b = normalized(rhs)
-        return a == b || a.contains(b) || b.contains(a)
+    /// Whether an authority sits in the requested jurisdiction, for ranking purposes.
+    ///
+    /// Shares `JurisdictionScopeResolver` with `LegalCitationVerifier`, so retrieval
+    /// ranking and citation verification answer this question the same way. The
+    /// substring comparison this replaces both credited an Arkansas authority in a
+    /// Kansas matter (ranking out-of-forum law above controlling law) and denied
+    /// "…for the 11th Circuit" a match in an "…for the Eleventh Circuit" matter.
+    ///
+    /// `.indeterminate` falls back to exact normalized equality — never containment —
+    /// mirroring the verifier. An unrecognized court simply earns no jurisdiction
+    /// bonus; ranking is advisory, so the conservative direction here is to withhold
+    /// score rather than to invent it.
+    private static func matchesJurisdiction(_ authority: LegalAuthority, requested: String) -> Bool {
+        switch JurisdictionScopeResolver.shared.verdict(
+            expected: requested,
+            authorityCourt: authority.court,
+            authorityJurisdiction: authority.jurisdiction,
+            authorityCourtID: authority.courtID
+        ) {
+        case .withinScope:
+            return true
+        case .outsideScope:
+            return false
+        case .indeterminate:
+            let requestedKey = normalized(requested)
+            let fields = [authority.jurisdiction, authority.court, authority.courtID].compactMap { $0 }
+            return fields.contains { normalized($0) == requestedKey }
+        }
     }
 
     /// Maps a CourtListener precedential status to a score delta and a reason.
