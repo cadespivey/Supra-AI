@@ -170,7 +170,7 @@ public enum DocumentSupportVerifier {
             guard !source.text.contains("…[source text truncated to fit the context window]") else {
                 return try result(.unverifiable, ["Source \(label) was truncated in the generation packet."])
             }
-            guard !containsInstructionLikeContent(source.text) else {
+            guard !InstructionShapeDetector.isBlocking(source.text) else {
                 return try result(.unverifiable, ["Source \(label) contains instruction-like content and is treated as untrusted data."])
             }
             citedSources.append(source)
@@ -585,32 +585,6 @@ public enum DocumentSupportVerifier {
         return !tokens.isEmpty && tokens.isSubset(of: headerTokens)
     }
 
-    private static func containsInstructionLikeContent(_ text: String) -> Bool {
-        let normalized = text.folding(
-            options: [.caseInsensitive, .diacriticInsensitive],
-            locale: Locale(identifier: "en_US_POSIX")
-        ).lowercased()
-        let compact = normalized.replacingOccurrences(
-            of: #"\s+"#,
-            with: " ",
-            options: .regularExpression
-        )
-        let patterns = [
-            #"\bignore\b.{0,80}\b(instructions?|prompt|system|developer|assistant)\b"#,
-            #"\b(reveal|disclose|print|show)\b.{0,80}\b(other )?(source|prompt|secret|instruction)s?\b"#,
-            #"\b(change|switch|override|assume)\b.{0,40}\b(role|persona|identity)\b"#,
-            #"\b(output|state|claim|answer|say)\b.{0,80}\b(false|fabricated|untrue|unsupported)\b"#,
-            #"\b(follow|obey|execute)\b.{0,40}\b(these|the following|my)\b.{0,20}\binstructions?\b"#,
-            #"\b(call|invoke|use|run)\b.{0,40}\b(tool|function|command)s?\b"#,
-            #"\byou are now\b"#,
-            #"[\"']role[\"']\s*:\s*[\"']system[\"']"#,
-            #"\bsystem message\b"#,
-            #"\btool request\b"#,
-        ]
-        return patterns.contains { pattern in
-            compact.range(of: pattern, options: .regularExpression) != nil
-        }
-    }
 
     private static func significantTokens(in text: String) -> [String] {
         normalizedWords(in: text).filter { !stopWords.contains($0) }

@@ -190,7 +190,7 @@ public struct DraftVerifier: Verifier, Sendable {
                 )
             }
             let combinedSource = referencedFacts.map(\.text).joined(separator: "\n")
-            if !Self.sourceIsUsable(combinedSource) || referencedFacts.contains(where: { Self.containsPromptInjection($0.text) }) {
+            if !Self.sourceIsUsable(combinedSource) || referencedFacts.contains(where: { InstructionShapeDetector.isBlocking($0.text) }) {
                 appendBlocked(
                     proposition: proposition,
                     status: .unverifiable,
@@ -333,13 +333,6 @@ public struct DraftVerifier: Verifier, Sendable {
         return trimmed.count >= 12 && tokens(in: trimmed).count >= 3
     }
 
-    private static func containsPromptInjection(_ source: String) -> Bool {
-        let lower = source.lowercased()
-        return [
-            "ignore previous", "ignore all previous", "system prompt", "assistant:",
-            "developer message", "tool call", "change your role", "output format"
-        ].contains { lower.contains($0) }
-    }
 
     private static func containsNegation(_ text: String) -> Bool {
         text.range(
