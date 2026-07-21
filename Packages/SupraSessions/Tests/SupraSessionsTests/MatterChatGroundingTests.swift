@@ -835,6 +835,103 @@ final class MatterChatGroundingTests: XCTestCase {
 
     // MARK: - Helpers
 
+    // MARK: - Phase 2 coverage-routing shadow (retrieve-before-route)
+
+    private func makeGrounding(_ store: SupraStore, matterID: String) -> MatterChatDocumentGrounding {
+        MatterChatDocumentGrounding(
+            store: store, embedder: nil, matterID: matterID,
+            defaultSystemPrompt: nil, runtimeClient: StubRuntimeClient()
+        )
+    }
+
+    /// Shadow ON + a content question the keyword router already grounds, over a corpus that
+    /// strongly covers it → the shadow records agreement. Expected RED: `lastShadowComparison`
+    /// does not exist yet (and no shadow runs).
+    func testShadowRecordsAgreeGroundWhenEnabled() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Shadow Indemnity Matter")
+        try store.appSettings.setSetting(CoverageRoutingShadow.shadowEnabledKey, value: true)
+        for index in 1...2 {
+            try await indexDocument(
+                store, matterID: matter.id, name: "indemnity-\(index).txt",
+                text: "SOURCE_\(index). The indemnification clause covers synthetic claims."
+            )
+        }
+        let grounding = makeGrounding(store, matterID: matter.id)
+        _ = await grounding.groundedContext(
+            forQuestion: "What do my documents say about indemnification?", depth: .fast, modelID: ModelID()
+        )
+        XCTAssertEqual(grounding.lastShadowComparison, .agreeGround)
+    }
+
+    /// Shadow ON + a question the keyword router does NOT ground ("what happened at the June
+    /// meeting?" hits no collection/entity/substance phrase), over a corpus that strongly covers
+    /// it → the shadow records the MISS while the returned context stays nil (keyword still
+    /// decides; output unchanged). This is the measured R2 improvement. Expected RED.
+    func testShadowRecordsCoverageWouldGroundForKeywordMiss() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Shadow Meeting Matter")
+        try store.appSettings.setSetting(CoverageRoutingShadow.shadowEnabledKey, value: true)
+        for index in 1...2 {
+            try await indexDocument(
+                store, matterID: matter.id, name: "meeting-\(index).txt",
+                text: "MEETING_\(index). The June board meeting approved the budget and the merger timeline."
+            )
+        }
+        // Precondition: the keyword classifier leaves this ungrounded.
+        XCTAssertEqual(
+            MatterChatDocumentIntent.classify("What happened at the June meeting?", folderNames: []),
+            .none
+        )
+        let grounding = makeGrounding(store, matterID: matter.id)
+        let context = await grounding.groundedContext(
+            forQuestion: "What happened at the June meeting?", depth: .fast, modelID: ModelID()
+        )
+        XCTAssertNil(context, "keyword routing still decides — the shadow changes no output")
+        XCTAssertEqual(grounding.lastShadowComparison, .coverageWouldGround)
+    }
+
+    /// Shadow OFF (setting unset) → the coverage probe never runs. Proves the gate: the default
+    /// is no shadow. Expected RED: `lastShadowComparison` does not exist.
+    func testShadowSkippedWhenDisabled() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Shadow Off Matter")
+        for index in 1...2 {
+            try await indexDocument(
+                store, matterID: matter.id, name: "indemnity-\(index).txt",
+                text: "SOURCE_\(index). The indemnification clause covers synthetic claims."
+            )
+        }
+        let grounding = makeGrounding(store, matterID: matter.id)
+        _ = await grounding.groundedContext(
+            forQuestion: "What do my documents say about indemnification?", depth: .fast, modelID: ModelID()
+        )
+        XCTAssertNil(grounding.lastShadowComparison, "shadow OFF must not run the coverage probe")
+    }
+
+    /// The shadow must not perturb the returned grounded context: same content question, shadow
+    /// OFF vs ON → byte-identical `GroundedChatContext`. Expected RED: the setting key/type do
+    /// not exist yet.
+    func testShadowLeavesContentContextByteIdentical() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Shadow Identical Matter")
+        for index in 1...2 {
+            try await indexDocument(
+                store, matterID: matter.id, name: "indemnity-\(index).txt",
+                text: "SOURCE_\(index). The indemnification clause covers synthetic claims."
+            )
+        }
+        let question = "What do my documents say about indemnification?"
+        try store.appSettings.setSetting(CoverageRoutingShadow.shadowEnabledKey, value: false)
+        let off = await makeGrounding(store, matterID: matter.id)
+            .groundedContext(forQuestion: question, depth: .fast, modelID: ModelID())
+        try store.appSettings.setSetting(CoverageRoutingShadow.shadowEnabledKey, value: true)
+        let on = await makeGrounding(store, matterID: matter.id)
+            .groundedContext(forQuestion: question, depth: .fast, modelID: ModelID())
+        XCTAssertNotNil(off)
+        XCTAssertEqual(off, on)
+    }
+
     private func indexDocument(
         _ store: SupraStore,
         matterID: String,
