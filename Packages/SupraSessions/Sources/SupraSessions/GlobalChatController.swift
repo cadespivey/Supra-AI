@@ -1120,9 +1120,13 @@ public final class GlobalChatController: ObservableObject {
                             updateMessage(id: assistant.id, content: streamedContent, status: .completed)
                             break generationEvents
                         }
-                        // The model's answer, before the source trailer — what the
-                        // entity-grounding check inspects.
-                        let answerText = streamedContent
+                        // The model's answer, before the source trailer — what the entity-grounding
+                        // and document-support checks inspect. A reasoning model streams its
+                        // chain-of-thought first (`<think>…</think>`); verifying the raw stream
+                        // would mine every reasoning step as an uncited proposition, so verification
+                        // runs on the reasoning-stripped answer. The displayed/persisted content
+                        // keeps the reasoning for the collapsible UI.
+                        let answerText = ReasoningContent.answer(from: streamedContent)
                         // Fast-tier refusal → escalate to the deep tier once, into this
                         // same message. Only when a genuinely different deeper packet
                         // exists (more/other sources than the fast one); otherwise the
