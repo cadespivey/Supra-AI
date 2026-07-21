@@ -75,7 +75,7 @@ public enum DocumentQAPromptBuilder {
     /// The exact sentence a grounded answer must return when the sources do not
     /// contain the answer. Defined once so the prompt contract and every detector
     /// (streaming escalation, support verification) key off the same literal.
-    public static let unsupportedAnswerReply = "The provided sources do not support an answer to this question."
+    public static let unsupportedAnswerReply = RefusalContract.canonicalReply
 
     /// Whether `answer` is a PURE refusal — the model declining because the sources
     /// do not support an answer — and nothing else. Tolerant of surrounding quotes,
@@ -83,14 +83,7 @@ public enum DocumentQAPromptBuilder {
     /// that merely opens with the refusal sentence is not a refusal (its content
     /// must be kept, not discarded or escalated over).
     public static func isUnsupportedAnswerReply(_ answer: String) -> Bool {
-        func normalize(_ text: String) -> String {
-            var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            trimmed = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "\"'“”‘’"))
-            trimmed = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.hasSuffix(".") { trimmed = String(trimmed.dropLast()) }
-            return trimmed.lowercased()
-        }
-        return normalize(answer) == normalize(unsupportedAnswerReply)
+        RefusalContract.isCanonicalReply(answer)
     }
 
     public static func buildQAPrompt(question: String, sources: [GroundingSource], mode: DocumentAnswerMode) -> String {
@@ -252,11 +245,7 @@ public enum CitationCoverage {
         let available = Set(availableLabels)
         let used = usedLabels(in: answer)
         let unresolved = used.filter { !available.contains($0) }
-        let lowered = answer.lowercased()
-        let unsupported = lowered.contains("do not support an answer")
-            || lowered.contains("does not support an answer")
-            || lowered.contains("sources do not contain")
-            || lowered.contains("cannot answer")
+        let unsupported = RefusalContract.isRefusal(answer)
         let citedLowConfidence = used.filter { lowConfidenceLabels.contains($0) }
         return CitationCheckResult(
             usedLabels: used,
