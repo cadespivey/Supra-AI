@@ -1020,7 +1020,7 @@ public enum LegalCitationVerifier {
                 continue
             }
             let text = authority.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !containsInstructionLikeContent(text) else {
+            guard !InstructionShapeDetector.isBlocking(text) else {
                 unverifiableReasons.append("\(label) contains instruction-shaped text and cannot be treated as authority evidence.")
                 continue
             }
@@ -1133,23 +1133,6 @@ public enum LegalCitationVerifier {
         return text.range(of: pattern, options: .regularExpression) != nil
     }
 
-    private static func containsInstructionLikeContent(_ text: String) -> Bool {
-        let normalized = text.folding(
-            options: [.caseInsensitive, .diacriticInsensitive],
-            locale: Locale(identifier: "en_US_POSIX")
-        ).lowercased().replacingOccurrences(
-            of: #"\s+"#, with: " ", options: .regularExpression
-        )
-        let patterns = [
-            #"\bignore\b.{0,80}\b(instructions?|prompt|system|developer|assistant)\b"#,
-            #"\b(change|switch|override|assume)\b.{0,40}\b(role|persona|identity)\b"#,
-            #"\b(follow|obey|execute)\b.{0,40}\b(these|the following|my)\b.{0,20}\binstructions?\b"#,
-            #"[\"']role[\"']\s*:\s*[\"']system[\"']"#,
-            #"\bsystem message\b"#,
-            #"\btool (call|request)\b"#,
-        ]
-        return patterns.contains { normalized.range(of: $0, options: .regularExpression) != nil }
-    }
 
     private static func hasMaterialContradiction(to proposition: String, in sourceText: String) -> Bool {
         let terms = significantContentTerms(proposition)
