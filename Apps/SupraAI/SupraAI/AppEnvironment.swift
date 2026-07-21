@@ -262,18 +262,19 @@ final class AppEnvironment: ObservableObject {
                 guard let self, let matterID = self.mattersController.selectedMatterID else { return }
                 self.documentQueue.enqueueClassify(matterID: matterID)
             }
+        // Headless coverage-routing evidence run: triggered from init (not `bootstrap()`, which is
+        // driven by a view `.task` that never fires when the app is launched without a rendered
+        // window) so the read-only probe runs and exits even in a windowless launch. No-op without
+        // the `-runCoverageShadowProbe` flag; safe on the real store (read-only, and skipped on a
+        // fallback/recovery store).
+        if ProcessInfo.processInfo.arguments.contains("-runCoverageShadowProbe"),
+           !storeResult.isFallback, storeResult.recoveryState == nil {
+            Task { await self.runCoverageShadowProbeIfRequested() }
+        }
     }
 
     /// Loads persisted state and refreshes runtime status on launch.
     func bootstrap() async {
-        // Headless Phase 2 coverage-routing evidence run (`-runCoverageShadowProbe`): runs FIRST,
-        // on the freshly-opened real store, before any bootstrap writes or the XPC/model-warm
-        // work — so it is genuinely read-only and does not depend on the runtime service. No-op
-        // without the flag; skipped on a fallback/recovery store so an empty tally is not mistaken
-        // for real evidence.
-        if !usingFallbackStore, databaseRecoveryState == nil {
-            await runCoverageShadowProbeIfRequested()
-        }
         // Reconcile any validation run abandoned by a previous quit/crash so it
         // surfaces as cancelled rather than lingering as in-progress.
         try? store.validation.markUnfinishedRunsCancelled()
