@@ -310,6 +310,11 @@ final class AppEnvironment: ObservableObject {
         // the chat model — and it removes the first-use wait on Document Q&A, semantic
         // search, and import indexing.
         if !Self.isUITestMode { documentSetupController.prewarmEmbeddingModel() }
+        // Headless Phase 2 coverage-routing evidence run (`-runCoverageShadowProbe`): read-only,
+        // prints the tally and exits. No-op without the flag. Placed after the runtime/embedding
+        // model are known so the probe can use real semantic coverage, and before the queue/backup
+        // work so a probe launch does no extra writes.
+        await runCoverageShadowProbeIfRequested()
         // Reconcile any document job interrupted by a previous quit (plan §5.4).
         documentQueue.bootstrap()
         // Auto-purge documents and chats soft-deleted past the retention window
@@ -363,6 +368,55 @@ final class AppEnvironment: ObservableObject {
             systemPrompt: nil,
             runtimeClient: runtimeClient
         )
+    }
+
+    /// The currently selected embedding model wrapped for retrieval, or nil when none is selected
+    /// or the record fails verification. Mirrors `makeDocumentChunkerRolloutService()` — the app's
+    /// one idiom for vending the real embedder (the runtime client is otherwise private).
+    func makeSelectedEmbedder() -> (any TextEmbedder)? {
+        let selectedModel = try? store.documentSettings.fetchSelectedEmbeddingModel()
+        return selectedModel.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+    }
+
+    /// Runs the Phase 2 coverage-routing evidence probe: replays this store's real matter-chat
+    /// user questions through the keyword router and the corpus-coverage signal and tallies where
+    /// they diverge — the go/no-go for flipping coverage to the primary router. Read-only. Uses
+    /// the real embedder when one is selected (semantic coverage); nil falls back to FTS-only, a
+    /// conservative lower bound reflected in `report.usedSemantic`.
+    func runCoverageRoutingShadowProbe() async -> CoverageRoutingReport {
+        await CoverageRoutingProbe.run(store: store, embedder: makeSelectedEmbedder())
+    }
+
+    /// Headless evidence run (`-runCoverageShadowProbe`): runs the coverage-routing probe over the
+    /// real store, emits the tally as delimited JSON on stdout and to a file in the app container,
+    /// then exits. Read-only, so it is safe on the real store (Release only, per the
+    /// launch-correct-build rule). No-op unless the flag is present. Lets the probe run without the
+    /// GUI, since the on-disk store cannot be safely opened by a separate process (migrations).
+    func runCoverageShadowProbeIfRequested() async {
+        guard ProcessInfo.processInfo.arguments.contains("-runCoverageShadowProbe") else { return }
+        let report = await runCoverageRoutingShadowProbe()
+        let payload: [String: Any] = [
+            "matterCount": report.matterCount,
+            "questionsScanned": report.questionsScanned,
+            "agreeGround": report.agreeGround,
+            "agreeSkip": report.agreeSkip,
+            "coverageWouldGround": report.coverageWouldGround,
+            "coverageWouldSkip": report.coverageWouldSkip,
+            "marginal": report.marginal,
+            "usedSemantic": report.usedSemantic,
+            "agreementRate": report.agreementRate,
+            "divergenceRate": report.divergenceRate,
+            "wouldGroundRate": report.wouldGroundRate,
+            "wouldSkipRate": report.wouldSkipRate,
+        ]
+        let json = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("coverage-shadow-report.json")
+        try? json.data(using: .utf8)?.write(to: fileURL)
+        print("===COVERAGE_SHADOW_REPORT_BEGIN===")
+        print(json)
+        print("===COVERAGE_SHADOW_REPORT_END===")
+        exit(0)
     }
 
     private func promoteApprovedDocumentChunkerDefaultIfNeeded() async {
