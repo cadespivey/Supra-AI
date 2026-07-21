@@ -262,6 +262,15 @@ final class AppEnvironment: ObservableObject {
                 guard let self, let matterID = self.mattersController.selectedMatterID else { return }
                 self.documentQueue.enqueueClassify(matterID: matterID)
             }
+        // Headless coverage-routing evidence run: triggered from init (not `bootstrap()`, which is
+        // driven by a view `.task` that never fires when the app is launched without a rendered
+        // window) so the read-only probe runs and exits even in a windowless launch. No-op without
+        // the `-runCoverageShadowProbe` flag; safe on the real store (read-only, and skipped on a
+        // fallback/recovery store).
+        if ProcessInfo.processInfo.arguments.contains("-runCoverageShadowProbe"),
+           !storeResult.isFallback, storeResult.recoveryState == nil {
+            Task { await self.runCoverageShadowProbeIfRequested() }
+        }
     }
 
     /// Loads persisted state and refreshes runtime status on launch.
@@ -363,6 +372,65 @@ final class AppEnvironment: ObservableObject {
             systemPrompt: nil,
             runtimeClient: runtimeClient
         )
+    }
+
+    /// The currently selected embedding model wrapped for retrieval, or nil when none is selected
+    /// or the record fails verification. Mirrors `makeDocumentChunkerRolloutService()` — the app's
+    /// one idiom for vending the real embedder (the runtime client is otherwise private).
+    func makeSelectedEmbedder() -> (any TextEmbedder)? {
+        let selectedModel = try? store.documentSettings.fetchSelectedEmbeddingModel()
+        return selectedModel.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+    }
+
+    /// Runs the Phase 2 coverage-routing evidence probe: replays this store's real matter-chat
+    /// user questions through the keyword router and the corpus-coverage signal and tallies where
+    /// they diverge — the go/no-go for flipping coverage to the primary router. Read-only. Uses
+    /// the real embedder when one is selected (semantic coverage); nil falls back to FTS-only, a
+    /// conservative lower bound reflected in `report.usedSemantic`.
+    func runCoverageRoutingShadowProbe() async -> CoverageRoutingReport {
+        await CoverageRoutingProbe.run(store: store, embedder: makeSelectedEmbedder())
+    }
+
+    /// Headless evidence run (`-runCoverageShadowProbe`): runs the coverage-routing probe over the
+    /// real store and emits the tally as delimited JSON — to the general pasteboard (readable via
+    /// `pbpaste`, the sandbox-crossing channel `-dumpChats` uses), stdout, and a container file —
+    /// then exits. Read-only, so it is safe on the real store (Release only, per the
+    /// launch-correct-build rule). No-op unless the flag is present. Uses FTS-only coverage
+    /// (`embedder: nil`) so it does not depend on the runtime XPC/embedding model: a reliable,
+    /// clearly-labeled lower bound (`usedSemantic: false`). The Diagnostics button runs the same
+    /// probe with the real embedder for the full semantic signal.
+    func runCoverageShadowProbeIfRequested() async {
+        guard ProcessInfo.processInfo.arguments.contains("-runCoverageShadowProbe") else { return }
+        let report = await CoverageRoutingProbe.run(store: store, embedder: nil)
+        let payload: [String: Any] = [
+            "matterCount": report.matterCount,
+            "questionsScanned": report.questionsScanned,
+            "agreeGround": report.agreeGround,
+            "agreeSkip": report.agreeSkip,
+            "coverageWouldGround": report.coverageWouldGround,
+            "coverageWouldSkip": report.coverageWouldSkip,
+            "marginal": report.marginal,
+            "usedSemantic": report.usedSemantic,
+            "readErrors": report.readErrors,
+            "completedCleanly": report.completedCleanly,
+            "agreementRate": report.agreementRate,
+            "divergenceRate": report.divergenceRate,
+            "wouldGroundRate": report.wouldGroundRate,
+            "wouldSkipRate": report.wouldSkipRate,
+        ]
+        let json = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("coverage-shadow-report.json")
+        try? json.data(using: .utf8)?.write(to: fileURL)
+        // Pasteboard is the reliable channel out of the sandbox for a headless run (a GUI app's
+        // stdout is not captured, and the container file is TCC-protected from other processes).
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("===COVERAGE_SHADOW_REPORT===\n\(json)", forType: .string)
+        print("===COVERAGE_SHADOW_REPORT_BEGIN===")
+        print(json)
+        print("===COVERAGE_SHADOW_REPORT_END===")
+        exit(0)
     }
 
     private func promoteApprovedDocumentChunkerDefaultIfNeeded() async {

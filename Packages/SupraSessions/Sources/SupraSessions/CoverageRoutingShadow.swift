@@ -26,12 +26,13 @@ public enum CoverageRoutingComparison: String, Sendable, Equatable {
 /// logs the result as metadata only. It changes nothing user-visible — the keyword classifier
 /// still decides — so real matters reveal how well coverage would route before it flips to
 /// primary. Mirrors the Phase 0 attribution shadow (`GroundedAttributionAdapter`).
-enum CoverageRoutingShadow {
+public enum CoverageRoutingShadow {
     private static let log = Logger(subsystem: "ai.supra.SupraAI", category: "reasoning.shadow")
 
     /// The app setting that turns the shadow probe on. Default OFF (absent → false): shadow adds
-    /// a fast-tier retrieval per matter-chat turn, so it runs only when explicitly enabled.
-    static let shadowEnabledKey = "reasoning.corpusCoverageShadow.enabled"
+    /// a fast-tier retrieval per matter-chat turn, so it runs only when explicitly enabled. Public
+    /// so the app's Diagnostics surface can flip it.
+    public static let shadowEnabledKey = "reasoning.corpusCoverageShadow.enabled"
 
     /// The candidate primary rule under test: coverage would ground iff its evidence is strong.
     /// `keywordGrounds` is the legacy decision (intent is `.content`/`.inventory`, not `.none`).

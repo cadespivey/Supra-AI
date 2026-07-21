@@ -17,6 +17,9 @@ struct DiagnosticsView: View {
     @State private var runningCapabilityProbe = false
     @State private var capabilityProbeMessage: String?
     @State private var typedGenerationEnabled = false
+    @State private var coverageReport: CoverageRoutingReport?
+    @State private var runningCoverageProbe = false
+    @State private var shadowLoggingEnabled = false
 
     var body: some View {
         List {
@@ -168,6 +171,47 @@ struct DiagnosticsView: View {
             }
 
             Section {
+                if let report = coverageReport {
+                    LabeledContent("Questions scanned", value: "\(report.questionsScanned)")
+                    LabeledContent("Matters", value: "\(report.matterCount)")
+                    LabeledContent("Would-ground (keyword miss)", value: Self.percent(report.wouldGroundRate))
+                    LabeledContent("Would-skip (over-ground)", value: Self.percent(report.wouldSkipRate))
+                    LabeledContent("Agreement", value: Self.percent(report.agreementRate))
+                    LabeledContent("Coverage retrieval", value: report.usedSemantic ? "Semantic" : "Keyword-only")
+                    if !report.completedCleanly {
+                        LabeledContent("Scan status", value: "Incomplete — \(report.readErrors) read error(s)")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                if runningCoverageProbe {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Running probe…").foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("Run Coverage Routing Probe") {
+                        Task {
+                            runningCoverageProbe = true
+                            coverageReport = await environment.runCoverageRoutingShadowProbe()
+                            runningCoverageProbe = false
+                        }
+                    }
+                    .accessibilityIdentifier("diagnostics.coverageRouting.run")
+                }
+                Toggle("Log coverage-routing shadow during matter chat", isOn: $shadowLoggingEnabled)
+                    .accessibilityIdentifier("diagnostics.coverageShadow.toggle")
+                    .onChange(of: shadowLoggingEnabled) { _, enabled in
+                        try? environment.store.appSettings.setSetting(
+                            CoverageRoutingShadow.shadowEnabledKey, value: enabled
+                        )
+                    }
+            } header: {
+                Text("Coverage Routing Shadow").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
+            } footer: {
+                Text("Replays this matter set's real chat questions through the keyword router and the corpus-coverage signal, tallying where they diverge — the Phase 2 go/no-go for making coverage the primary router. “Would-ground” is the share of questions the keyword router skipped that the corpus actually covers; “would-skip” is keyword over-grounding. Reads only; runs a retrieval per question. The toggle logs the same comparison live during matter chat (metadata only).")
+            }
+
+            Section {
                 Text(nextStep)
                     .foregroundStyle(.secondary)
             } header: {
@@ -179,6 +223,9 @@ struct DiagnosticsView: View {
         .task {
             typedGenerationEnabled = (try? environment.store.appSettings.getSetting(
                 GlobalChatController.typedGroundedGenerationKey, as: Bool.self
+            )) ?? false
+            shadowLoggingEnabled = (try? environment.store.appSettings.getSetting(
+                CoverageRoutingShadow.shadowEnabledKey, as: Bool.self
             )) ?? false
             while !Task.isCancelled {
                 await environment.refreshRuntimeStatus()
