@@ -69,7 +69,12 @@ public enum TypedProseABProbe {
                     GroundedSpanInput(label: "S1", sourceID: "ab/fee", text: "The engagement fee is $9,000.", lowConfidence: false),
                     GroundedSpanInput(label: "S2", sourceID: "ab/due", text: "Payment is due no later than April 15, 2025.", lowConfidence: false),
                 ],
-                expected: TypedProseExpectedAnswer(money: 9_000),
+                expected: TypedProseExpectedAnswer(
+                    money: 9_000,
+                    allowedDates: [
+                        TypedProseExpectedAnswer.Day(year: 2025, month: 4, day: 15),
+                    ]
+                ),
                 expectsRefusal: false
             ),
             TypedProseABFixture(

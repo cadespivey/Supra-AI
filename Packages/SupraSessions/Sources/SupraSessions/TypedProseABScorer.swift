@@ -14,8 +14,11 @@ public enum TypedProseArm: String, Sendable, Equatable, Codable {
 /// review finding #3). Fields are REQUESTED individually; correctness requires every
 /// requested field to be affirmatively satisfied, and for value-typed fields (money,
 /// date) the answer's affirmative values of that type must be exactly the expected
-/// value — a contradiction or an unsupported additional value fails closed. Types the
-/// fixture did not request are unconstrained.
+/// value — a contradiction or an unsupported additional value fails closed. A fixture
+/// must explicitly enumerate incidental money/date values that a correct answer may
+/// include even though the question did not request that type. Requested fields must
+/// also co-occur in one affirmative sentence so the scorer cannot join unrelated
+/// propositions into a synthetic answer.
 ///
 /// `terms` is the honestly limited field: word-bounded, negation-guarded term
 /// presence. It measures term recall for rule-style answers, not semantic
@@ -46,17 +49,25 @@ public struct TypedProseExpectedAnswer: Sendable, Equatable, Codable {
     public var actor: String?
     /// Word-bounded terms that must each appear in a non-negated sentence.
     public var terms: [String]
+    /// Evidence-backed incidental values permitted only when this type is not itself
+    /// requested. Nil decodes old artifacts safely as an empty allowlist.
+    public var allowedMoney: [Decimal]?
+    public var allowedDates: [Day]?
 
     public init(
         money: Decimal? = nil,
         date: Day? = nil,
         actor: String? = nil,
-        terms: [String] = []
+        terms: [String] = [],
+        allowedMoney: [Decimal]? = nil,
+        allowedDates: [Day]? = nil
     ) {
         self.money = money
         self.date = date
         self.actor = actor
         self.terms = terms
+        self.allowedMoney = allowedMoney
+        self.allowedDates = allowedDates
     }
 
     /// Whether any field is requested at all — an empty expectation can never be
@@ -144,7 +155,7 @@ public struct TypedProseABReport: Sendable, Equatable, Codable {
 /// independently RE-SCORED from its own artifact — decode `outcomes`, re-run
 /// `TypedProseABScorer.report`, and compare against the recorded reports.
 public struct TypedProseABRunRecord: Sendable, Equatable, Codable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public let schemaVersion: Int
     public let outcomes: [TypedProseABOutcome]
@@ -174,9 +185,10 @@ public struct TypedProseABRunRecord: Sendable, Equatable, Codable {
 /// Correctness is decided from TYPED expected fields, never substring containment:
 /// values are extracted from the answer (dates as dates, money as amounts), negated
 /// sentences never satisfy a field, and for a requested value type the answer's
-/// affirmative values must be exactly the expected value. The old substring test
-/// survives only as the `containsExpectedLiteral` diagnostic, which no correctness
-/// decision consumes.
+/// affirmative values must be exactly the expected value. Values of an unrequested
+/// type must be in the fixture's explicit allowlist, and all requested fields must
+/// bind in a single proposition. The old substring test survives only as the
+/// `containsExpectedLiteral` diagnostic, which no correctness decision consumes.
 public enum TypedProseABScorer {
 
     /// Whether the answer is the one the fixture calls for.
@@ -193,22 +205,20 @@ public enum TypedProseABScorer {
 
         let sentences = classifiedSentences(in: outcome.answer)
 
+        guard sentences.contains(where: { sentenceSatisfiesExpectedProposition($0, expected: expected) })
+        else { return false }
+
+        let statedMoney = affirmativeValues(of: sentences, extractor: moneyValues)
         if let money = expected.money {
-            guard affirmativeValues(of: sentences, extractor: moneyValues) == [money] else { return false }
+            guard statedMoney == [money] else { return false }
+        } else {
+            guard statedMoney.isSubset(of: Set(expected.allowedMoney ?? [])) else { return false }
         }
+        let statedDates = affirmativeValues(of: sentences, extractor: dateValues)
         if let day = expected.date {
-            guard affirmativeValues(of: sentences, extractor: dateValues) == [day] else { return false }
-        }
-        if let actor = expected.actor {
-            let tokens = significantTokens(in: actor)
-            guard !tokens.isEmpty,
-                  sentences.contains(where: { !$0.negated && tokens.isSubset(of: significantTokens(in: $0.text)) })
-            else { return false }
-        }
-        for term in expected.terms {
-            guard sentences.contains(where: { !$0.negated && containsWordBounded(term, in: $0.text) }) else {
-                return false
-            }
+            guard statedDates == [day] else { return false }
+        } else {
+            guard statedDates.isSubset(of: Set(expected.allowedDates ?? [])) else { return false }
         }
         return true
     }
@@ -314,6 +324,31 @@ public enum TypedProseABScorer {
     private static func containsWordBounded(_ term: String, in text: String) -> Bool {
         let escaped = NSRegularExpression.escapedPattern(for: term)
         return text.range(of: "\\b\(escaped)\\b", options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Tests the expected fields as one proposition. Global typed-value checks still
+    /// run afterward to reject contradictions and unauthorized additions elsewhere.
+    private static func sentenceSatisfiesExpectedProposition(
+        _ sentence: ClassifiedSentence,
+        expected: TypedProseExpectedAnswer
+    ) -> Bool {
+        guard !sentence.negated else { return false }
+        if let money = expected.money, !moneyValues(in: sentence.text).contains(money) {
+            return false
+        }
+        if let date = expected.date, !dateValues(in: sentence.text).contains(date) {
+            return false
+        }
+        if let actor = expected.actor {
+            let actorTokens = significantTokens(in: actor)
+            guard !actorTokens.isEmpty,
+                  actorTokens.isSubset(of: significantTokens(in: sentence.text))
+            else { return false }
+        }
+        for term in expected.terms where !containsWordBounded(term, in: sentence.text) {
+            return false
+        }
+        return true
     }
 
     /// The set of values of one type stated affirmatively (in non-negated sentences).
