@@ -180,9 +180,14 @@ public struct RoutedPrompt: Codable, Hashable, Sendable {
 
 public struct ModelRouter: Sendable {
     public var configuration: LegalModelConfiguration
+    private let intentClassifier: any PromptIntentClassifying
 
-    public init(configuration: LegalModelConfiguration = .fromEnvironment()) {
+    public init(
+        configuration: LegalModelConfiguration = .fromEnvironment(),
+        intentClassifier: any PromptIntentClassifying = SemanticPromptIntentClassifier()
+    ) {
         self.configuration = configuration
+        self.intentClassifier = intentClassifier
     }
 
     public func route(for mode: ModelRouteMode) -> ModelRoute {
@@ -310,7 +315,17 @@ public struct ModelRouter: Sendable {
             )
         }
 
-        let inferredMode: ModelRouteMode = Self.looksLegal(trimmed) ? .legalQA : .generalQA
+        let inferredMode: ModelRouteMode
+        if DeterministicLegalIntentMarkers.matches(trimmed) {
+            inferredMode = .legalQA
+        } else {
+            switch intentClassifier.classify(trimmed) {
+            case .legal, .uncertain:
+                inferredMode = .legalQA
+            case .general:
+                inferredMode = .generalQA
+            }
+        }
         return RoutedPrompt(route: route(for: inferredMode), prompt: trimmed, command: nil)
     }
 
@@ -339,34 +354,6 @@ public struct ModelRouter: Sendable {
         }
     }
 
-    private static func looksLegal(_ prompt: String) -> Bool {
-        let lower = prompt.lowercased()
-        let strongMarkers = [
-            "case law", "statute", "regulation", "precedent", "jurisdiction",
-            "legal authority", "legal standard", "holding", "motion to dismiss",
-            "summary judgment", "pleading", "bluebook", "citation", "docket",
-            "plaintiff", "defendant", "appellant", "appellee", "injunction",
-            "court of appeals", "district court", "supreme court"
-        ]
-        if strongMarkers.contains(where: { lower.contains($0) }) {
-            return true
-        }
-
-        let contextualMarkers = [
-            "contract law", "under california law", "under new york law",
-            "governing law", "elements of", "cause of action", "burden of proof",
-            "standard of review", "recover damages", "damages under",
-            // Common legal questions a user opens global research with — so they default
-            // to source-grounded answers rather than the model's parametric memory.
-            "lawsuit", "sue ", "can i sue", "liable", "liability", "breach of",
-            "negligence", "statute of limitations", " tort", "wrongful", "discrimination",
-            "is it legal", "legal to", "my legal rights", "what are my rights",
-            "lease agreement", "evict", "custody", "alimony", "warranty", "easement",
-            "fiduciary", "indemnif", "good faith", "due process", "first amendment",
-            "is enforceable", "legally required", "legally binding", "right to"
-        ]
-        return contextualMarkers.contains { lower.contains($0) }
-    }
 }
 
 public enum LegalPromptTemplates {

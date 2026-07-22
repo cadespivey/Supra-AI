@@ -24,7 +24,10 @@ final class PromptRoutingRecallBaselineTests: XCTestCase {
         }
     }
 
-    private let router = ModelRouter(configuration: .fromEnvironment())
+    private let router = ModelRouter(configuration: LegalModelConfiguration(
+        requireCitations: true,
+        jurisdictionRequired: true
+    ))
 
     private func mode(_ prompt: String) -> ModelRoute {
         router.routePrompt(prompt).route
