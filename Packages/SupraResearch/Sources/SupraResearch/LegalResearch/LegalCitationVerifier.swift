@@ -1182,7 +1182,11 @@ public enum LegalCitationVerifier {
         }
     }
 
-    private static func isQualifiedOrNonholdingSupport(_ excerpt: String, for proposition: String) -> Bool {
+    /// Internal rather than private so the holding-vs-dicta rule can be tested directly. Reaching
+    /// it through `verify(...)` requires an excerpt that first clears citation resolution, term
+    /// overlap, negation polarity and contradiction — so an end-to-end test of this rule passes or
+    /// fails for reasons that have nothing to do with it.
+    static func isQualifiedOrNonholdingSupport(_ excerpt: String, for proposition: String) -> Bool {
         let claim = proposition.lowercased()
         guard claim.contains("hold") || claim.contains("require") || claim.contains("must") else {
             return false
