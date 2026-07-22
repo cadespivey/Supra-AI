@@ -16,6 +16,14 @@ import XCTest
 /// it safe to remove accidental substring matches and measure the resulting precision.
 final class PromptRoutingRecallBaselineTests: XCTestCase {
 
+    private struct FixedClassifier: PromptIntentClassifying {
+        let result: PromptIntentClassification
+
+        func classify(_ prompt: String) -> PromptIntentClassification {
+            result
+        }
+    }
+
     private let router = ModelRouter(configuration: .fromEnvironment())
 
     private func mode(_ prompt: String) -> ModelRoute {
@@ -65,6 +73,47 @@ final class PromptRoutingRecallBaselineTests: XCTestCase {
     func testIncidentalSubstringsRemainGeneralOnceRecallIsProtected() {
         XCTAssertFalse(mode("Is this API reliable?").requiresCitations)
         XCTAssertFalse(mode("What is the issue here?").requiresCitations)
+    }
+
+    // MARK: - Fail-closed classifier contract
+
+    /// T-RTE-04: an unavailable or low-confidence semantic result cannot silently select the
+    /// ungated route.
+    func testUncertainClassificationFailsClosedToLegal() {
+        let router = ModelRouter(intentClassifier: FixedClassifier(result: .uncertain))
+
+        let route = router.routePrompt("A prompt outside the classifier corpus").route
+
+        XCTAssertEqual(route.mode, .legalQA)
+        XCTAssertTrue(route.requiresCitations)
+        XCTAssertTrue(route.requiresJurisdiction)
+    }
+
+    /// T-RTE-03: deterministic markers remain an independent safety override rather than an
+    /// assumption about the semantic model's score.
+    func testUnequivocalLegalMarkerOverridesGeneralClassification() {
+        let router = ModelRouter(intentClassifier: FixedClassifier(result: .general))
+
+        let route = router.routePrompt("What is the standard for summary judgment?").route
+
+        XCTAssertEqual(route.mode, .legalQA)
+        XCTAssertTrue(route.requiresCitations)
+    }
+
+    /// T-RTE-02: explicit commands are authoritative even when inference would disagree.
+    func testSlashCommandBypassesInjectedClassifier() {
+        let legalClassifier = FixedClassifier(result: .legal)
+        let generalClassifier = FixedClassifier(result: .general)
+
+        XCTAssertEqual(
+            ModelRouter(intentClassifier: legalClassifier).routePrompt("/ask what is 2+2").route.mode,
+            .generalQA
+        )
+        XCTAssertEqual(
+            ModelRouter(intentClassifier: generalClassifier)
+                .routePrompt("/legal is this enforceable").route.mode,
+            .legalQA
+        )
     }
 
     // MARK: - Invariants Phase 4 must preserve
