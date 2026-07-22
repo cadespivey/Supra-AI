@@ -198,7 +198,7 @@ claims:
     wording: "Citation coverage means a citation label resolves to retained source material; proposition verification separately requires each material claim to be supported, and neither check is a citator or good-law opinion."
     owner: "Legal reliability engineering"
     code_anchor: "Packages/SupraDocuments/Sources/SupraDocuments/DocumentSupportVerifier.swift"
-    verification: "Packages/SupraDocuments/Tests/SupraDocumentsTests/RefusalOutcomeGatingTests.swift"
+    verification: "Packages/SupraDocuments/Tests/SupraDocumentsTests/DocumentSupportVerifierTests.swift"
     ci_job: "macos-ci/swift-packages"
     applicable_version: "2.3.0 and later"
     last_reviewed: "2026-07-22"
