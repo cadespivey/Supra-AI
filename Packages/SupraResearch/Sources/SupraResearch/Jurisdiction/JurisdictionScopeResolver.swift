@@ -81,11 +81,11 @@ public struct JurisdictionScopeResolver: Sendable {
         self.catalog = catalog
         var courtKeys: [String: String] = [:]
         var jurisdictionKeys: [String: String] = [:]
-        var courtListenerIDs: [String: String] = [:]
-        // First writer wins throughout. Parse order is hierarchy order (SCOTUS, then the
-        // circuits, then state sections, each state's aggregate ahead of its courts), so
-        // the most authoritative option claims a shared key — "scotus" must resolve to
-        // the Supreme Court, and a bare state name to that state's aggregate.
+        var optionIDsByCourtListenerID: [String: [String]] = [:]
+        // Court and jurisdiction names remain first-writer indexes: parse order is
+        // hierarchy order, so a bare state name intentionally names its aggregate.
+        // CourtListener ids are collected first because state aggregates precede their
+        // courts and carry the same ids as authority scope, not tribunal identity.
         for option in catalog.options {
             for name in [option.courtName, option.displayName] {
                 let key = Self.canonicalKey(name)
@@ -97,8 +97,20 @@ public struct JurisdictionScopeResolver: Sendable {
             }
             for id in option.courtListenerIDs {
                 let key = id.lowercased()
-                if !key.isEmpty, courtListenerIDs[key] == nil { courtListenerIDs[key] = option.id }
+                if !key.isEmpty { optionIDsByCourtListenerID[key, default: []].append(option.id) }
             }
+        }
+        let courtListenerIDs = optionIDsByCourtListenerID.compactMapValues { optionIDs -> String? in
+            let preciseIDs = optionIDs.filter { optionID in
+                guard let option = catalog.option(id: optionID) else { return false }
+                return option.level != .jurisdiction && option.level != .trial
+            }
+            // A unique precise owner beats an aggregate owner (for example `fla` is
+            // the Florida Supreme Court). A generic id shared by multiple tribunals
+            // stays on its aggregate rather than guessing among them.
+            if preciseIDs.count == 1 { return preciseIDs[0] }
+            return optionIDs.first { catalog.option(id: $0)?.level == .jurisdiction }
+                ?? optionIDs.first
         }
         self.optionIDByCourtKey = courtKeys
         self.optionIDByJurisdictionKey = jurisdictionKeys
@@ -214,11 +226,17 @@ public struct JurisdictionScopeResolver: Sendable {
         jurisdiction: String?,
         courtID: String?
     ) -> JurisdictionOption? {
-        if let courtID, let id = optionIDByCourtListenerID[courtID.lowercased()],
-           let option = catalog.option(id: id) {
-            return option
+        let idOption = courtID
+            .flatMap { optionIDByCourtListenerID[$0.lowercased()] }
+            .flatMap { catalog.option(id: $0) }
+        let courtOption = court.flatMap(option(forCourtKey:))
+
+        if let idOption, let courtOption {
+            guard metadataIsConsistent(idOption, courtOption) else { return nil }
+            return morePreciselyIdentified(idOption, courtOption)
         }
-        if let court, let option = option(forCourtKey: court) { return option }
+        if let idOption { return idOption }
+        if let courtOption { return courtOption }
         if let jurisdiction {
             if let option = option(forCourtKey: jurisdiction) { return option }
             if let option = option(forJurisdictionKey: jurisdiction) { return option }
@@ -227,6 +245,32 @@ public struct JurisdictionScopeResolver: Sendable {
         // back to the state the court name ends in ("Supreme Court of Arkansas").
         if let court, let option = optionForTrailingJurisdiction(in: court) { return option }
         return nil
+    }
+
+    /// Independently resolved name/id metadata must describe the same tribunal or a
+    /// compatible aggregate. A conflicting precise name and id is malformed input,
+    /// never an invitation to let one silently override the other.
+    private func metadataIsConsistent(
+        _ lhs: JurisdictionOption,
+        _ rhs: JurisdictionOption
+    ) -> Bool {
+        if lhs.id == rhs.id { return true }
+        let lhsIDs = Set(lhs.courtListenerIDs.map { $0.lowercased() })
+        let rhsIDs = Set(rhs.courtListenerIDs.map { $0.lowercased() })
+        if !lhsIDs.isDisjoint(with: rhsIDs) { return true }
+        if lhs.level == .jurisdiction || rhs.level == .jurisdiction {
+            return lhs.system == rhs.system && lhs.state == rhs.state
+        }
+        return false
+    }
+
+    private func morePreciselyIdentified(
+        _ lhs: JurisdictionOption,
+        _ rhs: JurisdictionOption
+    ) -> JurisdictionOption {
+        if lhs.level == .jurisdiction, rhs.level != .jurisdiction { return rhs }
+        if rhs.level == .jurisdiction, lhs.level != .jurisdiction { return lhs }
+        return lhs
     }
 
     private func resolveExpected(_ expected: String) -> JurisdictionOption? {
