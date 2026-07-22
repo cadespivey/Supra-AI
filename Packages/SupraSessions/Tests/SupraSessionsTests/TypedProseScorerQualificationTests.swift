@@ -289,6 +289,10 @@ final class TypedProseScorerQualificationTests: XCTestCase {
     /// T-MQ-12. The run record retains raw outputs and round-trips losslessly, so a
     /// published measurement can be independently re-scored from its own artifact.
     func testRunRecordRetainsRawOutputsAndRoundTrips() throws {
+        XCTAssertEqual(
+            TypedProseABRunRecord.currentSchemaVersion, 2,
+            "a proposition-binding semantics change requires a new artifact schema"
+        )
         let outcomes = [
             outcome(
                 answer: "The engagement fee is $9,000 [S1].",
