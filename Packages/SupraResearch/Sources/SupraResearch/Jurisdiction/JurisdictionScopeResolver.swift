@@ -1,10 +1,46 @@
 import Foundation
 
-/// Whether a cited authority falls within the scope of a requested jurisdiction.
-public enum JurisdictionScopeVerdict: String, Sendable, Equatable {
-    /// The authority is binding, or nationally binding, for the requested forum.
-    case withinScope
-    /// Both sides resolved against the court hierarchy, and the authority is not in scope.
+/// The direction of a state/federal geographic overlap. The two directions are
+/// legally distinct and must never collapse into one symmetric value: a federal court
+/// sitting in a state routinely applies that state's law, while a state court is not
+/// part of its geographically overlapping federal circuit hierarchy at all.
+public enum GeographicOverlapDirection: String, Sendable, Equatable {
+    /// A federal authority sitting in the expected STATE forum's footprint.
+    case federalAuthorityInExpectedState
+    /// A state authority inside the expected FEDERAL forum's footprint.
+    case stateAuthorityInExpectedFederalFootprint
+}
+
+/// The directional relationship of a cited authority to a requested forum — the
+/// Phase 3C replacement for the generic `.withinScope` verdict, which collapsed
+/// legally distinct concepts (same tribunal, binding superior, same federal family,
+/// same state, geographic overlap, subject-limited national jurisdiction, persuasive
+/// authority) into one value that hard gates then consumed as a boolean.
+///
+/// Every consumer must choose explicitly which relationships it accepts; no case here
+/// means "fine everywhere". Symmetry exists only where legally appropriate: aliases
+/// and exact same-court identity.
+public enum AuthorityRelationship: Sendable, Equatable {
+    /// The same tribunal, including notation/alias variants of one court.
+    case sameCourt
+    /// The authority's court bindingly controls the expected forum (SCOTUS over any
+    /// resolvable U.S. forum, a circuit over its districts, a state supreme court
+    /// over that state's forums).
+    case controllingSuperior
+    /// Same federal family (a district under the expected circuit, sibling district
+    /// courts) — related, not controlling.
+    case sameFederalFamily
+    /// Same state's court system, without a controlling relationship.
+    case sameStateNoncontrolling
+    /// State/federal geographic overlap — related but never controlling, and
+    /// directional (see `GeographicOverlapDirection`).
+    case geographicallyRelated(GeographicOverlapDirection)
+    /// Nationwide but subject-limited jurisdiction (the Federal Circuit,
+    /// 28 U.S.C. § 1295). Whether it reaches the expected forum depends on subject
+    /// matter this resolver cannot see; consumers without established subject matter
+    /// MUST fail closed.
+    case subjectMatterDependent
+    /// Both sides resolved and no recognized relation holds.
     case outsideScope
     /// At least one side is not resolvable against the bundled court list, so the
     /// hierarchy cannot answer the question. Callers must apply their own fail-closed
@@ -45,11 +81,11 @@ public struct JurisdictionScopeResolver: Sendable {
         self.catalog = catalog
         var courtKeys: [String: String] = [:]
         var jurisdictionKeys: [String: String] = [:]
-        var courtListenerIDs: [String: String] = [:]
-        // First writer wins throughout. Parse order is hierarchy order (SCOTUS, then the
-        // circuits, then state sections, each state's aggregate ahead of its courts), so
-        // the most authoritative option claims a shared key — "scotus" must resolve to
-        // the Supreme Court, and a bare state name to that state's aggregate.
+        var optionIDsByCourtListenerID: [String: [String]] = [:]
+        // Court and jurisdiction names remain first-writer indexes: parse order is
+        // hierarchy order, so a bare state name intentionally names its aggregate.
+        // CourtListener ids are collected first because state aggregates precede their
+        // courts and carry the same ids as authority scope, not tribunal identity.
         for option in catalog.options {
             for name in [option.courtName, option.displayName] {
                 let key = Self.canonicalKey(name)
@@ -61,17 +97,29 @@ public struct JurisdictionScopeResolver: Sendable {
             }
             for id in option.courtListenerIDs {
                 let key = id.lowercased()
-                if !key.isEmpty, courtListenerIDs[key] == nil { courtListenerIDs[key] = option.id }
+                if !key.isEmpty { optionIDsByCourtListenerID[key, default: []].append(option.id) }
             }
+        }
+        let courtListenerIDs = optionIDsByCourtListenerID.compactMapValues { optionIDs -> String? in
+            let preciseIDs = optionIDs.filter { optionID in
+                guard let option = catalog.option(id: optionID) else { return false }
+                return option.level != .jurisdiction && option.level != .trial
+            }
+            // A unique precise owner beats an aggregate owner (for example `fla` is
+            // the Florida Supreme Court). A generic id shared by multiple tribunals
+            // stays on its aggregate rather than guessing among them.
+            if preciseIDs.count == 1 { return preciseIDs[0] }
+            return optionIDs.first { catalog.option(id: $0)?.level == .jurisdiction }
+                ?? optionIDs.first
         }
         self.optionIDByCourtKey = courtKeys
         self.optionIDByJurisdictionKey = jurisdictionKeys
         self.optionIDByCourtListenerID = courtListenerIDs
     }
 
-    // MARK: - Verdict
+    // MARK: - Relationship
 
-    /// Whether an authority sits within the requested jurisdiction's scope.
+    /// The directional relationship of a cited authority to the requested forum.
     ///
     /// - Parameters:
     ///   - expected: the requested jurisdiction — a bare jurisdiction name
@@ -80,12 +128,12 @@ public struct JurisdictionScopeResolver: Sendable {
     ///   - authorityCourt: the authority's court name, if recorded.
     ///   - authorityJurisdiction: the authority's jurisdiction name, if recorded.
     ///   - authorityCourtID: the authority's CourtListener court id, if recorded.
-    public func verdict(
+    public func relationship(
         expected: String,
         authorityCourt: String?,
         authorityJurisdiction: String?,
         authorityCourtID: String?
-    ) -> JurisdictionScopeVerdict {
+    ) -> AuthorityRelationship {
         guard
             let authority = resolveAuthority(
                 court: authorityCourt,
@@ -95,41 +143,72 @@ public struct JurisdictionScopeResolver: Sendable {
         else {
             return .indeterminate
         }
-
-        // R1 — nationally binding authority is in scope everywhere, whatever the forum.
-        // Derived from catalog data, not a needle list: the U.S. Supreme Court is the
-        // federal supreme-level option, and the Federal Circuit is the option the
-        // catalog assigns the `cafc` id (28 U.S.C. § 1295 gives it nationwide appellate
-        // jurisdiction over its subject matter, so its law applies in every regional
-        // circuit).
-        if isNationallyBinding(authority) { return .withinScope }
-
         guard let expectedOption = resolveExpected(expected) else { return .indeterminate }
 
-        // R2 — the same court.
-        if authority.id == expectedOption.id { return .withinScope }
+        // Identity — the ONE deliberately symmetric relation. A state AGGREGATE
+        // (level `.jurisdiction`) is a jurisdiction, not a tribunal: two sides that
+        // both resolve to it share a state, never a court.
+        if authority.id == expectedOption.id {
+            if expectedOption.level == .jurisdiction {
+                return expectedOption.system == .state ? .sameStateNoncontrolling : .sameFederalFamily
+            }
+            return .sameCourt
+        }
+        // The same tribunal under differing names, by CourtListener identity —
+        // restricted to precisely identified tribunals: aggregates and county trial
+        // rollups carry a whole jurisdiction's ids as authority SCOPE, not identity.
+        if isPreciselyIdentifiedTribunal(authority), isPreciselyIdentifiedTribunal(expectedOption),
+           !Set(authority.courtListenerIDs.map { $0.lowercased() })
+               .isDisjoint(with: expectedOption.courtListenerIDs.map { $0.lowercased() }) {
+            return .sameCourt
+        }
 
-        // R3 — the same state's courts.
+        // The Federal Circuit is nationwide but subject-limited (28 U.S.C. § 1295):
+        // never an unconditional match for another forum. This resolver cannot see
+        // subject matter, so the answer is `.subjectMatterDependent` and consumers
+        // without established subject matter fail closed.
+        if authority.courtListenerIDs.contains(where: { $0.lowercased() == "cafc" }) {
+            return .subjectMatterDependent
+        }
+
+        // SCOTUS bindingly controls every resolvable U.S. forum.
+        if authority.system == .federal, authority.level == .supreme {
+            return .controllingSuperior
+        }
+
+        // The same state's courts, directional: the state supreme court controls the
+        // state's forums; anything else same-state is noncontrolling.
         if authority.system == .state, expectedOption.system == .state,
            let authorityState = authority.state, authorityState == expectedOption.state {
-            return .withinScope
+            return authority.level == .supreme ? .controllingSuperior : .sameStateNoncontrolling
         }
 
-        // R4 — the same court by CourtListener identity, under differing names.
-        if !Set(authority.courtListenerIDs.map { $0.lowercased() })
-            .isDisjoint(with: expectedOption.courtListenerIDs.map { $0.lowercased() }) {
-            return .withinScope
+        // The federal hierarchy, directional: the circuit above the expected district
+        // controls it; a district under the expected circuit (or a sibling district in
+        // the same state family) is family, not controlling.
+        if authority.system == .federal, expectedOption.system == .federal {
+            if let state = expectedOption.state, isInFederalFamily(authority, ofState: state) {
+                return authority.level == .federalAppellate ? .controllingSuperior : .sameFederalFamily
+            }
+            if let state = authority.state, isInFederalFamily(expectedOption, ofState: state) {
+                return .sameFederalFamily
+            }
+            return .outsideScope
         }
 
-        // R5 — the federal/state family relation, in both directions: a federal court
-        // sitting in the requested state (it applies that state's law), and a district or
-        // bankruptcy court under the requested circuit (it is within that hierarchy).
-        if relatesThroughFederalFamily(of: expectedOption, to: authority)
-            || relatesThroughFederalFamily(of: authority, to: expectedOption) {
-            return .withinScope
+        // State/federal geographic overlap — related, never controlling, directional.
+        // A state court is NOT part of its overlapping federal circuit hierarchy; each
+        // consumer decides what either direction is worth.
+        if expectedOption.system == .state, authority.system == .federal,
+           let state = expectedOption.state, isInFederalFamily(authority, ofState: state) {
+            return .geographicallyRelated(.federalAuthorityInExpectedState)
+        }
+        if expectedOption.system == .federal, authority.system == .state,
+           let state = authority.state, isInFederalFamily(expectedOption, ofState: state) {
+            return .geographicallyRelated(.stateAuthorityInExpectedFederalFootprint)
         }
 
-        // R6 — both sides resolved and no relation holds.
+        // Both sides resolved and no relation holds.
         return .outsideScope
     }
 
@@ -147,11 +226,17 @@ public struct JurisdictionScopeResolver: Sendable {
         jurisdiction: String?,
         courtID: String?
     ) -> JurisdictionOption? {
-        if let courtID, let id = optionIDByCourtListenerID[courtID.lowercased()],
-           let option = catalog.option(id: id) {
-            return option
+        let idOption = courtID
+            .flatMap { optionIDByCourtListenerID[$0.lowercased()] }
+            .flatMap { catalog.option(id: $0) }
+        let courtOption = court.flatMap(option(forCourtKey:))
+
+        if let idOption, let courtOption {
+            guard metadataIsConsistent(idOption, courtOption) else { return nil }
+            return morePreciselyIdentified(idOption, courtOption)
         }
-        if let court, let option = option(forCourtKey: court) { return option }
+        if let idOption { return idOption }
+        if let courtOption { return courtOption }
         if let jurisdiction {
             if let option = option(forCourtKey: jurisdiction) { return option }
             if let option = option(forJurisdictionKey: jurisdiction) { return option }
@@ -160,6 +245,32 @@ public struct JurisdictionScopeResolver: Sendable {
         // back to the state the court name ends in ("Supreme Court of Arkansas").
         if let court, let option = optionForTrailingJurisdiction(in: court) { return option }
         return nil
+    }
+
+    /// Independently resolved name/id metadata must describe the same tribunal or a
+    /// compatible aggregate. A conflicting precise name and id is malformed input,
+    /// never an invitation to let one silently override the other.
+    private func metadataIsConsistent(
+        _ lhs: JurisdictionOption,
+        _ rhs: JurisdictionOption
+    ) -> Bool {
+        if lhs.id == rhs.id { return true }
+        let lhsIDs = Set(lhs.courtListenerIDs.map { $0.lowercased() })
+        let rhsIDs = Set(rhs.courtListenerIDs.map { $0.lowercased() })
+        if !lhsIDs.isDisjoint(with: rhsIDs) { return true }
+        if lhs.level == .jurisdiction || rhs.level == .jurisdiction {
+            return lhs.system == rhs.system && lhs.state == rhs.state
+        }
+        return false
+    }
+
+    private func morePreciselyIdentified(
+        _ lhs: JurisdictionOption,
+        _ rhs: JurisdictionOption
+    ) -> JurisdictionOption {
+        if lhs.level == .jurisdiction, rhs.level != .jurisdiction { return rhs }
+        if rhs.level == .jurisdiction, lhs.level != .jurisdiction { return lhs }
+        return lhs
     }
 
     private func resolveExpected(_ expected: String) -> JurisdictionOption? {
@@ -197,20 +308,20 @@ public struct JurisdictionScopeResolver: Sendable {
 
     // MARK: - Relations
 
-    private func isNationallyBinding(_ option: JurisdictionOption) -> Bool {
-        if option.system == .federal, option.level == .supreme { return true }
-        return option.courtListenerIDs.contains { $0.lowercased() == "cafc" }
+    /// Whether an option identifies one specific tribunal. State aggregates
+    /// (`.jurisdiction`) and county trial rollups (`.trial`) carry a whole
+    /// jurisdiction's CourtListener ids as authority scope, so a shared id there is
+    /// not court identity.
+    private func isPreciselyIdentifiedTribunal(_ option: JurisdictionOption) -> Bool {
+        option.level != .jurisdiction && option.level != .trial
     }
 
-    /// Whether `other` belongs to the federal court family of `option`'s state — that
-    /// state's circuit plus the federal district and bankruptcy courts sitting in it.
-    private func relatesThroughFederalFamily(
-        of option: JurisdictionOption,
-        to other: JurisdictionOption
-    ) -> Bool {
-        guard let state = option.state, !other.courtListenerIDs.isEmpty else { return false }
+    /// Whether `option` belongs to the federal court family of `state` — that state's
+    /// circuit plus the federal district and bankruptcy courts sitting in it.
+    private func isInFederalFamily(_ option: JurisdictionOption, ofState state: String) -> Bool {
+        guard !option.courtListenerIDs.isEmpty else { return false }
         let family = Set(catalog.relatedFederalCourtIDs(forState: state).map { $0.lowercased() })
-        return other.courtListenerIDs.contains { family.contains($0.lowercased()) }
+        return option.courtListenerIDs.contains { family.contains($0.lowercased()) }
     }
 
     // MARK: - Canonical key

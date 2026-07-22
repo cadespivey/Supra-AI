@@ -66,9 +66,6 @@ public enum AnswerDraftContract {
         guard let dto = try? JSONDecoder().decode(DraftDTO.self, from: Data(json.utf8)) else {
             throw ParseError.malformed
         }
-        if dto.insufficientEvidence == true {
-            return AnswerDraft(refusal: Refusal(reason(from: dto.reason)))
-        }
         func resolve(_ label: String) -> SpanID { labelToSpanID[label] ?? SpanID("unresolved:\(label)") }
         let segments = (dto.segments ?? []).map { segment in
             Segment(
@@ -76,6 +73,14 @@ public enum AnswerDraftContract {
                 citations: (segment.citations ?? []).map(resolve),
                 quotes: (segment.quotes ?? []).map { Quote(spanID: resolve($0.spanID), verbatim: $0.verbatim) }
             )
+        }
+        if dto.insufficientEvidence == true {
+            // Parse tolerant, validate strict: a reply that claims insufficient
+            // evidence while ALSO carrying answer segments must keep its mixed shape,
+            // so `AttributionValidator`/`AnswerOutcome` can reject it. Dropping the
+            // segments here laundered a mixed reply into a clean typed refusal
+            // (Phase 3C, finding #1).
+            return AnswerDraft(segments: segments, refusal: Refusal(reason(from: dto.reason)), reasoning: dto.reasoning)
         }
         return AnswerDraft(segments: segments, reasoning: dto.reasoning)
     }

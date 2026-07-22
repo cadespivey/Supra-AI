@@ -15,6 +15,13 @@ public struct AttributionViolation: Sendable, Codable, Equatable {
         case citedLowConfidence
         /// A segment carries prose but no citation and no quote — an uncited claim.
         case substantiveSegmentUncited
+        /// The draft claims a refusal while also carrying non-blank answer segments —
+        /// an internally inconsistent (mixed) result that must be reviewed, never
+        /// fast-pathed as a clean refusal.
+        case refusalCarriesAnswerContent
+        /// The draft is neither a substantive answer nor a pure refusal (for
+        /// example, completely empty or attribution attached to blank prose).
+        case malformedOutcome
     }
 
     public let kind: Kind
@@ -62,13 +69,31 @@ public struct ValidationResult: Sendable, Codable, Equatable {
 /// and it does not ask a model to judge another model's answer.
 public enum AttributionValidator {
     public static func validate(draft: AnswerDraft, evidence: EvidenceSet) -> ValidationResult {
-        // A typed refusal asserts nothing: it can carry no attribution and is never a
-        // proposition. This is the structural fix for refusal-as-"no citation".
-        if draft.refusal != nil {
+        // The refusal fast path exists ONLY for a validated pure refusal: a typed
+        // refusal asserts nothing, so it can carry no attribution and is never a
+        // proposition. A draft that claims a refusal while also carrying answer
+        // content is mixed/malformed — it falls through to segment validation with an
+        // explicit violation, so it always requires review (Phase 3C, finding #1).
+        let outcome = AnswerOutcome(validating: draft)
+        if case .refused = outcome {
             return ValidationResult(status: .refused, violations: [])
         }
 
         var violations: [AttributionViolation] = []
+
+        if draft.refusal != nil {
+            violations.append(AttributionViolation(
+                kind: .refusalCarriesAnswerContent,
+                spanID: nil,
+                detail: "Draft claims a refusal but also carries answer segments; a refusal cannot contain material answer text or citations."
+            ))
+        } else if outcome == nil {
+            violations.append(AttributionViolation(
+                kind: .malformedOutcome,
+                spanID: nil,
+                detail: "Draft is neither a substantive answer nor a pure refusal."
+            ))
+        }
 
         for segment in draft.segments {
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)

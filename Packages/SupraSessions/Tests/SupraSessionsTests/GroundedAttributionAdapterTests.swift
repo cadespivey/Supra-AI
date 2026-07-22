@@ -26,7 +26,7 @@ final class GroundedAttributionAdapterTests: XCTestCase {
         let sources = [input("S1", "matter/chunk-a", "The agreement was signed March 3, 2024."),
                        input("S2", "matter/chunk-b", "The fee was $900.")]
         let answer = "The agreement was signed on March 3, 2024 [S1]. The fee was $900 [S2]."
-        let result = GroundedAttributionAdapter.shadowValidate(answer: answer, sources: sources, isRefusal: false)
+        let result = GroundedAttributionAdapter.shadowValidate(answer: answer, sources: sources, shape: .answer)
         XCTAssertEqual(result.status, .validated)
         XCTAssertTrue(result.violations.isEmpty)
     }
@@ -35,13 +35,13 @@ final class GroundedAttributionAdapterTests: XCTestCase {
         // Answer cites [S3], which was never in the provided packet.
         let sources = [input("S1", "matter/chunk-a", "Alpha."), input("S2", "matter/chunk-b", "Beta.")]
         let flagged = GroundedAttributionAdapter.shadowValidate(
-            answer: "The rule applies [S3].", sources: sources, isRefusal: false
+            answer: "The rule applies [S3].", sources: sources, shape: .answer
         )
         XCTAssertEqual(flagged.status, .violations)
         XCTAssertTrue(flagged.violations.contains { $0.kind == .citationNotInEvidence })
         // Wire-proof: the same answer with a resolvable label is clean.
         let clean = GroundedAttributionAdapter.shadowValidate(
-            answer: "The rule applies [S1].", sources: sources, isRefusal: false
+            answer: "The rule applies [S1].", sources: sources, shape: .answer
         )
         XCTAssertFalse(clean.violations.contains { $0.kind == .citationNotInEvidence })
     }
@@ -50,7 +50,7 @@ final class GroundedAttributionAdapterTests: XCTestCase {
         let sources = [input("S1", "matter/chunk-a", "Unrelated.")]
         let result = GroundedAttributionAdapter.shadowValidate(
             answer: "The provided sources do not support an answer to this question.",
-            sources: sources, isRefusal: true
+            sources: sources, shape: .refusal
         )
         XCTAssertEqual(result.status, .refused)
         XCTAssertTrue(result.violations.isEmpty)
@@ -61,7 +61,7 @@ final class GroundedAttributionAdapterTests: XCTestCase {
         // noise in shadow — only [S#]-bearing sentences are attribution claims.
         let sources = [input("S1", "matter/chunk-a", "The fee was $900.")]
         let answer = "Here is what the documents show. The fee was $900 [S1]."
-        let result = GroundedAttributionAdapter.shadowValidate(answer: answer, sources: sources, isRefusal: false)
+        let result = GroundedAttributionAdapter.shadowValidate(answer: answer, sources: sources, shape: .answer)
         XCTAssertEqual(result.status, .validated)
         XCTAssertFalse(result.violations.contains { $0.kind == .substantiveSegmentUncited })
     }
@@ -75,8 +75,8 @@ final class GroundedAttributionAdapterTests: XCTestCase {
                        input("S2", "matter/chunk-b", "other")]
         let reversed = [input("S2", "matter/chunk-b", "other"),
                         input("S1", "matter/chunk-a", "signed March 3, 2024")]
-        let d1 = GroundedAttributionAdapter.answerDraft(answer: answer, sources: forward, isRefusal: false)
-        let d2 = GroundedAttributionAdapter.answerDraft(answer: answer, sources: reversed, isRefusal: false)
+        let d1 = GroundedAttributionAdapter.answerDraft(answer: answer, sources: forward, shape: .answer)
+        let d2 = GroundedAttributionAdapter.answerDraft(answer: answer, sources: reversed, shape: .answer)
         XCTAssertEqual(d1.segments.first?.citations, [SpanID("matter/chunk-a")])
         XCTAssertEqual(d1.segments.first?.citations, d2.segments.first?.citations)
     }

@@ -1231,7 +1231,10 @@ public final class GlobalChatController: ObservableObject {
                                         text: $0.supportText, lowConfidence: $0.lowConfidence
                                     )
                                 },
-                                isRefusal: report?.appearsUnsupported ?? false
+                                // Typed whole-response shape, never a boolean: only a
+                                // validated `.refusal` may take the typed-refusal fast
+                                // path; a missing report fails closed to `.answer`.
+                                shape: report?.responseShape ?? .answer
                             )
                             GroundedAttributionAdapter.logShadow(shadow, lexicalRequiresReview: report?.requiresReview)
                             let banner = report.flatMap(Self.documentSupportBanner) ?? """

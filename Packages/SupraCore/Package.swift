@@ -12,6 +12,10 @@ let package = Package(
     ],
     targets: [
         .target(name: "SupraCore"),
-        .testTarget(name: "SupraCoreTests", dependencies: ["SupraCore"])
+        .testTarget(
+            name: "SupraCoreTests",
+            dependencies: ["SupraCore"],
+            resources: [.process("Fixtures")]
+        )
     ]
 )

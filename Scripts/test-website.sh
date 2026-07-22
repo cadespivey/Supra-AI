@@ -33,11 +33,12 @@ run_step 'static build' "$npm_command" run build:pages
 # that is a mismatch — a Swift-only change cannot introduce an npm advisory, and this
 # site is a static export, so these build-time packages never execute for a visitor.
 #
-# CI therefore sets SUPRA_SKIP_DEP_AUDIT=1 when a run touches nothing under website/,
-# and the weekly scheduled audit (.github/workflows/security-scheduled.yml) owns
-# advisory drift. Unset or 0 — including every local run — audits as before.
+# CI therefore sets SUPRA_SKIP_DEP_AUDIT=1 only when neither website content nor an
+# audit-controlling script/workflow changed; Scripts/website-dependency-audit-required.sh
+# owns that tested scope. The weekly scheduled audit owns outside-world advisory drift.
+# Unset or 0 — including every local run — audits as before.
 if [[ "${SUPRA_SKIP_DEP_AUDIT:-0}" == "1" ]]; then
-  printf 'SKIP: dependency audit — no website/ changes in this run; the weekly scheduled audit covers advisory drift.\n'
+  printf 'SKIP: dependency audit — no website audit inputs changed; the weekly scheduled audit covers advisory drift.\n'
 else
   run_step 'dependency audit' "$npm_command" audit --audit-level=high
 fi

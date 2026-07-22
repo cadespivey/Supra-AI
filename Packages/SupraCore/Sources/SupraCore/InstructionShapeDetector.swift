@@ -1,14 +1,10 @@
 import Foundation
 
-/// How instruction-shaped a piece of untrusted text is.
+/// Result of the narrow instruction-shaped evidence rejection policy.
 public enum InstructionShapeTier: String, Sendable, Equatable, Codable {
-    /// No instruction-shaped content detected.
+    /// No rejection pattern matched. This does not mean the text is trusted or attack-free.
     case clean
-    /// Matched a pattern that also occurs in ordinary legal prose. Surfaced as a
-    /// warning; never blocks, because blocking on these quarantines genuine authority.
-    case advisory
-    /// Matched a structurally unambiguous injection pattern. Blocks: the text is not
-    /// usable as evidence.
+    /// Matched a narrow, high-confidence rejection pattern; the text is not usable as evidence.
     case blocking
 }
 
@@ -27,8 +23,7 @@ public struct InstructionShapeFinding: Sendable, Equatable {
     public static let clean = InstructionShapeFinding(tier: .clean, patternID: nil)
 }
 
-/// The one detector for instruction-shaped (prompt-injection-shaped) content in
-/// untrusted text.
+/// The shared, narrow rejection policy for instruction-shaped content in untrusted text.
 ///
 /// Three private copies of this guard existed, written within 26 minutes of each other
 /// and never reconciled: a 10-pattern regex list in the document verifier, a 6-pattern
@@ -37,7 +32,7 @@ public struct InstructionShapeFinding: Sendable, Equatable {
 /// They disagreed in both directions — one caught `"you are now"` and exfiltration
 /// phrasing the others missed; another caught `"tool call"` the first missed.
 ///
-/// ## Why two tiers
+/// ## Why there is no advisory tier
 ///
 /// Every surface this guards holds LEGAL PROSE — imported pleadings and opinions on the
 /// document side, court opinions on the research side. Four of the patterns fire on
@@ -49,15 +44,15 @@ public struct InstructionShapeFinding: Sendable, Equatable {
 /// - `"did not use the tool during the inspection"` (products liability)
 /// - `"You are now in default under the Note."` (quoted default notice)
 ///
-/// Measured over an adversarial probe set, the 10-pattern list flagged 7 of 8 genuine
-/// legal excerpts while catching 9 of 14 injection payloads; the 6-pattern list flagged
-/// 0 of 8 and caught 5 of 14. Blocking on the imprecise patterns therefore costs far
-/// more than it buys — a false positive marks real authority unusable.
+/// The former advisory patterns had no production consumer and classified all of the
+/// ordinary legal examples above as suspicious. Keeping a public signal with no behavior
+/// invited callers to promote those false positives into a gate, so Phase 5 removed it.
 ///
-/// The precision trade is acceptable because this detector is a BACKSTOP, not a
-/// barrier: untrusted text has already reached the model by the time any of this runs.
-/// It only decides whether to distrust the resulting answer. Four of fourteen probes
-/// evade every pattern in both lists, so treating it as a hard boundary was never sound.
+/// This policy is a BACKSTOP, not a prompt-injection security boundary. Source-data
+/// envelopes and explicit instructions keep evidence separate from operator instructions;
+/// these regexes only reject a small set of especially unambiguous shapes. The committed
+/// injection/legal-prose corpus and `InstructionShapeCorpusTests` publish the policy's
+/// deliberately incomplete recall and its false-positive count from inspectable inputs.
 public enum InstructionShapeDetector {
     /// Structurally unambiguous injection shapes. These do not occur in ordinary legal
     /// prose, so they block on every surface.
@@ -70,30 +65,18 @@ public enum InstructionShapeDetector {
         ("tool-invocation", #"\btool (call|request)\b"#),
     ]
 
-    /// Patterns that also match ordinary legal prose. Retained for their signal, but
-    /// advisory only — see the type's discussion.
-    static let advisoryPatterns: [(id: String, pattern: String)] = [
-        ("exfiltrate-sources", #"\b(reveal|disclose|print|show)\b.{0,80}\b(other )?(source|prompt|secret|instruction)s?\b"#),
-        ("assert-falsehood", #"\b(output|state|claim|answer|say)\b.{0,80}\b(false|fabricated|untrue|unsupported)\b"#),
-        ("invoke-tool", #"\b(call|invoke|use|run)\b.{0,40}\b(tool|function|command)s?\b"#),
-        ("you-are-now", #"\byou are now\b"#),
-    ]
-
-    /// Classifies untrusted text. Blocking patterns are checked first, so a text that
-    /// matches both tiers is reported as blocking.
+    /// Applies the narrow evidence-rejection policy. `.clean` means only that none of
+    /// these patterns matched; it is not a trust or attack-detection verdict.
     public static func classify(_ text: String) -> InstructionShapeFinding {
         let normalized = normalize(text)
         guard !normalized.isEmpty else { return .clean }
         if let hit = firstMatch(in: normalized, among: blockingPatterns) {
             return InstructionShapeFinding(tier: .blocking, patternID: hit)
         }
-        if let hit = firstMatch(in: normalized, among: advisoryPatterns) {
-            return InstructionShapeFinding(tier: .advisory, patternID: hit)
-        }
         return .clean
     }
 
-    /// Whether the text must not be used as evidence.
+    /// Whether the text matches the narrow policy and must not be used as evidence.
     public static func isBlocking(_ text: String) -> Bool {
         classify(text).tier == .blocking
     }
