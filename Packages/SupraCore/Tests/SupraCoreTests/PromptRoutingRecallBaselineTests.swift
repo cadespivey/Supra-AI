@@ -3,24 +3,17 @@ import XCTest
 
 /// Phase 4 regression coverage for `ModelRouter.routePrompt`'s legal-intent inference.
 ///
-/// ## Why this is a baseline and not a fix
+/// ## Why Phase 4 does not merely tighten the old marker list
 ///
-/// The obvious repair — word-bounding the keyword matching, as was done for the verifier's
-/// jurisdiction, refusal, and holding-vs-dicta rules — would make routing WORSE here, because the
-/// safety asymmetry runs the other way:
+/// Before semantic inference, word-bounding the keyword matching would have made routing worse,
+/// because the safety asymmetry runs the other way:
 ///
 ///   looksLegal == true   → .legalQA    → requiresCitations / requiresJurisdiction /
 ///                                        requiresCourtListener all honor configuration
 ///   looksLegal == false  → .generalQA  → all three are FALSE; the answer is ungrounded
 ///
-/// So over-firing is safe and under-firing is dangerous. Every substring collision in the current
-/// list ("reliable" contains "liable", "issue " contains "sue ") pushes prompts toward the MORE
-/// gated route. Tightening the match would strip that accidental protection while leaving the
-/// real defect — recall — untouched.
-///
-/// The real defect is that ordinary legal questions match no marker at all and fall to
-/// `.generalQA`. That cannot be fixed by another phrase list; it is the case for a semantic
-/// classifier with a deterministic fail-closed backstop.
+/// Phase 4 first protects recall with semantic inference and a fail-closed backstop. Only then is
+/// it safe to remove accidental substring matches and measure the resulting precision.
 final class PromptRoutingRecallBaselineTests: XCTestCase {
 
     private let router = ModelRouter(configuration: .fromEnvironment())
@@ -55,32 +48,23 @@ final class PromptRoutingRecallBaselineTests: XCTestCase {
         }
     }
 
-    /// The gap is recall, not vocabulary: adding one marker word to the same question flips it to
-    /// the gated route. A phrase list can always be extended and will always have a next miss —
-    /// which is the argument against extending it again.
-    func testAddingASingleMarkerWordFlipsTheSameQuestion() {
+    /// T-RTE-05: legal intent must not depend on adding one word from a marker list.
+    func testLegalIntentDoesNotDependOnSingleMarkerWord() {
         let bare = mode("Can my landlord keep my security deposit?")
         let marked = mode("Can my landlord keep my security deposit under the lease agreement?")
 
-        XCTAssertFalse(bare.requiresCitations, "BASELINE (defect)")
-        XCTAssertTrue(marked.requiresCitations, "one marker word is the whole difference")
+        XCTAssertTrue(bare.requiresCitations)
+        XCTAssertTrue(marked.requiresCitations)
     }
 
-    // MARK: - Over-firing, recorded as ACCEPTABLE
+    // MARK: - Precision
 
-    /// Substring collisions send non-legal prompts to the gated legal route. That costs retrieval
-    /// work and can produce a legal-research treatment of a plainly non-legal question, but it
-    /// fails SAFE.
-    ///
-    /// PHASE 4: do not "fix" these by tightening the match in isolation. Precision here is only
-    /// worth improving once recall is handled by something other than a phrase list, or the net
-    /// effect is to remove gating from prompts that currently get it.
-    func testSubstringCollisionsOverFireTowardTheGatedRoute() {
-        // "reliable" contains "liable"; "issue " contains "sue ".
-        XCTAssertTrue(mode("Is this API reliable?").requiresCitations,
-                      "BASELINE: over-fires, but toward the safer route")
-        XCTAssertTrue(mode("What is the issue here?").requiresCitations,
-                      "BASELINE: over-fires, but toward the safer route")
+    /// T-RTE-08: once semantic recall and the fail-closed path exist, incidental substrings no
+    /// longer need to provide accidental safety ("reliable" contains "liable", "issue" contains
+    /// "sue").
+    func testIncidentalSubstringsRemainGeneralOnceRecallIsProtected() {
+        XCTAssertFalse(mode("Is this API reliable?").requiresCitations)
+        XCTAssertFalse(mode("What is the issue here?").requiresCitations)
     }
 
     // MARK: - Invariants Phase 4 must preserve
