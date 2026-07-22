@@ -120,6 +120,32 @@ final class AttributionValidatorTests: XCTestCase {
         XCTAssertTrue(draft.insufficientEvidence)
     }
 
+    // MARK: - T-VALID-05A/05B — malformed typed outcomes fail closed
+
+    func testEmptyDraftIsAMalformedOutcome() {
+        let result = AttributionValidator.validate(
+            draft: AnswerDraft(),
+            evidence: EvidenceSet(spans: [])
+        )
+        XCTAssertEqual(result.status, .violations)
+        XCTAssertTrue(result.violations.contains { $0.kind == .malformedOutcome })
+        XCTAssertFalse(result.isClean)
+    }
+
+    func testRefusalCannotHideCitationInBlankSegment() {
+        let ev = evidence([("S/a", "Unrelated content.", false)])
+        let draft = AnswerDraft(
+            segments: [Segment(text: " \n", citations: [SpanID("S/a")])],
+            refusal: Refusal(.noCoverage)
+        )
+        let result = AttributionValidator.validate(draft: draft, evidence: ev)
+        XCTAssertEqual(result.status, .violations)
+        XCTAssertTrue(
+            result.violations.contains { $0.kind == .refusalCarriesAnswerContent }
+        )
+        XCTAssertFalse(result.isClean)
+    }
+
     // MARK: - T-VALID-06 — empty evidence + a citing segment
 
     func testEmptyEvidenceWithCitingSegmentIsFlagged() {

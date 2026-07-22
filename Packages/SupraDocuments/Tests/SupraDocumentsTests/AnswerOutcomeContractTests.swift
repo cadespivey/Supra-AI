@@ -183,4 +183,14 @@ final class AnswerOutcomeContractTests: XCTestCase {
             return XCTFail("blank segments carry no answer content, got \(outcome)")
         }
     }
+
+    /// T-OUT-14. A blank string does not erase attribution payload. A refusal cannot
+    /// carry citations or quotes even when the segment prose is whitespace-only.
+    func testRefusalWithAttributedBlankSegmentFailsValidation() {
+        let draft = AnswerDraft(
+            segments: [Segment(text: "  ", citations: [SpanID("matter/chunk-1")])],
+            refusal: Refusal(.noCoverage)
+        )
+        XCTAssertNil(AnswerOutcome(validating: draft))
+    }
 }
