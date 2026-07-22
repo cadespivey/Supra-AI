@@ -37,6 +37,15 @@ run_case \
   "Product claims verification passed" \
   bash "$verifier"
 
+run_case \
+  "citation semantics claim retains broad proposition verification" \
+  0 \
+  "Packages/SupraDocuments/Tests/SupraDocumentsTests/DocumentSupportVerifierTests.swift" \
+  awk '
+    /^  - id: "CITATION-PROPOSITION-SEMANTICS"/ { in_claim = 1; next }
+    in_claim && /^    verification:/ { print; exit }
+  ' "$claims"
+
 drifted_count="${temporary_dir}/drifted-count.yml"
 awk '!changed && sub(/expected: "14"/, "expected: \"13\"") { changed = 1 } { print }' \
   "$claims" >"$drifted_count"
@@ -74,12 +83,12 @@ run_case \
   env SUPRA_CLAIMS_FILE="$hardcoded_release_version" bash "$verifier"
 
 stale_security_support="${temporary_dir}/stale-security-support.yml"
-awk '!changed && sub(/expected: "2.2.x"/, "expected: \"1.4.x\"") { changed = 1 } { print }' \
+awk '!changed && sub(/expected: "2.3.x"/, "expected: \"1.4.x\"") { changed = 1 } { print }' \
   "$claims" >"$stale_security_support"
 run_case \
   "a stale security support line fails closed" \
   1 \
-  "security support claim expected 1.4.x, project marketing version resolves to 2.2.x" \
+  "security support claim expected 1.4.x, project marketing version resolves to 2.3.x" \
   env SUPRA_CLAIMS_FILE="$stale_security_support" bash "$verifier"
 
 if (( failures != 0 )); then
