@@ -1187,13 +1187,41 @@ public enum LegalCitationVerifier {
     /// overlap, negation polarity and contradiction — so an end-to-end test of this rule passes or
     /// fails for reasons that have nothing to do with it.
     static func isQualifiedOrNonholdingSupport(_ excerpt: String, for proposition: String) -> Bool {
-        let claim = proposition.lowercased()
-        guard claim.contains("hold") || claim.contains("require") || claim.contains("must") else {
-            return false
-        }
-        let source = excerpt.lowercased()
-        return ["dissent", "dicta", "might", "whether", "declines to decide", "does not decide"]
-            .contains { source.contains($0) }
+        guard matches(proposition, holdingClaimPattern) else { return false }
+        return nonholdingMarkerPatterns.contains { matches(excerpt, $0) }
+    }
+
+    /// A proposition that asserts a holding or an obligation. Word-bounded: the substring form
+    /// treated "threshold" as a holding claim, and "stakeholder" and "withholding" alike.
+    private static let holdingClaimPattern =
+        #"\b(hold|holds|held|holding|require|requires|required|requirement|must)\b"#
+
+    /// Phrases that mark treatment as something other than the holding.
+    ///
+    /// Word-bounded, so "dictates" is no longer dicta and "mighty" is no longer a hedge. Two
+    /// needles from the substring list are deliberately GONE rather than bounded:
+    ///
+    /// - `whether` — appellate courts phrase the question presented that way constantly, so it
+    ///   appears inside express holdings ("We hold that whether X is a question of fact").
+    /// - `might` — ordinary hedging that survives into a holding ("however slight the prejudice
+    ///   might be").
+    ///
+    /// Both marked genuine holdings as dicta far more often than they caught real dicta. The
+    /// narrower phrases that follow capture what those two were reaching for — a court expressly
+    /// declining to resolve the question — without sweeping in every hedge.
+    private static let nonholdingMarkerPatterns = [
+        #"\bdicta\b"#,
+        #"\bdictum\b"#,
+        #"\bdissent(s|ed|ing)?\b"#,
+        #"\bdeclines? to decide\b"#,
+        #"\bdo(es)? not decide\b"#,
+        #"\bneed not (decide|reach)\b"#,
+        #"\bwithout deciding\b"#,
+        #"\barguendo\b"#,
+    ]
+
+    private static func matches(_ text: String, _ pattern: String) -> Bool {
+        text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     private static func orderedCriticalValues(in text: String) -> [String] {
