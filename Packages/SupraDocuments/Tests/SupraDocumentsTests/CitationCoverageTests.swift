@@ -52,11 +52,20 @@ final class CitationCoverageTests: XCTestCase {
     func testRefusalPhraseInSubstantiveCitedAnswerStillRequiresReviewForUnresolvedLabel() {
         // A substantive answer that merely contains a refusal-like phrase AND cites
         // an unresolved label must not skip review (audit [10]).
+        //
+        // REVISED in the Phase 3C RED commit (review finding #1, methodology §3.5):
+        // this test previously asserted `appearsUnsupported == true` — encoding the
+        // very defect under correction, a refusal-clause-plus-assertion classified as
+        // a refusal. A mixed response is not a whole-response refusal; only the
+        // review requirement stands. Expected RED: `appearsUnsupported` is true today.
         let check = CitationCoverage.check(
             answer: "The sources do not contain X, but the deadline was March 3 [S9].",
             availableLabels: ["S1", "S2"]
         )
-        XCTAssertTrue(check.appearsUnsupported)
+        XCTAssertFalse(
+            check.appearsUnsupported,
+            "a refusal clause joined to a factual assertion is mixed, not a refusal"
+        )
         XCTAssertEqual(check.unresolvedLabels, ["S9"])
         XCTAssertTrue(check.requiresReview)
     }
