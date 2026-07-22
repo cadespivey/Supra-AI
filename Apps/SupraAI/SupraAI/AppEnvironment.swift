@@ -277,6 +277,11 @@ final class AppEnvironment: ObservableObject {
            !storeResult.isFallback, storeResult.recoveryState == nil {
             Task { await self.runCapabilityProbeIfRequested() }
         }
+        // Typed-vs-prose A/B, triggered from init for the same reason. Fixture-only, so unlike the
+        // other two it has no store preconditions — it never reads matter data.
+        if ProcessInfo.processInfo.arguments.contains("-runTypedProseABProbe") {
+            Task { await self.runTypedProseABProbeIfRequested() }
+        }
     }
 
     /// Loads persisted state and refreshes runtime status on launch.
@@ -386,6 +391,79 @@ final class AppEnvironment: ObservableObject {
     func makeSelectedEmbedder() -> (any TextEmbedder)? {
         let selectedModel = try? store.documentSettings.fetchSelectedEmbeddingModel()
         return selectedModel.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+    }
+
+    /// Headless typed-vs-prose A/B (`-runTypedProseABProbe`, optional `-abRepeats N`): runs both
+    /// grounded-answer paths over AUTHORED fixtures and reports the verifier's false-positive rate
+    /// on each.
+    ///
+    /// Fixtures only — it never reads matter data, and the payload carries no client content,
+    /// which is why the pasteboard channel is safe here. That constraint is also what makes the
+    /// measurement possible: with authored evidence the correct answer is known, so a verifier
+    /// flag can be classified as noise (it flagged a CORRECT answer) or as the gate working (it
+    /// flagged a WRONG one). A comparison run against real questions could only report that the
+    /// two paths differ, never which one was right.
+    func runTypedProseABProbeIfRequested() async {
+        guard ProcessInfo.processInfo.arguments.contains("-runTypedProseABProbe") else { return }
+        var payload: [String: Any] = [:]
+        defer { emitTypedProseABPayload(payload) }
+
+        let resolution = await modelLibrary.ensureLoadedChatModelID(for: .legalReasoning)
+        guard case let .success(modelID) = resolution else {
+            payload["status"] = "model_load_failed"
+            payload["detail"] = String(describing: resolution)
+            return
+        }
+        payload["probedModel"] = modelLibrary.models
+            .first { $0.id == modelLibrary.loadedModelID?.rawValue.uuidString }?.displayName ?? "unknown"
+
+        var options = ModelRouter(configuration: .fromEnvironment())
+            .route(forStructuredOutput: .documentQA)?.options ?? GenerationOptions()
+        options.thinkingBudget = .off
+
+        let repeats = Self.intArgument(named: "-abRepeats") ?? 3
+        payload["repeats"] = repeats
+        let outcomes = await TypedProseABProbe.run(
+            modelID: modelID, options: options, systemPrompt: nil,
+            runtimeClient: runtimeClient, repeats: repeats
+        )
+        payload["status"] = "ok"
+        for arm in [TypedProseArm.typed, .prose] {
+            let report = TypedProseABScorer.report(outcomes: outcomes, arm: arm)
+            payload[arm.rawValue] = [
+                "total": report.total,
+                "correct": report.correct,
+                "correctRate": report.correctRate,
+                "falsePositives": report.falsePositives,
+                "falsePositiveRate": report.falsePositiveRate,
+                "truePositives": report.truePositives,
+                "missedErrors": report.missedErrors,
+                "missedErrorRate": report.missedErrorRate,
+                "trueNegatives": report.trueNegatives,
+                "fellBack": report.fellBack,
+            ]
+        }
+    }
+
+    /// A positive integer launch argument (`-flag 5`), or nil when absent or unparsable.
+    private static func intArgument(named flag: String) -> Int? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let marker = arguments.firstIndex(of: flag),
+              arguments.indices.contains(marker + 1),
+              let value = Int(arguments[marker + 1]), value > 0 else { return nil }
+        return value
+    }
+
+    private func emitTypedProseABPayload(_ payload: [String: Any]) {
+        let json = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("===TYPED_PROSE_AB_REPORT===\n\(json)", forType: .string)
+        print("===TYPED_PROSE_AB_REPORT_BEGIN===")
+        print(json)
+        print("===TYPED_PROSE_AB_REPORT_END===")
+        exit(0)
     }
 
     /// Runs the Phase 2 coverage-routing evidence probe: replays this store's real matter-chat
