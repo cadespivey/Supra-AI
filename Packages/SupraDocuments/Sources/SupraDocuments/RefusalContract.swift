@@ -43,8 +43,8 @@ public enum ResponseShape: String, Sendable, Equatable {
 /// structure — every sentence must be a pure refusal statement (an anchored refusal
 /// clause with no assertion payload and no continuation clause). Anything the grammar
 /// does not affirmatively accept is an answer or a mixed response and flows to the
-/// ordinary citation checks. There is deliberately no conjunction blacklist here:
-/// unknown phrasings fall OUT of the refusal shape, never into it.
+/// ordinary citation checks. The accepted introduction and topic complement are both
+/// finite grammars: unknown phrasings fall OUT of the refusal shape, never into it.
 public enum RefusalContract {
     /// The exact reply the grounded-Q&A prompt instructs the model to produce when the
     /// sources do not support an answer.
@@ -101,8 +101,8 @@ public enum RefusalContract {
     ///    - the sentence carries NO assertion payload (digits, currency, @, quotes),
     ///    - the sentence carries NO clause-delimiting punctuation (, ; : parentheses
     ///      or dashes) — a continuation clause disqualifies the shape,
-    ///    - at most 3 tokens precede the refusal clause (room for "Unfortunately the
-    ///      provided …", not for a leading assertion), and
+    ///    - only a whitelisted source/inability introduction may precede the refusal
+    ///      clause (room for "Unfortunately, the provided …", not an assertion), and
     ///    - the tail after the refusal verb parses as a short object (≤ 3 tokens)
     ///      optionally followed by a topic complement introduced by a whitelisted
     ///      marker ("about/regarding/whether/when/…"). The whitelist is an affirmative
@@ -123,7 +123,7 @@ public enum RefusalContract {
         for pattern in corePatterns {
             for coreRange in matchRanges(of: pattern, in: normalized) {
                 let prefixTokens = tokens(of: String(normalized[..<coreRange.lowerBound]))
-                guard prefixTokens.count <= 3 else { continue }
+                guard prefixParsesAsRefusalIntroduction(prefixTokens) else { continue }
                 let tailTokens = tokens(of: String(normalized[coreRange.upperBound...]))
                 if tailParsesAsRefusalObject(tailTokens) { return true }
             }
@@ -170,6 +170,27 @@ public enum RefusalContract {
 
     // MARK: - Structural guards
 
+    /// Words that may introduce the anchored refusal clause. This is intentionally
+    /// exact: a token-count cap allowed arbitrary short assertions such as "buyer
+    /// admits the sources do not support …" to masquerade as refusals.
+    private static func prefixParsesAsRefusalIntroduction(_ prefix: [String]) -> Bool {
+        let normalized = prefix.map(stripTerminalPunctuation)
+        let withoutDiscourseMarker: ArraySlice<String>
+        if normalized.first == "unfortunately" {
+            withoutDiscourseMarker = normalized.dropFirst()
+        } else {
+            withoutDiscourseMarker = normalized[...]
+        }
+        return allowedRefusalIntroductions.contains(Array(withoutDiscourseMarker))
+    }
+
+    private static let allowedRefusalIntroductions: Set<[String]> = [
+        [], ["the"], ["these"], ["those"], ["provided"],
+        ["the", "provided"], ["the", "available"], ["the", "retrieved"],
+        ["the", "cited"], ["the", "supplied"],
+        ["i"], ["i", "am"], ["im"], ["it", "is"], ["its"],
+    ]
+
     /// Material a refusal cannot carry: numbers (dates, amounts, section numbers,
     /// citation-label digits), currency, or addresses. A "refusal" carrying any of
     /// these is asserting something.
@@ -194,7 +215,15 @@ public enum RefusalContract {
     private static func tailParsesAsRefusalObject(_ tail: [String]) -> Bool {
         for objectLength in 0...min(3, tail.count) {
             if objectLength == tail.count { return true }
-            if topicMarkers.contains(stripTerminalPunctuation(tail[objectLength])) { return true }
+            guard topicMarkers.contains(stripTerminalPunctuation(tail[objectLength])) else {
+                continue
+            }
+            let topic = tail.dropFirst(objectLength + 1).map(stripTerminalPunctuation)
+            guard !topic.isEmpty, topic.count <= 12 else { continue }
+            guard topic.allSatisfy({ !topicContinuationMarkers.contains($0) }) else {
+                continue
+            }
+            return true
         }
         return false
     }
@@ -206,6 +235,14 @@ public enum RefusalContract {
     private static let topicMarkers: Set<String> = [
         "about", "regarding", "concerning", "to", "from", "whether",
         "when", "where", "who", "whom", "what", "which", "how", "why",
+    ]
+
+    /// A topic complement names what cannot be answered; it cannot coordinate or
+    /// explain a second clause. Rejecting ambiguous compound topics is the safe
+    /// direction because rejection restores ordinary citation review.
+    private static let topicContinuationMarkers: Set<String> = [
+        "and", "but", "yet", "because", "although", "though", "while",
+        "whereas", "however", "therefore", "nevertheless", "nonetheless",
     ]
 
     private static func stripTerminalPunctuation(_ token: String) -> String {
