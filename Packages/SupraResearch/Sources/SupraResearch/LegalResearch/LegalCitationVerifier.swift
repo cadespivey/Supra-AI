@@ -1203,6 +1203,10 @@ public enum LegalCitationVerifier {
 
     /// Phrases that mark treatment as something other than the holding.
     ///
+    /// This is a deliberately CONSERVATIVE lexical heuristic for review-gating — it
+    /// recognizes bounded formulations by which courts expressly decline to decide; it
+    /// is not, and must not be presented as, a semantic holding/dicta determination.
+    ///
     /// Word-bounded, so "dictates" is no longer dicta and "mighty" is no longer a hedge. Two
     /// needles from the substring list are deliberately GONE rather than bounded:
     ///
@@ -1211,17 +1215,22 @@ public enum LegalCitationVerifier {
     /// - `might` — ordinary hedging that survives into a holding ("however slight the prejudice
     ///   might be").
     ///
-    /// Both marked genuine holdings as dicta far more often than they caught real dicta. The
-    /// narrower phrases that follow capture what those two were reaching for — a court expressly
-    /// declining to resolve the question — without sweeping in every hedge.
+    /// Both marked genuine holdings as dicta far more often than they caught real dicta. What
+    /// they were reaching for is captured instead by the bounded express-non-decision
+    /// formulations below (Phase 3C, review finding #4): "do not reach", "decline to
+    /// reach/decide/resolve/address", "leave open", "express no view", and
+    /// "assume without deciding" (via `without deciding`).
     private static let nonholdingMarkerPatterns = [
         #"\bdicta\b"#,
         #"\bdictum\b"#,
         #"\bdissent(s|ed|ing)?\b"#,
-        #"\bdeclines? to decide\b"#,
+        #"\bdeclin(?:e|es|ed|ing) to (?:decide|reach|resolve|address)\b"#,
         #"\bdo(es)? not decide\b"#,
+        #"\b(?:do|does|did) not reach\b"#,
         #"\bneed not (decide|reach)\b"#,
         #"\bwithout deciding\b"#,
+        #"\b(?:leave|leaves|left)(?: (?:that|this|the) (?:question|issue|matter))? open\b"#,
+        #"\bexpress(?:es|ed|ing)? no (?:view|opinion)\b"#,
         #"\barguendo\b"#,
     ]
 
