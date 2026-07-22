@@ -271,6 +271,12 @@ final class AppEnvironment: ObservableObject {
            !storeResult.isFallback, storeResult.recoveryState == nil {
             Task { await self.runCoverageShadowProbeIfRequested() }
         }
+        // Headless capability run, triggered from init for the same reason as the coverage probe:
+        // `bootstrap()` is a view `.task` that never fires in a windowless launch.
+        if ProcessInfo.processInfo.arguments.contains("-runCapabilityProbe"),
+           !storeResult.isFallback, storeResult.recoveryState == nil {
+            Task { await self.runCapabilityProbeIfRequested() }
+        }
     }
 
     /// Loads persisted state and refreshes runtime status on launch.
@@ -399,6 +405,91 @@ final class AppEnvironment: ObservableObject {
     /// (`embedder: nil`) so it does not depend on the runtime XPC/embedding model: a reliable,
     /// clearly-labeled lower bound (`usedSemantic: false`). The Diagnostics button runs the same
     /// probe with the real embedder for the full semantic signal.
+    /// Headless capability run (`-runCapabilityProbe`): loads the chat model this app would
+    /// normally use, runs the reasoning capability probe against it, emits the tally as delimited
+    /// JSON on the same three channels as the coverage probe, and exits.
+    ///
+    /// Unlike the coverage probe, this one genuinely needs the runtime: typed generation is what
+    /// it measures. It therefore loads a model via the ordinary `ensureLoadedChatModelID` path
+    /// rather than assuming one is already loaded — nothing loads a model in a windowless launch.
+    /// `SignedReleaseSmokeRunner` is the precedent that XPC connect/load/generate works without a
+    /// rendered window.
+    ///
+    /// The payload also lists every registered model, because the question this exists to answer
+    /// ("do I have a model that can do typed generation?") needs the inventory as much as the
+    /// score — and the model store is inside the TCC-protected container, unreadable from a shell.
+    ///
+    /// Read-only with respect to matter data. Release only, per the launch-correct-build rule.
+    func runCapabilityProbeIfRequested() async {
+        guard ProcessInfo.processInfo.arguments.contains("-runCapabilityProbe") else { return }
+        modelLibrary.refresh()
+        let registered = modelLibrary.models.map { model -> [String: Any] in
+            [
+                "displayName": model.displayName,
+                "isActive": model.isActive,
+                "validationStatus": model.validationStatus ?? "none",
+            ]
+        }
+
+        var payload: [String: Any] = ["registeredModels": registered]
+        defer { emitCapabilityProbePayload(payload) }
+
+        guard !registered.isEmpty else {
+            payload["status"] = "no_models_registered"
+            return
+        }
+
+        let resolution = await modelLibrary.ensureLoadedChatModelID(for: .legalReasoning)
+        switch resolution {
+        case let .failure(issue):
+            payload["status"] = "model_load_failed"
+            payload["detail"] = String(describing: issue)
+            return
+        case .success:
+            break
+        }
+
+        let probedName = modelLibrary.models.first { $0.id == modelLibrary.loadedModelID?.rawValue.uuidString }?.displayName
+        payload["probedModel"] = probedName ?? "unknown"
+
+        guard let report = await runReasoningCapabilityProbe() else {
+            payload["status"] = "probe_unavailable"
+            return
+        }
+        payload["status"] = "ok"
+        payload["total"] = report.total
+        payload["generated"] = report.generated
+        payload["firstAttempt"] = report.firstAttempt
+        payload["fellBack"] = report.fellBack
+        payload["refusalExpected"] = report.refusalExpected
+        payload["refusalCorrect"] = report.refusalCorrect
+        payload["successRate"] = report.successRate
+        payload["firstAttemptRate"] = report.firstAttemptRate
+        payload["fallbackRate"] = report.fallbackRate
+        payload["avgAttempts"] = report.avgAttempts
+        payload["refusalAccuracy"] = report.refusalAccuracy
+        // The decision this probe exists to inform: typed generation is viable only when the model
+        // holds the schema. An instruct model clears this; a reasoning distill does not.
+        payload["typedGenerationViable"] = report.generated == report.total && report.total > 0
+    }
+
+    /// Writes the capability payload to pasteboard, stdout, and a temp file, then exits — the same
+    /// three channels the coverage probe uses, because a GUI app's stdout is not captured and the
+    /// container file is TCC-protected from other processes.
+    private func emitCapabilityProbePayload(_ payload: [String: Any]) {
+        let json = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("capability-probe-report.json")
+        try? json.data(using: .utf8)?.write(to: fileURL)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("===CAPABILITY_PROBE_REPORT===\n\(json)", forType: .string)
+        print("===CAPABILITY_PROBE_REPORT_BEGIN===")
+        print(json)
+        print("===CAPABILITY_PROBE_REPORT_END===")
+        exit(0)
+    }
+
     func runCoverageShadowProbeIfRequested() async {
         guard ProcessInfo.processInfo.arguments.contains("-runCoverageShadowProbe") else { return }
         let report = await CoverageRoutingProbe.run(store: store, embedder: nil)
