@@ -10,10 +10,20 @@ import XCTest
 ///
 /// Expected RED for this whole file: `TypedProseABScorer` and its types do not exist.
 ///
+/// REVISED in the measurement-qualification RED commit (review finding #3, methodology
+/// §3.5): the helper previously fed the scorer a literal `expectedFact` string — the
+/// substring-containment correctness the review disqualified. The 2x2 semantics these
+/// tests pin are unchanged; expectations are now typed (`TypedProseExpectedAnswer`),
+/// so the file is compile-RED again until the typed scorer exists.
+///
 /// The behavioral RED each case pins is recorded per test: these reject specific WRONG scorers,
 /// not merely the absence of one. Every fixture here is synthetic — the pilot never reads real
 /// matter data.
 final class TypedProseABScorerTests: XCTestCase {
+
+    private static let signingDate = TypedProseExpectedAnswer(
+        date: TypedProseExpectedAnswer.Day(year: 2024, month: 3, day: 3)
+    )
 
     private func outcome(
         arm: TypedProseArm = .typed,
@@ -21,7 +31,7 @@ final class TypedProseABScorerTests: XCTestCase {
         answer: String,
         flagged: Bool,
         expectsRefusal: Bool = false,
-        expectedFact: String? = "March 3, 2024"
+        expected: TypedProseExpectedAnswer? = TypedProseABScorerTests.signingDate
     ) -> TypedProseABOutcome {
         TypedProseABOutcome(
             fixtureName: fixture,
@@ -30,7 +40,7 @@ final class TypedProseABScorerTests: XCTestCase {
             requiresReview: flagged,
             warnings: [],
             expectsRefusal: expectsRefusal,
-            expectedFact: expectedFact,
+            expected: expected,
             fellBack: false
         )
     }
@@ -83,7 +93,7 @@ final class TypedProseABScorerTests: XCTestCase {
                 answer: DocumentQAPromptBuilder.unsupportedAnswerReply,
                 flagged: false,
                 expectsRefusal: true,
-                expectedFact: nil
+                expected: nil
             )
         )
         XCTAssertEqual(scored, .trueNegative)
@@ -101,7 +111,7 @@ final class TypedProseABScorerTests: XCTestCase {
                 answer: DocumentQAPromptBuilder.unsupportedAnswerReply,
                 flagged: false,
                 expectsRefusal: false,
-                expectedFact: "March 3, 2024"
+                expected: Self.signingDate
             )
         )
         XCTAssertEqual(scored, .missedError, "a refusal on an answerable question is a wrong answer")
@@ -136,7 +146,7 @@ final class TypedProseABScorerTests: XCTestCase {
         fell = TypedProseABOutcome(
             fixtureName: fell.fixtureName, arm: fell.arm, answer: fell.answer,
             requiresReview: fell.requiresReview, warnings: fell.warnings,
-            expectsRefusal: fell.expectsRefusal, expectedFact: fell.expectedFact,
+            expectsRefusal: fell.expectsRefusal, expected: fell.expected,
             fellBack: true
         )
         let report = TypedProseABScorer.report(outcomes: [fell], arm: .typed)
