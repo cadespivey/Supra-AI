@@ -1603,7 +1603,10 @@ final class AppEnvironment: ObservableObject {
         isFallback: Bool,
         recoveryState: DatabaseRecoveryState?
     ) {
-        if isUITestMode || isDemoMode || headlessProbeRequiresIsolatedStore {
+        let requiresHermeticStore = isUITestMode
+            || isDemoMode
+            || !headlessProbeResolution.permitsUserStoreOpen
+        if requiresHermeticStore {
             // Fresh, throwaway store per launch so UI tests / demo screenshots are
             // deterministic and isolated from the user's real Application Support
             // database. Model-dependent headless probes get the same isolation
@@ -1613,6 +1616,12 @@ final class AppEnvironment: ObservableObject {
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("SupraAI-\(headlessProbeRequiresIsolatedStore ? "Probe" : "UITest")-\(UUID().uuidString).sqlite")
             if let store = try? SupraStore(url: url) { return (store, false, nil) }
+
+            // A failed temporary-store open must not widen this launch's authority
+            // to the user's Application Support database. Stay hermetic even in the
+            // degraded path, without fallback-file cleanup side effects.
+            if let store = try? SupraStore.inMemory() { return (store, true, nil) }
+            return (unavailableStore(), true, nil)
         }
         do {
             return (try SupraStore.openAppSupportStore(), false, nil)

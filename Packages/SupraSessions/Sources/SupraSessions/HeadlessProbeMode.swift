@@ -48,6 +48,17 @@ public enum HeadlessProbeMode: String, CaseIterable, Sendable, Equatable {
             if case .none = self { return true }
             return false
         }
+
+        /// Whether this launch is authorized to open the user's Application
+        /// Support store. The coverage probe is the only probe whose stated job
+        /// requires real data; all other probe states fail closed to a hermetic
+        /// store, including an invalid combination of flags.
+        public var permitsUserStoreOpen: Bool {
+            switch self {
+            case .none, .single(.coverageShadow): return true
+            case .single(.capability), .single(.typedProseAB), .conflict: return false
+            }
+        }
     }
 
     /// Resolves launch arguments to at most one probe mode, in declaration order.
