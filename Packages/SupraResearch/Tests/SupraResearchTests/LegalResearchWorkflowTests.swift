@@ -259,12 +259,15 @@ final class LegalResearchWorkflowTests: XCTestCase {
         XCTAssertTrue(stateReport.issues.contains { $0.kind == .jurisdictionMismatch })
     }
 
-    func testVerifierNeverFlagsFederalCircuitAuthorityAsJurisdictionMismatch() {
-        // T-JURIS-CAFC-01 expected RED: a Federal Circuit patent case saved to a
-        // Ninth Circuit patent matter is flagged "jurisdiction_mismatch"
-        // (2026-07-20 matter-chat screenshot). The Federal Circuit's appellate
-        // jurisdiction is subject-matter national (28 U.S.C. § 1295): its law
-        // applies in every regional circuit, so it is never a forum mismatch.
+    func testVerifierFlagsFederalCircuitAuthorityWithoutEstablishedSubjectMatter() {
+        // T-JURIS-CAFC-01 — REVISED in the Phase 3C RED commit (review finding #2,
+        // methodology §3.5). This test previously asserted the Federal Circuit is
+        // NEVER a jurisdiction mismatch, encoding an unconditional national
+        // exemption. 28 U.S.C. § 1295 makes the Federal Circuit's reach
+        // SUBJECT-MATTER dependent, and this pipeline establishes no subject matter
+        // (the verifier cannot tell a patent matter from anything else) — so the
+        // fail-closed behavior is a flag that says exactly that. Expected RED: no
+        // issue is emitted today.
         let cafc = LegalAuthority(
             id: "courtlistener:opinion:4",
             authorityType: .case,
@@ -280,12 +283,15 @@ final class LegalResearchWorkflowTests: XCTestCase {
             authorities: [cafc],
             expectedJurisdiction: "United States Court of Appeals for the Ninth Circuit"
         )
-        XCTAssertFalse(
-            report.issues.contains { $0.kind == .jurisdictionMismatch },
-            report.issues.map(\.message).joined(separator: "; ")
+        XCTAssertTrue(
+            report.issues.contains {
+                $0.kind == .jurisdictionMismatch && $0.message.localizedCaseInsensitiveContains("subject-matter")
+            },
+            "Federal Circuit authority fails closed absent established subject matter, and the flag must say why: \(report.issues.map(\.message))"
         )
 
-        // Metadata-poor saved records still qualify via the court name alone.
+        // Metadata-poor saved records reach the same fail-closed answer via the
+        // court name alone.
         let namedOnly = LegalAuthority(
             id: "courtlistener:opinion:5",
             authorityType: .case,
@@ -300,8 +306,10 @@ final class LegalResearchWorkflowTests: XCTestCase {
             authorities: [namedOnly],
             expectedJurisdiction: "United States Court of Appeals for the Ninth Circuit"
         )
-        XCTAssertFalse(
-            namedReport.issues.contains { $0.kind == .jurisdictionMismatch },
+        XCTAssertTrue(
+            namedReport.issues.contains {
+                $0.kind == .jurisdictionMismatch && $0.message.localizedCaseInsensitiveContains("subject-matter")
+            },
             namedReport.issues.map(\.message).joined(separator: "; ")
         )
 

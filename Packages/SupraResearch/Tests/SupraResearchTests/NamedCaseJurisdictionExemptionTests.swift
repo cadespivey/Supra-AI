@@ -1,8 +1,11 @@
 import SupraResearch
 import XCTest
 
-/// Phase 3 (I-FIXME-1): the named-case jurisdiction exemption must be scoped to the
-/// case the question named and its own forum — not applied to the whole packet.
+/// Phase 3 (I-FIXME-1), tightened by Phase 3C (review finding #2): the named-case
+/// jurisdiction exemption must be scoped to EXACTLY the case the question named —
+/// its authority ID and packet records the same lookup strictly resolves to — never
+/// to the whole packet, and never to authorities that merely share the named case's
+/// court or derived forum.
 ///
 /// Today the caller expresses the exemption by passing `expectedJurisdiction: nil`
 /// whenever the classification carries a `citationLookup`, which switches the
@@ -89,12 +92,17 @@ final class NamedCaseJurisdictionExemptionTests: XCTestCase {
         )
     }
 
-    /// T-JANA-02. Authorities sharing the named case's forum are exempt too: asking
-    /// about a Sixth Circuit case has to let the answer cite that case's own line of
-    /// authority, which is why the blanket exemption was introduced in the first place.
+    /// T-JANA-02 — REVISED in the Phase 3C RED commit (review finding #2, methodology
+    /// §3.5). This test previously asserted that authorities merely SHARING the named
+    /// case's forum are exempt — the forum-neighborhood expansion the review ordered
+    /// removed: it exempted whole swaths of out-of-forum authority (including, via the
+    /// symmetric federal-family relation, an Ohio Supreme Court case "sharing" a Sixth
+    /// Circuit forum). The exemption is now exact: the named authority's ID and packet
+    /// records the same lookup strictly resolves to. A different case from the same
+    /// court is out-of-forum authority like any other and must be flagged.
     ///
-    /// Behavioral RED if the parameter were ignored: the neighbor is flagged.
-    func testAuthorityInTheNamedCasesForumIsExempt() {
+    /// Behavioral RED: today the neighbor is exempted, so no issue is emitted.
+    func testAuthorityMerelySharingTheNamedCasesForumIsFlagged() {
         let named = sixthCircuitNamedCase()
         let neighbor = sixthCircuitNeighbor()
         let answer = """
@@ -108,8 +116,59 @@ final class NamedCaseJurisdictionExemptionTests: XCTestCase {
             namedAuthorityLookup: "Sixth v. Circuit, 900 F.2d 100"
         )
         XCTAssertFalse(
-            report.issues.contains { $0.kind == .jurisdictionMismatch },
-            report.issues.map(\.message).joined(separator: "; ")
+            report.issues.contains {
+                $0.kind == .jurisdictionMismatch && ($0.excerpt?.contains("900 F.2d") ?? false)
+            },
+            "the named case itself stays exempt"
+        )
+        XCTAssertTrue(
+            report.issues.contains {
+                $0.kind == .jurisdictionMismatch && ($0.excerpt?.contains("901 F.2d") ?? false)
+            },
+            "a different case from the named case's court is not exempt: \(report.issues.map(\.message))"
+        )
+    }
+
+    /// T-JANA-05. The exemption extends to ALIASES of the named case — packet records
+    /// the same lookup strictly resolves to (e.g. the same opinion appearing twice
+    /// under different provider IDs) — and no further.
+    ///
+    /// Standing guard on the alias half (the duplicate is exempt today via the broader
+    /// rule and must remain exempt under the exact rule); the second assertion is RED
+    /// with T-JANA-02 (the neighbor is wrongly exempt today).
+    func testAliasRecordsOfTheNamedCaseAreExemptButNeighborsAreNot() {
+        let named = sixthCircuitNamedCase()
+        let alias = LegalAuthority(
+            id: "courtlistener:opinion:named-ca6-duplicate",
+            authorityType: .case,
+            caseName: "Sixth v. Circuit",
+            citation: "900 F.2d 100",
+            citations: ["900 F.2d 100"],
+            court: "United States Court of Appeals for the Sixth Circuit",
+            courtID: "ca6",
+            text: "The court held that the limitations period runs from discovery."
+        )
+        let neighbor = sixthCircuitNeighbor()
+        let report = LegalCitationVerifier.verify(
+            answer: """
+            Sixth v. Circuit, 900 F.2d 100, held that the limitations period runs from \
+            discovery, and Neighbor v. Sixth, 901 F.2d 200, applied the same rule.
+            """,
+            authorities: [named, alias, neighbor],
+            expectedJurisdiction: "Florida",
+            namedAuthorityLookup: "Sixth v. Circuit, 900 F.2d 100"
+        )
+        XCTAssertFalse(
+            report.issues.contains {
+                $0.kind == .jurisdictionMismatch && ($0.excerpt?.contains("900 F.2d") ?? false)
+            },
+            "records resolving to the named case (including duplicates) stay exempt"
+        )
+        XCTAssertTrue(
+            report.issues.contains {
+                $0.kind == .jurisdictionMismatch && ($0.excerpt?.contains("901 F.2d") ?? false)
+            },
+            "the exact-alias exemption must not leak to forum neighbors: \(report.issues.map(\.message))"
         )
     }
 
