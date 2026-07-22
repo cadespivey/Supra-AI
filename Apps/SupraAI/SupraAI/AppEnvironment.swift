@@ -316,6 +316,12 @@ final class AppEnvironment: ObservableObject {
 
     /// Loads persisted state and refreshes runtime status on launch.
     func bootstrap() async {
+        // Probe work is dispatched directly from init because a headless launch cannot
+        // rely on this view-driven task. If a window nevertheless materializes, do not
+        // race that probe with normal write-capable bootstrap work. This is essential
+        // for the coverage probe, whose intentionally real-store operation is read-only.
+        guard Self.headlessProbeResolution.permitsNormalBootstrap else { return }
+
         // Reconcile any validation run abandoned by a previous quit/crash so it
         // surfaces as cancelled rather than lingering as in-progress.
         try? store.validation.markUnfinishedRunsCancelled()

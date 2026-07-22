@@ -39,6 +39,15 @@ public enum HeadlessProbeMode: String, CaseIterable, Sendable, Equatable {
         /// More than one probe flag present. Probes are mutually exclusive; the
         /// caller must run NONE of them and report the conflict.
         case conflict([HeadlessProbeMode])
+
+        /// Normal app bootstrap owns write-capable recovery, queue resumption,
+        /// retention, backup, and update work. A probe launch performs only its
+        /// explicitly dispatched probe task; even the real-store coverage diagnostic
+        /// must bypass normal bootstrap to remain read-only.
+        public var permitsNormalBootstrap: Bool {
+            if case .none = self { return true }
+            return false
+        }
     }
 
     /// Resolves launch arguments to at most one probe mode, in declaration order.
