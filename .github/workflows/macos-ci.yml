@@ -23,7 +23,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Test CI failure gates
-        run: bash Tests/Scripts/test-macos-ci-gates.sh
+        run: |
+          bash Tests/Scripts/test-macos-ci-gates.sh
+          bash Tests/Scripts/test-website-audit-governance.sh
       - name: Test SupraSessions Swift 6 portability guards
         run: bash Tests/Scripts/test-supra-sessions-swift6-portability.sh
       - name: Test release ceremony gates
