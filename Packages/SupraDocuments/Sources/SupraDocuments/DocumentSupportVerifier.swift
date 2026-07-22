@@ -32,11 +32,19 @@ public struct DocumentSupportReport: Sendable, Equatable {
     public let results: [PropositionSupportResult]
     public let usedLabels: [String]
     public let unresolvedLabels: [String]
-    public let appearsUnsupported: Bool
+    /// Typed whole-response classification (Phase 3C). `.mixed` — refusal language
+    /// joined to assertion content — always requires review, even when every
+    /// extracted proposition verifies.
+    public let responseShape: ResponseShape
     public let warnings: [String]
 
+    /// True exactly when the response is a validated whole-response refusal.
+    public var appearsUnsupported: Bool { responseShape == .refusal }
+
     public var verificationStatus: OutputVerificationStatus {
-        !results.isEmpty && results.allSatisfy { $0.status == .supported }
+        // An internally inconsistent response never presents as fully supported.
+        if responseShape == .mixed { return .needsReview }
+        return !results.isEmpty && results.allSatisfy { $0.status == .supported }
             ? .allSupported
             : .needsReview
     }
@@ -72,13 +80,17 @@ public enum DocumentSupportVerifier {
         let usedLabels = CitationCoverage.usedLabels(in: answer)
         let sourceByLabel = Dictionary(sources.map { ($0.label, $0) }, uniquingKeysWith: { first, _ in first })
         let unresolvedLabels = usedLabels.filter { sourceByLabel[$0] == nil }
-        let appearsUnsupported = RefusalContract.isRefusal(answer)
+        let responseShape = RefusalContract.responseShape(of: answer)
 
         var results: [PropositionSupportResult] = []
         var warnings: [String] = []
 
+        if responseShape == .mixed {
+            warnings.append("Answer joins a refusal statement to factual assertions; the declination cannot be relied on and the assertions require review.")
+        }
+
         if propositions.isEmpty {
-            let reason = appearsUnsupported
+            let reason = responseShape == .refusal
                 ? "A refusal cannot prove absence across the retrieved packet."
                 : "No material proposition could be extracted for verification."
             results.append(try PropositionSupportResult(
@@ -108,7 +120,7 @@ public enum DocumentSupportVerifier {
         if !unresolvedLabels.isEmpty {
             warnings.append("Answer cites sources that do not resolve: \(unresolvedLabels.joined(separator: ", ")).")
         }
-        if !appearsUnsupported && usedLabels.isEmpty {
+        if responseShape != .refusal && usedLabels.isEmpty {
             warnings.append("Answer has no inline citations.")
         }
         if !scopeFullyIndexed {
@@ -120,7 +132,7 @@ public enum DocumentSupportVerifier {
             results: results,
             usedLabels: usedLabels,
             unresolvedLabels: unresolvedLabels,
-            appearsUnsupported: appearsUnsupported,
+            responseShape: responseShape,
             warnings: orderedUnique(warnings)
         )
     }
@@ -240,12 +252,15 @@ public enum DocumentSupportVerifier {
 
         var propositions: [CitedProposition] = []
         for span in spans {
-            // The canonical refusal sentence ("The provided sources do not support an
+            // A PURE refusal sentence ("The provided sources do not support an
             // answer…") asserts no material claim, so it is never a proposition. Left
             // in, it extracts as an uncited proposition and the answer is warned
             // "has no citation in the same proposition" — a false flag on every honest
             // refusal. A pure refusal instead flows to verify()'s empty-proposition
             // branch, which emits the accurate "a refusal cannot prove absence" note.
+            // The pure-sentence test is anchored (Phase 3C): a sentence that joins a
+            // refusal clause to further content fails it and IS extracted, so a mixed
+            // clause can never smuggle an assertion past verification.
             guard !RefusalContract.isRefusalSentence(span.text) else { continue }
             let labels = CitationCoverage.usedLabels(in: span.text)
             let material = materialText(span.text)

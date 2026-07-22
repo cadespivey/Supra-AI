@@ -38,16 +38,19 @@ enum GroundedAttributionAdapter {
         })
     }
 
-    /// Projects the streamed prose answer into an `AnswerDraft`. A canonical refusal (the
-    /// caller supplies `isRefusal`, reusing the lexical verifier's own `appearsUnsupported`
-    /// signal) becomes a typed `Refusal`. Otherwise each sentence carrying ≥1 `[S#]` label
-    /// becomes a `Segment` whose citations are those labels resolved to their sources'
-    /// stable SpanIDs; sentences with no label are not attribution claims in the prose
-    /// model and are not represented (so ordinary connective prose is not uncited-segment
-    /// noise). An unresolvable `[S#]` maps to a SpanID absent from the evidence set, so the
-    /// validator flags it — matching the existing unresolved-label behavior.
-    static func answerDraft(answer: String, sources: [GroundedSpanInput], isRefusal: Bool) -> AnswerDraft {
-        if isRefusal { return AnswerDraft(refusal: Refusal(.noCoverage)) }
+    /// Projects the streamed prose answer into an `AnswerDraft`. Only a validated
+    /// whole-response refusal (`shape == .refusal`, the typed classification from
+    /// `RefusalContract.responseShape`) becomes a typed `Refusal` — a `.mixed` response
+    /// (a refusal clause joined to assertions) projects its cited assertions as
+    /// segments so the exact validator sees them, closing the fast path the Phase 3C
+    /// review flagged. Otherwise each sentence carrying ≥1 `[S#]` label becomes a
+    /// `Segment` whose citations are those labels resolved to their sources' stable
+    /// SpanIDs; sentences with no label are not attribution claims in the prose model
+    /// and are not represented (so ordinary connective prose is not uncited-segment
+    /// noise). An unresolvable `[S#]` maps to a SpanID absent from the evidence set, so
+    /// the validator flags it — matching the existing unresolved-label behavior.
+    static func answerDraft(answer: String, sources: [GroundedSpanInput], shape: ResponseShape) -> AnswerDraft {
+        if shape == .refusal { return AnswerDraft(refusal: Refusal(.noCoverage)) }
         let labelToSpan = Dictionary(sources.map { ($0.label, SpanID($0.sourceID)) }, uniquingKeysWith: { first, _ in first })
         var segments: [Segment] = []
         for sentence in sentences(in: answer) {
@@ -59,8 +62,8 @@ enum GroundedAttributionAdapter {
         return AnswerDraft(segments: segments)
     }
 
-    static func shadowValidate(answer: String, sources: [GroundedSpanInput], isRefusal: Bool) -> ValidationResult {
-        let draft = answerDraft(answer: answer, sources: sources, isRefusal: isRefusal)
+    static func shadowValidate(answer: String, sources: [GroundedSpanInput], shape: ResponseShape) -> ValidationResult {
+        let draft = answerDraft(answer: answer, sources: sources, shape: shape)
         return AttributionValidator.validate(draft: draft, evidence: evidenceSet(from: sources))
     }
 

@@ -191,28 +191,39 @@ public struct CitationCheckResult: Sendable, Equatable {
     public var usedLabels: [String]
     public var unresolvedLabels: [String]
     public var hasInlineCitations: Bool
-    public var appearsUnsupported: Bool
+    /// Typed whole-response classification (Phase 3C): the ONLY value that may
+    /// suppress the citation checks is `.refusal` — every sentence a pure refusal
+    /// statement. `.mixed` always requires review.
+    public var responseShape: ResponseShape
     public var citedLowConfidenceLabels: [String]
     public var citedFromIncompleteScope: Bool
 
+    /// True exactly when the response is a validated whole-response refusal. Derived
+    /// from `responseShape` so no caller can hold a refusal signal that disagrees
+    /// with the typed shape.
+    public var appearsUnsupported: Bool { responseShape == .refusal }
+
     /// The answer needs review when it is a substantive answer that lacks inline
     /// citations or cites labels that do not resolve, or when generated from an
-    /// incomplete scope. An explicit "sources do not support" answer is valid only
-    /// when it cites nothing resolvable — a substantive answer that merely contains
-    /// a refusal-like phrase must not skip the citation checks.
+    /// incomplete scope. Only a whole-response refusal skips the citation checks —
+    /// a response that joins a refusal-like clause to any assertion is `.mixed` and
+    /// always requires review, cited or not.
     public var requiresReview: Bool {
         // Hallucinated/unresolved citation labels always force review, even if the
         // text also contains a refusal-like phrase.
         if !unresolvedLabels.isEmpty { return true }
+        // Internally inconsistent output never ships unreviewed.
+        if responseShape == .mixed { return true }
         // A genuine refusal cites nothing resolvable.
-        if appearsUnsupported && usedLabels.isEmpty { return citedFromIncompleteScope }
+        if responseShape == .refusal && usedLabels.isEmpty { return citedFromIncompleteScope }
         return !hasInlineCitations || citedFromIncompleteScope
     }
 
     public var warnings: [String] {
         var result: [String] = []
         if !unresolvedLabels.isEmpty { result.append("Answer cites sources that do not resolve: \(unresolvedLabels.joined(separator: ", ")).") }
-        if !appearsUnsupported && !hasInlineCitations { result.append("Answer has no inline citations.") }
+        if responseShape == .mixed { result.append("Answer joins a refusal statement to factual assertions; the declination cannot be relied on and the assertions require review.") }
+        if responseShape != .refusal && !hasInlineCitations { result.append("Answer has no inline citations.") }
         if !citedLowConfidenceLabels.isEmpty { result.append("Cites low-confidence OCR sources: \(citedLowConfidenceLabels.joined(separator: ", ")).") }
         if citedFromIncompleteScope { result.append("Generated from an incompletely indexed scope.") }
         return result
@@ -245,13 +256,12 @@ public enum CitationCoverage {
         let available = Set(availableLabels)
         let used = usedLabels(in: answer)
         let unresolved = used.filter { !available.contains($0) }
-        let unsupported = RefusalContract.isRefusal(answer)
         let citedLowConfidence = used.filter { lowConfidenceLabels.contains($0) }
         return CitationCheckResult(
             usedLabels: used,
             unresolvedLabels: unresolved,
             hasInlineCitations: !used.isEmpty,
-            appearsUnsupported: unsupported,
+            responseShape: RefusalContract.responseShape(of: answer),
             citedLowConfidenceLabels: citedLowConfidence,
             citedFromIncompleteScope: !scopeFullyIndexed
         )
