@@ -1,13 +1,7 @@
 import SupraCore
 import XCTest
 
-/// A measured baseline of `ModelRouter.routePrompt`'s keyword inference, recorded so the Phase 4
-/// classifier work has something concrete to beat.
-///
-/// These are CHARACTERIZATION tests, not gates on new behavior: every assertion states what the
-/// router does TODAY, and the ones marked as defects are expected to be deliberately flipped when
-/// a semantic classifier replaces `looksLegal`. They are green on the current tree by
-/// construction.
+/// Phase 4 regression coverage for `ModelRouter.routePrompt`'s legal-intent inference.
 ///
 /// ## Why this is a baseline and not a fix
 ///
@@ -35,16 +29,11 @@ final class PromptRoutingRecallBaselineTests: XCTestCase {
         router.routePrompt(prompt).route
     }
 
-    // MARK: - The defect: real legal questions route to the UNGATED route
+    // MARK: - Legal-intent recall
 
-    /// Recorded gap. Each of these is unmistakably a legal question, and each matches no marker,
-    /// so it is answered with no citation requirement, no jurisdiction check, and no authority
-    /// retrieval — from the model's parametric memory.
-    ///
-    /// PHASE 4: these assertions should be INVERTED. When a semantic classifier lands, every
-    /// prompt below must route to a gated legal route, and this test should be rewritten to
-    /// assert that.
-    func testOrdinaryLegalQuestionsCurrentlyFallToTheUngatedRoute() {
+    /// T-RTE-01: each question expresses legal intent without relying on the old marker list.
+    /// Phase 4 must route every one through the citation and jurisdiction gates.
+    func testOrdinaryLegalQuestionsUseTheGatedRoute() {
         let missed = [
             "What did the Ninth Circuit say about arbitration clauses?",
             "Can my landlord keep my security deposit?",
@@ -55,13 +44,13 @@ final class PromptRoutingRecallBaselineTests: XCTestCase {
         ]
         for prompt in missed {
             let route = mode(prompt)
-            XCTAssertFalse(
+            XCTAssertTrue(
                 route.requiresCitations,
-                "BASELINE (defect): \(prompt) routes ungated — Phase 4 must flip this"
+                "legal question must require citations: \(prompt)"
             )
-            XCTAssertFalse(
+            XCTAssertTrue(
                 route.requiresJurisdiction,
-                "BASELINE (defect): \(prompt) skips the jurisdiction gate"
+                "legal question must require jurisdiction: \(prompt)"
             )
         }
     }
