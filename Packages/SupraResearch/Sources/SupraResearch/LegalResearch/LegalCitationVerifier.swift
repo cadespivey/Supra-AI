@@ -216,12 +216,12 @@ public enum LegalCitationVerifier {
             for citation in extracted {
                 guard let authority = supportingAuthority(for: citation, among: authorities) else { continue }
                 guard !exemptAuthorityIDs.contains(authority.id) else { continue }
-                if isOutOfJurisdiction(authority, expected: expectedJurisdiction),
+                if let message = jurisdictionMismatchMessage(for: authority, expected: expectedJurisdiction),
                    flaggedExcerpts.insert(citation).inserted {
                     issues.append(
                         LegalVerificationIssue(
                             kind: .jurisdictionMismatch,
-                            message: "The cited authority does not clearly belong to the requested jurisdiction (\(expectedJurisdiction)).",
+                            message: message,
                             excerpt: citation
                         )
                     )
@@ -235,11 +235,11 @@ public enum LegalCitationVerifier {
                     for index in packetLabelIndices(in: label) where index >= 1 && index <= packetSize {
                         let authority = authorities[index - 1]
                         guard !exemptAuthorityIDs.contains(authority.id) else { continue }
-                        if isOutOfJurisdiction(authority, expected: expectedJurisdiction),
+                        if let message = jurisdictionMismatchMessage(for: authority, expected: expectedJurisdiction),
                            flaggedExcerpts.insert(label).inserted {
                             issues.append(LegalVerificationIssue(
                                 kind: .jurisdictionMismatch,
-                                message: "The cited authority does not clearly belong to the requested jurisdiction (\(expectedJurisdiction)).",
+                                message: message,
                                 excerpt: label
                             ))
                         }
@@ -842,21 +842,21 @@ public enum LegalCitationVerifier {
     }
 
     /// The authorities exempt from the jurisdiction check because the question named
-    /// one of them: the named authority itself, plus any authority sharing its forum.
+    /// one of them: the named authority's exact ID plus packet records the same
+    /// lookup strictly resolves to (aliases — e.g. the same opinion appearing twice
+    /// under different provider IDs). Nothing else: an authority that merely shares
+    /// the named case's court or a forum derived from it is out-of-forum authority
+    /// like any other (Phase 3C, review finding #2 — the forum-neighborhood
+    /// expansion silently exempted, via the symmetric federal-family relation, even
+    /// a state supreme court "sharing" a federal circuit's footprint).
     ///
     /// The exemption used to be expressed by the caller passing no expected
     /// jurisdiction at all, which switched a HARD gate off for every authority in the
     /// answer. Since a named-case lookup can be *synthesized* from prior turns by the
     /// anaphora heuristic, a misfire silently disabled jurisdiction verification
-    /// wholesale (I-FIXME-1). Anchoring the exemption to authorities actually present
-    /// in the packet bounds the damage: a lookup that resolves to nothing now exempts
-    /// nothing.
-    ///
-    /// The named case's own forum is included because that is what the blanket
-    /// exemption was really protecting — asking about a Sixth Circuit case has to let
-    /// the answer cite that case's line of authority. Membership is decided by
-    /// `JurisdictionScopeResolver`, the same hierarchy relation used everywhere else,
-    /// so the neighborhood is the named court's actual scope rather than a name match.
+    /// wholesale (I-FIXME-1). Anchoring the exemption to authorities the lookup
+    /// actually resolves to bounds the damage in both regimes: a lookup that resolves
+    /// to nothing exempts nothing, and a lookup that resolves exempts only that case.
     private static func jurisdictionExemptAuthorityIDs(
         namedAuthorityLookup: String?,
         among authorities: [LegalAuthority]
@@ -864,61 +864,66 @@ public enum LegalCitationVerifier {
         guard
             let lookup = namedAuthorityLookup?.trimmingCharacters(in: .whitespacesAndNewlines),
             !lookup.isEmpty,
-            let named = supportingAuthority(for: lookup, among: authorities)
+            supportingAuthority(for: lookup, among: authorities) != nil
         else {
             return []
         }
-        var exempt: Set<String> = [named.id]
-        // Describe the named case's forum with whatever metadata it carries; saved
-        // authorities often have the court name but not the courtID, or vice versa.
-        let forums = [named.courtID, named.court, named.jurisdiction]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard !forums.isEmpty else { return exempt }
-        for authority in authorities where authority.id != named.id {
-            let sharesForum = forums.contains { forum in
-                JurisdictionScopeResolver.shared.verdict(
-                    expected: forum,
-                    authorityCourt: authority.court,
-                    authorityJurisdiction: authority.jurisdiction,
-                    authorityCourtID: authority.courtID
-                ) == .withinScope
-            }
-            if sharesForum { exempt.insert(authority.id) }
-        }
-        return exempt
+        // Every packet record the lookup independently, strictly resolves to is the
+        // same case under an alias; membership uses the same strict matcher as
+        // citation support, never containment or forum derivation.
+        return Set(
+            authorities
+                .filter { supportingAuthority(for: lookup, among: [$0]) != nil }
+                .map(\.id)
+        )
     }
 
-    /// Whether a cited authority sits outside the requested jurisdiction.
+    /// The jurisdiction-mismatch message for a cited authority, or `nil` when the
+    /// authority's relationship to the requested forum is acceptable.
     ///
-    /// Decided from the court hierarchy (`JurisdictionScopeResolver`), which resolves
-    /// both sides to catalog courts and answers from their relations — nationally
-    /// binding authority, the same court under a different notation, the same state, a
-    /// federal court sitting in the requested state, a district court under the
-    /// requested circuit. This replaces a substring comparison that both accepted an
-    /// Arkansas authority for a Kansas matter and rejected "…for the 11th Circuit" for
-    /// an "…for the Eleventh Circuit" matter, along with the hand-maintained
-    /// nationally-binding needle list it forced.
+    /// Decided from the directional `AuthorityRelationship` (Phase 3C) — this hard
+    /// gate consumes the typed relation and states its accepted set explicitly,
+    /// rather than a generic "within scope" boolean:
     ///
-    /// When the hierarchy cannot resolve a side, the check falls back to *exact*
-    /// normalized equality — never containment — so an unrecognized court is flagged
-    /// rather than waved through. That is the fail-closed direction: this issue is a
-    /// safety flag, and the message says the authority does not *clearly* belong.
-    private static func isOutOfJurisdiction(_ authority: LegalAuthority, expected: String) -> Bool {
-        switch JurisdictionScopeResolver.shared.verdict(
+    /// - Accepted: the same court, controlling superior authority, the same federal
+    ///   family, the same state, and a FEDERAL authority sitting in an expected STATE
+    ///   forum (it applies that state's law — flagging every such cite would bury
+    ///   real mismatches in noise).
+    /// - Flagged: a state authority inside an expected federal forum's footprint (a
+    ///   state court is not part of the federal hierarchy), subject-matter-dependent
+    ///   authority (the Federal Circuit) because this pipeline establishes no subject
+    ///   matter — fail closed — and anything outside scope.
+    /// - `.indeterminate` falls back to *exact* normalized equality — never
+    ///   containment — so an unrecognized court is flagged rather than waved through.
+    ///
+    /// The ranker chooses its own accepted set in `LegalAuthorityRanker`; the two
+    /// consumers deliberately do not share a generic definition.
+    private static func jurisdictionMismatchMessage(
+        for authority: LegalAuthority,
+        expected: String
+    ) -> String? {
+        switch JurisdictionScopeResolver.shared.relationship(
             expected: expected,
             authorityCourt: authority.court,
             authorityJurisdiction: authority.jurisdiction,
             authorityCourtID: authority.courtID
         ) {
-        case .withinScope:
-            return false
+        case .sameCourt, .controllingSuperior, .sameFederalFamily, .sameStateNoncontrolling:
+            return nil
+        case .geographicallyRelated(.federalAuthorityInExpectedState):
+            return nil
+        case .geographicallyRelated(.stateAuthorityInExpectedFederalFootprint):
+            return "The cited authority is a state-court decision; it is not part of the requested federal jurisdiction's hierarchy (\(expected))."
+        case .subjectMatterDependent:
+            return "The cited authority's jurisdiction is subject-matter limited (e.g., the Federal Circuit), and no qualifying subject matter is established for the requested jurisdiction (\(expected))."
         case .outsideScope:
-            return true
+            return "The cited authority does not clearly belong to the requested jurisdiction (\(expected))."
         case .indeterminate:
             let expectedKey = normalized(expected)
             let fields = [authority.jurisdiction, authority.court, authority.courtID].compactMap { $0 }
-            return !fields.contains { normalized($0) == expectedKey }
+            return fields.contains { normalized($0) == expectedKey }
+                ? nil
+                : "The cited authority does not clearly belong to the requested jurisdiction (\(expected))."
         }
     }
 

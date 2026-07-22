@@ -103,27 +103,38 @@ public enum LegalAuthorityRanker {
         return RankedLegalAuthority(authority: authority, score: score, reasons: reasons)
     }
 
-    /// Whether an authority sits in the requested jurisdiction, for ranking purposes.
+    /// Whether an authority earns the jurisdiction bonus, for ranking purposes.
     ///
-    /// Shares `JurisdictionScopeResolver` with `LegalCitationVerifier`, so retrieval
-    /// ranking and citation verification answer this question the same way. The
-    /// substring comparison this replaces both credited an Arkansas authority in a
-    /// Kansas matter (ranking out-of-forum law above controlling law) and denied
-    /// "…for the 11th Circuit" a match in an "…for the Eleventh Circuit" matter.
+    /// Consumes the directional `AuthorityRelationship` (Phase 3C) and states this
+    /// consumer's OWN accepted set — deliberately not shared with the verifier's hard
+    /// gate, per the review: each consumer chooses what a relationship is worth.
     ///
-    /// `.indeterminate` falls back to exact normalized equality — never containment —
-    /// mirroring the verifier. An unrecognized court simply earns no jurisdiction
-    /// bonus; ranking is advisory, so the conservative direction here is to withhold
-    /// score rather than to invent it.
+    /// - Bonus: the same court, controlling superior authority, the same federal
+    ///   family, the same state, and a federal authority sitting in a requested state
+    ///   forum (it applies that state's law and is what state-forum research surfaces).
+    /// - No bonus: a state authority merely inside a requested federal forum's
+    ///   footprint (not part of the federal hierarchy), subject-matter-dependent
+    ///   authority (the Federal Circuit — no subject matter is established here, so
+    ///   the score is withheld, fail closed), and anything outside scope.
+    /// - `.indeterminate` falls back to exact normalized equality — never
+    ///   containment. An unrecognized court simply earns no jurisdiction bonus;
+    ///   ranking is advisory, so the conservative direction is to withhold score
+    ///   rather than to invent it.
     private static func matchesJurisdiction(_ authority: LegalAuthority, requested: String) -> Bool {
-        switch JurisdictionScopeResolver.shared.verdict(
+        switch JurisdictionScopeResolver.shared.relationship(
             expected: requested,
             authorityCourt: authority.court,
             authorityJurisdiction: authority.jurisdiction,
             authorityCourtID: authority.courtID
         ) {
-        case .withinScope:
+        case .sameCourt, .controllingSuperior, .sameFederalFamily, .sameStateNoncontrolling:
             return true
+        case .geographicallyRelated(.federalAuthorityInExpectedState):
+            return true
+        case .geographicallyRelated(.stateAuthorityInExpectedFederalFootprint):
+            return false
+        case .subjectMatterDependent:
+            return false
         case .outsideScope:
             return false
         case .indeterminate:
