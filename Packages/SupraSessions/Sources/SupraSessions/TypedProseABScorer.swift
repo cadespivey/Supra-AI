@@ -10,6 +10,62 @@ public enum TypedProseArm: String, Sendable, Equatable, Codable {
     case prose
 }
 
+/// The typed ground truth a correct answer must state (measurement qualification,
+/// review finding #3). Fields are REQUESTED individually; correctness requires every
+/// requested field to be affirmatively satisfied, and for value-typed fields (money,
+/// date) the answer's affirmative values of that type must be exactly the expected
+/// value — a contradiction or an unsupported additional value fails closed. Types the
+/// fixture did not request are unconstrained.
+///
+/// `terms` is the honestly limited field: word-bounded, negation-guarded term
+/// presence. It measures term recall for rule-style answers, not semantic
+/// correctness — fixtures that only request terms are labeled by that limit.
+///
+/// Boolean/enumerated-outcome fields are deliberately absent until a fixture needs
+/// them: unmeasured machinery is how the substring scorer happened.
+public struct TypedProseExpectedAnswer: Sendable, Equatable, Codable {
+    /// A calendar day, compared as a date — never as notation.
+    public struct Day: Sendable, Equatable, Hashable, Codable {
+        public let year: Int
+        public let month: Int
+        public let day: Int
+
+        public init(year: Int, month: Int, day: Int) {
+            self.year = year
+            self.month = month
+            self.day = day
+        }
+    }
+
+    /// Expected amount in dollars, compared numerically ("$9,000", "9,000.00
+    /// dollars", and "nine thousand dollars" are the same money).
+    public var money: Decimal?
+    public var date: Day?
+    /// The entity a correct answer must attribute the fact to; all of its
+    /// significant tokens must co-occur in one non-negated sentence.
+    public var actor: String?
+    /// Word-bounded terms that must each appear in a non-negated sentence.
+    public var terms: [String]
+
+    public init(
+        money: Decimal? = nil,
+        date: Day? = nil,
+        actor: String? = nil,
+        terms: [String] = []
+    ) {
+        self.money = money
+        self.date = date
+        self.actor = actor
+        self.terms = terms
+    }
+
+    /// Whether any field is requested at all — an empty expectation can never be
+    /// satisfied (fail closed), only a refusal fixture carries none.
+    public var requestsAnything: Bool {
+        money != nil || date != nil || actor != nil || !terms.isEmpty
+    }
+}
+
 /// One scored (fixture, arm) result. Everything needed to classify it, and nothing that
 /// identifies a real matter — the pilot runs on authored fixtures only.
 public struct TypedProseABOutcome: Sendable, Equatable, Codable {
@@ -21,8 +77,8 @@ public struct TypedProseABOutcome: Sendable, Equatable, Codable {
     public let warnings: [String]
     /// True when the fixture's honest answer is a refusal.
     public let expectsRefusal: Bool
-    /// The fact a correct answer must state, for an answerable fixture. Nil when `expectsRefusal`.
-    public let expectedFact: String?
+    /// The typed ground truth for an answerable fixture. Nil when `expectsRefusal`.
+    public let expected: TypedProseExpectedAnswer?
     /// True when the path failed and degraded (typed fallback, or a failed generation).
     public let fellBack: Bool
 
@@ -33,7 +89,7 @@ public struct TypedProseABOutcome: Sendable, Equatable, Codable {
         requiresReview: Bool,
         warnings: [String],
         expectsRefusal: Bool,
-        expectedFact: String?,
+        expected: TypedProseExpectedAnswer?,
         fellBack: Bool
     ) {
         self.fixtureName = fixtureName
@@ -42,7 +98,7 @@ public struct TypedProseABOutcome: Sendable, Equatable, Codable {
         self.requiresReview = requiresReview
         self.warnings = warnings
         self.expectsRefusal = expectsRefusal
-        self.expectedFact = expectedFact
+        self.expected = expected
         self.fellBack = fellBack
     }
 }
@@ -83,12 +139,44 @@ public struct TypedProseABReport: Sendable, Equatable, Codable {
     public var correctRate: Double { total == 0 ? 0 : Double(correct) / Double(total) }
 }
 
+/// The persisted artifact of one A/B run: every raw outcome plus the per-arm reports.
+/// Deliberately timestamp-free and Codable-stable, so a published measurement can be
+/// independently RE-SCORED from its own artifact — decode `outcomes`, re-run
+/// `TypedProseABScorer.report`, and compare against the recorded reports.
+public struct TypedProseABRunRecord: Sendable, Equatable, Codable {
+    public static let currentSchemaVersion = 1
+
+    public let schemaVersion: Int
+    public let outcomes: [TypedProseABOutcome]
+    public let typed: TypedProseABReport
+    public let prose: TypedProseABReport
+
+    public init(
+        schemaVersion: Int = TypedProseABRunRecord.currentSchemaVersion,
+        outcomes: [TypedProseABOutcome],
+        typed: TypedProseABReport,
+        prose: TypedProseABReport
+    ) {
+        self.schemaVersion = schemaVersion
+        self.outcomes = outcomes
+        self.typed = typed
+        self.prose = prose
+    }
+}
+
 /// Scores typed-vs-prose pilot outcomes.
 ///
 /// Pure and model-free, so the arithmetic that decides the pilot is unit-tested independently of
 /// any generation run. The measurement it protects is the distinction between the verifier being
 /// NOISY (flagging correct answers) and the verifier WORKING (flagging wrong ones) — a raw
 /// `requiresReview` rate conflates the two, and a divergence tally between the paths sees neither.
+///
+/// Correctness is decided from TYPED expected fields, never substring containment:
+/// values are extracted from the answer (dates as dates, money as amounts), negated
+/// sentences never satisfy a field, and for a requested value type the answer's
+/// affirmative values must be exactly the expected value. The old substring test
+/// survives only as the `containsExpectedLiteral` diagnostic, which no correctness
+/// decision consumes.
 public enum TypedProseABScorer {
 
     /// Whether the answer is the one the fixture calls for.
@@ -101,8 +189,36 @@ public enum TypedProseABScorer {
         let refused = RefusalContract.isRefusal(outcome.answer)
         if outcome.expectsRefusal { return refused }
         if refused { return false }
-        guard let fact = outcome.expectedFact, !fact.isEmpty else { return false }
-        return outcome.answer.localizedCaseInsensitiveContains(fact)
+        guard let expected = outcome.expected, expected.requestsAnything else { return false }
+
+        let sentences = classifiedSentences(in: outcome.answer)
+
+        if let money = expected.money {
+            guard affirmativeValues(of: sentences, extractor: moneyValues) == [money] else { return false }
+        }
+        if let day = expected.date {
+            guard affirmativeValues(of: sentences, extractor: dateValues) == [day] else { return false }
+        }
+        if let actor = expected.actor {
+            let tokens = significantTokens(in: actor)
+            guard !tokens.isEmpty,
+                  sentences.contains(where: { !$0.negated && tokens.isSubset(of: significantTokens(in: $0.text)) })
+            else { return false }
+        }
+        for term in expected.terms {
+            guard sentences.contains(where: { !$0.negated && containsWordBounded(term, in: $0.text) }) else {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// The OLD substring test, retained strictly as a diagnostic under an honest
+    /// name. It accepts negated mentions and rejects paraphrases, so it must never be
+    /// consumed as correctness — `isCorrect` does not call it.
+    public static func containsExpectedLiteral(_ answer: String, literal: String?) -> Bool {
+        guard let literal, !literal.isEmpty else { return false }
+        return answer.localizedCaseInsensitiveContains(literal)
     }
 
     public static func classify(_ outcome: TypedProseABOutcome) -> TypedProseABCell {
@@ -137,5 +253,213 @@ public enum TypedProseABScorer {
             trueNegatives: trueNegatives,
             fellBack: mine.filter(\.fellBack).count
         )
+    }
+
+    // MARK: - Sentence structure
+
+    private struct ClassifiedSentence {
+        let text: String
+        let negated: Bool
+    }
+
+    /// Splits the answer into sentences (citation labels stripped first so `[S1]`
+    /// digits are not values; periods between digits masked so `$9,000.00` does not
+    /// end a sentence) and tags each with its negation polarity. A value found in a
+    /// negated sentence is neither credit nor contradiction — it is simply not an
+    /// affirmative statement of that value.
+    private static func classifiedSentences(in answer: String) -> [ClassifiedSentence] {
+        let unlabeled = answer.replacingOccurrences(
+            of: #"\[[A-Za-z]{1,3}\d{1,4}\]"#,
+            with: " ",
+            options: .regularExpression
+        )
+        let masked = unlabeled.replacingOccurrences(
+            of: #"(?<=\d)\.(?=\d)"#,
+            with: "\u{F8FF}",
+            options: .regularExpression
+        )
+        return masked
+            .components(separatedBy: CharacterSet(charactersIn: ".!?;\n"))
+            .map { $0.replacingOccurrences(of: "\u{F8FF}", with: ".") }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .map { ClassifiedSentence(text: $0, negated: isNegated($0)) }
+    }
+
+    private static let negationTokens: Set<String> = [
+        "no", "not", "never", "without", "none", "nor", "neither", "cannot",
+        "dont", "doesnt", "didnt", "wasnt", "werent", "isnt", "arent", "cant",
+        "couldnt", "wouldnt", "shouldnt", "hasnt", "havent",
+    ]
+
+    private static func isNegated(_ sentence: String) -> Bool {
+        // "no later than" is a deadline idiom, not a negation — the same phrase the
+        // support verifier normalizes to "due".
+        let normalized = sentence.lowercased().replacingOccurrences(of: "no later than", with: " by ")
+        return !Set(tokens(in: normalized)).isDisjoint(with: negationTokens)
+    }
+
+    private static func tokens(in text: String) -> [String] {
+        text.lowercased()
+            .replacingOccurrences(of: "’", with: "")
+            .replacingOccurrences(of: "'", with: "")
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
+    private static func significantTokens(in text: String) -> Set<String> {
+        Set(tokens(in: text).filter { $0.count >= 2 })
+    }
+
+    private static func containsWordBounded(_ term: String, in text: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: term)
+        return text.range(of: "\\b\(escaped)\\b", options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// The set of values of one type stated affirmatively (in non-negated sentences).
+    private static func affirmativeValues<Value: Hashable>(
+        of sentences: [ClassifiedSentence],
+        extractor: (String) -> [Value]
+    ) -> Set<Value> {
+        Set(sentences.filter { !$0.negated }.flatMap { extractor($0.text) })
+    }
+
+    // MARK: - Money
+
+    private static func moneyValues(in sentence: String) -> [Decimal] {
+        var values: [Decimal] = []
+        for pattern in [
+            #"\$\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)"#,
+            #"(?i)\b([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(?:dollars|usd)\b"#,
+        ] {
+            values.append(contentsOf: captures(pattern, in: sentence).compactMap { raw in
+                Decimal(string: raw.replacingOccurrences(of: ",", with: ""))
+            })
+        }
+        values.append(contentsOf: wordNumberDollarValues(in: sentence))
+        return values
+    }
+
+    /// Bounded English number-word amounts followed by "dollars"/"usd" ("nine
+    /// thousand dollars"). Deliberately small: units through ninety plus
+    /// hundred/thousand/million multipliers — enough for authored fixtures, and an
+    /// unparsed phrase simply contributes no value (fail closed).
+    private static func wordNumberDollarValues(in sentence: String) -> [Decimal] {
+        let words = tokens(in: sentence)
+        var values: [Decimal] = []
+        var index = 0
+        while index < words.count {
+            guard numberWords[words[index]] != nil else {
+                index += 1
+                continue
+            }
+            var end = index
+            while end < words.count, numberWords[words[end]] != nil || words[end] == "and" {
+                end += 1
+            }
+            if end < words.count, words[end] == "dollars" || words[end] == "usd",
+               let value = parseNumberWords(Array(words[index..<end])) {
+                values.append(value)
+            }
+            index = end + 1
+        }
+        return values
+    }
+
+    private static func parseNumberWords(_ words: [String]) -> Decimal? {
+        var total = 0
+        var current = 0
+        var sawNumber = false
+        for word in words where word != "and" {
+            guard let entry = numberWords[word] else { return nil }
+            sawNumber = true
+            switch entry {
+            case let .unit(value):
+                current += value
+            case .hundred:
+                current = max(current, 1) * 100
+            case let .multiplier(value):
+                total += max(current, 1) * value
+                current = 0
+            }
+        }
+        return sawNumber ? Decimal(total + current) : nil
+    }
+
+    private enum NumberWord {
+        case unit(Int)
+        case hundred
+        case multiplier(Int)
+    }
+
+    private static let numberWords: [String: NumberWord] = {
+        var map: [String: NumberWord] = [:]
+        let units = [
+            "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+            "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+            "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+            "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+            "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+            "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+        ]
+        for (word, value) in units { map[word] = .unit(value) }
+        map["hundred"] = .hundred
+        map["thousand"] = .multiplier(1_000)
+        map["million"] = .multiplier(1_000_000)
+        return map
+    }()
+
+    // MARK: - Dates
+
+    private static func dateValues(in sentence: String) -> [TypedProseExpectedAnswer.Day] {
+        var days: [TypedProseExpectedAnswer.Day] = []
+
+        for match in groupCaptures(#"\b(\d{4})-(\d{1,2})-(\d{1,2})\b"#, in: sentence) {
+            if let year = Int(match[0]), let month = Int(match[1]), let day = Int(match[2]) {
+                appendValidDay(year: year, month: month, day: day, to: &days)
+            }
+        }
+        for match in groupCaptures(#"\b(\d{1,2})/(\d{1,2})/(\d{4})\b"#, in: sentence) {
+            if let month = Int(match[0]), let day = Int(match[1]), let year = Int(match[2]) {
+                appendValidDay(year: year, month: month, day: day, to: &days)
+            }
+        }
+        let monthNames = months.keys.sorted { $0.count > $1.count }.joined(separator: "|")
+        let named = #"(?i)\b("# + monthNames + #")\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{4})\b"#
+        for match in groupCaptures(named, in: sentence) {
+            if let month = months[match[0].lowercased()],
+               let day = Int(match[1]), let year = Int(match[2]) {
+                appendValidDay(year: year, month: month, day: day, to: &days)
+            }
+        }
+        return days
+    }
+
+    private static func appendValidDay(year: Int, month: Int, day: Int, to days: inout [TypedProseExpectedAnswer.Day]) {
+        guard (1...12).contains(month), (1...31).contains(day) else { return }
+        days.append(TypedProseExpectedAnswer.Day(year: year, month: month, day: day))
+    }
+
+    private static let months: [String: Int] = [
+        "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+        "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+        "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9,
+        "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12,
+    ]
+
+    // MARK: - Regex helpers
+
+    private static func captures(_ pattern: String, in text: String) -> [String] {
+        groupCaptures(pattern, in: text).compactMap(\.first)
+    }
+
+    private static func groupCaptures(_ pattern: String, in text: String) -> [[String]] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).map { match in
+            (1..<match.numberOfRanges).compactMap { index in
+                Range(match.range(at: index), in: text).map { String(text[$0]) }
+            }
+        }
     }
 }

@@ -14,21 +14,22 @@ public struct TypedProseABFixture: Sendable, Equatable {
     public let name: String
     public let question: String
     public let spans: [GroundedSpanInput]
-    /// The fact a correct answer must state. Nil when the honest answer is a refusal.
-    public let expectedFact: String?
+    /// The typed ground truth a correct answer must state (never a literal to
+    /// substring-match). Nil when the honest answer is a refusal.
+    public let expected: TypedProseExpectedAnswer?
     public let expectsRefusal: Bool
 
     public init(
         name: String,
         question: String,
         spans: [GroundedSpanInput],
-        expectedFact: String?,
+        expected: TypedProseExpectedAnswer?,
         expectsRefusal: Bool
     ) {
         self.name = name
         self.question = question
         self.spans = spans
-        self.expectedFact = expectedFact
+        self.expected = expected
         self.expectsRefusal = expectsRefusal
     }
 }
@@ -56,7 +57,9 @@ public enum TypedProseABProbe {
                 spans: [GroundedSpanInput(label: "S1", sourceID: "ab/agreement",
                                           text: "This Services Agreement was executed on March 3, 2024 by both parties.",
                                           lowConfidence: false)],
-                expectedFact: "March 3, 2024",
+                expected: TypedProseExpectedAnswer(
+                    date: TypedProseExpectedAnswer.Day(year: 2024, month: 3, day: 3)
+                ),
                 expectsRefusal: false
             ),
             TypedProseABFixture(
@@ -66,7 +69,7 @@ public enum TypedProseABProbe {
                     GroundedSpanInput(label: "S1", sourceID: "ab/fee", text: "The engagement fee is $9,000.", lowConfidence: false),
                     GroundedSpanInput(label: "S2", sourceID: "ab/due", text: "Payment is due no later than April 15, 2025.", lowConfidence: false),
                 ],
-                expectedFact: "9,000",
+                expected: TypedProseExpectedAnswer(money: 9_000),
                 expectsRefusal: false
             ),
             TypedProseABFixture(
@@ -75,7 +78,7 @@ public enum TypedProseABProbe {
                 spans: [GroundedSpanInput(label: "S1", sourceID: "ab/scope",
                                           text: "This Agreement governs the scope of services and the fee schedule.",
                                           lowConfidence: false)],
-                expectedFact: nil,
+                expected: nil,
                 expectsRefusal: true
             ),
             // The verifier's false positives cluster on answers whose SOURCE prose collides with
@@ -86,7 +89,9 @@ public enum TypedProseABProbe {
                 spans: [GroundedSpanInput(label: "S1", sourceID: "ab/fca",
                                           text: "Relators must show the claim was false and material to payment.",
                                           lowConfidence: false)],
-                expectedFact: "material",
+                // Terms-only expectation: measures term recall on a rule-style
+                // answer, not semantic correctness (the field's documented limit).
+                expected: TypedProseExpectedAnswer(terms: ["false", "material"]),
                 expectsRefusal: false
             ),
             TypedProseABFixture(
@@ -95,7 +100,7 @@ public enum TypedProseABProbe {
                 spans: [GroundedSpanInput(label: "S1", sourceID: "ab/notice",
                                           text: "The letter stated: \"You are now in default under the Note.\"",
                                           lowConfidence: false)],
-                expectedFact: "default",
+                expected: TypedProseExpectedAnswer(terms: ["default"]),
                 expectsRefusal: false
             ),
             TypedProseABFixture(
@@ -104,7 +109,10 @@ public enum TypedProseABProbe {
                 spans: [GroundedSpanInput(label: "S1", sourceID: "ab/payment",
                                           text: "Alpha LLC paid the invoice in full on May 1, 2024.",
                                           lowConfidence: false)],
-                expectedFact: "May 1, 2024",
+                expected: TypedProseExpectedAnswer(
+                    date: TypedProseExpectedAnswer.Day(year: 2024, month: 5, day: 1),
+                    actor: "Alpha LLC"
+                ),
                 expectsRefusal: false
             ),
             TypedProseABFixture(
@@ -113,7 +121,7 @@ public enum TypedProseABProbe {
                 spans: [GroundedSpanInput(label: "S1", sourceID: "ab/note",
                                           text: "The Note was executed by the borrower and delivered to the lender.",
                                           lowConfidence: false)],
-                expectedFact: nil,
+                expected: nil,
                 expectsRefusal: true
             ),
         ]
@@ -170,7 +178,7 @@ public enum TypedProseABProbe {
             return TypedProseABOutcome(
                 fixtureName: fixture.name, arm: .typed, answer: "", requiresReview: true,
                 warnings: ["typed generation fell back"], expectsRefusal: fixture.expectsRefusal,
-                expectedFact: fixture.expectedFact, fellBack: true
+                expected: fixture.expected, fellBack: true
             )
         }
     }
@@ -198,7 +206,7 @@ public enum TypedProseABProbe {
             return TypedProseABOutcome(
                 fixtureName: fixture.name, arm: .prose, answer: "", requiresReview: true,
                 warnings: ["generation failed"], expectsRefusal: fixture.expectsRefusal,
-                expectedFact: fixture.expectedFact, fellBack: true
+                expected: fixture.expected, fellBack: true
             )
         }
         let answer = ReasoningContent.answer(from: CitationNormalizer.normalize(raw))
@@ -231,7 +239,7 @@ public enum TypedProseABProbe {
             requiresReview: report?.requiresReview ?? true,
             warnings: report?.warnings ?? [],
             expectsRefusal: fixture.expectsRefusal,
-            expectedFact: fixture.expectedFact,
+            expected: fixture.expected,
             fellBack: fellBack
         )
     }

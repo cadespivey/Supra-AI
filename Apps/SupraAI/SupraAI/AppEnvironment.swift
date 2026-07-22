@@ -443,6 +443,20 @@ final class AppEnvironment: ObservableObject {
                 "fellBack": report.fellBack,
             ]
         }
+        // Raw-output artifact (measurement qualification): every outcome — fixture,
+        // arm, verbatim answer, warnings, typed expectation — plus the per-arm
+        // reports, so a published number can be independently RE-SCORED from the
+        // emitted record alone. Fixture content is synthetic, so the payload still
+        // carries no client data.
+        let record = TypedProseABRunRecord(
+            outcomes: outcomes,
+            typed: TypedProseABScorer.report(outcomes: outcomes, arm: .typed),
+            prose: TypedProseABScorer.report(outcomes: outcomes, arm: .prose)
+        )
+        if let data = try? JSONEncoder().encode(record),
+           let object = try? JSONSerialization.jsonObject(with: data) {
+            payload["runRecord"] = object
+        }
     }
 
     /// A positive integer launch argument (`-flag 5`), or nil when absent or unparsable.
