@@ -19,6 +19,9 @@ public struct AttributionViolation: Sendable, Codable, Equatable {
         /// an internally inconsistent (mixed) result that must be reviewed, never
         /// fast-pathed as a clean refusal.
         case refusalCarriesAnswerContent
+        /// The draft is neither a substantive answer nor a pure refusal (for
+        /// example, completely empty or attribution attached to blank prose).
+        case malformedOutcome
     }
 
     public let kind: Kind
@@ -71,7 +74,8 @@ public enum AttributionValidator {
         // proposition. A draft that claims a refusal while also carrying answer
         // content is mixed/malformed — it falls through to segment validation with an
         // explicit violation, so it always requires review (Phase 3C, finding #1).
-        if case .refused = AnswerOutcome(validating: draft) {
+        let outcome = AnswerOutcome(validating: draft)
+        if case .refused = outcome {
             return ValidationResult(status: .refused, violations: [])
         }
 
@@ -82,6 +86,12 @@ public enum AttributionValidator {
                 kind: .refusalCarriesAnswerContent,
                 spanID: nil,
                 detail: "Draft claims a refusal but also carries answer segments; a refusal cannot contain material answer text or citations."
+            ))
+        } else if outcome == nil {
+            violations.append(AttributionViolation(
+                kind: .malformedOutcome,
+                spanID: nil,
+                detail: "Draft is neither a substantive answer nor a pure refusal."
             ))
         }
 

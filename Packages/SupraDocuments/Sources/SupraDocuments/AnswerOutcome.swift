@@ -16,22 +16,26 @@ public enum AnswerOutcome: Sendable, Equatable {
 
     /// Fail-closed validation of a tolerantly decoded draft.
     ///
-    /// - A draft with a refusal and NO non-blank segment is `.refused` (blank segments
-    ///   carry no answer content).
+    /// - A draft with a refusal and NO segment payload is `.refused` (a blank segment
+    ///   with no citations or quotes carries no answer content).
     /// - A draft with non-blank segments and no refusal is `.answered`.
     /// - A draft with both — the model refused AND asserted — is malformed: `nil`.
     /// - A draft with neither is malformed: `nil`.
     public init?(validating draft: AnswerDraft) {
-        let hasAnswerContent = draft.segments.contains {
+        let hasAnswerText = draft.segments.contains {
             !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        switch (draft.refusal, hasAnswerContent) {
-        case (let refusal?, false):
+        let hasSegmentPayload = draft.segments.contains {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !$0.citations.isEmpty
+                || !$0.quotes.isEmpty
+        }
+        if let refusal = draft.refusal {
+            guard !hasSegmentPayload else { return nil }
             self = .refused(refusal)
-        case (nil, true):
+        } else {
+            guard hasAnswerText else { return nil }
             self = .answered(draft)
-        case (_?, true), (nil, false):
-            return nil
         }
     }
 }
