@@ -91,6 +91,22 @@ final class TypedProseScorerQualificationTests: XCTestCase {
         )
     }
 
+    /// T-MQ-03A. Individually matching fields in different propositions cannot be
+    /// assembled into a correct answer. The actor must own the dated event.
+    func testRequestedFieldsMustBelongToTheSameProposition() {
+        let expected = TypedProseExpectedAnswer(
+            date: TypedProseExpectedAnswer.Day(year: 2024, month: 5, day: 1),
+            actor: "Alpha LLC"
+        )
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "Alpha LLC appears in the file. Beta Corp. paid the invoice on May 1, 2024 [S1].",
+                expected: expected
+            )),
+            "the scorer must not bind the date in Beta Corp.'s proposition to Alpha LLC"
+        )
+    }
+
     // MARK: - Contradictions and unsupported additions fail closed
 
     /// T-MQ-04. An answer that affirms the expected value AND a competing value of the
@@ -104,10 +120,10 @@ final class TypedProseScorerQualificationTests: XCTestCase {
         )
     }
 
-    /// T-MQ-05. An unsupported additional value of a REQUESTED type (a second date the
-    /// evidence never stated) fails closed; values of unrequested types are not
-    /// constrained (a fee answer may mention the due date).
-    func testUnsupportedAdditionOfRequestedTypeFailsClosed() {
+    /// T-MQ-05. Every typed value must be authorized by the fixture, even when that
+    /// value's type was not requested. Incidental evidence-backed detail is permitted
+    /// only when the fixture enumerates it.
+    func testUnsupportedAdditionOfAnyTypedValueFailsClosed() {
         XCTAssertFalse(
             TypedProseABScorer.isCorrect(outcome(
                 answer: "The agreement was signed on March 3, 2024 and again on June 9, 2025 [S1].",
@@ -118,9 +134,22 @@ final class TypedProseScorerQualificationTests: XCTestCase {
         XCTAssertTrue(
             TypedProseABScorer.isCorrect(outcome(
                 answer: "The engagement fee is $9,000, due no later than April 15, 2025 [S1] [S2].",
-                expected: TypedProseExpectedAnswer(money: 9_000)
+                expected: TypedProseExpectedAnswer(
+                    money: 9_000,
+                    allowedDates: [TypedProseExpectedAnswer.Day(year: 2025, month: 4, day: 15)]
+                )
             )),
-            "values of types the fixture did not request are unconstrained"
+            "an enumerated incidental value remains valid"
+        )
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is $9,000, due June 9, 2025 [S1].",
+                expected: TypedProseExpectedAnswer(
+                    money: 9_000,
+                    allowedDates: [TypedProseExpectedAnswer.Day(year: 2025, month: 4, day: 15)]
+                )
+            )),
+            "an invented value of an unrequested type must fail closed"
         )
     }
 
