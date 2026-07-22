@@ -27,6 +27,19 @@ run_step 'npm ci' "$npm_command" ci
 run_step 'lint' "$npm_command" run lint
 run_step 'typecheck' "$npm_command" run typecheck
 run_step 'static build' "$npm_command" run build:pages
-run_step 'dependency audit' "$npm_command" audit --audit-level=high
+# The dependency audit is the one gate here that fails because the OUTSIDE WORLD
+# changed rather than because someone changed something: a newly published advisory
+# against an unmodified tree turns it red. Blocking every merge in the repository on
+# that is a mismatch — a Swift-only change cannot introduce an npm advisory, and this
+# site is a static export, so these build-time packages never execute for a visitor.
+#
+# CI therefore sets SUPRA_SKIP_DEP_AUDIT=1 when a run touches nothing under website/,
+# and the weekly scheduled audit (.github/workflows/security-scheduled.yml) owns
+# advisory drift. Unset or 0 — including every local run — audits as before.
+if [[ "${SUPRA_SKIP_DEP_AUDIT:-0}" == "1" ]]; then
+  printf 'SKIP: dependency audit — no website/ changes in this run; the weekly scheduled audit covers advisory drift.\n'
+else
+  run_step 'dependency audit' "$npm_command" audit --audit-level=high
+fi
 run_step 'post-build public font guard' "$font_guard"
 printf '%s\n' 'Website gates passed.'
