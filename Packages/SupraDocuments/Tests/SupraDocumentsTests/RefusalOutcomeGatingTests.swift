@@ -206,6 +206,27 @@ final class RefusalOutcomeGatingTests: XCTestCase {
         )
     }
 
+    /// T-REFOUT-15. A topic marker cannot make the rest of the sentence opaque to
+    /// the grammar. The conjunction introduces an assertion, not more topic text.
+    func testTopicComplementCannotHideContinuationAssertion() {
+        let answer =
+            "The sources do not support an answer about termination and the buyer breached the agreement."
+        XCTAssertFalse(RefusalContract.isRefusal(answer))
+        XCTAssertTrue(
+            CitationCoverage.check(answer: answer, availableLabels: ["S1"]).requiresReview
+        )
+    }
+
+    /// T-REFOUT-16. The short-prefix allowance is a grammar, not permission for an
+    /// arbitrary three-token assertion before a refusal clause.
+    func testArbitraryLeadingTokensCannotHideAssertion() {
+        let answer = "Buyer admits the sources do not support an answer."
+        XCTAssertFalse(RefusalContract.isRefusal(answer))
+        XCTAssertTrue(
+            CitationCoverage.check(answer: answer, availableLabels: ["S1"]).requiresReview
+        )
+    }
+
     // MARK: - Typed path: a refusal cannot carry answer content (expected RED)
 
     /// T-REFOUT-12. Expected RED: `AttributionValidator` fast-paths any draft with a
