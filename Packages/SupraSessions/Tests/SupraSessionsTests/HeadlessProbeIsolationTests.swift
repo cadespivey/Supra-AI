@@ -76,6 +76,23 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         XCTAssertFalse(HeadlessProbeMode.coverageShadow.requiresIsolatedStore)
     }
 
+    /// T-PROBE-08. Normal bootstrap contains write-capable recovery, queue, retention,
+    /// backup, and update work. It may run only for an ordinary launch; every probe
+    /// resolution, including the real-store coverage diagnostic and a conflict, must
+    /// bypass it completely.
+    func testOnlyOrdinaryLaunchPermitsNormalBootstrap() {
+        XCTAssertTrue(HeadlessProbeMode.Resolution.none.permitsNormalBootstrap)
+        XCTAssertFalse(
+            HeadlessProbeMode.Resolution.single(.coverageShadow).permitsNormalBootstrap,
+            "the real-store coverage probe must remain read-only"
+        )
+        XCTAssertFalse(HeadlessProbeMode.Resolution.single(.capability).permitsNormalBootstrap)
+        XCTAssertFalse(HeadlessProbeMode.Resolution.single(.typedProseAB).permitsNormalBootstrap)
+        XCTAssertFalse(
+            HeadlessProbeMode.Resolution.conflict([.coverageShadow, .capability]).permitsNormalBootstrap
+        )
+    }
+
     // MARK: - Disk-truth model registry on an isolated store
 
     /// T-PROBE-05. A manifest-verified model folder registers into the isolated
