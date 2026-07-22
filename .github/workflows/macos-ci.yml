@@ -139,28 +139,23 @@ jobs:
           node-version: 22.13.0
           cache: npm
           cache-dependency-path: website/package-lock.json
-      # Lint, typecheck, build, and the font guard always run: they fail only when
-      # someone changed something. The dependency audit fails when the outside world
-      # changes, so it is scoped to runs that actually touch website/ — see the comment
-      # in Scripts/test-website.sh. Fails SAFE: an unresolvable base audits.
+      # Lint, typecheck, build, and the font guard always run. The dependency audit
+      # also runs when website content OR any input controlling that audit changes.
+      # The shared scope script is executable policy with hermetic tests; an
+      # unresolvable comparison fails closed to auditing.
       - name: Detect website changes
         id: website_changes
         env:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
           set -euo pipefail
-          if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            echo 'base commit unavailable; auditing'
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if git diff --name-only "${BASE_SHA}" HEAD -- website/ | grep -q .; then
-            echo 'website/ changed; auditing'
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          changed="$(bash Scripts/website-dependency-audit-required.sh "${BASE_SHA:-}" HEAD)"
+          if [ "$changed" = 'true' ]; then
+            echo 'website audit input changed; auditing'
           else
-            echo 'website/ unchanged; skipping dependency audit'
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'website audit inputs unchanged; skipping dependency audit'
           fi
+          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
       - name: Run deterministic website gates
         env:
           SUPRA_SKIP_DEP_AUDIT: ${{ steps.website_changes.outputs.changed == 'true' && '0' || '1' }}

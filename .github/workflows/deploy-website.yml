@@ -6,12 +6,16 @@ on:
       - main
     paths:
       - "website/**"
+      - "Scripts/test-website.sh"
       - "Scripts/verify-public-font-license.sh"
+      - "Scripts/website-dependency-audit-required.sh"
       - "Scripts/verify-public-repository-assets.sh"
       - "Tests/Scripts/Fixtures/PublicRepositoryAssets/**"
       - "Tests/Scripts/test-verify-public-repository-assets.sh"
       - "Docs/Website-Asset-Licensing.md"
+      - ".github/workflows/macos-ci.yml"
       - ".github/workflows/deploy-website.yml"
+      - ".github/workflows/security-scheduled.yml"
   workflow_dispatch:
 
 permissions:
