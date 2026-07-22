@@ -277,14 +277,24 @@ public enum LegalCitationVerifier {
     /// absent from the source as a whole word; structural/organizational words are
     /// excluded so headings and entity names are not mistaken for people.
     public static func verifyGroundedEntities(answer: String, sourceText: String) -> [LegalVerificationIssue] {
+        verifyGroundedEntities(answer: answer, sourceTexts: [sourceText])
+    }
+
+    /// Per-source overload: a name must ground within a SINGLE packed source. Tokens
+    /// drawn from two different documents are not a name the record states.
+    ///
+    /// Email and phone grounding stays pooled across sources — those are exact-value
+    /// matches with no cross-source assembly to exploit, and narrowing them would only
+    /// add false flags.
+    public static func verifyGroundedEntities(answer: String, sourceTexts: [String]) -> [LegalVerificationIssue] {
         // PDF text extraction splits words at line-break hyphens and soft hyphens
-        // ("Ritche-\nson"); the model reads through the split, so the whole-word
-        // haystack must include the rejoined text too or a name plainly on the page
-        // gets flagged as inferred.
-        let rejoinedSource = dehyphenatedText(sourceText)
-        let sourceWords = wordTokenSet(sourceText).union(wordTokenSet(rejoinedSource))
-        let sourceLower = (sourceText + "\n" + rejoinedSource).lowercased()
-        let sourceDigits = sourceText.lowercased().filter(\.isNumber)
+        // ("Ritche-\nson"); the model reads through the split, so each source
+        // contributes its rejoined text as a separate sequence too, or a name plainly
+        // on the page gets flagged as inferred.
+        let rejoinedSources = sourceTexts.map(dehyphenatedText)
+        let nameSequences = (sourceTexts + rejoinedSources).map(tokenSequence)
+        let sourceLower = (sourceTexts + rejoinedSources).joined(separator: "\n").lowercased()
+        let sourceDigits = sourceTexts.joined(separator: "\n").lowercased().filter(\.isNumber)
         var issues: [LegalVerificationIssue] = []
         var seen = Set<String>()
 
@@ -296,7 +306,7 @@ public enum LegalCitationVerifier {
         for candidate in personNameCandidates(in: answer) {
             let tokens = significantNameTokens(candidate)
             guard !tokens.isEmpty else { continue }
-            if tokens.contains(where: { !sourceWords.contains($0) }) {
+            if !tokensCooccur(tokens, inAnyOf: nameSequences) {
                 flag(candidate, "This name does not appear verbatim in the cited documents — it may be inferred (e.g. reconstructed from an email prefix or initials). The record does not spell it out; confirm it before relying on it.")
             }
         }
@@ -330,13 +340,38 @@ public enum LegalCitationVerifier {
 
     /// Whole-word, lowercased alphanumeric token set (≥2 chars) — the haystack a name
     /// token must appear in to count as "present in the record".
-    private static func wordTokenSet(_ text: String) -> Set<String> {
-        Set(
-            text.lowercased()
-                .components(separatedBy: CharacterSet.alphanumerics.inverted)
-                .filter { $0.count >= 2 }
-        )
+    /// The source's significant word tokens in reading order, using the same rule as
+    /// `significantNameTokens` so the two sides are comparable.
+    private static func tokenSequence(_ text: String) -> [String] {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 2 }
     }
+
+    /// Whether all of a name's tokens occur close together, in either order, within one
+    /// source sequence.
+    ///
+    /// Replaces a flat set-membership test that let "Nancy" in a caption and "Rust"
+    /// forty pages later ground "Nancy Rust". The window is deliberately not strict
+    /// adjacency: captions and signature blocks invert the name ("Rust, Nancy") and
+    /// carry middle initials ("Nancy P. Rust"), both of which are genuine groundings,
+    /// so the rule is bounded co-occurrence rather than order.
+    private static func tokensCooccur(_ tokens: [String], inAnyOf sequences: [[String]]) -> Bool {
+        let needed = Set(tokens)
+        guard !needed.isEmpty else { return false }
+        // Room for the tokens themselves plus a couple of intervening words (a middle
+        // initial is dropped by the >= 2 character filter, but suffixes and connectors
+        // such as "Jr" or "and" are not).
+        let span = needed.count + 3
+        for sequence in sequences where sequence.count >= needed.count {
+            for start in 0...(sequence.count - needed.count) {
+                let end = min(start + span, sequence.count)
+                if needed.isSubset(of: Set(sequence[start..<end])) { return true }
+            }
+        }
+        return false
+    }
+
 
     private static func regexMatches(in text: String, pattern: String) -> [String] {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
