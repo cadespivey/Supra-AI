@@ -141,6 +141,18 @@ final class AuthorityRelationshipTests: XCTestCase {
         )
     }
 
+    /// T-REL-06A. A CourtListener id owned by one precise tribunal must resolve to
+    /// that tribunal, not the statewide aggregate that happens to appear first.
+    func testStateSupremeCourtIDPreservesPreciseIdentity() {
+        XCTAssertEqual(
+            relationship(
+                expected: "Third District Court of Appeal of Florida",
+                courtID: "fla"
+            ),
+            .controllingSuperior
+        )
+    }
+
     /// T-REL-07. A sister state stays outside scope.
     func testSisterStateIsOutsideScope() {
         XCTAssertEqual(
@@ -248,6 +260,19 @@ final class AuthorityRelationshipTests: XCTestCase {
         )
         XCTAssertEqual(
             relationship(expected: "Freedonia", court: "Supreme Court of Florida"),
+            .indeterminate
+        )
+    }
+
+    /// T-REL-12. Independently resolvable identifiers that name different tribunals
+    /// are malformed metadata. An id must not silently override the court name.
+    func testConflictingCourtNameAndIDAreIndeterminate() {
+        XCTAssertEqual(
+            relationship(
+                expected: "United States Court of Appeals for the Eleventh Circuit",
+                court: "United States Court of Appeals for the Fifth Circuit",
+                courtID: "ca11"
+            ),
             .indeterminate
         )
     }
