@@ -262,26 +262,56 @@ final class AppEnvironment: ObservableObject {
                 guard let self, let matterID = self.mattersController.selectedMatterID else { return }
                 self.documentQueue.enqueueClassify(matterID: matterID)
             }
-        // Headless coverage-routing evidence run: triggered from init (not `bootstrap()`, which is
-        // driven by a view `.task` that never fires when the app is launched without a rendered
-        // window) so the read-only probe runs and exits even in a windowless launch. No-op without
-        // the `-runCoverageShadowProbe` flag; safe on the real store (read-only, and skipped on a
-        // fallback/recovery store).
-        if ProcessInfo.processInfo.arguments.contains("-runCoverageShadowProbe"),
-           !storeResult.isFallback, storeResult.recoveryState == nil {
-            Task { await self.runCoverageShadowProbeIfRequested() }
-        }
-        // Headless capability run, triggered from init for the same reason as the coverage probe:
-        // `bootstrap()` is a view `.task` that never fires in a windowless launch.
-        if ProcessInfo.processInfo.arguments.contains("-runCapabilityProbe"),
-           !storeResult.isFallback, storeResult.recoveryState == nil {
+        // Headless probe dispatch (measurement qualification, finding #5): at most
+        // ONE probe per launch — `HeadlessProbeMode.resolve` makes the modes
+        // mutually exclusive and a conflict runs NOTHING. The model-dependent
+        // probes run against the isolated throwaway store `makeStore()` opened for
+        // this launch; the coverage probe is the one justified real-store
+        // diagnostic (read-only replay of this store's own chat history, skipped
+        // on fallback/recovery stores). Probes are triggered from init (not
+        // `bootstrap()`, which is driven by a view `.task` that never fires in a
+        // windowless launch) and leave through the app's normal termination path.
+        switch Self.headlessProbeResolution {
+        case .none:
+            break
+        case let .conflict(modes):
+            Task { await self.emitHeadlessProbeConflict(modes) }
+        case .single(.coverageShadow):
+            if !storeResult.isFallback, storeResult.recoveryState == nil {
+                Task { await self.runCoverageShadowProbeIfRequested() }
+            }
+        case .single(.capability):
             Task { await self.runCapabilityProbeIfRequested() }
-        }
-        // Typed-vs-prose A/B, triggered from init for the same reason. Fixture-only, so unlike the
-        // other two it has no store preconditions — it never reads matter data.
-        if ProcessInfo.processInfo.arguments.contains("-runTypedProseABProbe") {
+        case .single(.typedProseAB):
             Task { await self.runTypedProseABProbeIfRequested() }
         }
+    }
+
+    /// Multiple probe flags were passed: report the conflict and terminate without
+    /// running any probe — mutual exclusivity is part of the probes' isolation
+    /// contract.
+    private func emitHeadlessProbeConflict(_ modes: [HeadlessProbeMode]) async {
+        let payload: [String: Any] = [
+            "status": "probe_conflict",
+            "detail": "Headless probe modes are mutually exclusive; none were run.",
+            "requested": modes.map(\.rawValue),
+        ]
+        let json = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("===HEADLESS_PROBE_CONFLICT===\n\(json)", forType: .string)
+        print("===HEADLESS_PROBE_CONFLICT_BEGIN===")
+        print(json)
+        print("===HEADLESS_PROBE_CONFLICT_END===")
+        terminateAfterHeadlessProbe()
+    }
+
+    /// Probes leave through the app's NORMAL termination path — never `exit(0)`
+    /// from application code (measurement qualification, finding #5), so lifecycle
+    /// teardown (delegates, XPC connections, pending writes) runs as on any quit.
+    private func terminateAfterHeadlessProbe() {
+        NSApplication.shared.terminate(nil)
     }
 
     /// Loads persisted state and refreshes runtime status on launch.
@@ -322,14 +352,14 @@ final class AppEnvironment: ObservableObject {
         // D-06: upgrade existing stores exactly once after setup is readable but
         // before the interrupted-job queue resumes. The marker survives an
         // explicit later rollback, so bootstrap never silently overrides it.
-        if !Self.isUITestMode, !Self.isDemoMode, !usingFallbackStore {
+        if !Self.isUITestMode, !Self.isDemoMode, !Self.isHeadlessProbeMode, !usingFallbackStore {
             await promoteApprovedDocumentChunkerDefaultIfNeeded()
         }
         // Warm the embedding model now that its selection/verification is known. It
         // lives in a separate runtime slot from the chat model, so this never evicts
         // the chat model — and it removes the first-use wait on Document Q&A, semantic
         // search, and import indexing.
-        if !Self.isUITestMode { documentSetupController.prewarmEmbeddingModel() }
+        if !Self.isUITestMode, !Self.isHeadlessProbeMode { documentSetupController.prewarmEmbeddingModel() }
         // Reconcile any document job interrupted by a previous quit (plan §5.4).
         documentQueue.bootstrap()
         // Auto-purge documents and chats soft-deleted past the retention window
@@ -339,12 +369,12 @@ final class AppEnvironment: ObservableObject {
         maintenance.purgeExpiredChats()
         // P2 backup schedule: one launch check, never on quit. The controller
         // skips fresh/unconfigured destinations and performs file work off-main.
-        if !Self.isUITestMode, !Self.isDemoMode, !usingFallbackStore {
+        if !Self.isUITestMode, !Self.isDemoMode, !Self.isHeadlessProbeMode, !usingFallbackStore {
             Task { await backupController.backUpOnLaunchIfStale() }
         }
         // Start Sparkle: scheduled background checks + silent download, surfacing a
         // single "Install and Relaunch" prompt. Skipped in UI tests.
-        if !Self.isUITestMode, !Self.isDemoMode { sparkleUpdater.start() }
+        if !Self.isUITestMode, !Self.isDemoMode, !Self.isHeadlessProbeMode { sparkleUpdater.start() }
     }
 
     func switchDocumentChunker(to targetVersion: Int) async {
@@ -404,10 +434,18 @@ final class AppEnvironment: ObservableObject {
     /// flagged a WRONG one). A comparison run against real questions could only report that the
     /// two paths differ, never which one was right.
     func runTypedProseABProbeIfRequested() async {
-        guard ProcessInfo.processInfo.arguments.contains("-runTypedProseABProbe") else { return }
-        var payload: [String: Any] = [:]
+        guard case .single(.typedProseAB) = Self.headlessProbeResolution else { return }
+        var payload: [String: Any] = ["storeIsolation": "temporary"]
         defer { emitTypedProseABPayload(payload) }
 
+        // Isolated-store launch: rebuild the model registry from disk manifests
+        // (see runCapabilityProbeIfRequested) — the fixtures are authored, but the
+        // MODEL must still resolve without the user's database.
+        DiskModelRegistrar.registerVerifiedModels(
+            into: modelLibrary,
+            root: ManagedModelStorage.modelsDirectory()
+        )
+        modelLibrary.refresh()
         let resolution = await modelLibrary.ensureLoadedChatModelID(for: .legalReasoning)
         guard case let .success(modelID) = resolution else {
             payload["status"] = "model_load_failed"
@@ -477,7 +515,7 @@ final class AppEnvironment: ObservableObject {
         print("===TYPED_PROSE_AB_REPORT_BEGIN===")
         print(json)
         print("===TYPED_PROSE_AB_REPORT_END===")
-        exit(0)
+        terminateAfterHeadlessProbe()
     }
 
     /// Runs the Phase 2 coverage-routing evidence probe: replays this store's real matter-chat
@@ -513,7 +551,15 @@ final class AppEnvironment: ObservableObject {
     ///
     /// Read-only with respect to matter data. Release only, per the launch-correct-build rule.
     func runCapabilityProbeIfRequested() async {
-        guard ProcessInfo.processInfo.arguments.contains("-runCapabilityProbe") else { return }
+        guard case .single(.capability) = Self.headlessProbeResolution else { return }
+        // Isolated-store launch (see HeadlessProbeMode): the registry is rebuilt
+        // from the managed model directory's VERIFIED manifests — disk truth — so
+        // the probe reports real inventory without opening the user's database or
+        // touching the user's active-model selection/role assignments.
+        DiskModelRegistrar.registerVerifiedModels(
+            into: modelLibrary,
+            root: ManagedModelStorage.modelsDirectory()
+        )
         modelLibrary.refresh()
         let registered = modelLibrary.models.map { model -> [String: Any] in
             [
@@ -523,7 +569,7 @@ final class AppEnvironment: ObservableObject {
             ]
         }
 
-        var payload: [String: Any] = ["registeredModels": registered]
+        var payload: [String: Any] = ["registeredModels": registered, "storeIsolation": "temporary"]
         defer { emitCapabilityProbePayload(payload) }
 
         guard !registered.isEmpty else {
@@ -579,11 +625,11 @@ final class AppEnvironment: ObservableObject {
         print("===CAPABILITY_PROBE_REPORT_BEGIN===")
         print(json)
         print("===CAPABILITY_PROBE_REPORT_END===")
-        exit(0)
+        terminateAfterHeadlessProbe()
     }
 
     func runCoverageShadowProbeIfRequested() async {
-        guard ProcessInfo.processInfo.arguments.contains("-runCoverageShadowProbe") else { return }
+        guard case .single(.coverageShadow) = Self.headlessProbeResolution else { return }
         let report = await CoverageRoutingProbe.run(store: store, embedder: nil)
         let payload: [String: Any] = [
             "matterCount": report.matterCount,
@@ -613,7 +659,7 @@ final class AppEnvironment: ObservableObject {
         print("===COVERAGE_SHADOW_REPORT_BEGIN===")
         print(json)
         print("===COVERAGE_SHADOW_REPORT_END===")
-        exit(0)
+        terminateAfterHeadlessProbe()
     }
 
     private func promoteApprovedDocumentChunkerDefaultIfNeeded() async {
@@ -657,7 +703,9 @@ final class AppEnvironment: ObservableObject {
     /// their assigned role model before generation. Skipped when a model is already
     /// loaded or in UI tests.
     private func autoLoadStartupModelIfNeeded() {
-        guard !Self.isUITestMode, case .idle = modelLibrary.loadState else { return }
+        // Probe launches manage their own model loading (or none); the startup
+        // auto-load must never race a probe's deliberate load.
+        guard !Self.isUITestMode, !Self.isHeadlessProbeMode, case .idle = modelLibrary.loadState else { return }
         // The app opens on the chat screen, so warm the model chat will actually use —
         // the pinned model, else the Autoselect legal-reasoning model — instead of the
         // heavier high-quality reasoning model, which plain chat doesn't route to and
@@ -697,6 +745,34 @@ final class AppEnvironment: ObservableObject {
     /// touches the user's real database.
     static var isDemoMode: Bool {
         ProcessInfo.processInfo.arguments.contains("-demoMode")
+    }
+
+    /// The headless probe requested by this launch, if any — resolved once, mutually
+    /// exclusive by construction. See `HeadlessProbeMode` for the isolation contract
+    /// and the justification for shipping these diagnostics in the Release app.
+    static var headlessProbeResolution: HeadlessProbeMode.Resolution {
+        HeadlessProbeMode.resolve(arguments: ProcessInfo.processInfo.arguments)
+    }
+
+    /// True for any probe launch (including a conflicting one): normal launch side
+    /// effects — Sparkle, model prewarm/auto-load, chunker promotion, backups — are
+    /// skipped so a probe can never change the user's models, diagnostics, or data.
+    static var isHeadlessProbeMode: Bool {
+        switch headlessProbeResolution {
+        case .none: return false
+        case .single, .conflict: return true
+        }
+    }
+
+    /// True when this launch must run against an isolated throwaway store. A
+    /// conflicting probe launch runs nothing, but still gets the isolated store —
+    /// the fail-closed direction is to never open the user's database.
+    private static var headlessProbeRequiresIsolatedStore: Bool {
+        switch headlessProbeResolution {
+        case .none: return false
+        case .conflict: return true
+        case let .single(mode): return mode.requiresIsolatedStore
+        }
     }
 
     /// Seeds a deterministic matter for UI tests if none exists yet.
@@ -1521,12 +1597,15 @@ final class AppEnvironment: ObservableObject {
         isFallback: Bool,
         recoveryState: DatabaseRecoveryState?
     ) {
-        if isUITestMode || isDemoMode {
+        if isUITestMode || isDemoMode || headlessProbeRequiresIsolatedStore {
             // Fresh, throwaway store per launch so UI tests / demo screenshots are
             // deterministic and isolated from the user's real Application Support
-            // database.
+            // database. Model-dependent headless probes get the same isolation
+            // (measurement qualification, finding #5): a probe launch never opens or
+            // migrates the user's real store — which also removes the Debug-build
+            // erase-on-schema-change hazard for probe runs.
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("SupraAI-UITest-\(UUID().uuidString).sqlite")
+                .appendingPathComponent("SupraAI-\(headlessProbeRequiresIsolatedStore ? "Probe" : "UITest")-\(UUID().uuidString).sqlite")
             if let store = try? SupraStore(url: url) { return (store, false, nil) }
         }
         do {
