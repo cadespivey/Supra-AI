@@ -93,6 +93,19 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         )
     }
 
+    /// T-PROBE-09. Failure to create the preferred temporary database cannot widen
+    /// authority to the user's Application Support store. Only an ordinary launch or
+    /// the intentionally real-store coverage probe may open it.
+    func testOnlyUserStoreModesPermitOpeningApplicationSupport() {
+        XCTAssertTrue(HeadlessProbeMode.Resolution.none.permitsUserStoreOpen)
+        XCTAssertTrue(HeadlessProbeMode.Resolution.single(.coverageShadow).permitsUserStoreOpen)
+        XCTAssertFalse(HeadlessProbeMode.Resolution.single(.capability).permitsUserStoreOpen)
+        XCTAssertFalse(HeadlessProbeMode.Resolution.single(.typedProseAB).permitsUserStoreOpen)
+        XCTAssertFalse(
+            HeadlessProbeMode.Resolution.conflict([.coverageShadow, .typedProseAB]).permitsUserStoreOpen
+        )
+    }
+
     // MARK: - Disk-truth model registry on an isolated store
 
     /// T-PROBE-05. A manifest-verified model folder registers into the isolated
