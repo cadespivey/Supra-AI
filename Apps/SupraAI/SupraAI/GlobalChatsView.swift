@@ -908,35 +908,39 @@ struct GlobalChatsView: View {
             return
         }
 
-        Task { @MainActor in
-            var modelID: ModelID?
-            if controller.requiresRuntimeModel(for: routed) {
+        // Clear the composer SYNCHRONOUSLY: the send pipeline echoes the user's
+        // turn and claims the generating flag before any model load, so nothing
+        // sits in the field during a cold load tempting a re-send. A failed load
+        // resolves the echoed turn with a failed assistant message.
+        draft = ""
+        attachments = []
+        attachmentError = nil
+        // Keep the cursor in the composer so the user can type a follow-up
+        // immediately instead of clicking back into the field.
+        inputFocused = true
+        var modelResolver: (@MainActor () async -> GlobalChatController.ModelResolution)?
+        if controller.requiresRuntimeModel(for: routed) {
+            modelResolver = {
                 switch await library.ensureLoadedChatModelID(
                     for: routed.route.role,
                     configuration: router.configuration
                 ) {
                 case let .success(loaded):
-                    modelID = loaded
+                    return .model(loaded)
                 case let .failure(issue):
-                    attachmentError = issue.message
-                    return
+                    return .unavailable(message: issue.message)
                 }
             }
-            draft = ""
-            attachments = []
-            attachmentError = nil
-            // Keep the cursor in the composer so the user can type a follow-up
-            // immediately instead of clicking back into the field.
-            inputFocused = true
-            controller.send(
-                prompt: routed.prompt,
-                modelID: modelID,
-                attachments: rawAttachments,
-                options: controller.activeChatOptions,
-                route: routed.route,
-                displayPrompt: rawPrompt
-            )
         }
+        controller.send(
+            prompt: routed.prompt,
+            modelID: nil,
+            attachments: rawAttachments,
+            options: controller.activeChatOptions,
+            route: routed.route,
+            displayPrompt: rawPrompt,
+            modelResolver: modelResolver
+        )
     }
 
     /// Re-runs the offered question at the deeper tier: the full document pass for
@@ -953,30 +957,33 @@ struct GlobalChatsView: View {
         if offer.kind == .research, routed.command == nil {
             routed.route = router.route(for: .legalResearch)
         }
-        Task { @MainActor in
-            var modelID: ModelID?
-            if controller.requiresRuntimeModel(for: routed) {
+        // Same instant-echo contract as `submit`: the deeper pass echoes its turn
+        // before the (possibly cold) model load rather than blocking on it.
+        let route = routed.route
+        var modelResolver: (@MainActor () async -> GlobalChatController.ModelResolution)?
+        if controller.requiresRuntimeModel(for: routed) {
+            modelResolver = {
                 switch await library.ensureLoadedChatModelID(
-                    for: routed.route.role,
+                    for: route.role,
                     configuration: router.configuration
                 ) {
                 case let .success(loaded):
-                    modelID = loaded
+                    return .model(loaded)
                 case let .failure(issue):
-                    attachmentError = issue.message
-                    return
+                    return .unavailable(message: issue.message)
                 }
             }
-            controller.send(
-                prompt: routed.prompt,
-                modelID: modelID,
-                options: controller.activeChatOptions,
-                route: routed.route,
-                displayPrompt: offer.question,
-                documentDepth: offer.kind == .documents ? .deep : .fast,
-                researchDepth: offer.kind == .research ? .deep : .fast
-            )
         }
+        controller.send(
+            prompt: routed.prompt,
+            modelID: nil,
+            options: controller.activeChatOptions,
+            route: route,
+            displayPrompt: offer.question,
+            documentDepth: offer.kind == .documents ? .deep : .fast,
+            researchDepth: offer.kind == .research ? .deep : .fast,
+            modelResolver: modelResolver
+        )
     }
 
     // MARK: - Status bar
@@ -1195,6 +1202,9 @@ private struct MessageRow: View {
     /// only while the response is still generating, and stays collapsed for
     /// completed/reloaded messages so chat history isn't a wall of reasoning.
     @State private var reasoningExpandedOverride: Bool?
+    /// The verification notice is always collapsed by default — it exists only on
+    /// completed answers and must not dwarf the answer it qualifies.
+    @State private var supportNoticeExpanded = false
     @State private var isHovered = false
 
     private var reasoningExpanded: Binding<Bool> {
@@ -1290,6 +1300,24 @@ private struct MessageRow: View {
             // citations stay independently actionable via the sources block below.
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(displayContent))
+            if let supportNotice {
+                DisclosureGroup(isExpanded: $supportNoticeExpanded) {
+                    MarkdownView(text: supportNotice, citationLabels: [], onCitationTap: { _ in })
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Text(EmojiStripper.strip(supportNotice)))
+                } label: {
+                    Label("Support check", systemImage: "exclamationmark.triangle")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .tint(.secondary)
+                .accessibilityIdentifier("chat.message.supportNotice.\(message.id)")
+            }
             if !message.citations.isEmpty {
                 sourcesBlock
             }
@@ -1343,8 +1371,10 @@ private struct MessageRow: View {
         Button {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
-            // Emoji-stripped Markdown — clean to paste elsewhere.
-            pasteboard.setString(EmojiStripper.strip(displayContent), forType: .string)
+            // Emoji-stripped Markdown — clean to paste elsewhere. Copies the
+            // UNSPLIT answer (verification notice included): the notice is a trust
+            // qualifier, and pasted work product must not silently shed it.
+            pasteboard.setString(EmojiStripper.strip(answerContent), forType: .string)
         } label: {
             Label("Copy", systemImage: "doc.on.doc").font(.caption)
         }
@@ -1419,7 +1449,9 @@ private struct MessageRow: View {
         return line
     }
 
-    private var displayContent: String {
+    /// The reasoning-stripped answer, verification notice still attached — the
+    /// copy surface, so pasted work product keeps its trust qualifier.
+    private var answerContent: String {
         if message.content.isEmpty {
             return message.isStreaming ? "…" : message.content
         }
@@ -1434,6 +1466,19 @@ private struct MessageRow: View {
             return message.isStreaming ? "Thinking…" : message.content
         }
         return answer
+    }
+
+    /// What the row RENDERS as the answer: the out-of-band verification banners
+    /// are split off into the collapsed notice below, so a warning block cannot
+    /// dwarf the answer it qualifies. User turns never carry a banner.
+    private var displayContent: String {
+        SupportNoticeContent.split(answerContent).body
+    }
+
+    /// The trailing verification banner block, rendered collapsed and subdued.
+    private var supportNotice: String? {
+        guard message.role == .assistant else { return nil }
+        return SupportNoticeContent.split(answerContent).notice
     }
 
     @ViewBuilder

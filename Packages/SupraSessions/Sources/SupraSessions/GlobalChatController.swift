@@ -499,6 +499,36 @@ public final class GlobalChatController: ObservableObject {
         }
     }
 
+    /// A model resolution failed after the user's turn was already echoed: persist
+    /// a FAILED assistant turn carrying the issue (session + variant, so the
+    /// failure survives reloads) instead of stranding the echo without a response.
+    private func persistModelResolutionFailure(
+        chatID: String,
+        message: String,
+        modelPrompt: String,
+        systemPrompt: String?,
+        options: GenerationOptions
+    ) throws {
+        let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
+        let session = try store.generation.createGenerationSession(
+            chatID: chatID,
+            messageID: assistant.id,
+            modelID: nil,
+            prompt: modelPrompt,
+            systemPrompt: systemPrompt,
+            options: options
+        )
+        let variant = try store.chats.createVariant(messageID: assistant.id, generationSessionID: session.id)
+        try store.generation.linkVariant(generationID: session.id, variantID: variant.id)
+        try? store.chats.appendToken(to: variant.id, token: message)
+        try? store.chats.markVariantFailed(variant.id, reason: message)
+        try? store.generation.failGeneration(
+            generationID: session.id, errorSummary: message, diagnosticEventID: nil
+        )
+        errorMessage = message
+        reloadMessages()
+    }
+
     /// A short snippet of `content` centered on the first match of `term`.
     private static func searchSnippet(_ content: String?, around term: String, window: Int = 100) -> String {
         guard let content, !content.isEmpty else { return "" }
@@ -533,7 +563,19 @@ public final class GlobalChatController: ObservableObject {
 
     // MARK: - Sending
 
-    /// Sends a prompt in the selected chat against the given (already loaded) model.
+    /// The outcome of resolving which model a queued send should run on. Injected
+    /// into the send pipeline so the user's turn is echoed BEFORE a (potentially
+    /// slow) model load, and so a failed load resolves the echoed turn with a
+    /// failed assistant message instead of stranding it.
+    public enum ModelResolution: Sendable {
+        case model(ModelID?)
+        case unavailable(message: String)
+    }
+
+    /// Sends a prompt in the selected chat. Pass `modelID` when the model is
+    /// already loaded, or `modelResolver` to load it AFTER the user's turn has been
+    /// echoed (the composer's path — a cold load can take seconds and must not
+    /// delay the echo).
     ///
     /// If no chat is selected, one is created automatically.
     public func send(
@@ -545,7 +587,8 @@ public final class GlobalChatController: ObservableObject {
         route: ModelRoute? = nil,
         displayPrompt: String? = nil,
         documentDepth: RetrievalDepth = .fast,
-        researchDepth: RetrievalDepth = .fast
+        researchDepth: RetrievalDepth = .fast,
+        modelResolver: (@MainActor () async -> ModelResolution)? = nil
     ) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowsEmptyPrompt = route?.mode == .legalCritique && latestAssistantDraft() != nil
@@ -578,7 +621,8 @@ public final class GlobalChatController: ObservableObject {
                 route: route,
                 displayPrompt: displayPrompt,
                 documentDepth: documentDepth,
-                researchDepth: researchDepth
+                researchDepth: researchDepth,
+                modelResolver: modelResolver
             )
         }
     }
@@ -718,7 +762,8 @@ public final class GlobalChatController: ObservableObject {
             "",
             "---",
             "",
-            "⚠️ **Grounding check — not found in the cited documents.** The following were stated in the answer above but do not appear verbatim in the sources, and may be inferred (for example, a name reconstructed from an email prefix). Verify each against the record before relying on it:"
+            SupportNoticeContent.entityGroundingHeading
+                + " The following were stated in the answer above but do not appear verbatim in the sources, and may be inferred (for example, a name reconstructed from an email prefix). Verify each against the record before relying on it:"
         ]
         for excerpt in excerpts {
             lines.append("- \(excerpt)")
@@ -735,13 +780,20 @@ public final class GlobalChatController: ObservableObject {
     /// reason is a distinct, meaningful warning that is kept verbatim.
     nonisolated static let plainSupportMissPrefix = "No cited source text supports"
 
+    /// The banner appended when proposition verification could not run at all.
+    /// Built from the shared heading so the render-time split (`SupportNoticeContent`)
+    /// recognizes it exactly like the report-driven banner.
+    nonisolated static let verificationUnavailableBanner = "\n\n---\n\n"
+        + SupportNoticeContent.documentSupportHeading
+        + "\n- Proposition verification could not be completed."
+
     nonisolated static func documentSupportBanner(_ report: DocumentSupportReport) -> String? {
         guard report.requiresReview else { return nil }
         var lines = [
             "",
             "---",
             "",
-            "⚠️ **Document support check — verify before relying on this answer.**",
+            SupportNoticeContent.documentSupportHeading,
         ]
         // Collapse the per-proposition misses into a single count. A reasoning model's synthesis
         // sentences cite sources but rarely match them verbatim, so the extractive verifier flags
@@ -863,13 +915,8 @@ public final class GlobalChatController: ObservableObject {
                 },
                 scopeFullyIndexed: groundingScopeFullyIndexed
             )
-            let banner = verification.flatMap(Self.documentSupportBanner) ?? """
-
-            ---
-
-            ⚠️ **Document support check — verify before relying on this answer.**
-            - Proposition verification could not be completed.
-            """
+            let banner = verification.flatMap(Self.documentSupportBanner)
+                ?? Self.verificationUnavailableBanner
             if verification == nil || verification?.requiresReview == true {
                 try? store.chats.appendToken(to: variant.id, token: banner)
                 content += banner
@@ -911,7 +958,8 @@ public final class GlobalChatController: ObservableObject {
         route: ModelRoute? = nil,
         displayPrompt: String? = nil,
         documentDepth: RetrievalDepth = .fast,
-        researchDepth: RetrievalDepth = .fast
+        researchDepth: RetrievalDepth = .fast,
+        modelResolver: (@MainActor () async -> ModelResolution)? = nil
     ) async {
         isGenerating = true
         errorMessage = nil
@@ -934,6 +982,50 @@ public final class GlobalChatController: ObservableObject {
             : displayBase + "\n\nAttached: " + attachments.map(\.name).joined(separator: ", ")
 
         do {
+            // ECHO FIRST (user report: a submitted prompt sat invisible during a
+            // cold model load, inviting a re-send): the user's turn is appended
+            // and visible — with `isGenerating` already claimed — BEFORE any slow
+            // pre-generation work (model load below, grounded retrieval after).
+            // Title from the routed prompt (slash command already stripped), so a
+            // "/draft …" chat is titled by its content — matching the legal path.
+            let chatID = try ensureSelectedChat(titleHint: prompt).id
+
+            // Replay prior turns so the model can answer follow-ups in context —
+            // captured BEFORE appending the new user message so the model never
+            // sees the question twice. A grounded turn discards this below (its
+            // prompt carries the authoritative sources and the "use ONLY these"
+            // contract; prior, possibly ungrounded turns must not dilute it).
+            let fullHistory = replayHistory(chatID: chatID)
+
+            _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
+            reloadMessages()
+
+            // Resolve the model AFTER the echo. Direct callers (tests) that pass
+            // `modelID` up front skip this. A failed resolution resolves the
+            // echoed turn with a FAILED assistant message rather than stranding it.
+            var resolvedModelID = modelID
+            if let modelResolver {
+                switch await modelResolver() {
+                case let .model(id):
+                    resolvedModelID = id
+                case let .unavailable(message):
+                    try persistModelResolutionFailure(
+                        chatID: chatID,
+                        message: message,
+                        modelPrompt: modelPrompt,
+                        systemPrompt: systemPrompt,
+                        options: options
+                    )
+                    return
+                }
+            }
+            // A Cancel pressed during a long model load abandons the turn before
+            // any retrieval or generation starts.
+            if cancelRequested {
+                reloadMessages()
+                return
+            }
+
             // In a matter chat, a question about the matter's OWN documents ("list the
             // cases in the Research folder", "what do my documents say about X") is
             // answered from real data — a deterministic inventory or retrieved passages
@@ -943,11 +1035,11 @@ public final class GlobalChatController: ObservableObject {
             // files inline (those are the grounding) or for non-document questions.
             // Gated on a loaded model so a no-model send doesn't pay for retrieval it
             // will discard at the guard below.
-            let grounded: GroundedChatContext? = (attachments.isEmpty && modelID != nil)
+            let grounded: GroundedChatContext? = (attachments.isEmpty && resolvedModelID != nil)
                 ? await documentGrounding?.groundedContext(
                     forQuestion: prompt,
                     depth: documentDepth,
-                    modelID: modelID,
+                    modelID: resolvedModelID,
                     options: options
                 )
                 : nil
@@ -956,33 +1048,24 @@ public final class GlobalChatController: ObservableObject {
                 try await performLegalOneShotSend(
                     prompt: prompt,
                     modelPrompt: modelPrompt,
-                    displayContent: displayContent,
-                    modelID: modelID,
+                    modelID: resolvedModelID,
                     route: route,
                     systemPrompt: systemPrompt,
                     options: options,
-                    researchDepth: researchDepth
+                    researchDepth: researchDepth,
+                    chatID: chatID,
+                    history: fullHistory
                 )
                 return
             }
 
-            guard let modelID else {
+            guard let modelID = resolvedModelID else {
                 errorMessage = "Load or register a local MLX model in the Models tab."
                 return
             }
 
-            // Title from the routed prompt (slash command already stripped), so a
-            // "/draft …" chat is titled by its content — matching the legal path.
-            let chatID = try ensureSelectedChat(titleHint: prompt).id
+            let history = grounded == nil ? fullHistory : []
 
-            // Replay prior turns so the model can answer follow-ups in context.
-            // Captured before appending the new user message. A grounded turn is
-            // self-contained (its prompt carries the authoritative inventory/sources
-            // and the "use ONLY these" contract), so it skips history — prior, possibly
-            // ungrounded turns must not dilute the grounding, matching the Q&A path.
-            let history = grounded == nil ? replayHistory(chatID: chatID) : []
-
-            _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
             let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
 
             // A fast-tier grounded answer whose small packet doesn't cover the question
@@ -1237,13 +1320,8 @@ public final class GlobalChatController: ObservableObject {
                                 shape: report?.responseShape ?? .answer
                             )
                             GroundedAttributionAdapter.logShadow(shadow, lexicalRequiresReview: report?.requiresReview)
-                            let banner = report.flatMap(Self.documentSupportBanner) ?? """
-
-                            ---
-
-                            ⚠️ **Document support check — verify before relying on this answer.**
-                            - Proposition verification could not be completed.
-                            """
+                            let banner = report.flatMap(Self.documentSupportBanner)
+                                ?? Self.verificationUnavailableBanner
                             if report == nil || report?.requiresReview == true {
                                 try? store.chats.appendToken(to: activeVariant.id, token: banner)
                                 streamedContent += banner
@@ -1343,22 +1421,18 @@ public final class GlobalChatController: ObservableObject {
     private func performLegalOneShotSend(
         prompt: String,
         modelPrompt: String,
-        displayContent: String,
         modelID: ModelID?,
         route: ModelRoute,
         systemPrompt: String?,
         options: GenerationOptions,
-        researchDepth: RetrievalDepth = .fast
+        researchDepth: RetrievalDepth = .fast,
+        chatID: String,
+        history: [GenerateRequest.Turn]
     ) async throws {
-        let chatID = try ensureSelectedChat(titleHint: prompt).id
+        // The caller (performSend) has already created/selected the chat, captured
+        // `history` before the user turn was appended, and ECHOED the user message —
+        // the echo must precede this workflow's retrieval, not follow it.
         let priorAssistantDraft = latestAssistantDraft()
-        // Replay prior turns so legal follow-ups ("now narrow that to the 9th Cir.",
-        // "apply that rule to my facts") resolve in context. Captured before the new
-        // user message is appended; the runtime's budget guard trims it if the packet
-        // + question leave no room.
-        let history = replayHistory(chatID: chatID)
-
-        _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
         let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
         let generationID = GenerationID()
         activeGenerationID = generationID
