@@ -20,9 +20,13 @@ final class PromptRoutingCorpusTests: XCTestCase {
         let examples = try JSONDecoder().decode([Example].self, from: Data(contentsOf: url))
         let legalCount = examples.count { $0.expected == "legal" }
         let generalCount = examples.count { $0.expected == "general" }
-        XCTAssertEqual(examples.count, 30, "corpus denominator changed")
+        // Denominators revised in RED (user report): G16–G20 add measured
+        // CONVERSATIONAL misfires — pleasantries, email-draft feedback, a lawyer
+        // joke — that the exemplar sets left near the legal side, so a
+        // jurisdictionless global chat hard-blocked ordinary conversation.
+        XCTAssertEqual(examples.count, 35, "corpus denominator changed")
         XCTAssertEqual(legalCount, 15, "legal denominator changed")
-        XCTAssertEqual(generalCount, 15, "general denominator changed")
+        XCTAssertEqual(generalCount, 20, "general denominator changed")
 
         let router = ModelRouter(configuration: LegalModelConfiguration(
             requireCitations: true,

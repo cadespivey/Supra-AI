@@ -627,6 +627,37 @@ public final class GlobalChatController: ObservableObject {
         }
     }
 
+    /// The controller-level backstop for the fail-closed router on conversational
+    /// prompts: an INFERRED-UNCERTAIN legal route whose prompt shows no legal
+    /// evidence of its own can only dead-end — the jurisdiction block in a
+    /// jurisdictionless chat, or a junk authority search in a matter chat — so it
+    /// is answered on the general route instead, whose system prompt still
+    /// deflects genuine legal asks toward the research route.
+    ///
+    /// Prompt-INTRINSIC legal evidence keeps the gate: a stated jurisdiction, a
+    /// named citation, or a docket ask is the prompt itself showing legal intent.
+    /// Context-supplied jurisdiction (matter scope, the chat picker) never
+    /// converts conversation into a research run. Confident `.legal`
+    /// classifications, deterministic markers, and explicit slash commands keep
+    /// their gates — measured, every committed legal-recall corpus entry
+    /// classifies confidently `.legal`, so no committed recall rides on the
+    /// uncertain band.
+    public func effectiveRoutedPrompt(_ routed: RoutedPrompt) -> RoutedPrompt {
+        guard routed.command == nil,
+              routed.route.mode == .legalQA,
+              routed.inferredIntent == .uncertain,
+              routed.route.requiresJurisdiction
+        else { return routed }
+        let intrinsic = LegalQueryClassifier.classify(routed.prompt)
+        guard intrinsic.jurisdiction == nil,
+              intrinsic.citationLookup == nil,
+              intrinsic.desiredAuthorityType != .docket
+        else { return routed }
+        var downgraded = routed
+        downgraded.route = ModelRouter(configuration: legalConfiguration).route(for: .generalQA)
+        return downgraded
+    }
+
     public func canSendRoutedPrompt(_ routed: RoutedPrompt) -> Bool {
         let trimmed = routed.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         switch routed.route.mode {

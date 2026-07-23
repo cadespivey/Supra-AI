@@ -176,6 +176,25 @@ public struct RoutedPrompt: Codable, Hashable, Sendable {
     public var route: ModelRoute
     public var prompt: String
     public var command: String?
+    /// WHY inference chose this route: `.legal` for a deterministic marker or a
+    /// confident classification, `.uncertain` for the fail-closed default,
+    /// `.general` for a confident general classification — nil for a slash
+    /// command (the user's explicit choice, no inference involved). Lets the
+    /// chat controller treat a fail-closed gate differently from a confident
+    /// one where the gated route could only produce a jurisdiction block.
+    public var inferredIntent: PromptIntentClassification?
+
+    public init(
+        route: ModelRoute,
+        prompt: String,
+        command: String? = nil,
+        inferredIntent: PromptIntentClassification? = nil
+    ) {
+        self.route = route
+        self.prompt = prompt
+        self.command = command
+        self.inferredIntent = inferredIntent
+    }
 }
 
 public struct ModelRouter: Sendable {
@@ -316,17 +335,25 @@ public struct ModelRouter: Sendable {
         }
 
         let inferredMode: ModelRouteMode
+        let inferredIntent: PromptIntentClassification
         if DeterministicLegalIntentMarkers.matches(trimmed) {
             inferredMode = .legalQA
+            inferredIntent = .legal
         } else {
-            switch intentClassifier.classify(trimmed) {
+            inferredIntent = intentClassifier.classify(trimmed)
+            switch inferredIntent {
             case .legal, .uncertain:
                 inferredMode = .legalQA
             case .general:
                 inferredMode = .generalQA
             }
         }
-        return RoutedPrompt(route: route(for: inferredMode), prompt: trimmed, command: nil)
+        return RoutedPrompt(
+            route: route(for: inferredMode),
+            prompt: trimmed,
+            command: nil,
+            inferredIntent: inferredIntent
+        )
     }
 
     private func parseSlashCommand(_ prompt: String) -> (mode: ModelRouteMode, command: String, remainingPrompt: String)? {
