@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [2.3.3] - 2026-07-23
+
+### Changed
+
+- **Answers lead; process folds away** — a grounded chat response now reads, top to bottom:
+  collapsed Reasoning, a collapsed Support check, one "Answer:" line, then tappable source
+  links. The document-support banner no longer dwarfs the answer it qualifies (it collapses
+  like the reasoning section and expands on demand), the answer is stated exactly once, and
+  the "Preliminary" badge no longer appears above chat answers — assurance states remain on
+  Outputs and exports, and answers saved to Outputs keep their exact assurance state.
+- **Chat sends feel instant** — a submitted message appears in the conversation immediately
+  and the composer clears at once, even while a model is still cold-loading. A failed model
+  load resolves the turn with a visible failed message instead of stranding it, and pressing
+  Return while an answer is running keeps the draft and says so instead of doing nothing.
+- **Conversation routes like conversation** — chat prompts route between general answering
+  and source-grounded legal research by on-device semantic classification with deterministic
+  legal markers, replacing the old keyword list. Pleasantries, drafting help, and other
+  ordinary conversation answer plainly in both global and matter chats, while legal
+  questions, named citations, docket asks, and stated jurisdictions keep the source-grounded
+  route. A legal question that still needs a jurisdiction now also points to `/ask` for a
+  general, non-authoritative answer, and Diagnostics reports the semantic classifier's
+  availability.
+
+### Fixed
+
+- **Global chat usability** — ordinary conversation in a global chat no longer dead-ends at
+  "I need the jurisdiction", and casual messages in a matter chat no longer trigger stray
+  authority searches.
+
 ## [2.3.2] - 2026-07-19
 
 ### Fixed
