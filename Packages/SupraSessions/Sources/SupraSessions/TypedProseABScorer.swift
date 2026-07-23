@@ -155,12 +155,20 @@ public struct TypedProseABReport: Sendable, Equatable, Codable {
 /// independently RE-SCORED from its own artifact — decode `outcomes`, re-run
 /// `TypedProseABScorer.report`, and compare against the recorded reports.
 public struct TypedProseABRunRecord: Sendable, Equatable, Codable {
-    public static let currentSchemaVersion = 2
+    /// v3: contrastive negation scope ("X, not Y" affirms X) changed scoring
+    /// semantics, and decoding now refuses any other schema — a recorded version
+    /// that is never checked protects nothing, and re-scoring an old artifact
+    /// under new semantics would silently change published numbers.
+    public static let currentSchemaVersion = 3
 
     public let schemaVersion: Int
     public let outcomes: [TypedProseABOutcome]
     public let typed: TypedProseABReport
     public let prose: TypedProseABReport
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, outcomes, typed, prose
+    }
 
     public init(
         schemaVersion: Int = TypedProseABRunRecord.currentSchemaVersion,
@@ -172,6 +180,24 @@ public struct TypedProseABRunRecord: Sendable, Equatable, Codable {
         self.outcomes = outcomes
         self.typed = typed
         self.prose = prose
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try container.decode(Int.self, forKey: .schemaVersion)
+        guard version == Self.currentSchemaVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "artifact schema \(version) does not match scorer schema "
+                    + "\(Self.currentSchemaVersion); the scoring semantics differ, so this artifact "
+                    + "cannot be re-scored — regenerate it with the current build"
+            )
+        }
+        self.schemaVersion = version
+        self.outcomes = try container.decode([TypedProseABOutcome].self, forKey: .outcomes)
+        self.typed = try container.decode(TypedProseABReport.self, forKey: .typed)
+        self.prose = try container.decode(TypedProseABReport.self, forKey: .prose)
     }
 }
 
@@ -272,11 +298,10 @@ public enum TypedProseABScorer {
         let negated: Bool
     }
 
-    /// Splits the answer into sentences (citation labels stripped first so `[S1]`
-    /// digits are not values; periods between digits masked so `$9,000.00` does not
-    /// end a sentence) and tags each with its negation polarity. A value found in a
-    /// negated sentence is neither credit nor contradiction — it is simply not an
-    /// affirmative statement of that value.
+    /// Splits the answer into negation-scoped spans (citation labels stripped first
+    /// so `[S1]` digits are not values; periods between digits masked so `$9,000.00`
+    /// does not end a sentence). A value found in a negated span is neither credit
+    /// nor contradiction — it is simply not an affirmative statement of that value.
     private static func classifiedSentences(in answer: String) -> [ClassifiedSentence] {
         let unlabeled = answer.replacingOccurrences(
             of: #"\[[A-Za-z]{1,3}\d{1,4}\]"#,
@@ -293,7 +318,34 @@ public enum TypedProseABScorer {
             .map { $0.replacingOccurrences(of: "\u{F8FF}", with: ".") }
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-            .map { ClassifiedSentence(text: $0, negated: isNegated($0)) }
+            .flatMap(negationSpans)
+    }
+
+    /// Splits one sentence into negation-scoped spans. The contrastive forms
+    /// "X, not Y" (and "X, but not Y") and "not X, but Y" state one clause and deny
+    /// the other; classifying the whole sentence by token presence would erase the
+    /// affirmative half ("The fee is $9,000, not $12,000." must affirm $9,000).
+    /// Only these two anchored comma pivots split — every other shape keeps
+    /// whole-sentence negation, so an unparsed sentence can only lose credit,
+    /// never gain it.
+    private static func negationSpans(_ sentence: String) -> [ClassifiedSentence] {
+        // Reverse contrastive first ("not X, but Y"): the head denies, the span
+        // after "but" is re-examined on its own ("not X, but not Y" stays negated).
+        if let match = firstMatch(
+            #"(?i)^(.*\b(?:not|never)\b.*?),\s*but\s+(?:rather\s+)?(.+)$"#,
+            in: sentence
+        ) {
+            return [ClassifiedSentence(text: match[0], negated: true)] + negationSpans(match[1])
+        }
+        // Forward contrastive ("X, not Y"): the tail denies, the head is
+        // re-examined on its own ("not X, not even close" resolves fully negated).
+        if let match = firstMatch(
+            #"(?i)^(.*?),\s*(?:but\s+)?(?:not|never)\b(.*)$"#,
+            in: sentence
+        ) {
+            return negationSpans(match[0]) + [ClassifiedSentence(text: match[1], negated: true)]
+        }
+        return [ClassifiedSentence(text: sentence, negated: isNegated(sentence))]
     }
 
     private static let negationTokens: Set<String> = [
@@ -486,6 +538,15 @@ public enum TypedProseABScorer {
 
     private static func captures(_ pattern: String, in text: String) -> [String] {
         groupCaptures(pattern, in: text).compactMap(\.first)
+    }
+
+    private static func firstMatch(_ pattern: String, in text: String) -> [String]? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range) else { return nil }
+        return (1..<match.numberOfRanges).compactMap { index in
+            Range(match.range(at: index), in: text).map { String(text[$0]) }
+        }
     }
 
     private static func groupCaptures(_ pattern: String, in text: String) -> [[String]] {
