@@ -5,23 +5,31 @@ import SupraRuntimeInterface
 import SupraStore
 import XCTest
 
-/// The controller-level backstop for the fail-closed router in a chat with no
-/// jurisdiction context (user report: global chat "always errors"). A prompt the
-/// classifier could only mark `.uncertain` routes to legalQA fail-closed — but in
-/// a jurisdictionless global chat that route can produce NOTHING except the
-/// "I need the jurisdiction" block, so ordinary conversation dead-ends. The
-/// controller therefore answers an INFERRED-UNCERTAIN legal route on the general
-/// route when (and only when) no jurisdiction is available:
+/// The controller-level backstop for the fail-closed router on conversational
+/// prompts (user report: global chat "always errors"; the same class produced
+/// junk CourtListener searches in matter chats). A prompt the classifier could
+/// only mark `.uncertain` routes to legalQA fail-closed — but when the prompt
+/// itself carries NO legal evidence, that route can only dead-end: the
+/// jurisdiction block in a jurisdictionless chat, or an authority search over
+/// non-legal text in a matter chat. The controller therefore answers an
+/// INFERRED-UNCERTAIN legal route on the general route unless the PROMPT ITSELF
+/// shows legal intent (REVISED in RED, matter-parity direction from the user;
+/// measured: all 15 committed legal-recall corpus entries classify confidently
+/// `.legal`, so no committed recall rides on the uncertain band):
 ///
+/// - prompt-INTRINSIC legal evidence keeps the gate: a stated jurisdiction
+///   ("under Florida law"), a named citation ("Smith v. Jones"), or a docket ask
+///   ("who sued X") — context-supplied jurisdiction (matter scope, the chat
+///   picker, history) never converts conversation into a research run;
 /// - confident classifications (`.legal`) and deterministic markers KEEP their
 ///   gates — recall protection is untouched;
-/// - explicit slash commands are never overridden;
-/// - with a jurisdiction available (matter scope, the chat's jurisdiction
-///   picker, or one stated in the prompt), `.uncertain` stays on the gated
-///   route exactly as before — matter chat is unchanged.
+/// - explicit slash commands are never overridden.
 ///
 /// Expected RED for this file: `effectiveRoutedPrompt` does not exist on
-/// `GlobalChatController`, so the file does not compile.
+/// `GlobalChatController`, so the file does not compile. (Second RED, matter
+/// parity: T-JLU-05 revised and T-JLU-06 added fail against the
+/// jurisdiction-availability rule, which kept context-gated conversation on the
+/// legal route.)
 final class JurisdictionlessUncertainRoutingTests: XCTestCase {
 
     private struct FixedClassifier: PromptIntentClassifying {
@@ -129,11 +137,12 @@ final class JurisdictionlessUncertainRoutingTests: XCTestCase {
         XCTAssertEqual(controller.effectiveRoutedPrompt(explicit).route.mode, .legalQA)
     }
 
-    /// T-JLU-05. The chat's jurisdiction picker supplies context: with an override
-    /// selected, the uncertain prompt stays gated (mirrors matter scope, where the
-    /// matter's courts do the same).
+    /// T-JLU-05 (REVISED in RED — matter parity, user direction). The chat's
+    /// jurisdiction picker bounds legal research; it must not convert
+    /// conversation into a research run. An uncertain prompt with no intrinsic
+    /// legal evidence downgrades even with an override selected.
     @MainActor
-    func testUncertainWithChatJurisdictionOverrideStaysGated() throws {
+    func testUncertainConversationDowngradesDespiteChatJurisdictionOverride() throws {
         let store = try makeStore()
         let controller = makeController(store: store)
         controller.loadChats()
@@ -143,6 +152,68 @@ final class JurisdictionlessUncertainRoutingTests: XCTestCase {
         controller.jurisdictionOverrideID = florida.id
 
         let uncertain = routed("Can you rewrite this paragraph to sound friendlier?", classifier: .uncertain)
+        XCTAssertEqual(controller.effectiveRoutedPrompt(uncertain).route.mode, .generalQA)
+    }
+
+    /// T-JLU-06 (matter parity). A matter's courts satisfy the jurisdiction gate,
+    /// so before this rule an uncertain conversational prompt ran a junk
+    /// CourtListener search and answered "didn't find authority matching this
+    /// query" (observed). It now answers on the general route, exactly like
+    /// global chat.
+    @MainActor
+    func testUncertainConversationInAMatterAnswersOnTheGeneralRoute() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Acme v. Beta", jurisdiction: "California")
+        let controller = makeGlobalChatController(
+            store: store,
+            runtimeClient: StubRuntimeClient { request in
+                .events([
+                    .event(request, 1, .token, token: "General answer."),
+                    .event(request, 2, .generationCompleted),
+                ])
+            },
+            scope: .matter(id: matter.id)
+        )
+        controller.loadChats()
+
+        let uncertain = routed("Can you rewrite this paragraph to sound friendlier?", classifier: .uncertain)
+        let effective = controller.effectiveRoutedPrompt(uncertain)
+        XCTAssertEqual(effective.route.mode, .generalQA)
+
+        await controller.performSend(
+            prompt: effective.prompt,
+            modelID: nil,
+            systemPrompt: effective.route.systemPrompt,
+            options: effective.route.options,
+            route: effective.route,
+            modelResolver: { @MainActor in .model(ModelID()) }
+        )
+        XCTAssertEqual(controller.messages.last?.content, "General answer.")
+    }
+
+    /// T-JLU-07. A named citation is the prompt showing legal intent: the gate
+    /// stays even when the classifier is uncertain and no jurisdiction exists.
+    @MainActor
+    func testUncertainNamedCitationStaysGated() throws {
+        let store = try makeStore()
+        let controller = makeController(store: store)
+        controller.loadChats()
+
+        let uncertain = routed("What happened in Smith v. Jones?", classifier: .uncertain)
+        XCTAssertEqual(uncertain.route.mode, .legalQA)
+        XCTAssertEqual(controller.effectiveRoutedPrompt(uncertain).route.mode, .legalQA)
+    }
+
+    /// T-JLU-08. A docket ask ("who sued X") is a factual litigation lookup the
+    /// legal route answers from RECAP — it must stay gated, uncertain or not.
+    @MainActor
+    func testUncertainDocketAskStaysGated() throws {
+        let store = try makeStore()
+        let controller = makeController(store: store)
+        controller.loadChats()
+
+        let uncertain = routed("Who sued Acme Corporation?", classifier: .uncertain)
+        XCTAssertEqual(uncertain.route.mode, .legalQA)
         XCTAssertEqual(controller.effectiveRoutedPrompt(uncertain).route.mode, .legalQA)
     }
 }
