@@ -1257,9 +1257,6 @@ private struct MessageRow: View {
                     if message.isStreaming {
                         ProgressView().controlSize(.small)
                     }
-                    if let assurance = message.assuranceState {
-                        AssuranceBadge(state: assurance)
-                    }
                     statusBadge
                 }
             }
@@ -1361,9 +1358,13 @@ private struct MessageRow: View {
     }
 
     /// Only show a header row when there's something to say — a system tag, the
-    /// streaming spinner, or a status badge. Plain answers get no heading.
+    /// streaming spinner, or a status badge. Plain answers get no heading. The
+    /// assurance state deliberately does NOT render here: in chat it duplicated
+    /// the collapsed Support check as unexplained noise; the shared vocabulary
+    /// stays on the Outputs/export surfaces, and a promoted answer still
+    /// carries its assurance state.
     private var showsHeader: Bool {
-        message.role == .system || message.isStreaming || hasStatusBadge || message.assuranceState != nil
+        message.role == .system || message.isStreaming || hasStatusBadge
     }
 
     private var showsCopy: Bool {
