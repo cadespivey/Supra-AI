@@ -323,6 +323,7 @@ run_case \
 
 accessibility_hook="${temporary_dir}/ResearchAuthoritiesUITests.swift"
 printf '%s\n' \
+  'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
   'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
   'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
   >"$accessibility_hook"
@@ -354,6 +355,15 @@ run_case \
 # disables signing even though Debug XPC authentication requires identifier-
 # bearing ad-hoc signatures on both the app and its embedded service.
 app_smoke_script="${scripts}/run-app-smoke-tests.sh"
+# Expected RED: the Diagnostics routing-availability test existed but the
+# protected smoke command did not select it, so deletion or wording drift would
+# still leave every executed CI test green.
+if grep -Fq -- '-only-testing:SupraAIUITests/DocumentChunkerRolloutUITests/testDiagnosticsShowsPromptClassifierAvailability' "$app_smoke_script"; then
+  printf '%s\n' 'PASS: app smoke executes the prompt-routing Diagnostics guard'
+else
+  record_failure 'app smoke does not execute the prompt-routing Diagnostics guard'
+fi
+
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_ALLOWED=YES' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_REQUIRED=YES' "$app_smoke_script" \
