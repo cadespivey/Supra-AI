@@ -119,6 +119,46 @@ final class PromptRoutingRecallBaselineTests: XCTestCase {
         )
     }
 
+    // MARK: - Marker-homonym false gating (committed baseline)
+
+    /// BASELINE (defect): every prompt below is unambiguously non-legal, yet the
+    /// deterministic marker override gates it — "sue" the name, "holding" the gerund,
+    /// an APA "citation", a consumer "warranty", the Supreme Court BUILDING,
+    /// biological "regulation", "elements of" a story, directional "right to", and
+    /// "good faith" matched across a hyphen. The injected `.general` classifier
+    /// proves the marker alone causes the gating, so this baseline is deterministic
+    /// on every machine. The user-visible cost is a jurisdiction demand on a casual
+    /// question (#115 review, finding 1).
+    ///
+    /// These assertions document the defect; INVERT them when marker refinement
+    /// lands. The refinement must keep the committed corpus's legal recall at 1.0
+    /// (PromptRoutingCorpusTests) — do not fix these by deleting markers wholesale.
+    func testMarkerHomonymsCurrentlyGateNonLegalPrompts() {
+        let router = ModelRouter(
+            configuration: LegalModelConfiguration(
+                requireCitations: true,
+                jurisdictionRequired: true
+            ),
+            intentClassifier: FixedClassifier(result: .general)
+        )
+        for prompt in [
+            "Can you ask Sue about the meeting tomorrow?",
+            "I'm holding a party on Saturday afternoon.",
+            "How do I format an APA citation?",
+            "Is my MacBook still under warranty?",
+            "What time does the Supreme Court building open for tourists?",
+            "How does blood sugar regulation work?",
+            "What are the elements of a good story?",
+            "Scroll right to see the hidden columns.",
+            "Recommend a good faith-based charity.",
+        ] {
+            XCTAssertTrue(
+                router.routePrompt(prompt).route.requiresCitations,
+                "BASELINE (defect): marker homonym no longer gates — if deliberate, invert this assertion: \(prompt)"
+            )
+        }
+    }
+
     // MARK: - Invariants Phase 4 must preserve
 
     /// Explicit slash commands bypass inference entirely and must keep doing so — they are the

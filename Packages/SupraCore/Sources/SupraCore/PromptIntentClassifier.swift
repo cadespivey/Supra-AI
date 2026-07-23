@@ -135,10 +135,15 @@ public struct SemanticPromptIntentClassifier: PromptIntentClassifying {
     }
 }
 
-/// A high-precision deterministic override for legal terms whose meaning is unequivocal enough
-/// to gate without consulting the semantic classifier. Matching is token/phrase bounded: an API
-/// being "reliable" is not the legal term "liable", and an "issue" does not contain the verb
-/// "sue" for routing purposes.
+/// A deterministic override that gates without consulting the semantic classifier.
+/// Matching is token/phrase bounded — an API being "reliable" is not the legal term
+/// "liable", and an "issue" does not contain the verb "sue" — but bounding cannot
+/// disambiguate homonyms: "ask Sue", "holding a party", an APA "citation", a MacBook
+/// "warranty", and the Supreme Court BUILDING all still gate (measured baseline:
+/// PromptRoutingRecallBaselineTests.testMarkerHomonymsCurrentlyGateNonLegalPrompts).
+/// That trade is deliberate: every miss here fails toward the gated route, never
+/// away from it. Refine only with the homonym baseline and the routing corpus's
+/// recall gate both in view.
 enum DeterministicLegalIntentMarkers {
     private static let phrases = [
         "case law", "statute", "regulation", "precedent", "jurisdiction",
