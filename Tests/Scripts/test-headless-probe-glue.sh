@@ -55,8 +55,16 @@ fi
 # Observed RED before the degraded-store fix: an unavailable coverage probe
 # (fallback store, recovery state, or Debug build) must consult the typed
 # reason and emit it before terminating.
+# The exact machine-readable envelope is load-bearing: the headless harness
+# polls for these delimiters and reads both status and reason. These assertions
+# are [standing] guards because the production emitter already had the correct
+# shape when this review exposed that function-name greps alone did not pin it.
 if grep -Fq 'coverageShadowUnavailableReason' <<<"$code" \
-    && grep -Fq 'emitCoverageShadowUnavailable' <<<"$code"; then
+    && grep -Fq 'emitCoverageShadowUnavailable' <<<"$code" \
+    && grep -Fq '"status": "coverage_probe_unavailable"' <<<"$code" \
+    && grep -Fq '"reason": reason' <<<"$code" \
+    && grep -Fq 'print("===COVERAGE_SHADOW_UNAVAILABLE_BEGIN===")' <<<"$code" \
+    && grep -Fq 'print("===COVERAGE_SHADOW_UNAVAILABLE_END===")' <<<"$code"; then
   printf '%s\n' 'PASS: unavailable coverage probe reports its reason and terminates'
 else
   fail 'coverage probe degraded/Debug branch does not report unavailability'

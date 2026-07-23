@@ -54,6 +54,42 @@ final class DocumentChunkerRolloutUITests: XCTestCase {
         app.buttons["diagnostics.chunker.switch"].click()
         assertVersion("v2")
     }
+
+    /// Standing guard for the routing-degradation surface added by the review
+    /// follow-up. It was green at introduction because the row already existed;
+    /// the guard makes deleting it or drifting its user-facing state observable in
+    /// the protected UI smoke suite.
+    func testDiagnosticsShowsPromptClassifierAvailability() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+
+        let diagnosticsRoute = app.staticTexts["Diagnostics"].firstMatch
+        XCTAssertTrue(diagnosticsRoute.waitForExistence(timeout: 20))
+        diagnosticsRoute.click()
+
+        let availability = app.descendants(matching: .any)[
+            "diagnostics.routing.classifierAvailability"
+        ]
+        XCTAssertTrue(
+            availability.waitForExistence(timeout: 20),
+            "Diagnostics must expose whether semantic prompt routing is available"
+        )
+        let renderedState = availability.value as? String ?? availability.label
+        XCTAssertTrue(
+            [
+                "Available",
+                "Unavailable — non-marker prompts all use the gated legal route",
+            ].contains(renderedState),
+            "Unexpected prompt-routing availability state: \(renderedState)"
+        )
+    }
 }
 
 /// T-OPS-02 drives the hermetic interrupted-import fixture through both user

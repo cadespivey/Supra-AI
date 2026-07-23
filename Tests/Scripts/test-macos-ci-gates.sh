@@ -421,7 +421,10 @@ fi
 # A gate that is never executed is not a gate; the meta-harness must run on
 # every protected CI pass.
 ci_workflow="${repo_root}/.github/workflows/macos-ci.yml"
-if grep -Fq 'Tests/Scripts/test-verify-product-claims.sh' "$ci_workflow"; then
+# [standing] Match an active run-block command, not a comment mentioning the
+# script. This was green at introduction because the workflow already executes
+# both commands; it prevents a commented-out gate from satisfying this meta-gate.
+if grep -Eq '^[[:space:]]+bash Tests/Scripts/test-verify-product-claims\.sh([[:space:]]|$)' "$ci_workflow"; then
   printf '%s\n' 'PASS: Protected macOS CI executes the product-claims verifier meta-tests'
 else
   record_failure 'Protected macOS CI does not execute Tests/Scripts/test-verify-product-claims.sh'
@@ -431,7 +434,7 @@ fi
 # AppEnvironment's probe isolation glue (user-store authority, exclusive
 # dispatch, no exit(), coverage unavailability reporting) exist only if CI runs
 # them.
-if grep -Fq 'Tests/Scripts/test-headless-probe-glue.sh' "$ci_workflow"; then
+if grep -Eq '^[[:space:]]+bash Tests/Scripts/test-headless-probe-glue\.sh([[:space:]]|$)' "$ci_workflow"; then
   printf '%s\n' 'PASS: Protected macOS CI executes the headless probe glue guards'
 else
   record_failure 'Protected macOS CI does not execute Tests/Scripts/test-headless-probe-glue.sh'
