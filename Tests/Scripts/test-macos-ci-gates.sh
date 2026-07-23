@@ -423,6 +423,25 @@ else
   printf '%s\n' 'PASS: shell height comes from the layout proposal, not AppKit window observation'
 fi
 
+# Expected RED before the chat assurance-badge removal: chat message rows must
+# not render the assurance badge. The seven-state assurance vocabulary stays on
+# the Outputs/export surfaces (and still travels with promoted answers); in
+# chat it duplicated the collapsed Support check and read as unexplained noise
+# above the answer (user decision; DOCUMENT-OUTPUT-ASSURANCE-UX wording updated
+# in the same change). Comment lines excluded.
+chat_view_source="${repo_root}/Apps/SupraAI/SupraAI/GlobalChatsView.swift"
+chat_assurance_badges="$(
+  { grep -vE '^[[:space:]]*//' "$chat_view_source" |
+      grep -F 'AssuranceBadge(' || true; } |
+    wc -l | tr -d ' '
+)"
+if [[ "$chat_assurance_badges" != '0' ]]; then
+  record_failure \
+    "chat message rows must not render the assurance badge (found ${chat_assurance_badges} render site(s) in GlobalChatsView)"
+else
+  printf '%s\n' 'PASS: chat message rows render no assurance badge'
+fi
+
 # Expected RED before the claims meta-harness was wired into CI: no workflow
 # executed Tests/Scripts/test-verify-product-claims.sh, so the harness that
 # verifies the product-claims gate could rot undetected on main — its
