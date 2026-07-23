@@ -97,7 +97,7 @@ public enum DocumentQAPromptBuilder {
         if mode == .memo {
             lines.append("- Write a formal memo with short headed sections (Question Presented, Short Answer, Analysis), still citing inline.")
         } else {
-            lines.append("- Be short and direct. State the answer once: do not repeat or rephrase it, do not echo it inside brackets, and do not open with a label such as \"Answer:\" or \"ANSWER:\".")
+            lines.append("- Be short and direct. State the answer exactly once, as one final line that begins \"Answer:\" and carries its citation labels in that same line. Do not state or rephrase the answer anywhere else.")
         }
         lines.append("")
         lines.append(contentsOf: UntrustedDocumentSourceEnvelope.promptLines(sources))
