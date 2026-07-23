@@ -1263,22 +1263,43 @@ private struct MessageRow: View {
                     statusBadge
                 }
             }
-            if let reasoning {
+            if let reasoningSectionText {
                 DisclosureGroup(isExpanded: reasoningExpanded) {
-                    Text(EmojiStripper.strip(reasoning))
+                    Text(EmojiStripper.strip(reasoningSectionText))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 2)
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(Text(EmojiStripper.strip(reasoning)))
+                        .accessibilityLabel(Text(EmojiStripper.strip(reasoningSectionText)))
                 } label: {
                     Label("Reasoning", systemImage: "brain")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
                 .tint(.secondary)
+            }
+            // Process before result (user-chosen order): the collapsed Support
+            // check sits with Reasoning, ABOVE the answer, so the response reads
+            // Reasoning → Support check → Answer → sources.
+            if let supportNotice {
+                DisclosureGroup(isExpanded: $supportNoticeExpanded) {
+                    MarkdownView(text: supportNotice, citationLabels: [], onCitationTap: { _ in })
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Text(EmojiStripper.strip(supportNotice)))
+                } label: {
+                    Label("Support check", systemImage: "exclamationmark.triangle")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .tint(.secondary)
+                .accessibilityIdentifier("chat.message.supportNotice.\(message.id)")
             }
             MarkdownView(
                 text: displayContent,
@@ -1300,24 +1321,6 @@ private struct MessageRow: View {
             // citations stay independently actionable via the sources block below.
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(displayContent))
-            if let supportNotice {
-                DisclosureGroup(isExpanded: $supportNoticeExpanded) {
-                    MarkdownView(text: supportNotice, citationLabels: [], onCitationTap: { _ in })
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 2)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(Text(EmojiStripper.strip(supportNotice)))
-                } label: {
-                    Label("Support check", systemImage: "exclamationmark.triangle")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-                .tint(.secondary)
-                .accessibilityIdentifier("chat.message.supportNotice.\(message.id)")
-            }
             if !message.citations.isEmpty {
                 sourcesBlock
             }
@@ -1469,16 +1472,31 @@ private struct MessageRow: View {
     }
 
     /// What the row RENDERS as the answer: the out-of-band verification banners
-    /// are split off into the collapsed notice below, so a warning block cannot
-    /// dwarf the answer it qualifies. User turns never carry a banner.
+    /// are split off into the collapsed notice, and any working prose before the
+    /// final "Answer:" line folds into the Reasoning section — the answer is
+    /// stated exactly once. User turns are never split.
     private var displayContent: String {
-        SupportNoticeContent.split(answerContent).body
+        guard message.role == .assistant else { return answerContent }
+        return FinalAnswerContent.split(SupportNoticeContent.split(answerContent).body).answer
     }
 
     /// The trailing verification banner block, rendered collapsed and subdued.
     private var supportNotice: String? {
         guard message.role == .assistant else { return nil }
         return SupportNoticeContent.split(answerContent).notice
+    }
+
+    /// The collapsed Reasoning section's text: the model's chain-of-thought plus
+    /// any pre-"Answer:" working prose the fold moved out of the answer.
+    private var reasoningSectionText: String? {
+        var sections: [String] = []
+        if let reasoning { sections.append(reasoning) }
+        if message.role == .assistant,
+           let preamble = FinalAnswerContent.split(SupportNoticeContent.split(answerContent).body).preamble {
+            sections.append(preamble)
+        }
+        let combined = sections.joined(separator: "\n\n")
+        return combined.isEmpty ? nil : combined
     }
 
     @ViewBuilder
