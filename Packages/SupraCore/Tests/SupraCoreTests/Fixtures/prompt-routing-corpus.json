@@ -28,5 +28,10 @@
   {"id":"G12","expected":"general","prompt":"Summarize these meeting notes into action items."},
   {"id":"G13","expected":"general","prompt":"How can I make my home Wi-Fi faster?"},
   {"id":"G14","expected":"general","prompt":"What ingredients go into vegetable curry?"},
-  {"id":"G15","expected":"general","prompt":"Who won the chess match?"}
+  {"id":"G15","expected":"general","prompt":"Who won the chess match?"},
+  {"id":"G16","expected":"general","prompt":"Thanks, that was helpful"},
+  {"id":"G17","expected":"general","prompt":"What do you think about this email draft?"},
+  {"id":"G18","expected":"general","prompt":"Tell me a joke about lawyers"},
+  {"id":"G19","expected":"general","prompt":"Sounds good, let's go with that plan"},
+  {"id":"G20","expected":"general","prompt":"Can you rewrite this paragraph to sound friendlier?"}
 ]

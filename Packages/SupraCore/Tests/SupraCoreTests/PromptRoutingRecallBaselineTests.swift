@@ -119,6 +119,40 @@ final class PromptRoutingRecallBaselineTests: XCTestCase {
         )
     }
 
+    // MARK: - Inference provenance travels with the route
+
+    /// The chat controller needs to know WHY a prompt landed on the gated route:
+    /// a fail-closed `.uncertain` in a chat with no jurisdiction context can only
+    /// produce the jurisdiction block (it answers nothing), so the controller may
+    /// answer it on the general route — while confident `.legal` classifications
+    /// and deterministic markers must keep their gates, and slash commands are the
+    /// user's explicit choice with no inference at all.
+    ///
+    /// Expected RED: compile error — `RoutedPrompt` has no `inferredIntent`.
+    func testRoutedPromptRecordsInferenceProvenance() {
+        XCTAssertNil(
+            router.routePrompt("/ask what is 2+2").inferredIntent,
+            "a slash command is explicit, not inferred"
+        )
+        XCTAssertEqual(
+            ModelRouter(intentClassifier: FixedClassifier(result: .general))
+                .routePrompt("What is the standard for summary judgment?").inferredIntent,
+            .legal,
+            "a deterministic marker is a confident legal signal regardless of the classifier"
+        )
+        XCTAssertEqual(
+            ModelRouter(intentClassifier: FixedClassifier(result: .uncertain))
+                .routePrompt("A prompt outside the classifier corpus").inferredIntent,
+            .uncertain,
+            "the fail-closed route must be distinguishable from a confident one"
+        )
+        XCTAssertEqual(
+            ModelRouter(intentClassifier: FixedClassifier(result: .general))
+                .routePrompt("Plan a picnic for Saturday").inferredIntent,
+            .general
+        )
+    }
+
     // MARK: - Classifier availability is observable
 
     /// The semantic classifier degrades to `.uncertain` — and the router therefore
