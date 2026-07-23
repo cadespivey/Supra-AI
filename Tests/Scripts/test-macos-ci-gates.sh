@@ -427,6 +427,16 @@ else
   record_failure 'Protected macOS CI does not execute Tests/Scripts/test-verify-product-claims.sh'
 fi
 
+# Expected RED before the probe-glue guards were wired into CI: the guards over
+# AppEnvironment's probe isolation glue (user-store authority, exclusive
+# dispatch, no exit(), coverage unavailability reporting) exist only if CI runs
+# them.
+if grep -Fq 'Tests/Scripts/test-headless-probe-glue.sh' "$ci_workflow"; then
+  printf '%s\n' 'PASS: Protected macOS CI executes the headless probe glue guards'
+else
+  record_failure 'Protected macOS CI does not execute Tests/Scripts/test-headless-probe-glue.sh'
+fi
+
 if (( failures != 0 )); then
   printf 'macOS CI gate tests failed: %d\n' "$failures" >&2
   exit 1

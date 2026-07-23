@@ -106,6 +106,53 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         )
     }
 
+    // MARK: - Coverage probe degraded-store / build-configuration contract
+
+    /// T-PROBE-10. A resolved coverage probe that cannot run must say WHY, so the app
+    /// glue can emit the reason and terminate. Before this contract the
+    /// fallback/recovery branch silently ran nothing: no probe, no report, no
+    /// termination — a headless harness polling for the report delimiters hung
+    /// forever. Debug builds are refused outright: the coverage probe is the one
+    /// real-store diagnostic, and real data is Release-only (a Debug launch could
+    /// migrate the user's live schema on mismatch).
+    ///
+    /// Expected RED: compile error — `coverageShadowUnavailableReason` does not exist
+    /// on `HeadlessProbeMode`.
+    func testCoverageShadowUnavailabilityIsExplicit() {
+        XCTAssertNil(
+            HeadlessProbeMode.coverageShadowUnavailableReason(
+                isFallbackStore: false, hasRecoveryState: false, isDebugBuild: false
+            ),
+            "a healthy store in a Release build runs the probe"
+        )
+        XCTAssertEqual(
+            HeadlessProbeMode.coverageShadowUnavailableReason(
+                isFallbackStore: true, hasRecoveryState: false, isDebugBuild: false
+            ),
+            "coverage_probe_store_is_fallback"
+        )
+        XCTAssertEqual(
+            HeadlessProbeMode.coverageShadowUnavailableReason(
+                isFallbackStore: false, hasRecoveryState: true, isDebugBuild: false
+            ),
+            "coverage_probe_store_in_recovery"
+        )
+        XCTAssertEqual(
+            HeadlessProbeMode.coverageShadowUnavailableReason(
+                isFallbackStore: false, hasRecoveryState: false, isDebugBuild: true
+            ),
+            "coverage_probe_requires_release_build",
+            "Debug builds must never open the real store, even for the read-only diagnostic"
+        )
+        XCTAssertEqual(
+            HeadlessProbeMode.coverageShadowUnavailableReason(
+                isFallbackStore: true, hasRecoveryState: true, isDebugBuild: true
+            ),
+            "coverage_probe_requires_release_build",
+            "the build-configuration refusal outranks store-state reasons"
+        )
+    }
+
     // MARK: - Disk-truth model registry on an isolated store
 
     /// T-PROBE-05. A manifest-verified model folder registers into the isolated
