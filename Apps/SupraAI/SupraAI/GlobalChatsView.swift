@@ -899,10 +899,19 @@ struct GlobalChatsView: View {
     /// Routes the prompt, loads the role model if needed, then streams the answer.
     private func submit(_ rawPrompt: String) {
         guard !rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,
-              !controller.isGenerating, !attachmentBusy else { return }
+              !attachmentBusy else { return }
+        // Never a silent dead Return: while an answer (or its model load) is in
+        // flight, say so and keep the draft instead of doing nothing.
+        if controller.isGenerating {
+            attachmentError = "Still answering — wait for it to finish, or press Stop, then send again."
+            return
+        }
         let rawAttachments = attachments
         let router = ModelRouter(configuration: .fromEnvironment())
-        let routed = router.routePrompt(rawPrompt)
+        // The controller may answer a fail-closed uncertain route on the general
+        // route when no jurisdiction is available anywhere (global-chat parity
+        // with matter scope, where matter courts satisfy the gate).
+        let routed = controller.effectiveRoutedPrompt(router.routePrompt(rawPrompt))
         guard controller.canSendRoutedPrompt(routed) else {
             attachmentError = "Enter a prompt, paste text to verify, or use `/critique` after an assistant draft."
             return

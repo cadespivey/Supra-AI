@@ -627,6 +627,35 @@ public final class GlobalChatController: ObservableObject {
         }
     }
 
+    /// The controller-level backstop for the fail-closed router in a chat with no
+    /// jurisdiction context: an INFERRED-UNCERTAIN legal route whose jurisdiction
+    /// gate cannot be satisfied from anywhere (prompt, chat picker, matter scope)
+    /// could only produce the "I need the jurisdiction" block, so it is answered
+    /// on the general route instead — whose system prompt still deflects genuine
+    /// legal asks toward the research route. Confident `.legal` classifications,
+    /// deterministic markers, and explicit slash commands keep their gates, and
+    /// any available jurisdiction keeps `.uncertain` gated exactly as before —
+    /// matter chat is unchanged. Recall protection is untouched.
+    public func effectiveRoutedPrompt(_ routed: RoutedPrompt) -> RoutedPrompt {
+        guard routed.command == nil,
+              routed.route.mode == .legalQA,
+              routed.inferredIntent == .uncertain,
+              routed.route.requiresJurisdiction
+        else { return routed }
+        // Mirror requiresRuntimeModel's jurisdiction replay (D4: this pre-gate
+        // must match the pipeline's own classification, history included).
+        let history = selectedChatID.map { replayHistory(chatID: $0) } ?? []
+        let classification = classificationApplyingChatJurisdiction(
+            classificationApplyingMatterScope(LegalQueryClassifier.classify(routed.prompt)),
+            prompt: routed.prompt,
+            history: history
+        )
+        guard classification.needsJurisdictionForAuthority else { return routed }
+        var downgraded = routed
+        downgraded.route = ModelRouter(configuration: legalConfiguration).route(for: .generalQA)
+        return downgraded
+    }
+
     public func canSendRoutedPrompt(_ routed: RoutedPrompt) -> Bool {
         let trimmed = routed.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         switch routed.route.mode {
