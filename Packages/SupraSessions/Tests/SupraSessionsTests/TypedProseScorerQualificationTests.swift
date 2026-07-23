@@ -267,6 +267,102 @@ final class TypedProseScorerQualificationTests: XCTestCase {
         )
     }
 
+    // MARK: - Contrastive negation scope (review follow-up)
+
+    /// T-MQ-13. A correct contrastive answer states the expected value and denies the
+    /// competitor in one sentence: "The fee is $9,000, not $12,000." The whole-sentence
+    /// negation rule scores it WRONG (the sentence contains "not", so its $9,000 is
+    /// never affirmative), which understates verifier noise — the very metric the
+    /// pilot publishes.
+    ///
+    /// Expected RED: both contrastive forms score `isCorrect == false` because
+    /// `isNegated` classifies the entire sentence by token presence.
+    func testContrastiveDenialOfTheCompetitorIsCorrect() {
+        XCTAssertTrue(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is $9,000, not $12,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "denying the competing value must not erase the affirmative statement of the expected value"
+        )
+        XCTAssertTrue(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is not $12,000, but $9,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "the reverse contrastive form affirms the value after \"but\""
+        )
+    }
+
+    /// T-MQ-13A. The contrastive refinement must stay fail-closed: a sentence that
+    /// only DENIES the expected value never becomes correct, in either clause
+    /// position, and the denied competitor never counts as a contradiction the
+    /// answer must not have made.
+    ///
+    /// Expected RED: none — these guard assertions already hold and must survive the
+    /// contrastive change; they are committed with T-MQ-13 so the GREEN cannot
+    /// overshoot into treating denial as affirmation.
+    func testContrastiveRefinementStaysFailClosed() {
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is not $9,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "a bare denial of the expected value is not an answer"
+        )
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is $12,000, not $9,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "affirming the competitor while denying the expected value is wrong"
+        )
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is not $9,000, not even close [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "stacked denials must not resolve to an affirmative head"
+        )
+    }
+
+    // MARK: - Artifact schema enforcement (review follow-up)
+
+    /// T-MQ-14. A schema version that is merely RECORDED protects nothing: an
+    /// artifact produced under old scoring semantics decodes silently and re-scores
+    /// under the new semantics with no mismatch signal. Decoding must refuse any
+    /// artifact whose schema is not the current one.
+    ///
+    /// Expected RED: synthesized `Codable` decodes a `schemaVersion: 2` artifact
+    /// without complaint, so `XCTAssertThrowsError` fails.
+    func testDecodingRefusesAnArtifactFromAnotherSchema() throws {
+        let outcomes = [
+            outcome(
+                answer: "The engagement fee is $9,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            ),
+        ]
+        let record = TypedProseABRunRecord(
+            outcomes: outcomes,
+            typed: TypedProseABScorer.report(outcomes: outcomes, arm: .typed),
+            prose: TypedProseABScorer.report(outcomes: outcomes, arm: .prose)
+        )
+        let encoded = try JSONEncoder().encode(record)
+        var object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object["schemaVersion"] = TypedProseABRunRecord.currentSchemaVersion - 1
+        let stale = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(TypedProseABRunRecord.self, from: stale),
+            "an artifact recorded under different scoring semantics must not silently re-score"
+        ) { error in
+            guard case DecodingError.dataCorrupted = error else {
+                return XCTFail("schema refusal must be a decoding error, got \(error)")
+            }
+        }
+    }
+
     // MARK: - Fixtures and raw-output record
 
     /// T-MQ-11. Every answerable standard fixture carries a typed expectation (no
@@ -290,8 +386,8 @@ final class TypedProseScorerQualificationTests: XCTestCase {
     /// published measurement can be independently re-scored from its own artifact.
     func testRunRecordRetainsRawOutputsAndRoundTrips() throws {
         XCTAssertEqual(
-            TypedProseABRunRecord.currentSchemaVersion, 2,
-            "a proposition-binding semantics change requires a new artifact schema"
+            TypedProseABRunRecord.currentSchemaVersion, 3,
+            "a scoring-semantics change (contrastive negation scope) requires a new artifact schema"
         )
         let outcomes = [
             outcome(
