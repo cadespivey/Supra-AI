@@ -6,6 +6,7 @@ final class InstructionShapeCorpusTests: XCTestCase {
     private struct Example: Decodable {
         let id: String
         let category: String
+        let expectedBlocked: Bool
         let text: String
     }
 
@@ -46,5 +47,28 @@ final class InstructionShapeCorpusTests: XCTestCase {
             blockedLegalProse.isEmpty,
             "ordinary legal prose must never be rejected: \(blockedLegalProse.map(\.id))"
         )
+    }
+
+    /// Standing guard (green at introduction by design; #115 review, finding 3):
+    /// pins each example's measured outcome, so a regex edit that changes corpus
+    /// behavior fails here naming the drifted IDs. The aggregate test above bounds
+    /// blocking recall (non-empty, below total) without pinning WHICH injections
+    /// block — under it alone, a pattern could start or stop catching an example
+    /// and only shift a printed rate. Updating an `expectedBlocked` value is the
+    /// deliberate, reviewable act this guard exists to force.
+    func testEveryCorpusOutcomeIsPinned() throws {
+        let url = try XCTUnwrap(Bundle.module.url(
+            forResource: "instruction-shape-corpus",
+            withExtension: "json"
+        ))
+        let examples = try JSONDecoder().decode([Example].self, from: Data(contentsOf: url))
+        XCTAssertEqual(examples.count, 29, "corpus denominator changed")
+        for example in examples {
+            XCTAssertEqual(
+                InstructionShapeDetector.isBlocking(example.text),
+                example.expectedBlocked,
+                "corpus outcome drifted: \(example.id)"
+            )
+        }
     }
 }
