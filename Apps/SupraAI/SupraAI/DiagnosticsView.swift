@@ -172,6 +172,20 @@ struct DiagnosticsView: View {
             }
 
             Section {
+                LabeledContent(
+                    "Semantic intent classifier",
+                    value: SemanticPromptIntentClassifier.isAvailable
+                        ? "Available"
+                        : "Unavailable — non-marker prompts all use the gated legal route"
+                )
+                .accessibilityIdentifier("diagnostics.routing.classifierAvailability")
+            } header: {
+                Text("Prompt Routing").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
+            } footer: {
+                Text("Chat prompts route by on-device sentence embeddings plus deterministic legal markers, failing closed to the source-grounded legal route when uncertain. If the macOS embedding asset is unavailable, every prompt without a marker or slash command is treated as legal and will ask for a jurisdiction — start general questions with /ask, and check for pending macOS asset downloads.")
+            }
+
+            Section {
                 if let report = coverageReport {
                     LabeledContent("Questions scanned", value: "\(report.questionsScanned)")
                     LabeledContent("Matters", value: "\(report.matterCount)")

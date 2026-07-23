@@ -155,12 +155,21 @@ public struct TypedProseABReport: Sendable, Equatable, Codable {
 /// independently RE-SCORED from its own artifact — decode `outcomes`, re-run
 /// `TypedProseABScorer.report`, and compare against the recorded reports.
 public struct TypedProseABRunRecord: Sendable, Equatable, Codable {
-    public static let currentSchemaVersion = 2
+    /// v4: contrastive negation scope is limited to disjoint, bare typed values;
+    /// comma-not adjuncts, hypotheticals, and repeated denied values fail closed.
+    /// Decoding refuses any other schema — a recorded version that is never checked
+    /// protects nothing, and re-scoring an old artifact under new semantics would
+    /// silently change published numbers.
+    public static let currentSchemaVersion = 4
 
     public let schemaVersion: Int
     public let outcomes: [TypedProseABOutcome]
     public let typed: TypedProseABReport
     public let prose: TypedProseABReport
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, outcomes, typed, prose
+    }
 
     public init(
         schemaVersion: Int = TypedProseABRunRecord.currentSchemaVersion,
@@ -172,6 +181,24 @@ public struct TypedProseABRunRecord: Sendable, Equatable, Codable {
         self.outcomes = outcomes
         self.typed = typed
         self.prose = prose
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try container.decode(Int.self, forKey: .schemaVersion)
+        guard version == Self.currentSchemaVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "artifact schema \(version) does not match scorer schema "
+                    + "\(Self.currentSchemaVersion); the scoring semantics differ, so this artifact "
+                    + "cannot be re-scored — regenerate it with the current build"
+            )
+        }
+        self.schemaVersion = version
+        self.outcomes = try container.decode([TypedProseABOutcome].self, forKey: .outcomes)
+        self.typed = try container.decode(TypedProseABReport.self, forKey: .typed)
+        self.prose = try container.decode(TypedProseABReport.self, forKey: .prose)
     }
 }
 
@@ -272,11 +299,10 @@ public enum TypedProseABScorer {
         let negated: Bool
     }
 
-    /// Splits the answer into sentences (citation labels stripped first so `[S1]`
-    /// digits are not values; periods between digits masked so `$9,000.00` does not
-    /// end a sentence) and tags each with its negation polarity. A value found in a
-    /// negated sentence is neither credit nor contradiction — it is simply not an
-    /// affirmative statement of that value.
+    /// Splits the answer into negation-scoped spans (citation labels stripped first
+    /// so `[S1]` digits are not values; periods between digits masked so `$9,000.00`
+    /// does not end a sentence). A value found in a negated span is neither credit
+    /// nor contradiction — it is simply not an affirmative statement of that value.
     private static func classifiedSentences(in answer: String) -> [ClassifiedSentence] {
         let unlabeled = answer.replacingOccurrences(
             of: #"\[[A-Za-z]{1,3}\d{1,4}\]"#,
@@ -293,7 +319,113 @@ public enum TypedProseABScorer {
             .map { $0.replacingOccurrences(of: "\u{F8FF}", with: ".") }
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-            .map { ClassifiedSentence(text: $0, negated: isNegated($0)) }
+            .flatMap(negationSpans)
+    }
+
+    /// Splits one sentence into negation-scoped spans. Contrast is recognized only
+    /// when both sides contain DISJOINT values of the same typed field and the
+    /// denied/replacement side is a bare value phrase. That deliberately excludes
+    /// comma-not adjuncts ("not including tax"), appositives, hypotheticals, and a
+    /// post-but re-mention of the denied value. Unrecognized shapes keep
+    /// whole-sentence negation and therefore fail closed.
+    private static func negationSpans(_ sentence: String) -> [ClassifiedSentence] {
+        // Reverse contrastive first ("not X, but Y"). The replacement must be a
+        // bare, disjoint typed value; prose that merely re-mentions the denied value
+        // ("but the draft lists X") cannot become affirmative credit.
+        if let match = firstMatch(
+            #"(?i)^(.*?\b(?:not|never)\b.*?),\s*but\s+(?:rather\s+)?(.+)$"#,
+            in: sentence
+        ), isBareTypedValuePhrase(match[1]), hasDisjointTypedContrast(match[0], match[1]) {
+            return [ClassifiedSentence(text: match[0], negated: true)] + negationSpans(match[1])
+        }
+
+        // Forward contrastive ("X, not Y"). Only the bare competitor is negated;
+        // any following clause remains affirmative and subject to value allowlists.
+        if let match = firstMatch(
+            #"(?i)^(.*?),\s*(?:but\s+)?(?:not|never)\b(.*)$"#,
+            in: sentence
+        ), !beginsWithConditional(match[0]),
+           let contrast = contrastiveAtomAndSuffix(head: match[0], tail: match[1]) {
+            var spans = negationSpans(match[0])
+            spans.append(ClassifiedSentence(text: contrast.atom, negated: true))
+            if let suffix = contrast.suffix {
+                spans.append(contentsOf: negationSpans(suffix))
+            }
+            return spans
+        }
+
+        // Preserve an independent affirmative clause before a later negated one.
+        // This is intentionally narrower than general "but" splitting: the prefix
+        // must itself be non-negated and the remainder must contain negation.
+        if let match = firstMatch(
+            #"(?i)^(.+?),\s*but\s+(.+\b(?:not|never)\b.*)$"#,
+            in: sentence
+        ), !isNegated(match[0]) {
+            return negationSpans(match[0]) + negationSpans(match[1])
+        }
+        return [ClassifiedSentence(text: sentence, negated: isNegated(sentence))]
+    }
+
+    /// Finds the shortest comma-delimited tail prefix that is a bare typed value
+    /// contrast. Commas inside currency have no following whitespace; commas inside
+    /// long-form dates are skipped until the prefix parses as a complete date.
+    private static func contrastiveAtomAndSuffix(
+        head: String,
+        tail: String
+    ) -> (atom: String, suffix: String?)? {
+        guard !beginsWithConditional(head) else { return nil }
+        guard let comma = try? NSRegularExpression(pattern: #",\s+"#) else { return nil }
+        let fullRange = NSRange(tail.startIndex..<tail.endIndex, in: tail)
+        for match in comma.matches(in: tail, range: fullRange) {
+            guard let delimiter = Range(match.range, in: tail) else { continue }
+            let atom = String(tail[..<delimiter.lowerBound])
+                .trimmingCharacters(in: .whitespaces)
+            let suffix = String(tail[delimiter.upperBound...])
+                .trimmingCharacters(in: .whitespaces)
+            if isBareTypedValuePhrase(atom), hasDisjointTypedContrast(head, atom) {
+                return (atom, suffix.isEmpty ? nil : suffix)
+            }
+        }
+        let atom = tail.trimmingCharacters(in: .whitespaces)
+        guard isBareTypedValuePhrase(atom), hasDisjointTypedContrast(head, atom) else {
+            return nil
+        }
+        return (atom, nil)
+    }
+
+    /// Contrast is safe only when both sides state at least one value of the same
+    /// typed field and those sets do not overlap.
+    private static func hasDisjointTypedContrast(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsMoney = Set(moneyValues(in: lhs))
+        let rhsMoney = Set(moneyValues(in: rhs))
+        if !lhsMoney.isEmpty, !rhsMoney.isEmpty, lhsMoney.isDisjoint(with: rhsMoney) {
+            return true
+        }
+        let lhsDates = Set(dateValues(in: lhs))
+        let rhsDates = Set(dateValues(in: rhs))
+        return !lhsDates.isEmpty && !rhsDates.isEmpty && lhsDates.isDisjoint(with: rhsDates)
+    }
+
+    /// A typed value without relational prose. Keeping this deliberately strict is
+    /// the scorer's fail-closed boundary: "$9,000" and "June 15, 2026" qualify;
+    /// "the draft lists $9,000" and "including tax" do not.
+    private static func isBareTypedValuePhrase(_ text: String) -> Bool {
+        guard !moneyValues(in: text).isEmpty || !dateValues(in: text).isEmpty else {
+            return false
+        }
+        let allowedWords: Set<String> = ["and", "dollars", "usd"]
+        return tokens(in: text).allSatisfy { token in
+            token.allSatisfy(\.isNumber)
+                || token.range(of: #"^\d+(?:st|nd|rd|th)$"#, options: .regularExpression) != nil
+                || numberWords[token] != nil
+                || months[token] != nil
+                || allowedWords.contains(token)
+        }
+    }
+
+    private static func beginsWithConditional(_ text: String) -> Bool {
+        guard let first = tokens(in: text).first else { return false }
+        return ["if", "unless", "whether", "assuming", "provided"].contains(first)
     }
 
     private static let negationTokens: Set<String> = [
@@ -486,6 +618,15 @@ public enum TypedProseABScorer {
 
     private static func captures(_ pattern: String, in text: String) -> [String] {
         groupCaptures(pattern, in: text).compactMap(\.first)
+    }
+
+    private static func firstMatch(_ pattern: String, in text: String) -> [String]? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range) else { return nil }
+        return (1..<match.numberOfRanges).compactMap { index in
+            Range(match.range(at: index), in: text).map { String(text[$0]) }
+        }
     }
 
     private static func groupCaptures(_ pattern: String, in text: String) -> [[String]] {

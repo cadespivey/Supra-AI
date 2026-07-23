@@ -267,17 +267,29 @@ final class AppEnvironment: ObservableObject {
         // mutually exclusive and a conflict runs NOTHING. The model-dependent
         // probes run against the isolated throwaway store `makeStore()` opened for
         // this launch; the coverage probe is the one justified real-store
-        // diagnostic (read-only replay of this store's own chat history, skipped
-        // on fallback/recovery stores). Probes are triggered from init (not
-        // `bootstrap()`, which is driven by a view `.task` that never fires in a
-        // windowless launch) and leave through the app's normal termination path.
+        // diagnostic (read-only replay of this store's own chat history), refused
+        // with an emitted reason on fallback/recovery stores and in Debug builds.
+        // Probes are triggered from init (not `bootstrap()`, which is driven by a
+        // view `.task` that never fires in a windowless launch) and leave through
+        // the app's normal termination path.
         switch Self.headlessProbeResolution {
         case .none:
             break
         case let .conflict(modes):
             Task { await self.emitHeadlessProbeConflict(modes) }
         case .single(.coverageShadow):
-            if !storeResult.isFallback, storeResult.recoveryState == nil {
+            #if DEBUG
+            let isDebugBuild = true
+            #else
+            let isDebugBuild = false
+            #endif
+            if let reason = HeadlessProbeMode.coverageShadowUnavailableReason(
+                isFallbackStore: storeResult.isFallback,
+                hasRecoveryState: storeResult.recoveryState != nil,
+                isDebugBuild: isDebugBuild
+            ) {
+                Task { await self.emitCoverageShadowUnavailable(reason) }
+            } else {
                 Task { await self.runCoverageShadowProbeIfRequested() }
             }
         case .single(.capability):
@@ -304,6 +316,27 @@ final class AppEnvironment: ObservableObject {
         print("===HEADLESS_PROBE_CONFLICT_BEGIN===")
         print(json)
         print("===HEADLESS_PROBE_CONFLICT_END===")
+        terminateAfterHeadlessProbe()
+    }
+
+    /// The coverage probe was requested but cannot run (fallback store, recovery
+    /// state, or a Debug build). Emit the typed reason instead of silently doing
+    /// nothing — a headless harness polls the pasteboard/stdout for report
+    /// delimiters and would otherwise hang forever — then leave through the
+    /// normal termination path.
+    private func emitCoverageShadowUnavailable(_ reason: String) async {
+        let payload: [String: Any] = [
+            "status": "coverage_probe_unavailable",
+            "reason": reason,
+        ]
+        let json = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("===COVERAGE_SHADOW_UNAVAILABLE===\n\(json)", forType: .string)
+        print("===COVERAGE_SHADOW_UNAVAILABLE_BEGIN===")
+        print(json)
+        print("===COVERAGE_SHADOW_UNAVAILABLE_END===")
         terminateAfterHeadlessProbe()
     }
 

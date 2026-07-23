@@ -1660,7 +1660,7 @@ public final class GlobalChatController: ObservableObject {
         let classification = sourcePlan.effectiveClassification
         if route.requiresJurisdiction, !sourcePlan.satisfiesJurisdictionRequirement {
             let message = """
-            I need the jurisdiction before I can give source-grounded legal authority. Please specify the state, federal circuit, court, or other governing jurisdiction. If you only want a general non-authoritative overview, use `/draft` or ask for a general overview.
+            I need the jurisdiction before I can give source-grounded legal authority. Please specify the state, federal circuit, court, or other governing jurisdiction. If you didn't mean to ask a legal question — or want a general, non-authoritative answer — resend it starting with `/ask` to skip legal grounding, or use `/draft` for attorney-editable drafting.
             """
             return LegalWorkflowResult(output: message, queryTerms: [], authorities: [], verification: nil, researchSessionID: nil)
         }

@@ -323,6 +323,7 @@ run_case \
 
 accessibility_hook="${temporary_dir}/ResearchAuthoritiesUITests.swift"
 printf '%s\n' \
+  'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
   'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
   'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
   >"$accessibility_hook"
@@ -354,6 +355,15 @@ run_case \
 # disables signing even though Debug XPC authentication requires identifier-
 # bearing ad-hoc signatures on both the app and its embedded service.
 app_smoke_script="${scripts}/run-app-smoke-tests.sh"
+# Expected RED: the Diagnostics routing-availability test existed but the
+# protected smoke command did not select it, so deletion or wording drift would
+# still leave every executed CI test green.
+if grep -Fq -- '-only-testing:SupraAIUITests/DocumentChunkerRolloutUITests/testDiagnosticsShowsPromptClassifierAvailability' "$app_smoke_script"; then
+  printf '%s\n' 'PASS: app smoke executes the prompt-routing Diagnostics guard'
+else
+  record_failure 'app smoke does not execute the prompt-routing Diagnostics guard'
+fi
+
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_ALLOWED=YES' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_REQUIRED=YES' "$app_smoke_script" \
@@ -411,6 +421,33 @@ if [[ "$window_resize_observers" != '0' || "$window_metric_reads" != '0' ]]; the
     "shell height must come from the SwiftUI layout proposal, not AppKit window observation (observers=${window_resize_observers}, windowMetricReads=${window_metric_reads})"
 else
   printf '%s\n' 'PASS: shell height comes from the layout proposal, not AppKit window observation'
+fi
+
+# Expected RED before the claims meta-harness was wired into CI: no workflow
+# executed Tests/Scripts/test-verify-product-claims.sh, so the harness that
+# verifies the product-claims gate could rot undetected on main — its
+# stale-security-support mutation fixture was in fact dead after the 2.3.x
+# version bump and nothing failed until a later change happened to repair it.
+# A gate that is never executed is not a gate; the meta-harness must run on
+# every protected CI pass.
+ci_workflow="${repo_root}/.github/workflows/macos-ci.yml"
+# [standing] Match an active run-block command, not a comment mentioning the
+# script. This was green at introduction because the workflow already executes
+# both commands; it prevents a commented-out gate from satisfying this meta-gate.
+if grep -Eq '^[[:space:]]+bash Tests/Scripts/test-verify-product-claims\.sh([[:space:]]|$)' "$ci_workflow"; then
+  printf '%s\n' 'PASS: Protected macOS CI executes the product-claims verifier meta-tests'
+else
+  record_failure 'Protected macOS CI does not execute Tests/Scripts/test-verify-product-claims.sh'
+fi
+
+# Expected RED before the probe-glue guards were wired into CI: the guards over
+# AppEnvironment's probe isolation glue (user-store authority, exclusive
+# dispatch, no exit(), coverage unavailability reporting) exist only if CI runs
+# them.
+if grep -Eq '^[[:space:]]+bash Tests/Scripts/test-headless-probe-glue\.sh([[:space:]]|$)' "$ci_workflow"; then
+  printf '%s\n' 'PASS: Protected macOS CI executes the headless probe glue guards'
+else
+  record_failure 'Protected macOS CI does not execute Tests/Scripts/test-headless-probe-glue.sh'
 fi
 
 if (( failures != 0 )); then

@@ -83,6 +83,21 @@ done
 grep -Fq 'Tests/Scripts/test-website-audit-governance.sh' "$macos_workflow" \
   || fail 'Protected macOS CI does not execute the website audit governance test'
 
+# Standing guards over the CI wiring itself (green at introduction by design;
+# #115 review, finding 2): the scope decision is only as good as the one line
+# that consumes it. Pin the exact gating expression — swapping '0' and '1'
+# would skip the audit precisely when audit inputs changed, and would
+# self-hide because the inverting PR itself touches macos-ci.yml. And the
+# deploy workflow must never set SUPRA_SKIP_DEP_AUDIT at all: deploy builds
+# always audit (test-website.sh defaults the variable to 0 when unset).
+audit_gate_line="SUPRA_SKIP_DEP_AUDIT: \${{ steps.website_changes.outputs.changed == 'true' && '0' || '1' }}"
+grep -Fq -- "$audit_gate_line" "$macos_workflow" \
+  || fail 'macOS CI audit-gating expression is missing or altered (the audit must run exactly when audit inputs changed)'
+
+if grep -Fq 'SUPRA_SKIP_DEP_AUDIT' "$deploy_workflow"; then
+  fail 'deploy workflow must not set SUPRA_SKIP_DEP_AUDIT - deploys always audit'
+fi
+
 if (( failures != 0 )); then
   printf 'Website audit governance tests failed: %d\n' "$failures" >&2
   exit 1

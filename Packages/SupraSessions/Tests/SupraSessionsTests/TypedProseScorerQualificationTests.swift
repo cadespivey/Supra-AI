@@ -267,6 +267,214 @@ final class TypedProseScorerQualificationTests: XCTestCase {
         )
     }
 
+    // MARK: - Contrastive negation scope (review follow-up)
+
+    /// T-MQ-13. A correct contrastive answer states the expected value and denies the
+    /// competitor in one sentence: "The fee is $9,000, not $12,000." The whole-sentence
+    /// negation rule scores it WRONG (the sentence contains "not", so its $9,000 is
+    /// never affirmative), which understates verifier noise — the very metric the
+    /// pilot publishes.
+    ///
+    /// Expected RED: both contrastive forms score `isCorrect == false` because
+    /// `isNegated` classifies the entire sentence by token presence.
+    func testContrastiveDenialOfTheCompetitorIsCorrect() {
+        XCTAssertTrue(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is $9,000, not $12,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "denying the competing value must not erase the affirmative statement of the expected value"
+        )
+        XCTAssertTrue(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is not $12,000, but $9,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "the reverse contrastive form affirms the value after \"but\""
+        )
+        XCTAssertTrue(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The deadline is June 15, 2026, not June 30, 2026 [S1].",
+                expected: TypedProseExpectedAnswer(
+                    date: TypedProseExpectedAnswer.Day(year: 2026, month: 6, day: 15)
+                )
+            )),
+            "a comma inside a long-form date must not be mistaken for a clause boundary"
+        )
+    }
+
+    /// T-MQ-13A. The contrastive refinement must stay fail-closed: a sentence that
+    /// only DENIES the expected value never becomes correct, in either clause
+    /// position, and the denied competitor never counts as a contradiction the
+    /// answer must not have made.
+    ///
+    /// Expected RED: none — these guard assertions already hold and must survive the
+    /// contrastive change; they are committed with T-MQ-13 so the GREEN cannot
+    /// overshoot into treating denial as affirmation.
+    func testContrastiveRefinementStaysFailClosed() {
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is not $9,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "a bare denial of the expected value is not an answer"
+        )
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is $12,000, not $9,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "affirming the competitor while denying the expected value is wrong"
+        )
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is not $9,000, not even close [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "stacked denials must not resolve to an affirmative head"
+        )
+    }
+
+    /// T-MQ-13B. A comma followed by "not" is not necessarily a contrastive
+    /// denial. Adjuncts such as "not including" and "not counting" must not hide
+    /// later affirmative values from the exact-value and allowlist checks.
+    ///
+    /// Expected RED: the broad forward-contrastive regex marks everything after
+    /// "not" as negated, so both unsupported additions disappear and these wrong
+    /// answers score correct.
+    func testNegatedAdjunctCannotHideLaterAffirmativeValues() {
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is $9,000, not including tax, and rises to $12,000 after the deadline [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "a not-including adjunct must not hide a later competing amount"
+        )
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The reply is due June 15, 2026, not counting the extension, which moves it to June 30, 2026 [S1].",
+                expected: TypedProseExpectedAnswer(
+                    date: TypedProseExpectedAnswer.Day(year: 2026, month: 6, day: 15)
+                )
+            )),
+            "a not-counting adjunct must not hide a later competing date"
+        )
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is $9,000, not $12,000, due no later than April 15, 2025 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "text after a denied competitor remains affirmative and subject to the allowlist"
+        )
+        XCTAssertTrue(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The engagement fee is $9,000, not $12,000, due no later than April 15, 2025 [S1].",
+                expected: TypedProseExpectedAnswer(
+                    money: 9_000,
+                    allowedDates: [TypedProseExpectedAnswer.Day(year: 2025, month: 4, day: 15)]
+                )
+            )),
+            "an explicitly allowed trailing value remains valid after a denied competitor"
+        )
+    }
+
+    /// T-MQ-13C. Appositives and hypotheticals cannot be promoted into affirmative
+    /// answers merely because they contain the same comma-not surface shape.
+    ///
+    /// Expected RED: the broad forward split affirms the text before the comma,
+    /// crediting the unapproved and hypothetical amounts.
+    func testNonContrastiveCommaNotShapesStayFailClosed() {
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "A fee of $9,000, never approved by the client, appears in the draft [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "an unapproved draft amount is not an affirmative answer"
+        )
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "If the fee is $9,000, not $12,000, the cap applies [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "a hypothetical contrast must not be credited as an answer"
+        )
+    }
+
+    /// T-MQ-13D. Reverse contrast only affirms a genuinely different replacement
+    /// value. Repeating the denied value in a draft/listing clause cannot resurrect
+    /// the exact defect T-MQ-01 excludes.
+    ///
+    /// Expected RED: the reverse split unconditionally affirms everything after
+    /// "but", so the repeated $9,000 satisfies the expected-money check.
+    func testReverseContrastCannotReaffirmTheDeniedValue() {
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The fee is not $9,000, but the draft mistakenly lists $9,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "a post-but re-mention of the denied value is not a correct answer"
+        )
+        XCTAssertFalse(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The fee is not $12,000, but the draft mistakenly lists $9,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "a disjoint value embedded in relational prose is not a bare replacement answer"
+        )
+    }
+
+    /// T-MQ-13E. A later unrelated negated contrast must not erase an earlier
+    /// affirmative proposition.
+    ///
+    /// Expected RED: the greedy reverse-contrast head swallows the leading fee
+    /// clause and marks its $9,000 negated.
+    func testUnrelatedLaterNegationDoesNotEraseLeadingAffirmation() {
+        XCTAssertTrue(
+            TypedProseABScorer.isCorrect(outcome(
+                answer: "The fee is $9,000, but the deposit was not paid, but rather waived [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            )),
+            "an unrelated later denial must not erase the leading fee proposition"
+        )
+    }
+
+    // MARK: - Artifact schema enforcement (review follow-up)
+
+    /// T-MQ-14. A schema version that is merely RECORDED protects nothing: an
+    /// artifact produced under old scoring semantics decodes silently and re-scores
+    /// under the new semantics with no mismatch signal. Decoding must refuse any
+    /// artifact whose schema is not the current one.
+    ///
+    /// Expected RED: synthesized `Codable` decodes a `schemaVersion: 2` artifact
+    /// without complaint, so `XCTAssertThrowsError` fails.
+    func testDecodingRefusesAnArtifactFromAnotherSchema() throws {
+        let outcomes = [
+            outcome(
+                answer: "The engagement fee is $9,000 [S1].",
+                expected: TypedProseExpectedAnswer(money: 9_000)
+            ),
+        ]
+        let record = TypedProseABRunRecord(
+            outcomes: outcomes,
+            typed: TypedProseABScorer.report(outcomes: outcomes, arm: .typed),
+            prose: TypedProseABScorer.report(outcomes: outcomes, arm: .prose)
+        )
+        let encoded = try JSONEncoder().encode(record)
+        var object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object["schemaVersion"] = TypedProseABRunRecord.currentSchemaVersion - 1
+        let stale = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(TypedProseABRunRecord.self, from: stale),
+            "an artifact recorded under different scoring semantics must not silently re-score"
+        ) { error in
+            guard case DecodingError.dataCorrupted = error else {
+                return XCTFail("schema refusal must be a decoding error, got \(error)")
+            }
+        }
+    }
+
     // MARK: - Fixtures and raw-output record
 
     /// T-MQ-11. Every answerable standard fixture carries a typed expectation (no
@@ -290,8 +498,8 @@ final class TypedProseScorerQualificationTests: XCTestCase {
     /// published measurement can be independently re-scored from its own artifact.
     func testRunRecordRetainsRawOutputsAndRoundTrips() throws {
         XCTAssertEqual(
-            TypedProseABRunRecord.currentSchemaVersion, 2,
-            "a proposition-binding semantics change requires a new artifact schema"
+            TypedProseABRunRecord.currentSchemaVersion, 4,
+            "tightened contrastive-negation semantics require a new artifact schema"
         )
         let outcomes = [
             outcome(

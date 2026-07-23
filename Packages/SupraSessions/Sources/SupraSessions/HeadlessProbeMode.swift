@@ -19,8 +19,9 @@ import Foundation
 ///   or migrated, and the user's active-model selection is never read or written
 ///   (the registry is rebuilt from disk manifests by `DiskModelRegistrar`);
 /// - the coverage probe is the one real-store diagnostic, justified because its
-///   entire purpose is to replay THIS store's chat history; it is read-only and
-///   additionally skipped on fallback/recovery stores;
+///   entire purpose is to replay THIS store's chat history; it is read-only,
+///   Release-only, and refused with an emitted `coverageShadowUnavailableReason`
+///   on fallback/recovery stores and in Debug builds (never silently skipped);
 /// - probes leave through the app's normal termination path, never `exit(0)`.
 public enum HeadlessProbeMode: String, CaseIterable, Sendable, Equatable {
     /// Replays the real store's matter-chat questions through the routing shadow.
@@ -78,5 +79,22 @@ public enum HeadlessProbeMode: String, CaseIterable, Sendable, Equatable {
         case .coverageShadow: return false
         case .capability, .typedProseAB: return true
         }
+    }
+
+    /// Why a resolved coverage-shadow probe cannot run on this launch, or nil when
+    /// it can. The caller must EMIT the reason and terminate — a silent skip leaves
+    /// a headless harness polling for report delimiters forever. Debug builds are
+    /// refused outright and outrank store-state reasons: the coverage probe is the
+    /// one real-store diagnostic, real data is Release-only, and a Debug launch
+    /// could migrate the live schema.
+    public static func coverageShadowUnavailableReason(
+        isFallbackStore: Bool,
+        hasRecoveryState: Bool,
+        isDebugBuild: Bool
+    ) -> String? {
+        if isDebugBuild { return "coverage_probe_requires_release_build" }
+        if hasRecoveryState { return "coverage_probe_store_in_recovery" }
+        if isFallbackStore { return "coverage_probe_store_is_fallback" }
+        return nil
     }
 }

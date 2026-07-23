@@ -18,6 +18,7 @@ if [[ ! -f "$xpc_test" ]] || ! grep -Eq 'class[[:space:]]+RuntimeXPCIntegrationT
   exit 1
 fi
 if [[ ! -f "$accessibility_test" ]] \
+    || ! grep -Fq 'testDiagnosticsShowsPromptClassifierAvailability' "$accessibility_test" \
     || ! grep -Fq 'testLegacyOutputWarningAnnouncesStatusAndUnavailableExport' "$accessibility_test" \
     || ! grep -Fq 'testLegacyBillingWarningAnnouncesReviewAndUnavailableExport' "$accessibility_test"; then
   printf '%s\n' 'ERROR: remediation accessibility smoke tests are missing' >&2
@@ -37,6 +38,7 @@ xcodebuild \
   CODE_SIGN_IDENTITY=- \
   DEVELOPMENT_TEAM= \
   -only-testing:SupraAIUITests/DraftingBlockedStateUITests \
+  -only-testing:SupraAIUITests/DocumentChunkerRolloutUITests/testDiagnosticsShowsPromptClassifierAvailability \
   -only-testing:SupraAIUITests/ResearchAuthoritiesUITests/testLegacyOutputWarningAnnouncesStatusAndUnavailableExport \
   -only-testing:SupraAIUITests/ResearchAuthoritiesUITests/testLegacyBillingWarningAnnouncesReviewAndUnavailableExport \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \

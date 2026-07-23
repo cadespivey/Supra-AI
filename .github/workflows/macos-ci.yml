@@ -26,6 +26,8 @@ jobs:
         run: |
           bash Tests/Scripts/test-macos-ci-gates.sh
           bash Tests/Scripts/test-website-audit-governance.sh
+          bash Tests/Scripts/test-verify-product-claims.sh
+          bash Tests/Scripts/test-headless-probe-glue.sh
       - name: Test SupraSessions Swift 6 portability guards
         run: bash Tests/Scripts/test-supra-sessions-swift6-portability.sh
       - name: Test release ceremony gates

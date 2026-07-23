@@ -1,5 +1,6 @@
 import Foundation
 import NaturalLanguage
+import os
 
 /// A three-way intent result. Only `.general` is permission to use the ungated route;
 /// `.uncertain` deliberately carries different meaning from `.general` so callers can fail closed.
@@ -89,6 +90,15 @@ public struct SemanticPromptIntentClassifier: PromptIntentClassifying {
         return ExemplarVectors(legal: legal, general: general)
     }()
 
+    private static let log = Logger(subsystem: "ai.supra.SupraAI", category: "reasoning.routing")
+
+    /// Whether the OS sentence-embedding asset resolved and every exemplar
+    /// vectorized. False means `classify` returns `.uncertain` for every prompt, so
+    /// the router gates every non-marker prompt — the fail-closed direction, but a
+    /// degraded state the app must be able to OBSERVE (Diagnostics row, log
+    /// warning) rather than suffer silently (#115 review, finding 2).
+    public static var isAvailable: Bool { exemplarVectors != nil }
+
     public init() {}
 
     public func classify(_ prompt: String) -> PromptIntentClassification {
@@ -102,6 +112,11 @@ public struct SemanticPromptIntentClassifier: PromptIntentClassifying {
             ),
             let rawPromptVector = embedding.vector(for: trimmed)
         else {
+            // Once per classify call, not once per process: an operator tailing the
+            // log sees the degradation on the send that suffered it.
+            Self.log.warning(
+                "Semantic prompt classifier unavailable (missing OS embedding asset or prompt vector); routing fails closed to the gated legal route."
+            )
             return .uncertain
         }
 
@@ -135,10 +150,15 @@ public struct SemanticPromptIntentClassifier: PromptIntentClassifying {
     }
 }
 
-/// A high-precision deterministic override for legal terms whose meaning is unequivocal enough
-/// to gate without consulting the semantic classifier. Matching is token/phrase bounded: an API
-/// being "reliable" is not the legal term "liable", and an "issue" does not contain the verb
-/// "sue" for routing purposes.
+/// A deterministic override that gates without consulting the semantic classifier.
+/// Matching is token/phrase bounded — an API being "reliable" is not the legal term
+/// "liable", and an "issue" does not contain the verb "sue" — but bounding cannot
+/// disambiguate homonyms: "ask Sue", "holding a party", an APA "citation", a MacBook
+/// "warranty", and the Supreme Court BUILDING all still gate (measured baseline:
+/// PromptRoutingRecallBaselineTests.testMarkerHomonymsCurrentlyGateNonLegalPrompts).
+/// That trade is deliberate: every miss here fails toward the gated route, never
+/// away from it. Refine only with the homonym baseline and the routing corpus's
+/// recall gate both in view.
 enum DeterministicLegalIntentMarkers {
     private static let phrases = [
         "case law", "statute", "regulation", "precedent", "jurisdiction",
