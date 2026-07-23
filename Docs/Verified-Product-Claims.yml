@@ -71,13 +71,13 @@ claims:
 
   - id: "DOCUMENT-OUTPUT-ASSURANCE-UX"
     topic: "document-output-assurance-ux"
-    wording: "Saved output, grounded chat, chronology, and export surfaces render one shared seven-state assurance vocabulary; export is permitted only for proposition-supported or corpus-complete artifacts, and exports embed the state. A grounded matter-chat answer can be saved to Outputs with its exact retained source packet, verification, and assurance state; chat messages themselves never expose export."
+    wording: "Saved output, chronology, and export surfaces render one shared seven-state assurance vocabulary; export is permitted only for proposition-supported or corpus-complete artifacts, and exports embed the state. A grounded matter-chat answer can be saved to Outputs with its exact retained source packet, verification, and assurance state; chat messages themselves never expose export or render the assurance badge."
     owner: "Document reliability engineering"
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/StructuredOutputController.swift"
     verification: "Packages/SupraSessions/Tests/SupraSessionsTests/ChatOutputPromotionTests.swift"
     ci_job: "macos-ci/swift-packages"
     applicable_version: "2.3.0 and later"
-    last_reviewed: "2026-07-18"
+    last_reviewed: "2026-07-23"
     publication_anchor: "README.md"
 
   - id: "STORE-SUPPORTED-UPGRADES"
