@@ -453,6 +453,40 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.messages.last?.status, .completed)
     }
 
+    /// The jurisdiction ask is the message every routing false-positive lands on —
+    /// Phase 4 routes uncertain prompts to the gated legal path, so a casual
+    /// question can arrive here with no jurisdiction to give. The message must name
+    /// the actual ungated escape hatch `/ask`: the prior text offered only `/draft`
+    /// or a rephrased "general overview", and a rephrase re-enters the same
+    /// classifier and can re-block (#115 review, finding on refusal recovery).
+    ///
+    /// Expected RED: the message names `/draft` but never `/ask`.
+    func testJurisdictionAskNamesTheUngatedEscapeHatch() async throws {
+        let store = try makeStore()
+        let route = ModelRouter(configuration: LegalModelConfiguration(jurisdictionRequired: true)).route(for: .legalResearch)
+        let stub = StubRuntimeClient { _ in
+            XCTFail("Runtime should not run until jurisdiction is supplied.")
+            return .events([])
+        }
+        let controller = makeGlobalChatController(store: store, runtimeClient: stub)
+        controller.loadChats()
+
+        await controller.performSend(
+            prompt: "What are the elements of promissory estoppel?",
+            modelID: nil,
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route
+        )
+
+        let content = controller.messages.last?.content ?? ""
+        XCTAssertTrue(content.contains("I need the jurisdiction"))
+        XCTAssertTrue(
+            content.contains("`/ask`"),
+            "the jurisdiction block must name the ungated escape hatch"
+        )
+    }
+
     /// An explicit jurisdiction selection in a global chat must bind CourtListener
     /// (so research proceeds instead of asking) and bound the query's court IDs.
     func testGlobalChatExplicitJurisdictionBoundsCourtListenerQuery() async throws {

@@ -119,6 +119,35 @@ final class PromptRoutingRecallBaselineTests: XCTestCase {
         )
     }
 
+    // MARK: - Classifier availability is observable
+
+    /// The semantic classifier degrades to `.uncertain` — and the router therefore
+    /// gates every non-marker prompt — when the OS sentence-embedding asset is
+    /// missing. Correct fail-closed direction, but the #115 review found the
+    /// degradation is SILENT: nothing observable distinguishes "working classifier"
+    /// from "asset missing, everything gated". `isAvailable` is the observable the
+    /// app surfaces (log + Diagnostics).
+    ///
+    /// Expected RED: compile error — `isAvailable` does not exist on
+    /// `SemanticPromptIntentClassifier`.
+    func testClassifierAvailabilityIsObservable() {
+        if SemanticPromptIntentClassifier.isAvailable {
+            // Asset present (every supported CI/dev machine — the corpus gate
+            // already depends on it): a far-from-boundary prompt actually
+            // classifies instead of falling to the unavailability path.
+            XCTAssertNotEqual(
+                SemanticPromptIntentClassifier().classify("How do I bake a loaf of sourdough bread?"),
+                .uncertain
+            )
+        } else {
+            // Asset missing: every nonempty prompt must fail closed to uncertain.
+            XCTAssertEqual(
+                SemanticPromptIntentClassifier().classify("How do I bake a loaf of sourdough bread?"),
+                .uncertain
+            )
+        }
+    }
+
     // MARK: - Marker-homonym false gating (committed baseline)
 
     /// BASELINE (defect): every prompt below is unambiguously non-legal, yet the
