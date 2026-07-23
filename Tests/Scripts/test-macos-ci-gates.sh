@@ -413,6 +413,20 @@ else
   printf '%s\n' 'PASS: shell height comes from the layout proposal, not AppKit window observation'
 fi
 
+# Expected RED before the claims meta-harness was wired into CI: no workflow
+# executed Tests/Scripts/test-verify-product-claims.sh, so the harness that
+# verifies the product-claims gate could rot undetected on main — its
+# stale-security-support mutation fixture was in fact dead after the 2.3.x
+# version bump and nothing failed until a later change happened to repair it.
+# A gate that is never executed is not a gate; the meta-harness must run on
+# every protected CI pass.
+ci_workflow="${repo_root}/.github/workflows/macos-ci.yml"
+if grep -Fq 'Tests/Scripts/test-verify-product-claims.sh' "$ci_workflow"; then
+  printf '%s\n' 'PASS: Protected macOS CI executes the product-claims verifier meta-tests'
+else
+  record_failure 'Protected macOS CI does not execute Tests/Scripts/test-verify-product-claims.sh'
+fi
+
 if (( failures != 0 )); then
   printf 'macOS CI gate tests failed: %d\n' "$failures" >&2
   exit 1
