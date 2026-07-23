@@ -68,6 +68,15 @@ public struct SemanticPromptIntentClassifier: PromptIntentClassifying {
         "Help me plan a three-day city vacation.",
         "Who won the sports game or chess tournament?",
         "Will it rain this weekend?",
+        // Conversational register (measured gap, user report: with nothing
+        // conversational here, pleasantries and writing feedback landed on the
+        // legal side and a jurisdictionless chat hard-blocked them).
+        "Thanks, that was really helpful.",
+        "Great, that answers my question.",
+        "What do you think of this email draft I wrote?",
+        "Please rewrite this paragraph in a friendlier tone.",
+        "Tell me a funny joke.",
+        "Sounds good, let's go with that.",
     ]
 
     private struct ExemplarVectors: Sendable {
