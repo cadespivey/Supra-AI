@@ -708,6 +708,20 @@ run_case \
 successful_publish_log="${temporary_dir}/successful-publish.log"
 cp "$mock_log" "$successful_publish_log"
 
+# The staged website gate must run WITHOUT the npm dependency audit
+# (SUPRA_SKIP_DEP_AUDIT=1): the site is a static export whose build-time deps
+# never execute for a visitor, and a freshly disclosed transitive advisory
+# blocked a fully signed release three times (v2.3.3 round 1 was the third —
+# after notarization had already succeeded). Supply-chain coverage stays with
+# the scoped per-PR audit and the weekly scheduled audit. Owner decision,
+# 2026-07-24. Expected RED reason: the transaction invokes the gate with the
+# variable unset, so the recorded env line reads "unset".
+if grep -Fq 'website-gate-env SUPRA_SKIP_DEP_AUDIT=1' "$successful_publish_log"; then
+  printf '%s\n' 'PASS: staged website gate runs with the dependency audit skipped'
+else
+  fail 'staged website gate still couples the release to the npm advisory feed'
+fi
+
 # The production defaults for the transaction's gh and curl commands are bare
 # names resolved via PATH at execution time, exactly like the preflight's.
 # Expected RED reason: the availability gate tests bare names with [[ -x ]],
@@ -812,6 +826,17 @@ assert_prepublication_failure() {
     fail "${name}: public release was created before a pre-publication failure"
   elif ! grep -Eq 'gh release delete .*--cleanup-tag' "$mock_log"; then
     fail "${name}: draft release was not cleaned up"
+  # A pre-publication failure whose cleanup converged must SAY nothing was
+  # published and point at a plain re-dispatch — the operator's next move —
+  # and must never demand the emergency rollback (there is nothing to roll
+  # back). Expected RED reason: the current messages say only "public state
+  # was rolled back or retained as draft", naming neither.
+  elif ! grep -Fq 'nothing was published' "$output"; then
+    fail "${name}: operator is not told that nothing was published"
+  elif ! grep -Fiq 're-dispatch' "$output"; then
+    fail "${name}: operator is not pointed at the safe re-dispatch"
+  elif grep -Fiq 'emergency rollback' "$output"; then
+    fail "${name}: clean failure still demands the emergency rollback"
   else
     printf 'PASS: %s blocks before public release and cleans the draft\n' "$name"
   fi
@@ -819,6 +844,45 @@ assert_prepublication_failure() {
 
 assert_prepublication_failure upload-failure MOCK_UPLOAD_FAIL
 assert_prepublication_failure website-failure MOCK_WEBSITE_FAIL
+
+# The verdict must come from PROBING GitHub for what actually exists, not from
+# the rollback's own exit codes: in v2.3.3 round 1 the draft delete's tag
+# cleanup failed against a never-created tag, so a fully clean failure was
+# reported as "CRITICAL … invoke the protected emergency rollback immediately"
+# — a fire drill over nothing. With the delete failing AND the release-view
+# probe confirming no release exists, the message must still be the calm
+# published-nothing one. Expected RED reason: rollback_status drives the
+# message, so the CRITICAL line appears.
+: >"$mock_log"
+honest_output="${temporary_dir}/honest-clean-failure.log"
+honest_status=0
+MOCK_WEBSITE_FAIL=1 MOCK_DELETE_FAIL=1 publish_transaction >"$honest_output" 2>&1 || honest_status=$?
+if [[ "$honest_status" -ne 1 ]]; then
+  fail 'honest end state: expected the transaction to fail'
+elif grep -Fiq 'emergency rollback' "$honest_output" || grep -Fq 'CRITICAL' "$honest_output"; then
+  fail 'honest end state: clean failure with a failed tag cleanup still reports CRITICAL'
+elif ! grep -Fq 'nothing was published' "$honest_output"; then
+  fail 'honest end state: probe-confirmed clean failure does not say nothing was published'
+else
+  printf '%s\n' 'PASS: end-state probe reports a clean failure honestly despite a failed tag cleanup'
+fi
+
+# Standing guard (green at introduction by design): when a PUBLISHED release's
+# rollback genuinely fails — the release still exists and the appcast rollback
+# errored — the CRITICAL emergency-rollback demand must survive the messaging
+# rework. This is the one state where the fire drill is correct.
+: >"$mock_log"
+critical_output="${temporary_dir}/critical-postpublication.log"
+critical_status=0
+MOCK_DEPLOY_FAIL=1 MOCK_ROLLBACK_FAIL=1 MOCK_RELEASE_EXISTS=1 \
+  publish_transaction >"$critical_output" 2>&1 || critical_status=$?
+if [[ "$critical_status" -ne 1 ]]; then
+  fail 'critical end state: expected the transaction to fail'
+elif ! grep -Fq 'CRITICAL' "$critical_output" || ! grep -Fiq 'emergency rollback' "$critical_output"; then
+  fail 'critical end state: failed rollback of a public release must stay CRITICAL'
+else
+  printf '%s\n' 'PASS: failed rollback of a public release still demands the emergency rollback'
+fi
 
 assert_postpublication_failure() {
   local name="$1"

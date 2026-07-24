@@ -48,6 +48,8 @@ curl_command="$(release_resolve_command_override SUPRA_CURL_COMMAND curl)"
 reset_command="$(release_resolve_command_override SUPRA_RESET_COMMAND \
   "${script_root}/Scripts/reset-release-runner.sh")"
 runner_stop_override="$(release_resolve_command_override SUPRA_RUNNER_STOP_COMMAND '')"
+pkill_command="$(release_resolve_command_override SUPRA_PKILL_COMMAND pkill)"
+pgrep_command="$(release_resolve_command_override SUPRA_PGREP_COMMAND pgrep)"
 runner_home="${SUPRA_RUNNER_HOME:-${HOME}/actions-runner}"
 
 poll_seconds=30
@@ -90,13 +92,21 @@ printf 'Stopping the release runner…\n'
 if [[ -n "$runner_stop_override" ]]; then
   "$runner_stop_override" || true
 else
-  pkill -INT -f "${runner_home}/bin/Runner.Listener" 2>/dev/null || true
+  # run.sh wraps Runner.Listener in run-helper.sh, and the helper RESPAWNS the
+  # listener when it exits — killing only the listener let it come straight
+  # back, and finish died here demanding a manual stop on BOTH v2.3.3
+  # production rounds. Stop the respawning wrappers first, then the listener.
+  "$pkill_command" -f "${runner_home}/run-helper.sh" 2>/dev/null || true
+  "$pkill_command" -f "${runner_home}/run.sh" 2>/dev/null || true
+  "$pkill_command" -INT -f "${runner_home}/bin/Runner.Listener" 2>/dev/null || true
 fi
 for (( attempt = 0; attempt < 20; attempt++ )); do
-  pgrep -f "${runner_home}/bin/Runner.Listener" >/dev/null 2>&1 || break
+  "$pgrep_command" -f "${runner_home}/bin/Runner.Listener|${runner_home}/run-helper.sh" \
+    >/dev/null 2>&1 || break
   sleep 1
 done
-if pgrep -f "${runner_home}/bin/Runner.Listener" >/dev/null 2>&1; then
+if "$pgrep_command" -f "${runner_home}/bin/Runner.Listener|${runner_home}/run-helper.sh" \
+    >/dev/null 2>&1; then
   release_die 'the release runner did not stop; stop it manually, then run Scripts/reset-release-runner.sh'
 fi
 

@@ -24,51 +24,72 @@ stop and fix the cause — never weaken a gate to proceed.
   `Scripts/smoke-model-tool.swift`. Do not manage or modify that model through the app
   UI; content changes invalidate the pinned fingerprint.
 
-## Per-release procedure
+## Per-release procedure — one command
 
-The release candidate commit (version + build bump in the pbxproj, `CHANGELOG.md`
-entry — advancing SECURITY.md's supported line and `Docs/Verified-Product-Claims.yml`
-when the covered wording changes) must be on `main` with `Protected macOS CI` green on
-its exact SHA. The reviewed commit is the only statement of the release version and
-build; nothing is hand-typed at dispatch time. Then, from a logged-in owner session
-(login Keychain unlocked, as it is during normal use):
-
-### 1. Dispatch
+From a logged-in owner session (login Keychain unlocked, as it is during normal use),
+with your user-facing notes in a markdown file:
 
 ```sh
-bash Scripts/release-dispatch.sh
+bash Scripts/cut-release.sh --patch --notes-file NOTES.md
 ```
 
-This verifies readiness (green `Protected macOS CI` on origin/main's exact SHA, unused
-version/tag, live public-asset audit), starts the runner for this run only, and
-dispatches `Protected production release` bound to that SHA and CI run. Every check it
-performs is re-verified fail-closed inside the protected transaction; the script only
-assembles inputs and fails fast. If the public-asset audit reports prohibited font
-paths/blobs in any advertised ref, the release is blocked until GitHub Support removes
-those refs — do not weaken the gate.
+(`--patch` bumps the last version component and the build number; pass an explicit
+`X.Y.Z` instead for a minor/major. Running the command IS the owner's approval of the
+`production-release` deployment gate — pass `--hold` to keep that approval manual.)
 
-### 2. Approve
+The command sequences the whole runbook and stops on the first real failure:
 
-Approve the `production-release` deployment when GitHub prompts. The transaction creates
-a draft release, uploads and re-verifies artifacts, signs the ZIP downloaded back from
-the draft, publishes, opens and merges the appcast PR (two files:
-`website/public/appcast.xml`, `website/lib/constants.ts`), waits for the Pages
-deployment, and re-downloads everything unauthenticated for digest comparison.
-`origin/main` must not move during the run — do not push anything until it completes.
+1. **Preflight** — clean tree on an up-to-date `main`, `gh` authenticated, console
+   unlocked (notarization needs the login Keychain; a locked console sank a
+   production round), release runner offline. It holds the session awake with
+   `caffeinate` for the duration.
+2. **Candidate** — version + build bump in the pbxproj and the `CHANGELOG.md` entry
+   from your notes file, committed on `release/X.Y.Z` and opened as a PR. (Advance
+   SECURITY.md's supported line and `Docs/Verified-Product-Claims.yml` yourself first
+   when the covered wording changes — patch releases normally change neither.) The
+   reviewed commit remains the only statement of the release version and build;
+   nothing is hand-typed at dispatch time.
+3. **Babysat CI** — waits for `Protected macOS CI`; a failure whose every failed job
+   died in GitHub's own "Set up job" step (runner provisioning, before any repository
+   code ran) is rerun, at most twice. Any real failure aborts the cut before the
+   merge. Merges when green, then waits for green on `main`.
+4. **Dispatch** — `Scripts/release-dispatch.sh`: verifies readiness (green CI on
+   origin/main's exact SHA, unused version/tag, live public-asset audit), starts the
+   runner for this run only, and dispatches `Protected production release` bound to
+   that SHA and CI run. Every check is re-verified fail-closed inside the protected
+   transaction. If the public-asset audit reports prohibited font paths/blobs in any
+   advertised ref, the release is blocked until GitHub Support removes those refs —
+   do not weaken the gate.
+5. **Approve** — the `production-release` gate is approved automatically (or by you,
+   under `--hold`). The transaction creates a draft release, uploads and re-verifies
+   artifacts, publishes, opens and merges the appcast PR, waits for the Pages
+   deployment, and re-downloads everything unauthenticated for digest comparison.
+   `origin/main` must not move during the run — do not push anything until it
+   completes.
+6. **Finish** — `Scripts/release-finish.sh`: watches the run to completion, stops the
+   runner (including the respawning `run-helper.sh`), archives evidence via
+   `Scripts/reset-release-runner.sh` (including `release-result-vX.Y.Z.json`, whose
+   recorded appcast merge commit the emergency rollback workflow requires) into
+   `~/ReleaseEvidence/<timestamp>/`, and re-verifies the published release and
+   https://supralegal.ai/appcast.xml as a user would. Evidence is archived for every
+   completed run, green or red; a run that never completes leaves the runner and
+   workspace untouched for investigation.
 
-### 3. Finish
+On failure, the transaction reports its PROBED end state: a failure that published
+nothing says so and is safe to fix and re-dispatch; the CRITICAL
+emergency-rollback demand is reserved for a release that is verifiably still public
+after a failed rollback. The dispatch/approve/finish scripts remain individually
+runnable for manual operation.
 
-```sh
-bash Scripts/release-finish.sh
-```
+### Website dependency audit and releases
 
-This watches the run to completion, stops the runner, archives evidence via
-`Scripts/reset-release-runner.sh` (including `release-result-vX.Y.Z.json`, whose
-recorded appcast merge commit the emergency rollback workflow requires) into
-`~/ReleaseEvidence/<timestamp>/`, and re-verifies the published release and
-https://supralegal.ai/appcast.xml as a user would. Evidence is archived for every
-completed run, green or red; a run that never completes leaves the runner and workspace
-untouched for investigation. The runner stays offline until the next approved run.
+The release transaction's staged website gate runs lint, typecheck, the static
+build, and the font guard — it does NOT run `npm audit` (owner decision,
+2026-07-24, after a third freshly disclosed transitive advisory blocked a fully
+notarized release). The site is a static export whose build-time dependencies never
+execute for a visitor; supply-chain coverage lives in the scoped per-PR audit and
+the weekly scheduled audit (`security-scheduled.yml`). Advisories found there are
+fixed on their own schedule via `overrides` pins — never `npm audit fix --force`.
 
 ## Signed rehearsal policy
 
@@ -86,10 +107,12 @@ transaction logic on every change.
 To rehearse:
 
 ```sh
-bash Scripts/release-dispatch.sh --rehearsal
-# approve the deployment, then
-bash Scripts/release-finish.sh --rehearsal
+bash Scripts/cut-release.sh --rehearsal
 ```
+
+(One command: dispatches, approves, and finishes in rehearsal mode with no candidate
+commit. The underlying `release-dispatch.sh --rehearsal` / `release-finish.sh
+--rehearsal` pair remains available for manual operation.)
 
 ## Emergency withdrawal
 
