@@ -34,7 +34,9 @@ struct ScratchPadView: View {
     /// True while a drag hovers the note surface (drives the drop hint).
     @State private var fileDropTargeted = false
     @State private var isSubmitting = false
-    @FocusState private var composerFocused: Bool
+    /// Plain state (not @FocusState): the composer is AppKit-backed, so focus is
+    /// bridged through SupraComposerField's binding rather than SwiftUI focus.
+    @State private var composerFocused: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -531,36 +533,47 @@ struct ScratchPadView: View {
                             .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
                             .help("Attach a file to this note (work product, email, filing)")
-                            TextField("Add a note — @matter, #tag…", text: $composerText, axis: .vertical)
-                                .textFieldStyle(.plain)
-                                .lineLimit(1...5)
-                                .focused($composerFocused)
-                                .onChange(of: composerText) { _, _ in selectedSuggestion = 0 }
-                                // When the @/# list is open, the arrow keys move the highlight
-                                // and Return/Tab accept it; otherwise plain Return adds the note
-                                // (Shift-Return / ⌘-Return fall through to a newline or the send
-                                // shortcut). Replaces .onSubmit so Return can't fire twice.
-                                .onKeyPress(.downArrow) { suggestionMenuOpen ? moveSelection(1) : .ignored }
-                                .onKeyPress(.upArrow) { suggestionMenuOpen ? moveSelection(-1) : .ignored }
-                                .onKeyPress(.escape) {
-                                    guard suggestionMenuOpen else { return .ignored }
-                                    dismissedToken = activeToken
-                                    return .handled
-                                }
-                                .onKeyPress(.tab) {
-                                    guard suggestionMenuOpen, let item = highlightedSuggestion else { return .ignored }
-                                    accept(item)
-                                    return .handled
-                                }
-                                .onKeyPress(keys: [.return]) { keyPress in
-                                    guard keyPress.modifiers.isEmpty else { return .ignored }
+                            // AppKit-routed (SupraComposerEditorCore) so plain Return ALWAYS
+                            // saves the note — SwiftUI .onKeyPress detaches when the staged-file
+                            // bar or suggestion list restructures the hierarchy around the
+                            // focused field, letting Return fall through to the field's
+                            // commit-and-reselect. While the @/# list is open, arrows move the
+                            // highlight and Return/Tab accept it; Shift-Return inserts a
+                            // newline; ⌘-Return stays with the send button's shortcut.
+                            SupraComposerField(
+                                "Add a note — @matter, #tag…",
+                                text: $composerText,
+                                isFocused: $composerFocused,
+                                lineRange: 1...5,
+                                onPrimaryAction: {
                                     if suggestionMenuOpen, let item = highlightedSuggestion {
                                         accept(item)
-                                        return .handled
+                                    } else {
+                                        submit()
                                     }
-                                    submit()
-                                    return .handled
+                                },
+                                onTab: {
+                                    guard suggestionMenuOpen, let item = highlightedSuggestion else { return false }
+                                    accept(item)
+                                    return true
+                                },
+                                onMoveUp: {
+                                    guard suggestionMenuOpen else { return false }
+                                    _ = moveSelection(-1)
+                                    return true
+                                },
+                                onMoveDown: {
+                                    guard suggestionMenuOpen else { return false }
+                                    _ = moveSelection(1)
+                                    return true
+                                },
+                                onCancel: {
+                                    guard suggestionMenuOpen else { return false }
+                                    dismissedToken = activeToken
+                                    return true
                                 }
+                            )
+                            .onChange(of: composerText) { _, _ in selectedSuggestion = 0 }
                             Button(action: submit) {
                                 if isSubmitting {
                                     ProgressView()
