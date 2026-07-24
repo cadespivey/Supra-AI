@@ -366,6 +366,17 @@ run_cut \
 expect_status 'rehearsal cut succeeds' 0
 expect 'rehearsal dispatches in rehearsal mode' \
   grep -Eq '^dispatch .*--rehearsal' "$shim_log"
+# One command means WAITING, not failing fast: the first live rehearsal
+# dispatched seconds after its own prerequisite fix merged to main and died on
+# "no green Protected macOS CI run exists for origin/main". Rehearsal mode must
+# wait for green main CI before dispatching, exactly like the production path.
+# Expected RED reason: rehearsal mode performs no CI wait, so no main run-list
+# call precedes the dispatch.
+rehearsal_main_ci_line="$( { grep -n -- 'run list --branch main' "$shim_log" || true; } | head -1 | cut -d: -f1)"
+rehearsal_dispatch_line="$( { grep -n -- '^dispatch' "$shim_log" || true; } | head -1 | cut -d: -f1)"
+expect 'rehearsal waits for green main CI before dispatching' \
+  test -n "$rehearsal_main_ci_line" -a -n "$rehearsal_dispatch_line" \
+    -a "$rehearsal_main_ci_line" -lt "$rehearsal_dispatch_line"
 expect 'rehearsal finishes in rehearsal mode' \
   grep -Eq '^finish .*--rehearsal' "$shim_log"
 expect 'rehearsal opens no pull request' \
