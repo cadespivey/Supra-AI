@@ -36,7 +36,9 @@ struct GlobalChatsView: View {
     @State private var attachmentLoadID: UUID?
     /// True while a drag hovers the conversation column (drives the drop hint).
     @State private var fileDropTargeted = false
-    @FocusState private var inputFocused: Bool
+    /// Plain state (not @FocusState): the composer is AppKit-backed, so focus is
+    /// bridged through SupraComposerField's binding rather than SwiftUI focus.
+    @State private var inputFocused: Bool = false
 
     // Chat-history sidebar state (global chat only).
     @State private var chatSearch = ""
@@ -680,18 +682,18 @@ struct GlobalChatsView: View {
     private var inputBox: some View {
         HStack(alignment: .bottom, spacing: 8) {
             attachButton
-            TextField("Message — type / for commands", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...6)
-                .focused($inputFocused)
-                // Plain Return sends; Shift-Return (and ⌘-Return) fall through so the
-                // field inserts a newline / the send button's shortcut fires. Replaces
-                // .onSubmit so Return cannot fire twice.
-                .onKeyPress(keys: [.return]) { keyPress in
-                    guard keyPress.modifiers.isEmpty else { return .ignored }
-                    send()
-                    return .handled
-                }
+            // AppKit-routed (SupraComposerEditorCore) so plain Return ALWAYS sends —
+            // SwiftUI .onKeyPress detaches when attachment chips restructure the
+            // hierarchy around the focused field, letting Return fall through to
+            // TextField(axis:.vertical)'s commit-and-reselect. Shift-Return inserts
+            // a newline; ⌘-Return stays with the send button's shortcut.
+            SupraComposerField(
+                "Message — type / for commands",
+                text: $draft,
+                isFocused: $inputFocused,
+                lineRange: 1...6,
+                onPrimaryAction: send
+            )
             if controller.isGenerating {
                 Button(role: .cancel, action: controller.cancel) {
                     Image(systemName: "stop.circle.fill").font(.title2)
