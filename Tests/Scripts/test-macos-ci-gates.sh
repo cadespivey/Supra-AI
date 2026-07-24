@@ -459,6 +459,15 @@ else
   record_failure 'Protected macOS CI does not execute Tests/Scripts/test-verify-product-claims.sh'
 fi
 
+# Expected RED before the one-command release landed: its hermetic contract
+# tests (preflight refusals, bounded flake reruns, --hold, --rehearsal) exist
+# only if CI runs them.
+if grep -Fq 'Tests/Scripts/test-cut-release.sh' "$ci_workflow"; then
+  printf '%s\n' 'PASS: Protected macOS CI executes the cut-release contract tests'
+else
+  record_failure 'Protected macOS CI does not execute Tests/Scripts/test-cut-release.sh'
+fi
+
 # Expected RED before the probe-glue guards were wired into CI: the guards over
 # AppEnvironment's probe isolation glue (user-store authority, exclusive
 # dispatch, no exit(), coverage unavailability reporting) exist only if CI runs
