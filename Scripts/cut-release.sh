@@ -227,6 +227,10 @@ if (( rehearsal == 1 )); then
   dispatch_arguments+=(--rehearsal)
   finish_arguments+=(--rehearsal)
   transaction_workflow='Protected signed release rehearsal'
+  # One command means waiting, not failing fast: a rehearsal typically runs
+  # right after a machinery-change merge, when main's CI is still in flight.
+  # Dispatch still re-verifies exact-SHA green fail-closed.
+  wait_for_branch_ci main "main (rehearsal preflight)"
 fi
 "$dispatch_command" ${dispatch_arguments[@]+"${dispatch_arguments[@]}"} \
   || release_die 'release-dispatch failed; nothing was published — fix the cause and run cut-release again'
