@@ -255,6 +255,19 @@ expect 'existing tag is named' \
 expect 'existing tag does not dispatch' \
   bash -c "! grep -Fq 'gh workflow run' '$shim_log'"
 
+# A rehearsal binds to origin/main's reviewed candidate but never mints its tag
+# or release, and the runbook prescribes rehearsals AFTER release-machinery
+# changes — typically right after a release, when the reviewed candidate IS the
+# just-published version. Rehearsal readiness must therefore skip the
+# unused-tag and unused-release requirements (every other check identical).
+# Observed live: the first cut-release --rehearsal after v2.3.3 shipped died at
+# "release tag already exists on origin: v2.3.3". Expected RED reason: dispatch
+# applies both checks unconditionally, so this rehearsal fails the same way.
+run_dispatch SHIM_RELEASE_VIEW_STATUS=0 -- --rehearsal
+expect_status 'rehearsal dispatch succeeds with the candidate already released' 0
+expect 'released-candidate rehearsal targets the rehearsal workflow' \
+  grep -Fq 'gh workflow run Protected signed release rehearsal' "$shim_log"
+
 if (( failures > 0 )); then
   printf '%s\n' 'Release dispatch tests failed.' >&2
   exit 1
