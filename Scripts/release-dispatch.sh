@@ -21,11 +21,12 @@ usage() {
 }
 
 repository=''
+rehearsal=0
 workflow_name='Protected production release'
 while (( $# > 0 )); do
   case "$1" in
     --repository) repository="${2:-}"; shift 2 ;;
-    --rehearsal) workflow_name='Protected signed release rehearsal'; shift ;;
+    --rehearsal) rehearsal=1; workflow_name='Protected signed release rehearsal'; shift ;;
     *) usage ;;
   esac
 done
@@ -96,11 +97,19 @@ build="$(bash "${script_root}/Scripts/reviewed-release-metadata.sh" "$project_at
 tag="v${version}"
 printf 'Reviewed candidate at origin/main: %s (build %s)\n' "$tag" "$build"
 
-remote_tag="$(git -C "$repo_root" ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}")" \
-  || release_die 'unable to inspect origin release tags'
-[[ -z "$remote_tag" ]] || release_die "release tag already exists on origin: ${tag}"
-if "$gh_command" release view "$tag" --repo "$repository" >/dev/null 2>&1; then
-  release_die "release ${tag} is already published or reserved"
+# A rehearsal binds to the reviewed candidate but never mints its tag or
+# release (publication is structurally impossible), and the runbook prescribes
+# rehearsals right after machinery changes — typically post-release, when the
+# reviewed candidate IS the just-published version. So the unused-tag and
+# unused-release requirements apply only to production dispatches; every other
+# readiness check is identical in both modes.
+if (( rehearsal == 0 )); then
+  remote_tag="$(git -C "$repo_root" ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}")" \
+    || release_die 'unable to inspect origin release tags'
+  [[ -z "$remote_tag" ]] || release_die "release tag already exists on origin: ${tag}"
+  if "$gh_command" release view "$tag" --repo "$repository" >/dev/null 2>&1; then
+    release_die "release ${tag} is already published or reserved"
+  fi
 fi
 
 ci_json="$("$gh_command" run list --repo "$repository" --branch main \
