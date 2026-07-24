@@ -89,8 +89,12 @@ case "${1:-} ${2:-}" in
   'run view')
     run_id="$3"
     if [[ " $* " == *" --json jobs"* ]]; then
+      # A brace-laden default inside ${var:-...} mis-parses and appends a stray
+      # brace to set values, so default explicitly.
       jobs_variable="SHIM_RUN_${run_id}_JOBS"
-      printf '%s\n' "${!jobs_variable:-{\"jobs\":[]}}"
+      jobs_value="${!jobs_variable:-}"
+      [[ -n "$jobs_value" ]] || jobs_value='{"jobs":[]}'
+      printf '%s\n' "$jobs_value"
       exit 0
     fi
     token="$(plan_token "view-${run_id}")"
