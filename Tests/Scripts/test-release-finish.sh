@@ -77,7 +77,19 @@ cat >"${bin}/runner-stop" <<'SHIM'
 printf 'runner-stop\n' >>"${SHIM_LOG:?}"
 exit 0
 SHIM
-chmod +x "${bin}/gh" "${bin}/curl" "${bin}/reset" "${bin}/runner-stop"
+
+cat >"${bin}/pkill" <<'SHIM'
+#!/usr/bin/env bash
+printf 'pkill %s\n' "$*" >>"${SHIM_LOG:?}"
+exit 0
+SHIM
+
+cat >"${bin}/pgrep" <<'SHIM'
+#!/usr/bin/env bash
+printf 'pgrep %s\n' "$*" >>"${SHIM_LOG:?}"
+exit 1
+SHIM
+chmod +x "${bin}/gh" "${bin}/curl" "${bin}/reset" "${bin}/runner-stop" "${bin}/pkill" "${bin}/pgrep"
 
 # Fixture origin repository whose reviewed metadata says 9.4.7 (build 941).
 seed="${workdir}/seed"
@@ -197,6 +209,32 @@ stop_line="$(log_line_number '^runner-stop$')"
 reset_line="$(log_line_number '^reset$')"
 expect 'runner stops before the workspace reset' \
   test -n "$stop_line" -a -n "$reset_line" -a "$stop_line" -lt "$reset_line"
+
+# --- Default runner stop: kill the respawning wrapper BEFORE the listener ---
+# The runner's run.sh wraps Runner.Listener in run-helper.sh, which RESPAWNS
+# the listener when it exits. The default stop path killed only the listener,
+# so it came straight back and finish died demanding a manual stop — observed
+# on BOTH v2.3.3 production rounds. The default path must kill run-helper.sh
+# (and run.sh) first, then the listener, through overridable pkill/pgrep so
+# this is testable hermetically. Expected RED reason: the script has no
+# SUPRA_PKILL_COMMAND/SUPRA_PGREP_COMMAND overrides and kills only the
+# listener, so no shim pkill lines are recorded.
+run_finish \
+  SUPRA_RUNNER_STOP_COMMAND= \
+  SUPRA_PKILL_COMMAND="${bin}/pkill" \
+  SUPRA_PGREP_COMMAND="${bin}/pgrep" \
+  SUPRA_RUNNER_HOME=/fixture/runner-home \
+  -- --run 770002
+expect_status 'default stop path finishes cleanly' 0
+expect 'default stop kills the respawning run-helper' \
+  grep -Eq 'pkill .*-f /fixture/runner-home/run-helper\.sh' "$shim_log"
+expect 'default stop kills the listener' \
+  grep -Eq 'pkill .*-f /fixture/runner-home/bin/Runner\.Listener' "$shim_log"
+helper_kill_line="$(log_line_number '/fixture/runner-home/run-helper')"
+listener_kill_line="$(log_line_number '/fixture/runner-home/bin/Runner.Listener')"
+expect 'run-helper dies before the listener (or the listener respawns)' \
+  test -n "$helper_kill_line" -a -n "$listener_kill_line" \
+    -a "$helper_kill_line" -lt "$listener_kill_line"
 
 # --- Failed run: still stop and archive, then point at rollback -------------
 run_finish SHIM_FINAL_RUN_JSON="$run_failure" -- --run 770002
