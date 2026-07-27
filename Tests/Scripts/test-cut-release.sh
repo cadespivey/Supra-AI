@@ -275,10 +275,15 @@ expect 'running runner is named' grep -Fiq 'runner' "$cut_output"
 
 # --- Happy path: candidate, babysat CI, merge, dispatch, approve, finish ----
 make_fixture
+# The transaction plan models GitHub's REAL run lifecycle: a freshly
+# dispatched run reports 'queued' (or 'requested'/'pending') BEFORE 'waiting'.
+# (Fixture revised in RED: the first live rehearsal hit exactly this — the
+# approval loop treated the pre-waiting status as "already past the gate",
+# broke without approving, and finish watched an unapproved run for hours.)
 run_cut \
   "SHIM_RUN_list-88001_PLAN=success" \
   "SHIM_RUN_list-88002_PLAN=success" \
-  "SHIM_RUN_list-88003_PLAN=waiting waiting in_progress" \
+  "SHIM_RUN_list-88003_PLAN=queued waiting in_progress" \
   "SHIM_RUN_view-88003_PLAN=in_progress success" \
   -- --patch --notes-file "$notes"
 expect_status 'one-command production cut succeeds' 0
@@ -348,7 +353,7 @@ make_fixture
 run_cut \
   "SHIM_RUN_list-88001_PLAN=success" \
   "SHIM_RUN_list-88002_PLAN=success" \
-  "SHIM_RUN_list-88003_PLAN=waiting in_progress" \
+  "SHIM_RUN_list-88003_PLAN=queued waiting in_progress" \
   "SHIM_RUN_view-88003_PLAN=success" \
   -- --patch --notes-file "$notes" --hold
 expect_status 'held cut succeeds after manual approval' 0
@@ -366,6 +371,17 @@ run_cut \
 expect_status 'rehearsal cut succeeds' 0
 expect 'rehearsal dispatches in rehearsal mode' \
   grep -Eq '^dispatch .*--rehearsal' "$shim_log"
+# One command means WAITING, not failing fast: the first live rehearsal
+# dispatched seconds after its own prerequisite fix merged to main and died on
+# "no green Protected macOS CI run exists for origin/main". Rehearsal mode must
+# wait for green main CI before dispatching, exactly like the production path.
+# Expected RED reason: rehearsal mode performs no CI wait, so no main run-list
+# call precedes the dispatch.
+rehearsal_main_ci_line="$( { grep -n -- 'run list --branch main' "$shim_log" || true; } | head -1 | cut -d: -f1)"
+rehearsal_dispatch_line="$( { grep -n -- '^dispatch' "$shim_log" || true; } | head -1 | cut -d: -f1)"
+expect 'rehearsal waits for green main CI before dispatching' \
+  test -n "$rehearsal_main_ci_line" -a -n "$rehearsal_dispatch_line" \
+    -a "$rehearsal_main_ci_line" -lt "$rehearsal_dispatch_line"
 expect 'rehearsal finishes in rehearsal mode' \
   grep -Eq '^finish .*--rehearsal' "$shim_log"
 expect 'rehearsal opens no pull request' \

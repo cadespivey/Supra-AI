@@ -227,6 +227,10 @@ if (( rehearsal == 1 )); then
   dispatch_arguments+=(--rehearsal)
   finish_arguments+=(--rehearsal)
   transaction_workflow='Protected signed release rehearsal'
+  # One command means waiting, not failing fast: a rehearsal typically runs
+  # right after a machinery-change merge, when main's CI is still in flight.
+  # Dispatch still re-verifies exact-SHA green fail-closed.
+  wait_for_branch_ci main "main (rehearsal preflight)"
 fi
 "$dispatch_command" ${dispatch_arguments[@]+"${dispatch_arguments[@]}"} \
   || release_die 'release-dispatch failed; nothing was published — fix the cause and run cut-release again'
@@ -257,8 +261,12 @@ for (( poll = 0; poll < max_ci_polls; poll++ )); do
       printf 'Deployment gate approved for run %s.\n' "$transaction_run"
       break
     fi
-  elif [[ -n "$transaction_run" && "$transaction_status" != 'waiting' && -n "$transaction_status" ]]; then
-    # Already past the gate (manual approval under --hold, or a fast start).
+  elif [[ "$transaction_status" == 'in_progress' || "$transaction_status" == 'completed' ]]; then
+    # Genuinely past the gate (manual approval under --hold, or a fast start).
+    # A freshly dispatched run reports 'queued'/'requested'/'pending' BEFORE
+    # 'waiting' — those must keep polling, not break: treating them as
+    # past-the-gate skipped the approval on the first live rehearsal and left
+    # release-finish watching an unapproved run.
     break
   fi
   sleep "$poll_seconds"
