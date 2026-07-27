@@ -301,8 +301,8 @@ expect 'changelog entry was written from the notes file' \
 # '## [' header, which is [Unreleased], so the release lands above it.
 expect 'changelog entry lands below Unreleased and above the prior version' \
   bash -c "git -C '$origin' show 'release/9.4.8:CHANGELOG.md' \
-    | grep -nE '^## \[' | head -3 | tr '\n' ' ' \
-    | grep -Eq 'Unreleased.* 9\.4\.8.* 9\.4\.7'"
+    | grep -E '^## \[' | head -3 | tr '\n' ' ' \
+    | grep -Eq 'Unreleased.*\[9\.4\.8.*\[9\.4\.7'"
 expect 'deployment gate was auto-approved' \
   grep -Eq 'gh api .*-f state=approved' "$shim_log"
 expect 'finish received the transaction run id' \
