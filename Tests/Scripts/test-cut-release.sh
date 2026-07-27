@@ -50,6 +50,7 @@ plan_token() {
 run_json_for_token() {
   local run_id="$1" token="$2" sha="$3"
   case "$token" in
+    stale) printf '{"databaseId":%s,"headSha":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","status":"completed","conclusion":"success","url":"https://example.invalid/runs/%s"}' "$run_id" "$run_id" ;;
     success) printf '{"databaseId":%s,"headSha":"%s","status":"completed","conclusion":"success","url":"https://example.invalid/runs/%s"}' "$run_id" "$sha" "$run_id" ;;
     failure) printf '{"databaseId":%s,"headSha":"%s","status":"completed","conclusion":"failure","url":"https://example.invalid/runs/%s"}' "$run_id" "$sha" "$run_id" ;;
     waiting) printf '{"databaseId":%s,"headSha":"%s","status":"waiting","conclusion":"","url":"https://example.invalid/runs/%s"}' "$run_id" "$sha" "$run_id" ;;
@@ -166,7 +167,7 @@ make_fixture() {
     done
     printf '}\n'
   } >"${seed}/Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
-  printf '# Changelog\n\nIntro text.\n\n## [9.4.7] - 2099-01-01\n\n### Fixed\n\n- Old entry.\n' \
+  printf '# Changelog\n\nIntro text.\n\n## [Unreleased]\n\n### Added\n\n- Pending entry.\n\n## [9.4.7] - 2099-01-01\n\n### Fixed\n\n- Old entry.\n' \
     >"${seed}/CHANGELOG.md"
   git -C "$seed" init --quiet --initial-branch=main
   git -C "$seed" -c user.name=fixture -c user.email=fixture@example.invalid add -A
@@ -208,8 +209,8 @@ run_cut() {
       SUPRA_PGREP_COMMAND="${bin}/pgrep" \
       SHIM_LOG="$shim_log" \
       SHIM_STATE="$state" \
-      SHIM_MAIN_SHA='replaced-below' \
-      SHIM_BRANCH_SHA='replaced-below' \
+      SHIM_MAIN_SHA="$fixture_main_sha" \
+      SHIM_BRANCH_SHA='branch-sha-unused' \
       ${extra_env[@]+"${extra_env[@]}"} \
       bash "$cut" "$@"
   ) >"$cut_output" 2>&1 || cut_status=$?
@@ -241,10 +242,12 @@ log_line_number() {
   grep -n -- "$1" "$shim_log" | head -1 | cut -d: -f1
 }
 
-# NOTE: cut-release's CI waits track the NEWEST run on the relevant branch —
-# progress tracking, not the security gate. Exact-SHA green CI is re-verified
-# fail-closed by release-dispatch.sh and again inside the protected
-# transaction, so the shim's headSha placeholders are deliberately unused.
+# NOTE: cut-release's MAIN-CI waits are SHA-aware: right after a merge, the
+# newest completed run on main belongs to the PREVIOUS commit, and accepting
+# it hands dispatch a SHA it must refuse (observed live on the third
+# rehearsal). The candidate-branch wait stays newest-run (the branch is fresh
+# and exclusive); dispatch and the protected transaction remain the fail-closed
+# exact-SHA gates either way.
 
 # --- Preflight: a dirty tree is refused before any GitHub interaction -------
 make_fixture
@@ -293,6 +296,13 @@ expect 'candidate build was bumped on the release branch' \
   bash -c "git -C '$origin' show 'release/9.4.8:Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj' | grep -q 'CURRENT_PROJECT_VERSION = 942;'"
 expect 'changelog entry was written from the notes file' \
   bash -c "git -C '$origin' show 'release/9.4.8:CHANGELOG.md' | grep -q '## \[9.4.8\]' && git -C '$origin' show 'release/9.4.8:CHANGELOG.md' | grep -q 'A user-facing fix'"
+# Keep-a-Changelog ordering: the release entry lands BELOW [Unreleased] and
+# above the previous version. Expected RED reason: insertion targets the first
+# '## [' header, which is [Unreleased], so the release lands above it.
+expect 'changelog entry lands below Unreleased and above the prior version' \
+  bash -c "git -C '$origin' show 'release/9.4.8:CHANGELOG.md' \
+    | grep -nE '^## \[' | head -3 | tr '\n' ' ' \
+    | grep -Eq 'Unreleased.* 9\.4\.8.* 9\.4\.7'"
 expect 'deployment gate was auto-approved' \
   grep -Eq 'gh api .*-f state=approved' "$shim_log"
 expect 'finish received the transaction run id' \
@@ -364,11 +374,18 @@ expect 'held cut tells the operator where to approve' \
 
 # --- --rehearsal: no candidate, dispatch and finish in rehearsal mode --------
 make_fixture
+# The main plan leads with a completed-green run for the WRONG sha (the
+# pre-merge run): the wait must poll past it to the matching one. Expected RED
+# reason: the wait accepts the newest completed run regardless of headSha, so
+# only ONE main run-list call is recorded.
 run_cut \
+  "SHIM_RUN_list-88002_PLAN=stale success" \
   "SHIM_RUN_list-88003_PLAN=waiting in_progress" \
   "SHIM_RUN_view-88003_PLAN=success" \
   -- --rehearsal
 expect_status 'rehearsal cut succeeds' 0
+expect 'rehearsal polls past a stale main CI run' \
+  bash -c "test \"\$(grep -c 'run list --branch main' '$shim_log')\" -ge 2"
 expect 'rehearsal dispatches in rehearsal mode' \
   grep -Eq '^dispatch .*--rehearsal' "$shim_log"
 # One command means WAITING, not failing fast: the first live rehearsal
