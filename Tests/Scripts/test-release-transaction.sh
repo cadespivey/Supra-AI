@@ -113,6 +113,63 @@ else
   fail 'source preflight did not create its manifest'
 fi
 
+# A --no-publish rehearsal runs against the exact post-release state the
+# runbook prescribes for it: the candidate's tag exists locally and on origin,
+# the release is published, and the appcast already lists the candidate
+# version and build. Preflight must accept that state under
+# --allow-released-candidate — and ONLY under it; every other check stays
+# identical, and the flagless production path stays fail-closed. Observed
+# live: the first post-release signed rehearsal died at "release tag already
+# exists locally" after notarization-readiness had been proven pointless to
+# reach. Expected RED reason: the flag does not exist, so preflight exits 2
+# (usage) on the unknown option.
+make_source_repo released-candidate
+git -C "$SOURCE_REPO" tag v2.3.0
+git -C "$SOURCE_REPO" push --quiet origin v2.3.0
+printf '%s\n' \
+  '<rss xmlns:sparkle="https://sparkle-project.org/xml-namespaces/sparkle"><channel><item>' \
+  '<sparkle:version>387</sparkle:version>' \
+  '<sparkle:shortVersionString>2.3.0</sparkle:shortVersionString>' \
+  '</item></channel></rss>' >"${SOURCE_REPO}/website/public/appcast.xml"
+git -C "$SOURCE_REPO" add website/public/appcast.xml
+git -C "$SOURCE_REPO" commit -qm 'published appcast lists the candidate'
+git -C "$SOURCE_REPO" push --quiet origin main
+SOURCE_SHA="$(git -C "$SOURCE_REPO" rev-parse HEAD)"
+
+preflight_released_candidate() {
+  local extra_flag="${1:-}"
+  env \
+    PATH="${mock_bin}:$PATH" \
+    MOCK_RELEASE_LOG="$mock_log" \
+    MOCK_CI_HEAD_SHA="$SOURCE_SHA" \
+    MOCK_RELEASE_EXISTS=1 \
+    SUPRA_PROTECTED_RELEASE_ENVIRONMENT=1 \
+    SUPRA_RELEASE_TESTING=1 \
+    SUPRA_GH_COMMAND="${mock_bin}/gh" \
+    SUPRA_CREDENTIAL_GATE_COMMAND="${mock_bin}/credential-gate" \
+    SUPRA_FONT_GUARD_COMMAND="${mock_bin}/font-gate" \
+    SUPRA_RELEASE_GATE_COMMAND="${mock_bin}/release-gate" \
+    bash "${scripts}/release-preflight.sh" \
+      --repo-root "$SOURCE_REPO" \
+      --repository example/supra \
+      --version 2.3.0 \
+      --build 387 \
+      --expected-sha "$SOURCE_SHA" \
+      --ci-run-id 42 \
+      --output "${temporary_dir}/released-candidate-preflight.json" \
+      ${extra_flag:+"$extra_flag"}
+}
+run_case \
+  'released candidate passes preflight with --allow-released-candidate' \
+  0 \
+  'Release source preflight passed for v2.3.0' \
+  preflight_released_candidate --allow-released-candidate
+run_case \
+  'released candidate still fails preflight without the flag' \
+  1 \
+  'release tag already exists locally' \
+  preflight_released_candidate
+
 # The production default for the gh command is the bare name "gh", resolved via
 # PATH at execution time. The availability gate must accept it when a gh exists
 # on PATH even though no ./gh file exists in the working directory.
