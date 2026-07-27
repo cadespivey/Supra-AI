@@ -259,8 +259,10 @@ run_finish \
   SUPRA_PKILL_COMMAND="${bin}/pkill" \
   SUPRA_PGREP_COMMAND="${bin}/pgrep" \
   SUPRA_RUNNER_HOME=/fixture/runner-home \
-  SHIM_PGREP_ALIVE_CALLS=25 \
+  SHIM_PGREP_ALIVE_CALLS=27 \
   -- --run 770002
+# 27 alive polls = survives the whole INT wait (21 liveness checks) AND the
+# whole TERM wait (6 more), dying only after KILL — both escalations must fire.
 expect_status 'stubborn runner is escalated and finish succeeds' 0
 expect 'escalation sends TERM' \
   grep -Eq 'pkill -TERM .*Runner\.Listener' "$shim_log"

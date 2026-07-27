@@ -88,6 +88,26 @@ fi
 
 printf 'Run %s concluded: %s\n' "$run_id" "$conclusion"
 
+stop_poll_seconds=1
+if [[ "${SUPRA_RELEASE_TESTING:-0}" == '1' && -n "${SUPRA_RELEASE_CHECK_POLL_SECONDS:-}" ]]; then
+  stop_poll_seconds="$SUPRA_RELEASE_CHECK_POLL_SECONDS"
+fi
+
+runner_alive() {
+  "$pgrep_command" -f "${runner_home}/bin/Runner.Listener|${runner_home}/run-helper.sh" \
+    >/dev/null 2>&1
+}
+
+runner_stop_wait() {
+  local attempts="$1"
+  local attempt
+  for (( attempt = 0; attempt < attempts; attempt++ )); do
+    runner_alive || return 0
+    sleep "$stop_poll_seconds"
+  done
+  ! runner_alive
+}
+
 printf 'Stopping the release runner…\n'
 if [[ -n "$runner_stop_override" ]]; then
   "$runner_stop_override" || true
@@ -100,14 +120,18 @@ else
   "$pkill_command" -f "${runner_home}/run.sh" 2>/dev/null || true
   "$pkill_command" -INT -f "${runner_home}/bin/Runner.Listener" 2>/dev/null || true
 fi
-for (( attempt = 0; attempt < 20; attempt++ )); do
-  "$pgrep_command" -f "${runner_home}/bin/Runner.Listener|${runner_home}/run-helper.sh" \
-    >/dev/null 2>&1 || break
-  sleep 1
-done
-if "$pgrep_command" -f "${runner_home}/bin/Runner.Listener|${runner_home}/run-helper.sh" \
-    >/dev/null 2>&1; then
-  release_die 'the release runner did not stop; stop it manually, then run Scripts/reset-release-runner.sh'
+if ! runner_stop_wait 20; then
+  # A listener orphaned to launchd (its wrapper died with the operator's
+  # session) ignores SIGINT — observed on the first post-release rehearsal.
+  # Escalate to TERM, then KILL; give up only if it survives KILL.
+  printf 'Runner ignored INT; escalating to TERM…\n'
+  "$pkill_command" -TERM -f "${runner_home}/bin/Runner.Listener" 2>/dev/null || true
+  if ! runner_stop_wait 5; then
+    printf 'Runner ignored TERM; escalating to KILL…\n'
+    "$pkill_command" -KILL -f "${runner_home}/bin/Runner.Listener" 2>/dev/null || true
+    runner_stop_wait 5 \
+      || release_die 'the release runner did not stop; stop it manually, then run Scripts/reset-release-runner.sh'
+  fi
 fi
 
 printf 'Archiving evidence and clearing the runner workspace…\n'
