@@ -123,17 +123,29 @@ run_is_setup_flake() {
 }
 
 wait_for_branch_ci() {
-  local branch="$1" label="$2"
+  local branch="$1" label="$2" expected_sha="${3:-}"
   local reruns_left="$flake_reruns"
-  local poll runs run_id status conclusion url
+  local poll runs selected run_id status conclusion url
   for (( poll = 0; poll < max_ci_polls; poll++ )); do
     runs="$("$gh_command" run list --branch "$branch" --workflow 'Protected macOS CI' \
-      --json databaseId,headSha,status,conclusion,url --limit 1)" \
+      --json databaseId,headSha,status,conclusion,url --limit 5)" \
       || release_die "unable to list CI runs for ${label}"
-    run_id="$(jq -r '.[0].databaseId // empty' <<<"$runs")"
-    status="$(jq -r '.[0].status // empty' <<<"$runs")"
-    conclusion="$(jq -r '.[0].conclusion // empty' <<<"$runs")"
-    url="$(jq -r '.[0].url // empty' <<<"$runs")"
+    if [[ -n "$expected_sha" ]]; then
+      # SHA-aware: right after a merge, the newest completed run on the branch
+      # belongs to the PREVIOUS commit — accepting it hands dispatch a SHA it
+      # must refuse. Only the run for the expected commit counts.
+      selected="$(jq --arg sha "$expected_sha" '[.[] | select(.headSha == $sha)][0] // empty' <<<"$runs")"
+    else
+      selected="$(jq '.[0] // empty' <<<"$runs")"
+    fi
+    if [[ -z "$selected" ]]; then
+      sleep "$poll_seconds"
+      continue
+    fi
+    run_id="$(jq -r '.databaseId // empty' <<<"$selected")"
+    status="$(jq -r '.status // empty' <<<"$selected")"
+    conclusion="$(jq -r '.conclusion // empty' <<<"$selected")"
+    url="$(jq -r '.url // empty' <<<"$selected")"
     if [[ -n "$run_id" && "$status" == 'completed' ]]; then
       if [[ "$conclusion" == 'success' ]]; then
         printf 'CI green on %s (run %s).\n' "$label" "$run_id"
@@ -189,8 +201,10 @@ if (( rehearsal == 0 )); then
     printf '\n'
   } >"$entry"
   changelog="${repo_root}/CHANGELOG.md"
+  # Keep-a-Changelog ordering: insert before the first RELEASED version header
+  # (they start with a digit), so an [Unreleased] section stays on top.
   awk -v entry="$entry" '
-    /^## \[/ && !inserted { while ((getline line < entry) > 0) print line; print ""; inserted = 1 }
+    /^## \[[0-9]/ && !inserted { while ((getline line < entry) > 0) print line; print ""; inserted = 1 }
     { print }
   ' "$changelog" >"${changelog}.tmp"
   mv "${changelog}.tmp" "$changelog"
@@ -215,8 +229,9 @@ if (( rehearsal == 0 )); then
     || release_die 'unable to merge the candidate PR'
   git -C "$repo_root" checkout main --quiet
   git -C "$repo_root" fetch origin main --quiet
-  git -C "$repo_root" merge --ff-only FETCH_HEAD --quiet 2>/dev/null || true
-  wait_for_branch_ci main "main after the candidate merge"
+  merged_main_sha="$(git -C "$repo_root" rev-parse FETCH_HEAD)"
+  git -C "$repo_root" merge --ff-only "$merged_main_sha" --quiet 2>/dev/null || true
+  wait_for_branch_ci main "main after the candidate merge" "$merged_main_sha"
 fi
 
 # --- Dispatch, approve, finish ----------------------------------------------
@@ -230,7 +245,10 @@ if (( rehearsal == 1 )); then
   # One command means waiting, not failing fast: a rehearsal typically runs
   # right after a machinery-change merge, when main's CI is still in flight.
   # Dispatch still re-verifies exact-SHA green fail-closed.
-  wait_for_branch_ci main "main (rehearsal preflight)"
+  git -C "$repo_root" fetch origin main --quiet \
+    || release_die 'unable to fetch origin/main'
+  wait_for_branch_ci main "main (rehearsal preflight)" \
+    "$(git -C "$repo_root" rev-parse FETCH_HEAD)"
 fi
 "$dispatch_command" ${dispatch_arguments[@]+"${dispatch_arguments[@]}"} \
   || release_die 'release-dispatch failed; nothing was published — fix the cause and run cut-release again'
