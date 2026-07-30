@@ -37,6 +37,8 @@ jobs:
           bash Tests/Scripts/test-release-dispatch.sh
           bash Tests/Scripts/test-release-finish.sh
           bash Tests/Scripts/test-cut-release.sh
+          bash Tests/Scripts/test-release-preflight.sh
+          bash Tests/Scripts/test-release-rehearsal-required.sh
       - name: Verify repository facts
         run: bash Scripts/verify-repo-facts.sh
 
