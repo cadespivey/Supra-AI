@@ -11,16 +11,25 @@
 #
 # - SIGNED-OUTPUT machinery re-arms the rehearsal: scripts whose inputs are
 #   real signing/notarization/packaging tool behavior (build, sign, smoke,
-#   artifact verification, appcast preparation, the publish transaction), the
-#   release workflows, entitlements, ExportOptions, runner provisioning, and
-#   the shared library they all source. A green rehearsal proves this happy
-#   path against the real tools — hermetic mocks cannot.
+#   artifact verification, appcast preparation), the release workflows,
+#   entitlements, ExportOptions, runner provisioning, and the shared library
+#   they all source. A green rehearsal proves this happy path against the
+#   real tools — hermetic mocks cannot.
 #
 # - HERMETICALLY COVERED machinery does not: orchestration and gate scripts
 #   (cut-release, dispatch, finish, preflight, this script) consume only
 #   git/GitHub state, are exercised fail-closed by the Tests/Scripts
 #   harnesses in protected CI, and a green rehearsal exercises none of their
 #   fail-paths anyway.
+#
+# - PRODUCTION-ONLY PUBLISH PATH machinery does not either, for a structural
+#   reason: Scripts/release.sh under --no-publish exits before it would
+#   invoke the publish transaction, so a rehearsal is incapable of reaching
+#   publish-release-transaction.sh, publish-release-appcast.sh, or
+#   rollback-release-appcast.sh — a REQUIRED verdict for them would demand a
+#   rehearsal that cannot exercise them. Their only coverage is the hermetic
+#   suite Tests/Scripts/test-release-transaction.sh; the verdict says so on
+#   a distinct output line rather than pretending a rehearsal would help.
 #
 # - Anything else machinery-shaped but unclassified fails safe to REQUIRED.
 #
@@ -66,9 +75,6 @@ gh_command="$(release_resolve_command_override SUPRA_GH_COMMAND gh)"
 path_is_signed_output_machinery() {
   case "$1" in
     Scripts/release.sh|\
-    Scripts/publish-release-transaction.sh|\
-    Scripts/publish-release-appcast.sh|\
-    Scripts/rollback-release-appcast.sh|\
     Scripts/prepare-release-appcast.sh|\
     Scripts/create-preflight-manifest.sh|\
     Scripts/sign-release-manifest.swift|\
@@ -86,6 +92,20 @@ path_is_signed_output_machinery() {
     .github/workflows/release.yml|\
     .github/workflows/release-rehearsal.yml|\
     Apps/*.entitlements) return 0 ;;
+  esac
+  return 1
+}
+
+# Production-only publish path: release.sh --no-publish exits before the
+# publish transaction is invoked, so a rehearsal is structurally incapable of
+# exercising these scripts. They do not re-arm a rehearsal; their only
+# coverage is the hermetic suite Tests/Scripts/test-release-transaction.sh,
+# and the verdict lists them on a distinct line to keep that honest.
+path_is_production_only_publish() {
+  case "$1" in
+    Scripts/publish-release-transaction.sh|\
+    Scripts/publish-release-appcast.sh|\
+    Scripts/rollback-release-appcast.sh) return 0 ;;
   esac
   return 1
 }
@@ -149,11 +169,14 @@ changed_paths="$(git -C "$repo_root" diff --name-only "${base}...HEAD")" \
 
 required_paths=()
 covered_paths=()
+publish_only_paths=()
 pbxproj_changed=0
 while IFS= read -r path; do
   [[ -n "$path" ]] || continue
   if path_is_signed_output_machinery "$path"; then
     required_paths+=("$path")
+  elif path_is_production_only_publish "$path"; then
+    publish_only_paths+=("$path")
   elif path_is_hermetically_covered "$path"; then
     covered_paths+=("$path")
   elif path_is_machinery_shaped "$path"; then
@@ -170,6 +193,10 @@ printf '  head:     %s\n' "$head_sha"
 if (( ${#covered_paths[@]} > 0 )); then
   printf '  machinery covered by hermetic harnesses (does not re-arm the rehearsal):\n'
   printf '    - %s\n' "${covered_paths[@]}"
+fi
+if (( ${#publish_only_paths[@]} > 0 )); then
+  printf '  production-only publish path (a rehearsal cannot exercise these; hermetic coverage is the only coverage):\n'
+  printf '    - %s\n' "${publish_only_paths[@]}"
 fi
 if (( pbxproj_changed == 1 )); then
   printf '  note: a *.pbxproj changed — version bumps are routine, but review signing-setting diffs by eye.\n'
