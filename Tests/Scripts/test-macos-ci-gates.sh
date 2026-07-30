@@ -478,6 +478,20 @@ else
   record_failure 'Protected macOS CI does not execute Tests/Scripts/test-headless-probe-glue.sh'
 fi
 
+# Expected RED before the release-transaction harness was wired into CI: the
+# RELEASE-PROVENANCE claim in Docs/Verified-Product-Claims.yml names
+# Tests/Scripts/test-release-transaction.sh as its verifying test with ci_job
+# "macos-ci/inventory", and Docs/Release-Runbook.md leans on it as standing
+# coverage — but macos-ci.yml's release ceremony step never executed it, so the
+# ~1200-line hermetic transaction suite could rot undetected on main. A gate
+# that is never executed is not a gate. Match an active run-block command, not
+# a comment mentioning the script.
+if grep -Eq '^[[:space:]]+bash Tests/Scripts/test-release-transaction\.sh([[:space:]]|$)' "$ci_workflow"; then
+  printf '%s\n' 'PASS: Protected macOS CI executes the release transaction harness'
+else
+  record_failure 'Protected macOS CI does not execute Tests/Scripts/test-release-transaction.sh'
+fi
+
 if (( failures != 0 )); then
   printf 'macOS CI gate tests failed: %d\n' "$failures" >&2
   exit 1
