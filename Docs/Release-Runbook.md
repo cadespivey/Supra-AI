@@ -95,14 +95,29 @@ fixed on their own schedule via `overrides` pins — never `npm audit fix --forc
 
 A signed rehearsal — the same build, signing, notarization, stapling, and signed
 model/XPC smoke with publication structurally impossible (`--no-publish`) — is required
-before the next production release whenever release machinery has changed since the last
-green signed run on this runner: `.github/workflows/release*.yml`, `Scripts/release*`,
-`Scripts/publish-release*`, `Scripts/prepare-release-appcast.sh`,
-`Scripts/lib/release-common.sh`, runner provisioning, the signing/notarization
-toolchain or Xcode, or a Sparkle update. Routine releases that change only product code
-proceed directly to production (owner decision, 2026-07-19); the hermetic mock
-transaction (`bash Tests/Scripts/test-release-transaction.sh`) continues to cover the
-transaction logic on every change.
+before the next production release whenever **signed-output machinery** has changed
+since the last green signed run on this runner. The verdict is deterministic:
+
+```sh
+bash Scripts/release-rehearsal-required.sh
+```
+
+(It derives the baseline from the last green signed run via `gh`, or takes an explicit
+`--base SHA`.) Exit 0 is the only "no rehearsal needed" signal; a REQUIRED verdict and
+every error path exit nonzero, so a failure can never read as permission to skip.
+Signed-output machinery — scripts whose inputs are real signing/notarization/packaging
+tool behavior (build, sign, smoke, artifact verification, appcast preparation, the
+publish transaction), the release workflows, entitlements, `ExportOptions.plist`,
+runner provisioning, and `Scripts/lib/release-common.sh` — re-arms the rehearsal;
+anything machinery-shaped that the script cannot classify fails safe to REQUIRED.
+Orchestration and gate scripts that consume only git/GitHub state (cut-release,
+dispatch, finish, preflight) do not re-arm it: they are covered fail-closed by the
+hermetic harnesses in protected CI, and a green rehearsal exercises none of their
+fail-paths anyway. Toolchain changes (Xcode, Sparkle tools, signing identities) are
+invisible to the diff and still require a rehearsal. Routine releases that change only
+product code proceed directly to production (owner decision, 2026-07-19); the hermetic
+mock transaction (`bash Tests/Scripts/test-release-transaction.sh`) continues to cover
+the transaction logic on every change.
 
 To rehearse:
 

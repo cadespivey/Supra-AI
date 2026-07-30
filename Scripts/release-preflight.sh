@@ -75,11 +75,23 @@ origin_sha="$(printf '%s\n' "$origin_line" | awk 'NR == 1 {print $1}')"
 
 tag="v${version}"
 if (( allow_released_candidate == 0 )); then
-  if git -C "$repo_root" show-ref --verify --quiet "refs/tags/${tag}"; then
-    release_die 'release tag already exists locally'
-  fi
   remote_tag="$(git -C "$repo_root" ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}" 2>/dev/null)" \
     || release_die 'unable to inspect origin release tags'
+  if git -C "$repo_root" show-ref --verify --quiet "refs/tags/${tag}"; then
+    if [[ -n "$remote_tag" ]] \
+        || "$gh_command" release view "$tag" --repo "$repository" >/dev/null 2>&1; then
+      # Publication-shaped state — the tag is advertised on origin or a
+      # GitHub release exists for the version. Fail-closed, exactly as before.
+      release_die 'release tag already exists locally'
+    fi
+    # A local-only tag for an unpublished version is leftover state from an
+    # earlier failed run on this persistent runner (a skipped workspace reset
+    # after a stop failure or a cancelled run — rehearsal run 30275867763
+    # died here 2h44m in). It states no publication intent: prune and go on.
+    git -C "$repo_root" tag -d "$tag" >/dev/null \
+      || release_die 'unable to prune the stale local release tag'
+    printf 'Pruned stale local-only release tag %s (absent from origin, no published release).\n' "$tag"
+  fi
   [[ -z "$remote_tag" ]] || release_die 'release tag already exists on origin'
 fi
 
