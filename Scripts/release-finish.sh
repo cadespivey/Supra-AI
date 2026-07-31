@@ -48,6 +48,8 @@ curl_command="$(release_resolve_command_override SUPRA_CURL_COMMAND curl)"
 reset_command="$(release_resolve_command_override SUPRA_RESET_COMMAND \
   "${script_root}/Scripts/reset-release-runner.sh")"
 runner_stop_override="$(release_resolve_command_override SUPRA_RUNNER_STOP_COMMAND '')"
+pkill_command="$(release_resolve_command_override SUPRA_PKILL_COMMAND pkill)"
+pgrep_command="$(release_resolve_command_override SUPRA_PGREP_COMMAND pgrep)"
 runner_home="${SUPRA_RUNNER_HOME:-${HOME}/actions-runner}"
 
 poll_seconds=30
@@ -86,18 +88,50 @@ fi
 
 printf 'Run %s concluded: %s\n' "$run_id" "$conclusion"
 
+stop_poll_seconds=1
+if [[ "${SUPRA_RELEASE_TESTING:-0}" == '1' && -n "${SUPRA_RELEASE_CHECK_POLL_SECONDS:-}" ]]; then
+  stop_poll_seconds="$SUPRA_RELEASE_CHECK_POLL_SECONDS"
+fi
+
+runner_alive() {
+  "$pgrep_command" -f "${runner_home}/bin/Runner.Listener|${runner_home}/run-helper.sh" \
+    >/dev/null 2>&1
+}
+
+runner_stop_wait() {
+  local attempts="$1"
+  local attempt
+  for (( attempt = 0; attempt < attempts; attempt++ )); do
+    runner_alive || return 0
+    sleep "$stop_poll_seconds"
+  done
+  ! runner_alive
+}
+
 printf 'Stopping the release runner…\n'
 if [[ -n "$runner_stop_override" ]]; then
   "$runner_stop_override" || true
 else
-  pkill -INT -f "${runner_home}/bin/Runner.Listener" 2>/dev/null || true
+  # run.sh wraps Runner.Listener in run-helper.sh, and the helper RESPAWNS the
+  # listener when it exits — killing only the listener let it come straight
+  # back, and finish died here demanding a manual stop on BOTH v2.3.3
+  # production rounds. Stop the respawning wrappers first, then the listener.
+  "$pkill_command" -f "${runner_home}/run-helper.sh" 2>/dev/null || true
+  "$pkill_command" -f "${runner_home}/run.sh" 2>/dev/null || true
+  "$pkill_command" -INT -f "${runner_home}/bin/Runner.Listener" 2>/dev/null || true
 fi
-for (( attempt = 0; attempt < 20; attempt++ )); do
-  pgrep -f "${runner_home}/bin/Runner.Listener" >/dev/null 2>&1 || break
-  sleep 1
-done
-if pgrep -f "${runner_home}/bin/Runner.Listener" >/dev/null 2>&1; then
-  release_die 'the release runner did not stop; stop it manually, then run Scripts/reset-release-runner.sh'
+if ! runner_stop_wait 20; then
+  # A listener orphaned to launchd (its wrapper died with the operator's
+  # session) ignores SIGINT — observed on the first post-release rehearsal.
+  # Escalate to TERM, then KILL; give up only if it survives KILL.
+  printf 'Runner ignored INT; escalating to TERM…\n'
+  "$pkill_command" -TERM -f "${runner_home}/bin/Runner.Listener" 2>/dev/null || true
+  if ! runner_stop_wait 5; then
+    printf 'Runner ignored TERM; escalating to KILL…\n'
+    "$pkill_command" -KILL -f "${runner_home}/bin/Runner.Listener" 2>/dev/null || true
+    runner_stop_wait 5 \
+      || release_die 'the release runner did not stop; stop it manually, then run Scripts/reset-release-runner.sh'
+  fi
 fi
 
 printf 'Archiving evidence and clearing the runner workspace…\n'

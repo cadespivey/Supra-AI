@@ -58,10 +58,17 @@ temporary_dir="$(mktemp -d)"
 trap 'rm -rf "$temporary_dir"' EXIT
 source_manifest="${temporary_dir}/source-preflight.json"
 
+preflight_arguments=()
+if (( publish == 0 )); then
+  # A rehearsal never mints the tag, release, or appcast entry, and typically
+  # runs right after a release — when the candidate is already published.
+  preflight_arguments+=(--allow-released-candidate)
+fi
 bash "${root}/Scripts/release-preflight.sh" \
   --repo-root "$root" --repository "$repository" --version "$version" \
   --build "$build_number" --expected-sha "$expected_sha" \
-  --ci-run-id "$ci_run_id" --output "$source_manifest"
+  --ci-run-id "$ci_run_id" --output "$source_manifest" \
+  ${preflight_arguments[@]+"${preflight_arguments[@]}"}
 
 build_root="${root}/build/release"
 archive="${build_root}/SupraAI.xcarchive"

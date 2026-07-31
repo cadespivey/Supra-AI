@@ -31,6 +31,7 @@ case "$name" in
     [[ "${MOCK_RELEASE_GATE_FAIL:-0}" != "1" ]]
     ;;
   website-gate)
+    printf 'website-gate-env SUPRA_SKIP_DEP_AUDIT=%s\n' "${SUPRA_SKIP_DEP_AUDIT:-unset}" >>"$log"
     [[ "${MOCK_WEBSITE_FAIL:-0}" != "1" ]]
     ;;
   signed-smoke)
@@ -87,7 +88,8 @@ case "$name" in
         mkdir -p "$destination"
         cp "${MOCK_ZIP_SOURCE}" "${destination}/$(basename "${MOCK_ZIP_SOURCE}")"
         ;;
-      "release edit"|"release delete") exit 0 ;;
+      "release edit") exit 0 ;;
+      "release delete") [[ "${MOCK_DELETE_FAIL:-0}" != "1" ]] ;;
       *) exit 0 ;;
     esac
     ;;

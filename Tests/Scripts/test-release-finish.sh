@@ -77,7 +77,27 @@ cat >"${bin}/runner-stop" <<'SHIM'
 printf 'runner-stop\n' >>"${SHIM_LOG:?}"
 exit 0
 SHIM
-chmod +x "${bin}/gh" "${bin}/curl" "${bin}/reset" "${bin}/runner-stop"
+
+cat >"${bin}/pkill" <<'SHIM'
+#!/usr/bin/env bash
+printf 'pkill %s\n' "$*" >>"${SHIM_LOG:?}"
+exit 0
+SHIM
+
+cat >"${bin}/pgrep" <<'SHIM'
+#!/usr/bin/env bash
+printf 'pgrep %s\n' "$*" >>"${SHIM_LOG:?}"
+if [[ -n "${SHIM_PGREP_ALIVE_CALLS:-}" ]]; then
+  counter="${SHIM_STATE:?}/pgrep-count"
+  count=0
+  [[ -f "$counter" ]] && count="$(cat "$counter")"
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$counter"
+  (( count <= SHIM_PGREP_ALIVE_CALLS )) && exit 0
+fi
+exit 1
+SHIM
+chmod +x "${bin}/gh" "${bin}/curl" "${bin}/reset" "${bin}/runner-stop" "${bin}/pkill" "${bin}/pgrep"
 
 # Fixture origin repository whose reviewed metadata says 9.4.7 (build 941).
 seed="${workdir}/seed"
@@ -122,7 +142,7 @@ run_finish() {
   done
   [[ "${1:-}" == '--' ]] && shift
   : >"$shim_log"
-  rm -f "${state}/poll-count"
+  rm -f "${state}/poll-count" "${state}/pgrep-count"
   finish_status=0
   (
     cd "$clone" && env \
@@ -197,6 +217,59 @@ stop_line="$(log_line_number '^runner-stop$')"
 reset_line="$(log_line_number '^reset$')"
 expect 'runner stops before the workspace reset' \
   test -n "$stop_line" -a -n "$reset_line" -a "$stop_line" -lt "$reset_line"
+
+# --- Default runner stop: kill the respawning wrapper BEFORE the listener ---
+# The runner's run.sh wraps Runner.Listener in run-helper.sh, which RESPAWNS
+# the listener when it exits. The default stop path killed only the listener,
+# so it came straight back and finish died demanding a manual stop — observed
+# on BOTH v2.3.3 production rounds. The default path must kill run-helper.sh
+# (and run.sh) first, then the listener, through overridable pkill/pgrep so
+# this is testable hermetically. Expected RED reason: the script has no
+# SUPRA_PKILL_COMMAND/SUPRA_PGREP_COMMAND overrides and kills only the
+# listener, so no shim pkill lines are recorded.
+run_finish \
+  SUPRA_RUNNER_STOP_COMMAND= \
+  SUPRA_PKILL_COMMAND="${bin}/pkill" \
+  SUPRA_PGREP_COMMAND="${bin}/pgrep" \
+  SUPRA_RUNNER_HOME=/fixture/runner-home \
+  -- --run 770002
+expect_status 'default stop path finishes cleanly' 0
+expect 'default stop kills the respawning run-helper' \
+  grep -Eq 'pkill .*-f /fixture/runner-home/run-helper\.sh' "$shim_log"
+expect 'default stop kills the listener' \
+  grep -Eq 'pkill .*-f /fixture/runner-home/bin/Runner\.Listener' "$shim_log"
+helper_kill_line="$(log_line_number '/fixture/runner-home/run-helper')"
+listener_kill_line="$(log_line_number '/fixture/runner-home/bin/Runner.Listener')"
+expect 'run-helper dies before the listener (or the listener respawns)' \
+  test -n "$helper_kill_line" -a -n "$listener_kill_line" \
+    -a "$helper_kill_line" -lt "$listener_kill_line"
+
+# --- Stubborn runner: escalate INT -> TERM -> KILL before giving up ---------
+# A listener orphaned to launchd (its respawning wrapper died with the
+# operator's session) ignores SIGINT — observed on the first post-release
+# rehearsal: finish waited out its INT loop, died demanding a manual stop,
+# and left evidence unarchived. The default stop must escalate to TERM and
+# then KILL, dying only if the listener survives KILL — and evidence must
+# still be archived on the escalated path.
+# Expected RED reason: no escalation exists; the stop sends only INT, the
+# wait loop sees the shim's persistent liveness, and finish exits 1 with no
+# pkill -TERM/-KILL lines recorded.
+run_finish \
+  SUPRA_RUNNER_STOP_COMMAND= \
+  SUPRA_PKILL_COMMAND="${bin}/pkill" \
+  SUPRA_PGREP_COMMAND="${bin}/pgrep" \
+  SUPRA_RUNNER_HOME=/fixture/runner-home \
+  SHIM_PGREP_ALIVE_CALLS=27 \
+  -- --run 770002
+# 27 alive polls = survives the whole INT wait (21 liveness checks) AND the
+# whole TERM wait (6 more), dying only after KILL — both escalations must fire.
+expect_status 'stubborn runner is escalated and finish succeeds' 0
+expect 'escalation sends TERM' \
+  grep -Eq 'pkill -TERM .*Runner\.Listener' "$shim_log"
+expect 'escalation sends KILL' \
+  grep -Eq 'pkill -KILL .*Runner\.Listener' "$shim_log"
+expect 'escalated stop still archives evidence' \
+  grep -Fxq 'reset' "$shim_log"
 
 # --- Failed run: still stop and archive, then point at rollback -------------
 run_finish SHIM_FINAL_RUN_JSON="$run_failure" -- --run 770002

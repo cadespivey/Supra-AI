@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > (per-milestone implementation plans, work orders, and progress logs) and in the
 > git history. This file summarizes user-facing changes per release.
 
+## [Unreleased]
+
+## [2.3.4] - 2026-07-27
+
+### Added
+
+- **Edit a ScratchPad note in place** — hovering a note now shows an edit (pencil)
+  button beside delete. Editing swaps the note for an inline editor seeded with its
+  raw text; Return (or ⌘-Return) saves, Shift-Return inserts a line break, and
+  Escape or Cancel discards the change. Saving re-parses `@matter` and `#tag`
+  tokens and preserves the note's original timestamp. Editing stays unavailable on
+  a locked day, matching delete.
+
+### Fixed
+
+- **Return always sends** — in global chat, matter chat, and ScratchPad, pressing
+  Return with an attachment, staged file, or tag present now sends the message or
+  saves the note instead of highlighting the composer text. Shift-Return inserts a
+  line break, and ⌘-Return still sends. While the ScratchPad @/# suggestion list
+  is open, Return and Tab still accept the highlighted suggestion.
+
+
 ## [2.3.3] - 2026-07-23
 
 ### Changed

@@ -94,8 +94,17 @@ rollback_transaction() {
   fi
   record_incident "$failure_status" "$rollback_status"
   rm -rf "$temporary_dir"
-  if (( rollback_status == 0 )); then
-    printf 'ERROR: release transaction failed; public state was rolled back or retained as draft (%s).\n' "$tag" >&2
+  # The operator's verdict comes from PROBING what actually exists, never from
+  # the rollback's own exit codes: a draft delete's tag cleanup failing against
+  # a never-created tag once reported a fully clean failure as CRITICAL
+  # (v2.3.3 round 1) — a fire drill over nothing. A clean failure is a calm
+  # re-dispatch; the emergency-rollback demand is reserved for a release that
+  # is verifiably still public after a failed rollback.
+  if ! "$gh_command" release view "$tag" --repo "$repository" >/dev/null 2>&1 \
+      && [[ -z "$appcast_commit" ]]; then
+    printf 'ERROR: release transaction failed for %s; nothing was published (no release, no appcast change). Fix the cause and re-dispatch.\n' "$tag" >&2
+  elif (( rollback_status == 0 )); then
+    printf 'ERROR: release transaction failed; public state was rolled back or retained as draft (%s). Fix the cause and re-dispatch.\n' "$tag" >&2
   else
     printf 'CRITICAL: release transaction and automated rollback both failed for %s; invoke the protected emergency rollback immediately.\n' "$tag" >&2
   fi
@@ -179,7 +188,15 @@ cp "$prepared_appcast" "${website_stage}/public/appcast.xml"
 cp "$prepared_constants" "${website_stage}/lib/constants.ts"
 bash "${root}/Scripts/verify-release-artifact-contents.sh" "$website_stage" >/dev/null \
   || release_die 'staged website artifact policy failed'
-"$website_gate" "$website_stage" >/dev/null || release_die 'staged website release gate failed'
+# The staged gate proves the appcast merge deploys: lint, typecheck, static
+# build, and the font guard. The npm dependency audit is deliberately EXCLUDED
+# from the release transaction — the site is a static export whose build-time
+# dependencies never execute for a visitor, and a freshly disclosed transitive
+# advisory blocked a fully notarized release three times (v2.3.3 round 1 was
+# the third). Supply-chain coverage stays with the scoped per-PR audit and the
+# weekly scheduled audit (security-scheduled.yml). Owner decision, 2026-07-24.
+SUPRA_SKIP_DEP_AUDIT=1 "$website_gate" "$website_stage" >/dev/null \
+  || release_die 'staged website release gate failed'
 built_website="${website_stage}/out"
 if [[ ! -d "$built_website" ]]; then
   if [[ "${SUPRA_RELEASE_TESTING:-0}" == '1' ]]; then

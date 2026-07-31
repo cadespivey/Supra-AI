@@ -226,6 +226,86 @@ final class ScratchPadControllerTests: XCTestCase {
         XCTAssertEqual(reopened.entries.first?.seq, 1)
     }
 
+    // MARK: - Editing entries
+
+    // Standing guards (green from day one): the in-pad edit affordance calls
+    // `updateEntry`, but before this feature that controller path had no test. These
+    // pin the contract the edit UI depends on so a future refactor can't silently
+    // break it. Their RED reason is regression, not first-implementation.
+
+    /// Editing rewrites the text and RE-PARSES `@matter` / `#tag` tokens, so a
+    /// corrected note carries the corrected mentions and tags — not the originals.
+    func testUpdateEntryRewritesTextAndReparsesTokens() throws {
+        let store = try makeStore()
+        let alpha = try store.matters.createMatter(name: "Alpha Holdings v. Crane")
+        let beta = try store.matters.createMatter(name: "Beta Logistics Dispute")
+        let controller = ScratchPadController(store: store, now: fixedNow)
+        controller.load()
+        XCTAssertTrue(controller.addEntry("Reviewed order for @Alpha #discovery"))
+        let entry = controller.entries[0]
+        XCTAssertEqual(entry.mentionMatterIDs, [alpha.id])
+        XCTAssertEqual(entry.tags, ["discovery"])
+
+        controller.updateEntry(id: entry.id, text: "Revised memo for @Beta #drafting #urgent")
+
+        let edited = controller.entries[0]
+        XCTAssertEqual(edited.id, entry.id, "editing keeps the same entry, not a new one")
+        XCTAssertEqual(edited.text, "Revised memo for @Beta #drafting #urgent")
+        XCTAssertEqual(edited.mentionMatterIDs, [beta.id], "mentions re-resolve on edit")
+        XCTAssertEqual(edited.tags, ["drafting", "urgent"], "tags re-parse on edit")
+    }
+
+    /// Editing preserves the entry's original timestamp (its `createdAt` is the
+    /// silent time evidence behind billing). A regression that reset the timestamp
+    /// on edit would corrupt duration inference, so this guards it: with a fixed
+    /// clock, the post-edit timestamp must still equal the creation time.
+    func testUpdateEntryPreservesOriginalTimestamp() throws {
+        let store = try makeStore()
+        let controller = ScratchPadController(store: store, now: fixedNow)
+        controller.load()
+        XCTAssertTrue(controller.addEntry("Initial note"))
+        let created = controller.entries[0].timestamp
+        XCTAssertEqual(created, fixedNow())
+
+        controller.updateEntry(id: controller.entries[0].id, text: "Corrected note")
+
+        XCTAssertEqual(controller.entries[0].text, "Corrected note")
+        XCTAssertEqual(controller.entries[0].timestamp, created,
+                       "editing must not move the entry's time evidence")
+    }
+
+    /// Editing is blocked on a locked day — the same lock gate as delete/add — so a
+    /// finalized day's notes can't be rewritten after the fact.
+    func testUpdateEntryBlockedWhenDayLocked() throws {
+        let store = try makeStore()
+        let controller = ScratchPadController(store: store, now: fixedNow)
+        controller.load()
+        XCTAssertTrue(controller.addEntry("Locked-day note"))
+        let entry = controller.entries[0]
+        controller.lockCurrentDay()
+        XCTAssertTrue(controller.isCurrentDayLocked)
+
+        controller.updateEntry(id: entry.id, text: "Attempted edit after lock")
+
+        XCTAssertEqual(controller.entries[0].text, "Locked-day note",
+                       "a locked day rejects entry edits")
+    }
+
+    /// A save that trims to empty is a no-op (the edit UI disables Save when empty);
+    /// this guards against an accidental all-whitespace edit blanking a note.
+    func testUpdateEntryIgnoresEmptyText() throws {
+        let store = try makeStore()
+        let controller = ScratchPadController(store: store, now: fixedNow)
+        controller.load()
+        XCTAssertTrue(controller.addEntry("Keep me"))
+        let entry = controller.entries[0]
+
+        controller.updateEntry(id: entry.id, text: "   \n  ")
+
+        XCTAssertEqual(controller.entries[0].text, "Keep me",
+                       "an empty edit must not blank the entry")
+    }
+
     // MARK: - Live @matter registry
 
     /// A matter created while the pad is already open must appear in the `@`

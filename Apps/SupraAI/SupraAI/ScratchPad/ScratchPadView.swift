@@ -34,7 +34,14 @@ struct ScratchPadView: View {
     /// True while a drag hovers the note surface (drives the drop hint).
     @State private var fileDropTargeted = false
     @State private var isSubmitting = false
-    @FocusState private var composerFocused: Bool
+    /// Plain state (not @FocusState): the composer is AppKit-backed, so focus is
+    /// bridged through SupraComposerField's binding rather than SwiftUI focus.
+    @State private var composerFocused: Bool = false
+    /// The entry currently being edited inline, and its working text. Parent-owned
+    /// so only one entry edits at a time and starting another cancels the first.
+    @State private var editingEntryID: String?
+    @State private var editingText: String = ""
+    @State private var editingFocused: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -359,6 +366,12 @@ struct ScratchPadView: View {
                                 attachments: controller.attachments(forEntry: entry.id),
                                 isLocked: controller.isCurrentDayLocked,
                                 showTimestamp: billingSettings.autoTimestamp,
+                                isEditing: editingEntryID == entry.id,
+                                editingText: $editingText,
+                                editingFocused: $editingFocused,
+                                onBeginEdit: { beginEditing(entry) },
+                                onCommitEdit: { commitEditing(entry) },
+                                onCancelEdit: cancelEditing,
                                 onDelete: { controller.deleteEntry(id: entry.id) },
                                 onRemoveAttachment: { controller.removeAttachment(id: $0) }
                             )
@@ -403,7 +416,36 @@ struct ScratchPadView: View {
             .onChange(of: controller.entries.count) {
                 if let last = controller.entries.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
+            // Leaving the day, or locking it, abandons any in-progress edit.
+            .onChange(of: controller.displayedDate) { cancelEditing() }
+            .onChange(of: controller.isCurrentDayLocked) { _, locked in
+                if locked { cancelEditing() }
+            }
         }
+    }
+
+    /// Opens the inline editor on `entry`, seeding it with the entry's raw text
+    /// (sigils intact, so `@matter`/`#tag` re-parse on save). Never opens on a
+    /// locked day.
+    private func beginEditing(_ entry: ScratchPadEntryView) {
+        guard !controller.isCurrentDayLocked else { return }
+        editingEntryID = entry.id
+        editingText = entry.text
+        editingFocused = true
+    }
+
+    /// Saves the edit if the text is non-empty, then closes the editor. An empty
+    /// edit is discarded (the controller no-ops on it) rather than blanking the note.
+    private func commitEditing(_ entry: ScratchPadEntryView) {
+        defer { cancelEditing() }
+        guard !editingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        controller.updateEntry(id: entry.id, text: editingText)
+    }
+
+    private func cancelEditing() {
+        editingEntryID = nil
+        editingText = ""
+        editingFocused = false
     }
 
     // MARK: - Attachments
@@ -531,36 +573,47 @@ struct ScratchPadView: View {
                             .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
                             .help("Attach a file to this note (work product, email, filing)")
-                            TextField("Add a note — @matter, #tag…", text: $composerText, axis: .vertical)
-                                .textFieldStyle(.plain)
-                                .lineLimit(1...5)
-                                .focused($composerFocused)
-                                .onChange(of: composerText) { _, _ in selectedSuggestion = 0 }
-                                // When the @/# list is open, the arrow keys move the highlight
-                                // and Return/Tab accept it; otherwise plain Return adds the note
-                                // (Shift-Return / ⌘-Return fall through to a newline or the send
-                                // shortcut). Replaces .onSubmit so Return can't fire twice.
-                                .onKeyPress(.downArrow) { suggestionMenuOpen ? moveSelection(1) : .ignored }
-                                .onKeyPress(.upArrow) { suggestionMenuOpen ? moveSelection(-1) : .ignored }
-                                .onKeyPress(.escape) {
-                                    guard suggestionMenuOpen else { return .ignored }
-                                    dismissedToken = activeToken
-                                    return .handled
-                                }
-                                .onKeyPress(.tab) {
-                                    guard suggestionMenuOpen, let item = highlightedSuggestion else { return .ignored }
-                                    accept(item)
-                                    return .handled
-                                }
-                                .onKeyPress(keys: [.return]) { keyPress in
-                                    guard keyPress.modifiers.isEmpty else { return .ignored }
+                            // AppKit-routed (SupraComposerEditorCore) so plain Return ALWAYS
+                            // saves the note — SwiftUI .onKeyPress detaches when the staged-file
+                            // bar or suggestion list restructures the hierarchy around the
+                            // focused field, letting Return fall through to the field's
+                            // commit-and-reselect. While the @/# list is open, arrows move the
+                            // highlight and Return/Tab accept it; Shift-Return inserts a
+                            // newline; ⌘-Return stays with the send button's shortcut.
+                            SupraComposerField(
+                                "Add a note — @matter, #tag…",
+                                text: $composerText,
+                                isFocused: $composerFocused,
+                                lineRange: 1...5,
+                                onPrimaryAction: {
                                     if suggestionMenuOpen, let item = highlightedSuggestion {
                                         accept(item)
-                                        return .handled
+                                    } else {
+                                        submit()
                                     }
-                                    submit()
-                                    return .handled
+                                },
+                                onTab: {
+                                    guard suggestionMenuOpen, let item = highlightedSuggestion else { return false }
+                                    accept(item)
+                                    return true
+                                },
+                                onMoveUp: {
+                                    guard suggestionMenuOpen else { return false }
+                                    _ = moveSelection(-1)
+                                    return true
+                                },
+                                onMoveDown: {
+                                    guard suggestionMenuOpen else { return false }
+                                    _ = moveSelection(1)
+                                    return true
+                                },
+                                onCancel: {
+                                    guard suggestionMenuOpen else { return false }
+                                    dismissedToken = activeToken
+                                    return true
                                 }
+                            )
+                            .onChange(of: composerText) { _, _ in selectedSuggestion = 0 }
                             Button(action: submit) {
                                 if isSubmitting {
                                     ProgressView()
@@ -889,16 +942,27 @@ private struct WeekDayButton: View {
     }
 }
 
-/// One entry row with a hover-revealed delete button. The delete affordance lives
-/// outside the selectable text so it isn't shadowed by the system text menu.
+/// One entry row with hover-revealed edit and delete buttons. Those affordances
+/// live outside the selectable text so they aren't shadowed by the system text
+/// menu. Selecting edit swaps the note's text for an inline editor.
 private struct ScratchPadEntryRow: View {
     let entry: ScratchPadEntryView
     var attachments: [ScratchPadAttachmentView] = []
     let isLocked: Bool
     var showTimestamp: Bool = true
+    var isEditing: Bool = false
+    @Binding var editingText: String
+    @Binding var editingFocused: Bool
+    var onBeginEdit: () -> Void = {}
+    var onCommitEdit: () -> Void = {}
+    var onCancelEdit: () -> Void = {}
     let onDelete: () -> Void
     var onRemoveAttachment: (String) -> Void = { _ in }
     @State private var hovering = false
+
+    private var editIsEmpty: Bool {
+        editingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -912,10 +976,14 @@ private struct ScratchPadEntryRow: View {
                     .padding(.top, 2)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(ScratchPadFormatting.highlighted(entry.text))
-                    .supraReadingBody(measure: nil)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if isEditing {
+                    editor
+                } else {
+                    Text(ScratchPadFormatting.highlighted(entry.text))
+                        .supraReadingBody(measure: nil)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 if entry.isNonBillable {
                     Label("Non-billable", systemImage: "nosign")
                         .font(.supraCaption.weight(.medium))
@@ -926,20 +994,63 @@ private struct ScratchPadEntryRow: View {
                     inlineAttachment(attachment)
                 }
             }
-            if !isLocked {
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
+            // Edit/delete are hidden while editing (the editor has its own controls)
+            // and on a locked day.
+            if !isLocked && !isEditing {
+                HStack(spacing: 10) {
+                    Button(action: onBeginEdit) {
+                        Image(systemName: "pencil")
+                    }
+                    .help("Edit entry")
+                    .accessibilityLabel("Edit entry")
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                    }
+                    .help("Delete entry")
+                    .accessibilityLabel("Delete entry")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.tertiary)
                 .opacity(hovering ? 1 : 0)
-                .help("Delete entry")
-                .accessibilityLabel("Delete entry")
             }
         }
         .padding(.vertical, 8)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+    }
+
+    /// Inline editor shown in place of the note text. Return saves, Shift-Return
+    /// inserts a line break, Escape cancels — matching the day's composer. Save is
+    /// disabled when the text trims to empty so an edit never blanks a note.
+    private var editor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SupraComposerField(
+                "Edit note — @matter, #tag…",
+                text: $editingText,
+                isFocused: $editingFocused,
+                lineRange: 1...6,
+                accessibilityID: "scratchpad.entry.editor",
+                onPrimaryAction: onCommitEdit,
+                onCancel: { onCancelEdit(); return true }
+            )
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.accentColor.opacity(0.5))
+            )
+            HStack(spacing: 8) {
+                Button("Save", action: onCommitEdit)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(editIsEmpty)
+                    .keyboardShortcut(.return, modifiers: .command)
+                Button("Cancel", action: onCancelEdit)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func inlineAttachment(_ attachment: ScratchPadAttachmentView) -> some View {
