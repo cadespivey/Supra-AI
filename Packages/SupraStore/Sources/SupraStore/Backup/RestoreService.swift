@@ -154,6 +154,7 @@ struct SystemRestoreFileOperations: RestoreFileOperations {
 /// installs live blobs; the marker is consumed by the cold-start activation
 /// work order after the existing controller graph has exited.
 public enum RestoreService {
+    public static let stagingDirectoryName = "RestoreStaging"
     static let safetyDatabaseFileName = "restore-safety.sqlite"
     static let stagedDatabaseFileName = "restore-selected.sqlite"
 

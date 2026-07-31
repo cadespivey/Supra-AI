@@ -120,7 +120,7 @@ private struct DatabaseRecoveryView: View {
                     Button("Show Recovery Snapshot") {
                         NSWorkspace.shared.activateFileViewerSelecting([snapshotURL])
                     }
-                    .accessibilityHint("Opens Finder with the verified pre-upgrade snapshot selected.")
+                    .accessibilityHint("Opens Finder with the verified recovery database selected.")
                 }
                 Button("Quit Without Changes") {
                     NSApplication.shared.terminate(nil)

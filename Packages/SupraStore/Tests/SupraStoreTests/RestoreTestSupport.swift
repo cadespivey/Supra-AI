@@ -161,6 +161,49 @@ struct RestoreTestFixture {
         }
     }
 
+    func writeShippingLiveState(sentinel: String = "current") throws {
+        try writeShippingDatabase(at: liveDatabaseURL, sentinel: sentinel)
+    }
+
+    @discardableResult
+    func writeCompleteShippingSnapshot(
+        stem: String = "SupraAI-20260731-120000-000",
+        sentinel: String = "selected"
+    ) throws -> (snapshot: URL, manifest: URL) {
+        let dbDirectory = backupDirectory.appendingPathComponent("db", isDirectory: true)
+        try FileManager.default.createDirectory(at: dbDirectory, withIntermediateDirectories: true)
+        let snapshot = dbDirectory.appendingPathComponent("\(stem).sqlite")
+        try writeShippingDatabase(at: snapshot, sentinel: sentinel)
+        let bytes = try XCTUnwrapForRestore(
+            snapshot.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        )
+        let manifest = BackupManifest(
+            appVersion: "9.8.7",
+            appBuild: "654",
+            schemaMigrationIdentifiers: SupraMigrator.makeMigrator().migrations,
+            createdAt: Date(timeIntervalSince1970: 1_785_499_200),
+            sourceDbBytes: bytes,
+            referencedBlobCount: 0
+        )
+        let manifestURL = dbDirectory.appendingPathComponent("\(stem).json")
+        try BackupManifest.encode(manifest).write(to: manifestURL)
+        return (snapshot, manifestURL)
+    }
+
+    private func writeShippingDatabase(at url: URL, sentinel: String) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let database = try SupraDatabase(url: url)
+        try database.writer.write { db in
+            try db.execute(sql: "CREATE TABLE restore_sentinel (value TEXT NOT NULL)")
+            try db.execute(
+                sql: "INSERT INTO restore_sentinel (value) VALUES (?)",
+                arguments: [sentinel]
+            )
+        }
+    }
+
     func sentinel(in databaseURL: URL) throws -> String? {
         var configuration = Configuration()
         configuration.readonly = true

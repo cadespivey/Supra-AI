@@ -15,6 +15,7 @@ struct DatabaseRecoveryState: Sendable {
     enum Failure: Sendable {
         case snapshot
         case migration
+        case restore
     }
 
     let failure: Failure
@@ -24,6 +25,7 @@ struct DatabaseRecoveryState: Sendable {
         switch failure {
         case .snapshot: "Database upgrade paused"
         case .migration: "Database recovery required"
+        case .restore: "Restore recovery required"
         }
     }
 
@@ -33,6 +35,8 @@ struct DatabaseRecoveryState: Sendable {
             "Supra AI could not create and verify the required pre-upgrade snapshot. Your existing database was not changed. Check available disk space and Application Support permissions, then quit and relaunch."
         case .migration:
             "Supra AI could not complete the database upgrade. New work is disabled so it cannot be written to temporary storage. Your existing database and the verified pre-upgrade snapshot remain available for recovery."
+        case .restore:
+            "Supra AI could not activate the staged restore or return the live database to its verified pre-restore state. Normal work is disabled. Quit the app and preserve the restore safety copy before attempting manual recovery."
         }
     }
 }
@@ -113,8 +117,9 @@ final class AppEnvironment: ObservableObject {
     private var classifyOnModelLoadCancellable: AnyCancellable?
 
     init() {
+        let restoreActivation = AppEnvironment.prepareColdStartRestore()
         let runtimeClient = RuntimeClient()
-        let storeResult = AppEnvironment.makeStore()
+        let storeResult = AppEnvironment.makeStore(after: restoreActivation)
         let store = storeResult.store
         let systemPrompt = DefaultSystemPrompt.milestone1()
         let appVersion = AppEnvironment.currentAppVersion()
@@ -1631,7 +1636,7 @@ final class AppEnvironment: ObservableObject {
     /// Opens the on-disk store, falling back to a temporary store so the app still
     /// launches if the Application Support database cannot be created. `isFallback`
     /// is true for that degraded last-resort store (not for the UI-test store).
-    private static func makeStore() -> (
+    private static func makeStore(after restoreActivation: RestoreActivationResult?) -> (
         store: SupraStore,
         isFallback: Bool,
         recoveryState: DatabaseRecoveryState?
@@ -1656,6 +1661,16 @@ final class AppEnvironment: ObservableObject {
             if let store = try? SupraStore.inMemory() { return (store, true, nil) }
             return (unavailableStore(), true, nil)
         }
+        if restoreActivation?.status == .recoveryRequired {
+            return (
+                makeFallbackStore(),
+                true,
+                DatabaseRecoveryState(
+                    failure: .restore,
+                    snapshotURL: restoreActivation?.recoveryDatabaseURL
+                )
+            )
+        }
         do {
             return (try SupraStore.openAppSupportStore(), false, nil)
         } catch let error as SupraDatabaseOpenError {
@@ -1676,6 +1691,22 @@ final class AppEnvironment: ObservableObject {
             // replace the work surface with the blocking recovery UI.
         }
         return (makeFallbackStore(), true, nil)
+    }
+
+    /// Consumes a complete restore intent before any user-store writer or
+    /// controller graph exists. Hermetic and headless launches skip this seam so
+    /// test/demo/probe authority can never mutate the user's live data.
+    private static func prepareColdStartRestore() -> RestoreActivationResult? {
+        guard !isUITestMode, !isDemoMode, !isHeadlessProbeMode,
+              let databaseURL = try? DatabasePath.appSupportDatabaseURL()
+        else { return nil }
+        let layout = RestoreLiveLayout(
+            databaseURL: databaseURL,
+            blobsDirectory: DocumentStorage.makeDefault().blobsDirectory,
+            stagingRootDirectory: databaseURL.deletingLastPathComponent()
+                .appendingPathComponent(RestoreService.stagingDirectoryName, isDirectory: true)
+        )
+        return RestoreActivationService.activatePendingRestore(liveLayout: layout)
     }
 
     private static func makeFallbackStore() -> SupraStore {
