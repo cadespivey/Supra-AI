@@ -247,6 +247,17 @@ run_case \
   'a project-file version bump alone does not require a rehearsal' \
   0 "$not_required_verdict" verdict
 
+# GATE: an otherwise permitted version-assignment line must not carry a second
+# project setting after its semicolon. Expected RED: the classifier anchors
+# only the beginning of the line, so this signing-affecting suffix is accepted
+# as routine metadata and the helper returns the not-required verdict.
+make_fixture_repo version-line-suffix
+commit_project_configuration \
+  '9.4.8; OTHER_CODE_SIGN_FLAGS = "--timestamp=none"' 942 Manual
+run_case \
+  'a second setting on a version line requires a rehearsal' \
+  1 "$required_verdict" verdict
+
 make_fixture_repo signing-style
 commit_project_configuration 9.4.7 941 Automatic
 run_case \
