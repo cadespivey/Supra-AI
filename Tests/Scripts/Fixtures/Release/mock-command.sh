@@ -43,6 +43,12 @@ case "$name" in
       '{schemaVersion: 1, status: "passed", sourceSha: $sourceSha, appTreeSHA256: $appTreeSHA256, modelSHA256: $modelSHA256, xpcBundleIdentifier: "ai.supra.SupraAI.SupraRuntimeService", generatedTokens: 4}' >"$output"
     ;;
   gh)
+    if [[ "${1:-}" == 'api' \
+        && "${2:-}" == *'/releases?per_page=1' \
+        && "${MOCK_RELEASE_PERMISSION_DENIED:-0}" == '1' ]]; then
+      printf '%s\n' 'synthetic release collection permission denial' >&2
+      exit 2
+    fi
     case "${1:-} ${2:-}" in
       "auth status") exit 0 ;;
       "run view")
@@ -67,6 +73,10 @@ case "$name" in
         [[ "${MOCK_DEPLOY_FAIL:-0}" != "1" ]]
         ;;
       "release view")
+        if [[ "${MOCK_RELEASE_LOOKUP_ERROR:-0}" == "1" ]]; then
+          printf '%s\n' 'synthetic release lookup transport failure' >&2
+          exit 2
+        fi
         if [[ " $* " == *" --json "* ]]; then
           jq -n \
             --arg tagName "${MOCK_RELEASE_TAG:-v2.3.0}" \
@@ -75,6 +85,17 @@ case "$name" in
             '{tagName: $tagName, targetCommitish: $targetCommitish, url: $url, isDraft: false}'
         else
           [[ "${MOCK_RELEASE_EXISTS:-0}" == "1" ]]
+        fi
+        ;;
+      "api --include")
+        if [[ "${MOCK_RELEASE_LOOKUP_ERROR:-0}" == "1" ]]; then
+          printf '%s\n' 'synthetic release lookup transport failure' >&2
+          exit 2
+        elif [[ "${MOCK_RELEASE_EXISTS:-0}" == "1" ]]; then
+          printf 'HTTP/2.0 200 OK\r\n\r\n{}\n'
+        else
+          printf 'HTTP/2.0 404 Not Found\r\n\r\n{"message":"Not Found"}\n'
+          exit 1
         fi
         ;;
       "release create")

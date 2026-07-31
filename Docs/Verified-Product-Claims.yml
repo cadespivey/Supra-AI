@@ -256,7 +256,7 @@ claims:
     verification: "Tests/Scripts/test-release-transaction.sh"
     ci_job: "macos-ci/inventory"
     applicable_version: "2.2.1 and later"
-    last_reviewed: "2026-07-13"
+    last_reviewed: "2026-07-31"
     publication_anchor: "CONTRIBUTING.md"
 
   - id: "PRIVILEGED-QUERY-LOGGING"

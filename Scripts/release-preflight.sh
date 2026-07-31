@@ -74,12 +74,34 @@ origin_sha="$(printf '%s\n' "$origin_line" | awk 'NR == 1 {print $1}')"
 [[ "$origin_sha" == "$head_sha" ]] || release_die 'HEAD does not equal origin/main'
 
 tag="v${version}"
+"$gh_command" auth status >/dev/null 2>&1 \
+  || release_die 'GitHub release authentication is unavailable'
+"$gh_command" api "repos/${repository}" --silent >/dev/null 2>&1 \
+  || release_die 'unable to confirm GitHub release state'
+"$gh_command" api "repos/${repository}/releases?per_page=1" --silent >/dev/null 2>&1 \
+  || release_die 'unable to confirm GitHub release read permission'
 if (( allow_released_candidate == 0 )); then
+  release_lookup_status=0
+  release_lookup_output="$(
+    "$gh_command" api --include "repos/${repository}/releases/tags/${tag}" 2>&1
+  )" || release_lookup_status=$?
+  release_http_status="$(
+    printf '%s\n' "$release_lookup_output" \
+      | sed -nE 's|^HTTP/[0-9.]+ ([0-9]{3})( .*)?$|\1|p' \
+      | tail -1
+  )"
+  if (( release_lookup_status == 0 )) && [[ "$release_http_status" == '200' ]]; then
+    release_state='published'
+  elif (( release_lookup_status != 0 )) && [[ "$release_http_status" == '404' ]]; then
+    release_state='absent'
+  else
+    release_die 'unable to confirm GitHub release state'
+  fi
+
   remote_tag="$(git -C "$repo_root" ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}" 2>/dev/null)" \
     || release_die 'unable to inspect origin release tags'
   if git -C "$repo_root" show-ref --verify --quiet "refs/tags/${tag}"; then
-    if [[ -n "$remote_tag" ]] \
-        || "$gh_command" release view "$tag" --repo "$repository" >/dev/null 2>&1; then
+    if [[ -n "$remote_tag" || "$release_state" == 'published' ]]; then
       # Publication-shaped state — the tag is advertised on origin or a
       # GitHub release exists for the version. Fail-closed, exactly as before.
       release_die 'release tag already exists locally'
@@ -93,15 +115,9 @@ if (( allow_released_candidate == 0 )); then
     printf 'Pruned stale local-only release tag %s (absent from origin, no published release).\n' "$tag"
   fi
   [[ -z "$remote_tag" ]] || release_die 'release tag already exists on origin'
+  [[ "$release_state" == 'absent' ]] \
+    || release_die 'release version is already published or reserved'
 fi
-
-"$gh_command" auth status >/dev/null 2>&1 || release_die 'GitHub release authentication is unavailable'
-if (( allow_released_candidate == 0 )) \
-    && "$gh_command" release view "$tag" --repo "$repository" >/dev/null 2>&1; then
-  release_die 'release version is already published or reserved'
-fi
-"$gh_command" api "repos/${repository}" --silent >/dev/null 2>&1 \
-  || release_die 'unable to confirm GitHub release state'
 
 ci_json="$("$gh_command" run view "$ci_run_id" --repo "$repository" \
   --json headSha,conclusion,workflowName,url)" \

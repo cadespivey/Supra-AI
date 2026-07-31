@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Scripts under test (release-preflight.sh, the manifest signer) default
+# DEVELOPER_DIR to Xcode-beta — the release runner's toolchain. GitHub's stock
+# macos-15 image has no Xcode-beta.app, and a nonexistent DEVELOPER_DIR makes
+# every xcrun-backed tool die with "missing DEVELOPER_DIR path" before any
+# assertion runs. Resolve the selected toolchain instead; an explicit
+# DEVELOPER_DIR always wins. Same pattern as test-release-preflight.sh.
+if [[ -z "${DEVELOPER_DIR:-}" && ! -d '/Applications/Xcode-beta.app/Contents/Developer' ]]; then
+  DEVELOPER_DIR="$(xcode-select -p)"
+  export DEVELOPER_DIR
+fi
+
 repo_root="$(git rev-parse --show-toplevel)"
 scripts="${repo_root}/Scripts"
 fixture_command="${repo_root}/Tests/Scripts/Fixtures/Release/mock-command.sh"
@@ -347,11 +358,22 @@ run_case \
 # signing with an arbitrary default the way `security cms -S -N` does.
 # Expected RED reason: Scripts/sign-release-manifest.swift does not exist, so
 # the interpreter fails without the required refusal message.
+# DEVELOPER_DIR resolution (stock-runner portability): this development
+# machine's CLI swift requires the Xcode-beta toolchain, but GitHub's stock
+# macos-15 image has no /Applications/Xcode-beta.app — an unconditional default
+# there makes the swift shim fail with "xcrun: error: missing DEVELOPER_DIR
+# path" before the signer runs, so the case would fail for the wrong reason.
+# An explicit DEVELOPER_DIR always wins; otherwise prefer Xcode-beta when it
+# exists and fall back to the runner's selected toolchain.
+signer_developer_dir="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
+if [[ ! -d "$signer_developer_dir" ]]; then
+  signer_developer_dir="$(xcode-select -p)"
+fi
 run_case \
   'manifest signer refuses an unknown identity' \
   1 \
   'no signing identity matches' \
-  env DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}" \
+  env DEVELOPER_DIR="$signer_developer_dir" \
     swift "${scripts}/sign-release-manifest.swift" \
     --identity 'Nonexistent Release Identity (SYNTHETIC0)' \
     --team-id SYNTHETIC0 \

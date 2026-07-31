@@ -110,6 +110,10 @@ tool behavior (build, sign, smoke, artifact verification, appcast preparation), 
 release workflows, entitlements, `ExportOptions.plist`,
 runner provisioning, and `Scripts/lib/release-common.sh` — re-arms the rehearsal;
 anything machinery-shaped that the script cannot classify fails safe to REQUIRED.
+Project-file changes are treated the same way: a diff limited to
+`MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` is the routine reviewed release
+bump, while every other `.pbxproj` mutation re-arms the rehearsal because it can
+change signing, hardened runtime, build phases, or the signed-smoke host.
 Orchestration and gate scripts that consume only git/GitHub state (cut-release,
 dispatch, finish, preflight) do not re-arm it: they are covered fail-closed by the
 hermetic harnesses in protected CI, and a green rehearsal exercises none of their

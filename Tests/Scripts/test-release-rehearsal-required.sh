@@ -79,7 +79,12 @@ make_fixture_repo() {
   printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/.github/workflows/release.yml"
   printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/Apps/SupraAI/SupraAI/AppMain.swift"
   printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/Apps/SupraAI/SupraAI/SupraAI.entitlements"
-  printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
+  printf '%s\n' \
+    'CURRENT_PROJECT_VERSION = 941;' \
+    'MARKETING_VERSION = 9.4.7;' \
+    'CODE_SIGN_STYLE = Manual;' \
+    'ENABLE_HARDENED_RUNTIME = YES;' \
+    >"${FIXTURE_REPO}/Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
   printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/Docs/notes.md"
   git -C "$FIXTURE_REPO" init -q -b main
   git -C "$FIXTURE_REPO" config user.name 'Rehearsal Scope Test'
@@ -94,6 +99,23 @@ commit_change() {
   printf '%s\n' 'fixture-v2' >"${FIXTURE_REPO}/${path}"
   git -C "$FIXTURE_REPO" add -A
   git -C "$FIXTURE_REPO" commit -qm "change ${path}"
+}
+
+commit_project_configuration() {
+  local version="$1"
+  local build="$2"
+  local signing_style="$3"
+  local extra_line="${4:-}"
+  {
+    printf '%s\n' \
+      "CURRENT_PROJECT_VERSION = ${build};" \
+      "MARKETING_VERSION = ${version};" \
+      "CODE_SIGN_STYLE = ${signing_style};" \
+      'ENABLE_HARDENED_RUNTIME = YES;'
+    [[ -z "$extra_line" ]] || printf '%s\n' "$extra_line"
+  } >"${FIXTURE_REPO}/Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
+  git -C "$FIXTURE_REPO" add -A
+  git -C "$FIXTURE_REPO" commit -qm 'change project configuration'
 }
 
 verdict() {
@@ -208,13 +230,54 @@ grep -Fq "$toolchain_reminder" "$LAST_CASE_OUTPUT" \
 # --- Product code and routine metadata do not re-arm -------------------------
 make_fixture_repo product
 commit_change Apps/SupraAI/SupraAI/AppMain.swift
-commit_change Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj
 commit_change Docs/notes.md
 run_case \
-  'product code, pbxproj, and docs changes do not require a rehearsal' \
+  'product code and docs changes do not require a rehearsal' \
   0 "$not_required_verdict" verdict
-grep -Fq 'review signing-setting diffs' "$LAST_CASE_OUTPUT" \
-  || fail 'pbxproj change did not print the signing-settings review note'
+
+# A release cut changes only reviewed version metadata in the project file;
+# that routine edit must not re-arm a signed rehearsal. Any other project-file
+# mutation can shape the archive or signed-smoke host and therefore fails safe.
+# Expected RED reason: the current helper treats every *.pbxproj edit alike,
+# merely prints a review-by-eye note, and returns the not-required verdict for
+# all three release-sensitive cases below.
+make_fixture_repo routine-version
+commit_project_configuration 9.4.8 942 Manual
+run_case \
+  'a project-file version bump alone does not require a rehearsal' \
+  0 "$not_required_verdict" verdict
+
+# GATE: an otherwise permitted version-assignment line must not carry a second
+# project setting after its semicolon. Expected RED: the classifier anchors
+# only the beginning of the line, so this signing-affecting suffix is accepted
+# as routine metadata and the helper returns the not-required verdict.
+make_fixture_repo version-line-suffix
+commit_project_configuration \
+  '9.4.8; OTHER_CODE_SIGN_FLAGS = "--timestamp=none"' 942 Manual
+run_case \
+  'a second setting on a version line requires a rehearsal' \
+  1 "$required_verdict" verdict
+
+make_fixture_repo signing-style
+commit_project_configuration 9.4.7 941 Automatic
+run_case \
+  'changing project signing style requires a rehearsal' \
+  1 "$required_verdict" verdict
+grep -Fq 'Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj' "$LAST_CASE_OUTPUT" \
+  || fail 'signing-style verdict does not name the project file'
+
+make_fixture_repo build-phase
+commit_project_configuration 9.4.7 941 Manual 'shellScript = "synthetic release mutation";'
+run_case \
+  'changing a project build phase requires a rehearsal' \
+  1 "$required_verdict" verdict
+
+make_fixture_repo signed-smoke-condition
+commit_project_configuration 9.4.7 941 Manual \
+  'SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SUPRA_SIGNED_RELEASE_SMOKE_HOST";'
+run_case \
+  'changing the signed-smoke compilation condition requires a rehearsal' \
+  1 "$required_verdict" verdict
 
 make_fixture_repo unchanged
 run_case \
