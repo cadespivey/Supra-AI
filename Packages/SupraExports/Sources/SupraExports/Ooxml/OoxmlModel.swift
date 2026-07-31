@@ -97,6 +97,10 @@ public enum RunContent: Sendable, Equatable {
     case tab
     case fieldChar(FieldCharType)
     case instrText(String)
+    case externalHyperlink(text: String, relationshipID: String)
+    case internalHyperlink(text: String, anchor: String)
+    case bookmarkStart(id: Int, name: String)
+    case bookmarkEnd(id: Int)
 }
 
 public struct OoxmlRun: Sendable, Equatable {
@@ -110,6 +114,30 @@ public struct OoxmlRun: Sendable, Equatable {
 
     public static func text(_ s: String, props: RunProps = RunProps()) -> OoxmlRun {
         OoxmlRun(.text(s), props: props)
+    }
+
+    public static func externalHyperlink(
+        _ text: String,
+        relationshipID: String,
+        props: RunProps = RunProps()
+    ) -> OoxmlRun {
+        OoxmlRun(.externalHyperlink(text: text, relationshipID: relationshipID), props: props)
+    }
+
+    public static func internalHyperlink(
+        _ text: String,
+        anchor: String,
+        props: RunProps = RunProps()
+    ) -> OoxmlRun {
+        OoxmlRun(.internalHyperlink(text: text, anchor: anchor), props: props)
+    }
+
+    public static func bookmarkStart(id: Int, name: String) -> OoxmlRun {
+        OoxmlRun(.bookmarkStart(id: id, name: name))
+    }
+
+    public static func bookmarkEnd(id: Int) -> OoxmlRun {
+        OoxmlRun(.bookmarkEnd(id: id))
     }
 }
 

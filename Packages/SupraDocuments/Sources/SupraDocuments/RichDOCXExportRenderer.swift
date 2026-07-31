@@ -2,28 +2,52 @@ import Foundation
 import SupraExports
 
 enum RichDOCXExportRenderer {
+    private struct SourceAnchor {
+        var name: String
+        var bookmarkID: Int
+    }
+
     static func render(_ payload: DocumentExportPayload) throws -> Data {
         let semantic = RichExportDocument(payload: payload)
+        let hyperlinkRelationships = externalHyperlinkRelationships(in: semantic)
+        let hyperlinkIDs = Dictionary(
+            uniqueKeysWithValues: hyperlinkRelationships.map { ($0.target, $0.id) }
+        )
+        let sourceAnchors = makeSourceAnchors(semantic)
         var body: [BodyElement] = []
         var orderedListIndex = 0
         var orderedStarts: [Int] = []
 
+        func makeParagraph(
+            _ content: [RichExportDocument.Inline],
+            style: String,
+            props: ParaProps = ParaProps()
+        ) -> OoxmlParagraph {
+            paragraph(
+                content,
+                style: style,
+                props: props,
+                hyperlinkIDs: hyperlinkIDs,
+                sourceAnchors: sourceAnchors
+            )
+        }
+
         for block in semantic.blocks {
             switch block {
             case let .title(content):
-                body.append(.paragraph(paragraph(content, style: "ExportTitle")))
+                body.append(.paragraph(makeParagraph(content, style: "ExportTitle")))
             case let .reviewBanner(content):
                 guard !plainText(content).isEmpty else { continue }
-                body.append(.paragraph(paragraph(content, style: "ReviewBanner")))
+                body.append(.paragraph(makeParagraph(content, style: "ReviewBanner")))
             case let .heading(level, content):
-                body.append(.paragraph(paragraph(content, style: "ExportHeading\(min(max(level, 1), 6))")))
+                body.append(.paragraph(makeParagraph(content, style: "ExportHeading\(min(max(level, 1), 6))")))
             case let .paragraph(content):
-                body.append(.paragraph(paragraph(content, style: "ExportBody")))
+                body.append(.paragraph(makeParagraph(content, style: "ExportBody")))
             case let .blockQuote(content):
-                body.append(.paragraph(paragraph(content, style: "ExportQuote")))
+                body.append(.paragraph(makeParagraph(content, style: "ExportQuote")))
             case let .unorderedList(items):
                 for item in items {
-                    body.append(.paragraph(paragraph(
+                    body.append(.paragraph(makeParagraph(
                         item,
                         style: "ExportList",
                         props: ParaProps(numberingLevel: 0, numberingID: 1)
@@ -34,18 +58,22 @@ enum RichDOCXExportRenderer {
                 let numberingID = orderedListIndex + 2
                 orderedListIndex += 1
                 for item in items {
-                    body.append(.paragraph(paragraph(
+                    body.append(.paragraph(makeParagraph(
                         item,
                         style: "ExportList",
                         props: ParaProps(numberingLevel: 0, numberingID: numberingID)
                     )))
                 }
             case let .table(table):
-                body.append(.table(ooxmlTable(table)))
+                body.append(.table(ooxmlTable(
+                    table,
+                    hyperlinkIDs: hyperlinkIDs,
+                    sourceAnchors: sourceAnchors
+                )))
             case let .sourceAppendix(sources):
                 guard !sources.isEmpty else { continue }
-                body.append(.paragraph(paragraph([.text("Sources")], style: "SourceHeading")))
-                body.append(.table(sourceTable(sources)))
+                body.append(.paragraph(makeParagraph([.text("Sources")], style: "SourceHeading")))
+                body.append(.table(sourceTable(sources, sourceAnchors: sourceAnchors)))
             }
         }
 
@@ -69,7 +97,8 @@ enum RichDOCXExportRenderer {
             settingsXML: StyleSheetCompiler.settingsXML(),
             numberingXML: numberingXML(orderedStarts: orderedStarts),
             headerXML: headerXML(title: payload.title),
-            footerXML: footerXML
+            footerXML: footerXML,
+            hyperlinks: hyperlinkRelationships
         )
         return try package.render()
     }
@@ -77,12 +106,22 @@ enum RichDOCXExportRenderer {
     private static func paragraph(
         _ content: [RichExportDocument.Inline],
         style: String,
-        props: ParaProps = ParaProps()
+        props: ParaProps = ParaProps(),
+        hyperlinkIDs: [String: String],
+        sourceAnchors: [String: SourceAnchor]
     ) -> OoxmlParagraph {
-        OoxmlParagraph(style: style, props: props, runs: runs(content))
+        OoxmlParagraph(
+            style: style,
+            props: props,
+            runs: runs(content, hyperlinkIDs: hyperlinkIDs, sourceAnchors: sourceAnchors)
+        )
     }
 
-    private static func runs(_ content: [RichExportDocument.Inline]) -> [OoxmlRun] {
+    private static func runs(
+        _ content: [RichExportDocument.Inline],
+        hyperlinkIDs: [String: String],
+        sourceAnchors: [String: SourceAnchor]
+    ) -> [OoxmlRun] {
         content.map { inline in
             switch inline {
             case let .text(value):
@@ -94,14 +133,34 @@ enum RichDOCXExportRenderer {
             case let .code(value):
                 .text(value, props: RunProps(fontHalfPoints: 20, fontName: "Menlo"))
             case let .citation(label):
-                .text("[\(label)]", props: RunProps(bold: true))
+                if let anchor = sourceAnchors[label] {
+                    .internalHyperlink(
+                        "[\(label)]",
+                        anchor: anchor.name,
+                        props: RunProps(bold: true, underline: true, colorHex: "2E74B5")
+                    )
+                } else {
+                    .text("[\(label)]", props: RunProps(bold: true))
+                }
             case let .link(label, destination):
-                .text("\(label) (\(destination))", props: RunProps(underline: true, colorHex: "2E74B5"))
+                if let relationshipID = hyperlinkIDs[destination] {
+                    .externalHyperlink(
+                        label,
+                        relationshipID: relationshipID,
+                        props: RunProps(underline: true, colorHex: "2E74B5")
+                    )
+                } else {
+                    .text("\(label) (\(destination))", props: RunProps(underline: true, colorHex: "2E74B5"))
+                }
             }
         }
     }
 
-    private static func ooxmlTable(_ table: RichExportDocument.Table) -> OoxmlTable {
+    private static func ooxmlTable(
+        _ table: RichExportDocument.Table,
+        hyperlinkIDs: [String: String],
+        sourceAnchors: [String: SourceAnchor]
+    ) -> OoxmlTable {
         let columnCount = max(table.headers.count, 1)
         let width = 9_360
         let columnWidth = width / columnCount
@@ -110,13 +169,15 @@ enum RichDOCXExportRenderer {
         let borders = Borders(top: border, left: border, bottom: border, right: border, insideH: border, insideV: border)
         var rows: [[OoxmlCell]] = [
             table.headers.enumerated().map { index, content in
-                OoxmlCell(
+                return OoxmlCell(
                     widthTwips: columnWidth,
                     borders: borders,
                     content: [paragraph(
                         content,
                         style: "ExportTableHeader",
-                        props: ParaProps(jc: alignment(table.alignments[safe: index] ?? .leading))
+                        props: ParaProps(jc: alignment(table.alignments[safe: index] ?? .leading)),
+                        hyperlinkIDs: hyperlinkIDs,
+                        sourceAnchors: sourceAnchors
                     )],
                     shadingFill: "F2F4F7",
                     verticalAlignment: "center"
@@ -131,7 +192,9 @@ enum RichDOCXExportRenderer {
                     content: [paragraph(
                         content,
                         style: "ExportTableBody",
-                        props: ParaProps(jc: alignment(table.alignments[safe: index] ?? .leading))
+                        props: ParaProps(jc: alignment(table.alignments[safe: index] ?? .leading)),
+                        hyperlinkIDs: hyperlinkIDs,
+                        sourceAnchors: sourceAnchors
                     )],
                     verticalAlignment: "center"
                 )
@@ -149,7 +212,10 @@ enum RichDOCXExportRenderer {
         )
     }
 
-    private static func sourceTable(_ sources: [RichExportDocument.Source]) -> OoxmlTable {
+    private static func sourceTable(
+        _ sources: [RichExportDocument.Source],
+        sourceAnchors: [String: SourceAnchor]
+    ) -> OoxmlTable {
         let widths = [1_700, 1_700, 1_100, 1_700, 3_160]
         let headers = ["Relationship ID", "Document", "Locator", "Warnings", "Excerpt"]
         let border = Border(val: "single", size: 4, space: 0, color: "B7B7B7")
@@ -159,19 +225,33 @@ enum RichDOCXExportRenderer {
                 OoxmlCell(
                     widthTwips: width,
                     borders: borders,
-                    content: [paragraph([.text(label)], style: "ExportTableHeader")],
+                    content: [OoxmlParagraph(
+                        style: "ExportTableHeader",
+                        runs: [.text(label)]
+                    )],
                     shadingFill: "F2F4F7",
                     verticalAlignment: "center"
                 )
             },
         ]
-        rows.append(contentsOf: sources.map { source in
+        rows.append(contentsOf: sources.enumerated().map { sourceIndex, source in
             let values = [source.label, source.documentName, source.locator, source.warnings, source.excerpt]
-            return zip(values, widths).map { value, width in
-                OoxmlCell(
+            return zip(values.indices, zip(values, widths)).map { valueIndex, pair in
+                let (value, width) = pair
+                var runs: [OoxmlRun] = [.text(value)]
+                if valueIndex == 0,
+                   let anchor = sourceAnchors[source.label],
+                   anchor.bookmarkID == sourceIndex + 1 {
+                    runs = [
+                        .bookmarkStart(id: anchor.bookmarkID, name: anchor.name),
+                        .text(value),
+                        .bookmarkEnd(id: anchor.bookmarkID),
+                    ]
+                }
+                return OoxmlCell(
                     widthTwips: width,
                     borders: borders,
-                    content: [paragraph([.text(value)], style: "SourceBody")],
+                    content: [OoxmlParagraph(style: "SourceBody", runs: runs)],
                     verticalAlignment: "center"
                 )
             }
@@ -194,6 +274,84 @@ enum RichDOCXExportRenderer {
         case .center: .center
         case .trailing: .right
         }
+    }
+
+    private static func externalHyperlinkRelationships(
+        in document: RichExportDocument
+    ) -> [DocxHyperlinkRelationship] {
+        var destinations: [String] = []
+        var seen: Set<String> = []
+
+        func collect(_ content: [RichExportDocument.Inline]) {
+            for case let .link(_, destination) in content
+                where isSafeExternalHyperlink(destination) && seen.insert(destination).inserted {
+                destinations.append(destination)
+            }
+        }
+
+        for block in document.blocks {
+            switch block {
+            case let .title(content),
+                 let .reviewBanner(content),
+                 let .heading(_, content),
+                 let .paragraph(content),
+                 let .blockQuote(content):
+                collect(content)
+            case let .unorderedList(items), let .orderedList(_, items):
+                items.forEach(collect)
+            case let .table(table):
+                table.headers.forEach(collect)
+                table.rows.flatMap { $0 }.forEach(collect)
+            case .sourceAppendix:
+                break
+            }
+        }
+
+        return destinations.enumerated().map { offset, destination in
+            DocxHyperlinkRelationship(id: "rIdHyperlink\(offset + 1)", target: destination)
+        }
+    }
+
+    private static func isSafeExternalHyperlink(_ destination: String) -> Bool {
+        guard let scheme = URLComponents(string: destination)?.scheme?.lowercased() else {
+            return false
+        }
+        return ["http", "https", "mailto"].contains(scheme)
+    }
+
+    private static func makeSourceAnchors(
+        _ document: RichExportDocument
+    ) -> [String: SourceAnchor] {
+        var anchors: [String: SourceAnchor] = [:]
+        var usedNames: Set<String> = []
+        for block in document.blocks {
+            guard case let .sourceAppendix(sources) = block else { continue }
+            for (index, source) in sources.enumerated() where anchors[source.label] == nil {
+                let base = sourceAnchorBase(source.label)
+                var name = base
+                var suffix = 2
+                while !usedNames.insert(name).inserted {
+                    let suffixText = "_\(suffix)"
+                    name = String(base.prefix(max(1, 40 - suffixText.count))) + suffixText
+                    suffix += 1
+                }
+                anchors[source.label] = SourceAnchor(name: name, bookmarkID: index + 1)
+            }
+        }
+        return anchors
+    }
+
+    private static func sourceAnchorBase(_ label: String) -> String {
+        let ascii = label.unicodeScalars.map { scalar -> Character in
+            switch scalar.value {
+            case 48...57, 65...90, 97...122, 95:
+                Character(String(scalar))
+            default:
+                "_"
+            }
+        }
+        let suffix = String(ascii).isEmpty ? "source" : String(ascii)
+        return String("_supra_\(suffix)".prefix(40))
     }
 
     private static func headerXML(title: String) -> String {

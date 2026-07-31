@@ -77,6 +77,23 @@ public enum OoxmlWriter {
     // MARK: - Run
 
     public static func runXML(_ run: OoxmlRun) -> String {
+        switch run.content {
+        case let .bookmarkStart(id, name):
+            return #"<w:bookmarkStart w:id="\#(id)" w:name="\#(escape(name))"/>"#
+        case let .bookmarkEnd(id):
+            return #"<w:bookmarkEnd w:id="\#(id)"/>"#
+        case let .externalHyperlink(text, relationshipID):
+            return #"<w:hyperlink r:id="\#(escape(relationshipID))">"#
+                + textRunXML(text, props: run.props)
+                + "</w:hyperlink>"
+        case let .internalHyperlink(text, anchor):
+            return #"<w:hyperlink w:anchor="\#(escape(anchor))">"#
+                + textRunXML(text, props: run.props)
+                + "</w:hyperlink>"
+        case .text, .tab, .fieldChar, .instrText:
+            break
+        }
+
         var out = "<w:r>"
         let rPr = runPropsXML(run.props)
         if !rPr.isEmpty { out += rPr }
@@ -89,7 +106,18 @@ public enum OoxmlWriter {
             out += #"<w:fldChar w:fldCharType="\#(type.rawValue)"/>"#
         case let .instrText(s):
             out += #"<w:instrText xml:space="preserve">\#(escape(s))</w:instrText>"#
+        case .externalHyperlink(_, _), .internalHyperlink(_, _), .bookmarkStart(_, _), .bookmarkEnd(_):
+            preconditionFailure("Hyperlinks and bookmarks are emitted outside w:r.")
         }
+        out += "</w:r>"
+        return out
+    }
+
+    private static func textRunXML(_ text: String, props: RunProps) -> String {
+        var out = "<w:r>"
+        let rPr = runPropsXML(props)
+        if !rPr.isEmpty { out += rPr }
+        out += #"<w:t xml:space="preserve">\#(escape(text))</w:t>"#
         out += "</w:r>"
         return out
     }

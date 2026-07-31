@@ -1,6 +1,16 @@
 import Foundation
 import ZIPFoundation
 
+public struct DocxHyperlinkRelationship: Sendable, Equatable {
+    public var id: String
+    public var target: String
+
+    public init(id: String, target: String) {
+        self.id = id
+        self.target = target
+    }
+}
+
 public struct DocxPackage: Sendable {
     public var parts: [String: String]
 
@@ -78,9 +88,13 @@ public struct DocxPackage: Sendable {
         settingsXML: String,
         numberingXML: String,
         headerXML: String,
-        footerXML: String = pageNumberFooterXML
+        footerXML: String = pageNumberFooterXML,
+        hyperlinks: [DocxHyperlinkRelationship] = []
     ) -> DocxPackage {
         let relsType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        let hyperlinkRelationships = hyperlinks.map { relationship in
+            #"<Relationship Id="\#(OoxmlWriter.escape(relationship.id))" Type="\#(relsType)/hyperlink" Target="\#(OoxmlWriter.escape(relationship.target))" TargetMode="External"/>"#
+        }.joined(separator: "\n  ")
         return DocxPackage(parts: [
             "[Content_Types].xml": contentTypes(
                 includeFooters: true,
@@ -102,6 +116,7 @@ public struct DocxPackage: Sendable {
               <Relationship Id="rIdNumbering" Type="\(relsType)/numbering" Target="numbering.xml"/>
               <Relationship Id="rIdHeader1" Type="\(relsType)/header" Target="header1.xml"/>
               <Relationship Id="rIdFooter1" Type="\(relsType)/footer" Target="footer1.xml"/>
+              \(hyperlinkRelationships)
             </Relationships>
             """,
             "word/document.xml": documentXML,
