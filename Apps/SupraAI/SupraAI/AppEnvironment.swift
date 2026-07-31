@@ -111,6 +111,9 @@ final class AppEnvironment: ObservableObject {
 
     private let runtimeStatusController: RuntimeStatusController
     private let runtimeClient: RuntimeClient
+    /// Non-nil only for the explicitly authorized guided-Q&A XCUITest launch.
+    /// The synthetic model fixture is confined to this throwaway root.
+    private let guidedQAUITestModelRoot: URL?
     /// Fires a classification-only pass for the selected matter whenever a model
     /// finishes loading, so documents imported while no model was available get
     /// classified once one is ready (the queue de-dupes and no-ops when nothing is
@@ -120,20 +123,32 @@ final class AppEnvironment: ObservableObject {
     init() {
         let restoreActivation = AppEnvironment.prepareColdStartRestore()
         let runtimeClient = RuntimeClient()
-        let taskRuntimeClient: any RuntimeClientProtocol = ProcessInfo.processInfo.arguments.contains(
-            "-uiTestGuidedQA"
-        ) ? GuidedQAUITestRuntimeClient() : runtimeClient
+        let guidedQAUITestAuthorized = Self.isUITestMode && ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA")
+        let guidedQAUITestModelRoot = guidedQAUITestAuthorized
+            ? Optional(FileManager.default.temporaryDirectory.appendingPathComponent(
+                "SupraAI-UITest-GuidedQA-\(UUID().uuidString)",
+                isDirectory: true
+            ))
+            : nil
+        let guidedQAUITestManagedRoots = guidedQAUITestModelRoot.map { [$0] }
+            ?? [ManagedModelStorage.modelsDirectory()]
+        let taskRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient
         let storeResult = AppEnvironment.makeStore(after: restoreActivation)
         let store = storeResult.store
         let systemPrompt = DefaultSystemPrompt.milestone1()
         let appVersion = AppEnvironment.currentAppVersion()
-        let modelLibrary = ModelLibrary(store: store, runtimeClient: taskRuntimeClient)
+        let modelLibrary = ModelLibrary(
+            store: store,
+            runtimeClient: taskRuntimeClient,
+            managedModelRoots: guidedQAUITestManagedRoots
+        )
         let tokenStore = APIKeyStoreComposition.live()
         self.store = store
         self.usingFallbackStore = storeResult.isFallback
         self.databaseRecoveryState = storeResult.recoveryState
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
         self.runtimeClient = runtimeClient
+        self.guidedQAUITestModelRoot = guidedQAUITestModelRoot
         self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
             store: store,
@@ -839,15 +854,14 @@ final class AppEnvironment: ObservableObject {
         seedUITestGuidedQAIfNeeded()
     }
 
-    /// Seeds one ready and one review-required revision-bound passage for the
-    /// guided Q&A chooser accessibility test. No model is needed: the hosted test
-    /// proves entry, selection/readiness, and fail-closed UI state while package
-    /// tests drive generation and persistence with the synthetic runtime.
+    /// Seeds one ready and one review-required revision-bound passage plus a
+    /// throwaway model for the guided Q&A hosted test. Both synthetic runtime and
+    /// model authority require the hermetic XCUITest launch contract.
     private func seedUITestGuidedQAIfNeeded() {
-        guard ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA"),
+        guard let guidedQAUITestModelRoot,
               let matterID = mattersController.matters.first?.id else { return }
         do {
-            try seedUITestGuidedQAModel()
+            try seedUITestGuidedQAModel(in: guidedQAUITestModelRoot)
             guard !(try store.documentLibrary.fetchDocuments(matterID: matterID)).contains(where: {
                 $0.id == "ready-guided-document"
             }) else { return }
@@ -950,9 +964,9 @@ final class AppEnvironment: ObservableObject {
     /// it. The app still exercises ModelLibrary's production load + stable-lineage
     /// checks; only the runtime implementation is deterministic under the explicit
     /// guided-Q&A UI-test launch flag.
-    private func seedUITestGuidedQAModel() throws {
+    private func seedUITestGuidedQAModel(in authorizedRoot: URL) throws {
         let modelID = "77777777-7777-4777-8777-777777777777"
-        let modelDirectory = ManagedModelStorage.modelsDirectory()
+        let modelDirectory = authorizedRoot
             .appendingPathComponent("guided-qa-ui-model", isDirectory: true)
         try FileManager.default.createDirectory(
             at: modelDirectory,
