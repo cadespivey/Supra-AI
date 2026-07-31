@@ -70,6 +70,18 @@ final class RichExportDocumentTests: XCTestCase {
         ])))
     }
 
+    func testTEXP04BracketedOrdinaryProseIsNotInventedAsACitation() {
+        let payload = makePayload(content: "See [Appendix] for the complete schedule and [S1] for the cited term.")
+
+        let document = RichExportDocument(payload: payload)
+
+        XCTAssertTrue(document.blocks.contains(.paragraph([
+            .text("See [Appendix] for the complete schedule and "),
+            .citation("S1"),
+            .text(" for the cited term."),
+        ])))
+    }
+
     func testTEXP05MarkdownGoldenRemainsByteExact() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("RichExportMarkdown-\(UUID().uuidString)", isDirectory: true)
