@@ -43,6 +43,12 @@ case "$name" in
       '{schemaVersion: 1, status: "passed", sourceSha: $sourceSha, appTreeSHA256: $appTreeSHA256, modelSHA256: $modelSHA256, xpcBundleIdentifier: "ai.supra.SupraAI.SupraRuntimeService", generatedTokens: 4}' >"$output"
     ;;
   gh)
+    if [[ "${1:-}" == 'api' \
+        && "${2:-}" == *'/releases?per_page=1' \
+        && "${MOCK_RELEASE_PERMISSION_DENIED:-0}" == '1' ]]; then
+      printf '%s\n' 'synthetic release collection permission denial' >&2
+      exit 2
+    fi
     case "${1:-} ${2:-}" in
       "auth status") exit 0 ;;
       "run view")

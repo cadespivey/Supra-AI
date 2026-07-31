@@ -170,7 +170,28 @@ fi
 git -C "$SOURCE_REPO" show-ref --verify --quiet refs/tags/v9.4.7 \
   || fail 'ambiguous release lookup pruned the local tag'
 
-# --- Case 3 (standing guard): local tag + published release stays fatal ------
+# --- Case 3: release-read permission is proven before accepting a 404 --------
+# Expected RED reason: preflight checks generic repository metadata but never
+# probes the releases collection, so this permission denial is not observed;
+# the tag-endpoint 404 is accepted as absence and the local tag is deleted.
+make_source_repo release-permission-denied
+git -C "$SOURCE_REPO" tag v9.4.7
+permission_output="${temporary_dir}/release-permission-denied.log"
+permission_status=0
+MOCK_RELEASE_PERMISSION_DENIED=1 preflight "$SOURCE_REPO" "$SOURCE_SHA" \
+  "${temporary_dir}/release-permission-denied.json" >"$permission_output" 2>&1 \
+  || permission_status=$?
+if [[ "$permission_status" -ne 1 ]] \
+  || ! grep -Fq 'unable to confirm GitHub release read permission' "$permission_output"; then
+  fail 'missing release-read permission did not fail closed before pruning'
+  sed 's/^/  | /' "$permission_output" >&2
+else
+  printf '%s\n' 'PASS: release-read permission is required before tag lookup'
+fi
+git -C "$SOURCE_REPO" show-ref --verify --quiet refs/tags/v9.4.7 \
+  || fail 'release-read permission failure pruned the local tag'
+
+# --- Case 4 (standing guard): local tag + published release stays fatal ------
 # The prune must never fire when a GitHub release exists for the version even
 # though the tag is absent from origin — that state is a real publication.
 make_source_repo local-published
@@ -189,7 +210,7 @@ fi
 git -C "$SOURCE_REPO" show-ref --verify --quiet refs/tags/v9.4.7 \
   || fail 'fatal published-release case pruned the local tag anyway'
 
-# --- Case 4 (standing guard): local tag also on origin stays fatal -----------
+# --- Case 5 (standing guard): local tag also on origin stays fatal -----------
 make_source_repo local-and-origin
 git -C "$SOURCE_REPO" tag v9.4.7
 git -C "$SOURCE_REPO" push --quiet origin v9.4.7
@@ -207,7 +228,7 @@ fi
 git -C "$SOURCE_REPO" show-ref --verify --quiet refs/tags/v9.4.7 \
   || fail 'fatal on-origin case pruned the local tag anyway'
 
-# --- Case 5 (standing guard): origin-only tag stays fatal --------------------
+# --- Case 6 (standing guard): origin-only tag stays fatal --------------------
 make_source_repo origin-only
 git -C "$ORIGIN_REPO" update-ref refs/tags/v9.4.7 "$SOURCE_SHA"
 origin_only_output="${temporary_dir}/origin-only.log"
