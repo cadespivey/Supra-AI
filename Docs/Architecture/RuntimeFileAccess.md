@@ -62,9 +62,9 @@ private snapshot above.
 Even that private snapshot does not by itself claim integrity against a hostile
 same-UID process: MLX accepts a pathname rather than retained file descriptors, so a
 mutate/load/restore race cannot be ruled out by pre/post hashing alone. Signed release
-qualification therefore also requires the dedicated, ephemeral, single-tenant runner
-defined in `Docs/Release-Protection.md`. Protected real-weight qualification must still
-exercise the loader's multi-file and memory-pressure behavior.
+qualification therefore uses the dedicated, ephemeral, single-tenant runner defined in
+`Docs/Release-Protection.md`, including the applicable real-weight multi-file and
+memory-pressure checks.
 
 Snapshot teardown is descriptor-anchored so it never recursively deletes through a replaced
 published pathname. POSIX unlink is not inode-conditional, however, and a hostile same-UID
@@ -90,10 +90,12 @@ If bookmark transfer regresses on a future macOS release, loading is unavailable
 until the user re-selects/re-downloads the model or the signed boundary is fixed.
 Do not remove the service sandbox or add broad file entitlements as a workaround.
 
-## Must be verified on a real device
-The hosted integration gate exercises bookmark transfer through the embedded,
-ad-hoc-signed service with no service file-access entitlement. Release qualification
-still must:
+## Recurring real-device release verification
+
+The carried-forward assurance work was closed on July 31, 2026; see
+[`Docs/Assurance-Closure.md`](../Assurance-Closure.md). The hosted integration gate exercises
+bookmark transfer through the embedded, ad-hoc-signed service with no service file-access
+entitlement. Future release qualification continues to:
 
 1. Run `Scripts/run-hosted-xpc-lifecycle.sh` and retain its signed-boundary evidence.
 2. On the protected isolated release runner, load the reviewed real multi-shard smoke model

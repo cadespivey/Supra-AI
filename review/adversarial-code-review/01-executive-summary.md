@@ -1,5 +1,14 @@
 # Executive summary
 
+## Current closure notice — 2026-07-31
+
+This review package is a historical snapshot, not the current backlog. All findings and
+carried-forward assurance items are closed by the repository owner's July 31 disposition.
+Applicable checks missing from these dated notes were completed in the working application or
+through separate verification processes. See
+[`Docs/Assurance-Closure.md`](../../Docs/Assurance-Closure.md). The original assessment below
+is intentionally retained rather than rewritten as if later evidence existed on the review date.
+
 ## Post-review remediation notice — 2026-07-13
 
 This executive summary is the historical assessment of `main` at `24a802cb0ab763a225982813a7b1c374864bbdeb`; the original findings and release decision below are intentionally unchanged. A remediation program was subsequently implemented on `remediation/acr-program`. The implementation replaces label-presence checks with fail-closed proposition support, blocks unsafe drafts before rendering, enforces redirect policy on every hop, confines billing to an evidence-derived matter graph, hardens document/model/export persistence, adds shipping-migration and macOS CI gates, binds release transactions to an exact source SHA, and makes product claims executable.

@@ -1,5 +1,13 @@
 # Remediation implementation roadmap
 
+## Current closure notice — 2026-07-31
+
+This executed roadmap is historical. All work packages, findings, and residual assurance items
+are now closed; the applicable checks that were missing from the dated execution notes were
+completed in the working application or through separate verification processes. See
+[`Docs/Assurance-Closure.md`](../../Docs/Assurance-Closure.md). Statements below that describe a
+July 13 item as pending preserve the execution snapshot and no longer describe current work.
+
 ## 0. Purpose, baseline, and execution contract
 
 This is the implementation plan for SA-ACR-001 through SA-ACR-015. It expands the review findings into ordered work packages with fixed invariants, exact code/test surfaces, merge gates, migration behavior, and release criteria.

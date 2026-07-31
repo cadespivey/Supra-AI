@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SupraDocuments
 import SupraDrafting
@@ -9,6 +10,9 @@ final class AttorneySupportCorpusTests: XCTestCase {
     private struct Corpus: Decodable {
         var schemaVersion: Int
         var reviewStatus: String
+        var reviewedBy: String
+        var reviewedAt: String
+        var casesSHA256: String
         var cases: [CorpusCase]
     }
 
@@ -37,7 +41,10 @@ final class AttorneySupportCorpusTests: XCTestCase {
         // domain categories required by WP3-01.
         let corpus = try loadCorpus()
         XCTAssertEqual(corpus.schemaVersion, 1)
-        XCTAssertEqual(corpus.reviewStatus, "pending_attorney_review")
+        XCTAssertEqual(corpus.reviewStatus, "attorney_reviewed")
+        XCTAssertEqual(corpus.reviewedBy, "Cade Spivey")
+        XCTAssertEqual(corpus.reviewedAt, "2026-07-31")
+        XCTAssertEqual(corpus.casesSHA256, try casesDigest())
         XCTAssertEqual(Set(corpus.cases.map(\.category)), requiredCategories)
         XCTAssertEqual(Set(corpus.cases.map(\.id)).count, corpus.cases.count)
         XCTAssertTrue(corpus.cases.allSatisfy { ["supported", "unsupported", "unverifiable"].contains($0.expectedStatus) })
@@ -122,12 +129,24 @@ final class AttorneySupportCorpusTests: XCTestCase {
     }
 
     private func loadCorpus() throws -> Corpus {
-        let url = try XCTUnwrap(Bundle.module.url(
+        try JSONDecoder().decode(Corpus.self, from: Data(contentsOf: corpusURL()))
+    }
+
+    private func casesDigest() throws -> String {
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: corpusURL())) as? [String: Any]
+        )
+        let cases = try XCTUnwrap(object["cases"])
+        let canonical = try JSONSerialization.data(withJSONObject: cases, options: [.sortedKeys])
+        return SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func corpusURL() throws -> URL {
+        try XCTUnwrap(Bundle.module.url(
             forResource: "attorney-support-corpus",
             withExtension: "json",
             subdirectory: "Fixtures"
         ))
-        return try JSONDecoder().decode(Corpus.self, from: Data(contentsOf: url))
     }
 
     private func dummyLetter(body: String) -> LetterModel {

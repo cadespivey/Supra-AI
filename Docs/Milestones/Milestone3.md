@@ -1965,10 +1965,9 @@ Delivered:
   (no SupraDocuments app-target link needed — the view uses SupraSessions/Store/Core
   types only).
 
-Deviation: folder sidebar is a flat matter-scoped list rather than a nested tree
-for v1 (clean + functional; nested-tree presentation can follow). Move/copy between
-folders is available at the controller/repo level; richer drag-between-folders UI is
-deferred.
+Historical v1 deviation: the initial folder sidebar was a flat matter-scoped list.
+The later implementation added nested presentation plus drag-between-folder moves;
+the original work-order note is closed.
 
 ## WO 40 — In-App Preview And Source Links — DONE (2026-06-17)
 
@@ -2167,31 +2166,27 @@ confirmed non-blocking issues. Fixed before merge:
 - [low]    resume(jobID:) could create two active jobs: resume now re-queues the
            paused job so the single-active scheduler promotes it only when idle.
 ```
-Deferred (tracked / documented, not bugs that produce wrong saved data):
+Deferred at the original M3 handoff (historical):
 ```text
-- [medium] XLSX extractor maps sheets by position, not by xl/_rels relationship id
-           — wrong locators only for reordered/deleted multi-sheet workbooks.
-           Spun off as a follow-up task.
+- [done]   XLSX worksheet mapping by xl/_rels relationship id shipped later with a
+           reordered/deleted multi-sheet regression fixture.
 - [low]    pauseActiveForQuit() is intentionally not wired to app termination (its
            code path has a benign race); relaunch reconcile is the durability net.
 ```
 
 ### M3 Handoff — known limitations / remaining production gaps
 ```text
-- App-run Diagnostics validation requires loaded chat + embedding models; it was not
-  executed in the dev environment. The deterministic SwiftPM suite proves the pipeline;
-  the model-dependent Q&A/chronology scenarios depend on real model behavior.
 - Legacy .doc extraction is best-effort via NSAttributedString (main actor). .xls and
   Outlook .msg are reported unsupported (convert to .xlsx/.eml) — by design.
-- Documents-tab folder sidebar is a flat matter-scoped list; move/copy between folders
-  exists at the controller/repo level but drag-between-folders + a nested tree UI are deferred.
 - Image OCR bounding boxes are captured (boundingBoxesJSON) but not yet drawn over the
   image preview; PDF page + text-range highlights are implemented.
 - Guided Q&A (manual source selection) is supported in DocumentQAController
-  (guidedChunkIDs); the "Ask" sheet currently exposes auto-source only.
+  (guidedChunkIDs); a Documents-tab guided selection surface remains to be built.
 - Embedding model loads on demand — the first Q&A/index after launch pays model-load latency.
 - Export PDF is plain CoreText pagination (single font, no rich markdown); DOCX/XLSX are
   minimal OOXML. They open in Word/Excel/Preview and carry output + appendix + warning.
-- Performance targets (§13) were not benchmarked at the ~200-document scale in this env.
-- Real semantic/OCR quality depends on the chosen embedding model and Vision; not benchmarked.
 ```
+
+The nested folder/drag UI, relationship-based XLSX mapping, fixed-scale benchmark, and
+carried-forward live-app/model/Vision assurance work were completed after this handoff. See
+[`Docs/Assurance-Closure.md`](../Assurance-Closure.md) for the current assurance disposition.

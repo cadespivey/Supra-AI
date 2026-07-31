@@ -45,50 +45,21 @@ on Hugging Face (1.4.1).
 
 ## Near-term: polish the v1.0.0 surfaces
 
-These are concrete follow-ups already identified in the Milestone 3 handoff notes
-([`Docs/Milestones/Milestone3.md`](Docs/Milestones/Milestone3.md), "known limitations").
-They sharpen what already ships:
+These are the remaining concrete product follow-ups. Completed ingestion, lineage, relation,
+tokenizer, folder-tree, workbook-relationship, and assurance work is recorded in the changelog
+and milestone documents rather than carried here as future work.
 
-- **Document-ingestion refinement (implemented in source; protected sign-off pending)** —
-  durable per-source import accounting and recovery; immutable extraction revisions; typed
-  DOCX/PDF/XLSX/EML/legal structure; a default-off structure-aware chunker; exhaustive corpus
-  ledgers; reviewed document relations; tokenizer-aware packets; output lineage, verification
-  dimensions, shared assurance/export gates, and atomic grounded-chat promotion. The fixed
-  10/50/200-document performance harness and deterministic zero-unaffected-work gate are also
-  implemented, and the repo owner approved the fixed-hardware statistical performance envelope
-  on July 18, 2026. The protected real-model/UI/Vision/bookmark matrix remains a release sign-off
-  gate; chunker v2 remains default-off.
-
-- **Index-lineage hardening (implemented in source)** — readiness is evaluated against the
-  active embedding model; switching models or saving corrected extracted text queues the
-  normal background indexing workflow. Converter-version drift marks affected documents
-  stale for explicit manual reprocessing instead of silently claiming current readiness.
-- **Document-relation review (implemented in source)** — deterministic duplicate/version
-  proposals remain non-operative until a user confirms or rejects them in an audited Documents
-  queue. Confirmed relations add explicit version-state metadata; unresolved in-scope relations
-  block clean comparison and negative-result assurance instead of silently choosing a document.
-- **Tokenizer-aware grounded packing (implemented in source)** — the runtime exposes batched
-  exact token counts for the loaded model. Q&A and chronology preflight the serialized packet,
-  Q&A retries one overflow with fewer sources, and grounded chat refuses rather than saving
-  partial output or citations after a context overflow. A conservative no-runtime estimate and
-  deterministic B-CTX accounting cover fallback and recovery behavior; the live-model matrix
-  remains part of protected on-device validation.
-- **Documents tab UX** — nested folder tree presentation and drag-between-folders (move/copy
-  already exists at the controller/repository level; the v1 sidebar is a flat list).
-- **Guided Q&A in the UI** — manual source selection is supported in `DocumentQAController`
-  (`guidedChunkIDs`); surface it in the "Ask" sheet alongside auto-source.
+- **Backup restore** — backups already produce manifest-backed database snapshots and a managed
+  blob pool. Add compatible-snapshot inspection, cold-start replacement, a verified pre-restore
+  safety copy, automatic rollback, and an explicit Settings workflow.
+- **Guided document Q&A** — `DocumentQAController` already accepts `guidedChunkIDs`; add a
+  Documents-tab Ask surface that lets the user choose readable source documents/passages and
+  proves that only those sources enter the saved answer.
 - **OCR highlight overlay** — image OCR bounding boxes are already captured
   (`boundingBoxesJSON`); draw them over the image preview (PDF page + text-range highlights
   are already implemented).
 - **Richer exports** — current PDF is plain CoreText pagination and DOCX/XLSX are minimal
   OOXML; improve formatting fidelity.
-- **XLSX sheet-by-relationship-id** — map worksheets by `xl/_rels` relationship id rather than
-  position (affects locators only for reordered/deleted multi-sheet workbooks).
-- **Live semantic/OCR benchmarking** — the deterministic and fixed-scale performance protocols
-  are implemented; record the protected Vision and chosen-model quality runs on release-candidate
-  hardware before approving their statistical bands.
-- **App-run validation with live models** — the deterministic SwiftPM suite is green; run the
-  model-dependent Diagnostics scenarios against loaded chat + embedding models on-device.
 
 ## Near-term: complete the ScratchPad follow-ups
 
@@ -104,6 +75,15 @@ deliberately deferred behind their own gates (recorded in the spec's §4/§5/§1
   extracted text feeds the draft; importing them as real `MatterDocumentRecord`s (with classifier
   privilege/confidentiality flags) so they live in the matter's library is the planned follow-up.
 
+## Near-term: expand drafting vertically
+
+- **Motion to Dismiss.** The definition, Florida failure-to-state-a-claim ground, deterministic
+  assembly, verification, pre-file gate, and court renderer exist. Wire typed inputs, selected
+  facts/authorities, durable lineage, controller dispatch, and the matter drafting UI end to end.
+- **Drafting catalog breadth.** After the motion vertical proves the repeated contract, add one
+  fully tested Florida document kind at a time. A kind is available only when its slots, grounding,
+  verification, renderer, persistence, UI, and acceptance fixture all ship together.
+
 ## Exploring: candidate next milestones
 
 Directions under consideration. Several were explicit **non-goals** in earlier milestones —
@@ -117,9 +97,6 @@ milestone plan before implementation.
   Outputs, Matters, Research, and Settings for visual consistency, with per-screen review. Kept
   separate from ScratchPad on purpose: it modifies every existing screen, a different risk profile.
 
-- **Drafting assistance (`SupraDrafting`).** A `/draft` chat route and drafting/critique
-  model roles already ship; the future work is a dedicated package for attorney-editable
-  drafting grounded in a matter's authorities and documents, with research-needed flags.
 - **Citator / negative-treatment signals.** v1.0.0 deliberately makes **no** automatic citator
   claims. A future milestone could integrate genuine treatment data rather than inferring it.
 - **Dockets / RECAP.** Federal docket and filing retrieval via CourtListener's RECAP data,

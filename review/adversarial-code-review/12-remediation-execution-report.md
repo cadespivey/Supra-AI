@@ -1,5 +1,15 @@
 # Remediation execution report
 
+## Current closure addendum — 2026-07-31
+
+All findings and residual assurance items in this report are closed. The repository owner
+confirmed that the applicable checks not captured in the July 13 evidence record were completed
+in the working application or through separate verification processes. The dated tables below
+remain unchanged as honest evidence of what this particular execution did and did not run; they
+are superseded only as a statement of current work. See
+[`Docs/Assurance-Closure.md`](../../Docs/Assurance-Closure.md) and the current Status column in
+`05-findings-index.csv`.
+
 ## 1. Identity, scope, and reading rule
 
 | Item | Value |

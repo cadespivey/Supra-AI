@@ -1,5 +1,13 @@
 # Adversarial code review manifest
 
+## Current disposition — 2026-07-31
+
+All findings and residual assurance items from this review are closed. The repository owner
+confirmed that the applicable checks omitted from these dated notes were completed in the
+working application or through separate verification processes. The historical review and
+execution evidence below remains unchanged as evidence of what was known at those snapshots;
+it is not the current backlog. See [`Docs/Assurance-Closure.md`](../../Docs/Assurance-Closure.md).
+
 ## Post-review remediation record — 2026-07-13
 
 The independent review below remains a historical record of `main` at `24a802cb0ab763a225982813a7b1c374864bbdeb`. It has not been rewritten to describe later code. Remediation was implemented separately on `remediation/acr-program`; its execution, evidence, and residual qualifications are recorded in `12-remediation-execution-report.md` and in dated appendices to the original deliverables.
@@ -12,7 +20,7 @@ The independent review below remains a historical record of `main` at `24a802cb0
 | Evidence-only deliverable commit | Self-locating: `git log -1 --format=%H -- review/adversarial-code-review/12-remediation-execution-report.md` |
 | Remediation branch | `remediation/acr-program` |
 | Execution date | 2026-07-13 |
-| Public hidden-ref cleanup | External; repository owner assigned current public refs/caches to GitHub Support |
+| Public hidden-ref cleanup | Closed July 31, 2026; refs 39 through 50 no longer advertised and temporary exception data removed |
 
 The implementation SHA above is the exact source snapshot used for final verification. A commit cannot embed its own final object ID, so the evidence commit is deliberately self-locating with the command above rather than represented by a circular placeholder.
 

@@ -1,5 +1,13 @@
 # Open questions and limitations
 
+## Current closure notice — 2026-07-31
+
+The assurance work identified in this dated review is closed. The repository owner confirms
+that the applicable checks were completed in the working application or through separate
+verification processes even where this historical record did not capture them. See
+[`Docs/Assurance-Closure.md`](../../Docs/Assurance-Closure.md). The original limitations remain
+below as evidence of the July 2026 review environment, not as a live task list.
+
 ## Environment and access limitations
 
 - No model weights were available. Real MLX load, generation quality, embedding dimensions, cancellation under compute, memory pressure, and model switching were not exercised.
