@@ -143,6 +143,12 @@ final class RichExportRendererTests: XCTestCase {
         XCTAssertTrue(relationships.contains(#"Target="numbering.xml""#))
         XCTAssertTrue(relationships.contains(#"Target="header1.xml""#))
         XCTAssertTrue(relationships.contains(#"Target="footer1.xml""#))
+        XCTAssertTrue(relationships.contains(#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink""#))
+        XCTAssertTrue(relationships.contains(#"Target="https://example.invalid/docket" TargetMode="External""#))
+        XCTAssertTrue(document.contains(#"<w:hyperlink r:id="rIdHyperlink1">"#))
+        XCTAssertTrue(document.contains(#"<w:hyperlink w:anchor="_supra_S1">"#))
+        XCTAssertTrue(document.contains(#"<w:bookmarkStart w:id="1" w:name="_supra_S1"/>"#))
+        XCTAssertTrue(document.contains(#"<w:bookmarkEnd w:id="1"/>"#))
         XCTAssertTrue(try entryString("word/header1.xml", in: url).contains("Quarterly Findings"))
         XCTAssertTrue(try entryString("word/footer1.xml", in: url).contains(" PAGE "))
     }
@@ -234,7 +240,7 @@ final class RichExportRendererTests: XCTestCase {
             contentMarkdown: """
             # Findings
 
-            Payment was **material** and due [S1].
+            Payment was **material** and due [S1]. See [the docket](https://example.invalid/docket).
 
             - Notice sent
             - Payment missed
