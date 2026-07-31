@@ -241,8 +241,10 @@ final class AppEnvironment: ObservableObject {
                 return DocumentIndexingService(store: store, embedder: embedder)
             },
             // Suggests a taxonomy category for each imported document using the
-            // assigned task model. Self-skips when no model is loadable.
-            classificationService: DocumentClassificationService(
+            // assigned task model. Hermetic UI-test launches disable the service:
+            // a Documents-tab appearance must not start unrelated generation or
+            // consume a scenario's deterministic runtime stream.
+            classificationService: Self.isUITestMode ? nil : DocumentClassificationService(
                 store: store,
                 modelLibrary: modelLibrary,
                 runtimeClient: taskRuntimeClient
