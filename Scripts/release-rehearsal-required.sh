@@ -144,6 +144,34 @@ path_is_machinery_shaped() {
   return 1
 }
 
+# The release cut routinely changes only these two reviewed version settings.
+# Every other project-file edit can shape the archive, entitlements, signing,
+# build phases, or the signed-smoke host, so it fails safe to REQUIRED.
+pbxproj_has_only_routine_version_changes() {
+  local path="$1"
+  local project_diff=''
+  local changed_line=''
+  local setting_line=''
+  local saw_change=0
+
+  project_diff="$(git -C "$repo_root" diff --unified=0 "${base}...HEAD" -- "$path")" \
+    || return 1
+  while IFS= read -r changed_line; do
+    case "$changed_line" in
+      '--- '*|'+++ '*) continue ;;
+      -*) setting_line="${changed_line:1}" ;;
+      +*) setting_line="${changed_line:1}" ;;
+      *) continue ;;
+    esac
+    saw_change=1
+    if [[ "$setting_line" =~ ^[[:space:]]*(CURRENT_PROJECT_VERSION|MARKETING_VERSION)[[:space:]]*= ]]; then
+      continue
+    fi
+    return 1
+  done <<<"$project_diff"
+  (( saw_change == 1 ))
+}
+
 baseline_source='--base'
 if [[ -z "$base" ]]; then
   derived="$(
@@ -170,7 +198,7 @@ changed_paths="$(git -C "$repo_root" diff --name-only "${base}...HEAD")" \
 required_paths=()
 covered_paths=()
 publish_only_paths=()
-pbxproj_changed=0
+routine_project_paths=()
 while IFS= read -r path; do
   [[ -n "$path" ]] || continue
   if path_is_signed_output_machinery "$path"; then
@@ -182,7 +210,11 @@ while IFS= read -r path; do
   elif path_is_machinery_shaped "$path"; then
     required_paths+=("${path} (unclassified release machinery — fail-safe)")
   elif [[ "$path" == *.pbxproj ]]; then
-    pbxproj_changed=1
+    if pbxproj_has_only_routine_version_changes "$path"; then
+      routine_project_paths+=("$path")
+    else
+      required_paths+=("${path} (non-version project configuration changed)")
+    fi
   fi
 done <<<"$changed_paths"
 
@@ -198,8 +230,9 @@ if (( ${#publish_only_paths[@]} > 0 )); then
   printf '  production-only publish path (a rehearsal cannot exercise these; hermetic coverage is the only coverage):\n'
   printf '    - %s\n' "${publish_only_paths[@]}"
 fi
-if (( pbxproj_changed == 1 )); then
-  printf '  note: a *.pbxproj changed — version bumps are routine, but review signing-setting diffs by eye.\n'
+if (( ${#routine_project_paths[@]} > 0 )); then
+  printf '  routine project version metadata (does not re-arm the rehearsal):\n'
+  printf '    - %s\n' "${routine_project_paths[@]}"
 fi
 
 if (( ${#required_paths[@]} > 0 )); then
