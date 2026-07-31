@@ -75,6 +75,39 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(controller.restoreState, .ready)
     }
 
+    func testDestinationCannotChangeWhileABackupOrRestoreOperationOwnsTheController() async throws {
+        let fixture = try makeFixture()
+        let backupGate = AsyncGate()
+        let controller = makeController(
+            fixture: fixture,
+            backupRunner: { _ in
+                await backupGate.wait()
+                return BackupRunSummary(
+                    snapshotBytes: 1,
+                    copiedBlobCount: 0,
+                    referencedBlobCount: 0
+                )
+            },
+            inspector: { _ in [] }
+        )
+        configure(controller, destination: fixture.destinationURL)
+        let originalPath = controller.destinationPath
+
+        let backup = Task { await controller.backUpNow() }
+        await waitUntil { controller.state == .backingUp }
+        let replacement = fixture.root.appendingPathComponent("Replacement", isDirectory: true)
+        let didReplace = controller.configureDestination(
+            bookmarkData: Data([0xBA, 0xD0]),
+            url: replacement
+        )
+
+        XCTAssertFalse(didReplace)
+        XCTAssertEqual(controller.destinationPath, originalPath)
+        backupGate.open()
+        let backupSucceeded = await backup.value
+        XCTAssertTrue(backupSucceeded)
+    }
+
     // T-RST-31: restore uses the same stale-bookmark fail-closed path as backup.
     func testRestoreStaleBookmarkPersistsDestinationRepickRequirement() async throws {
         let fixture = try makeFixture(destinationFailure: .staleBookmark)
