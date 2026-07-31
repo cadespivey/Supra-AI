@@ -235,6 +235,21 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
     }
 
+    // An invalid safety database cannot be offered as a verified manual-recovery
+    // artifact when activation stops before selected-state mutation.
+    func testInvalidSafetyStateExposesNoRecoveryDatabase() throws {
+        let staged = try stage()
+        try Data("CORRUPT SAFETY DATABASE".utf8).write(to: staged.safetyDatabaseURL)
+
+        let result = activate(operations: RecordingRestoreActivationOperations())
+
+        XCTAssertEqual(result.status, .recoveryRequired)
+        XCTAssertEqual(result.activationFailure, .safetyStateInvalid)
+        XCTAssertEqual(result.rollbackFailure, .safetyStateInvalid)
+        XCTAssertNil(result.recoveryDatabaseURL)
+        XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
+    }
+
     // T-RST-28: if the selected-state marker cannot be durably consumed even
     // after rollback, launch must stop in recovery instead of replaying it.
     func testMarkerRemovalFailureAfterVerifiedRollbackRequiresRecovery() throws {
