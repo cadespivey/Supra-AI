@@ -91,6 +91,44 @@ public struct RestoreActivationResult: Equatable, Sendable {
     }
 }
 
+/// Durable, display-safe record of the most recent attempted restore activation.
+/// It deliberately excludes filesystem locations and user/database content.
+public struct RestoreOutcomeRecord: Codable, Equatable, Sendable {
+    public static let currentSchemaVersion = 1
+    public static let lastOutcomeFileName = "last-restore-outcome.json"
+
+    public let schemaVersion: Int
+    public let operationID: String?
+    public let snapshotIdentifier: String?
+    public let status: RestoreActivationStatus
+    public let activationFailure: RestoreActivationFailure?
+    public let rollbackFailure: RestoreActivationFailure?
+    public let completedAt: Date
+
+    fileprivate init(result: RestoreActivationResult, completedAt: Date) {
+        schemaVersion = Self.currentSchemaVersion
+        operationID = result.operationID
+        snapshotIdentifier = result.snapshotIdentifier
+        status = result.status
+        activationFailure = result.activationFailure
+        rollbackFailure = result.rollbackFailure
+        self.completedAt = completedAt
+    }
+
+    public static func encode(_ record: RestoreOutcomeRecord) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(record)
+    }
+
+    public static func decode(_ data: Data) throws -> RestoreOutcomeRecord {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(RestoreOutcomeRecord.self, from: data)
+    }
+}
+
 /// Small mutation boundary used to inject replacement, durability, and marker
 /// faults without teaching the production API about test-only failure points.
 protocol RestoreActivationFileOperations {
@@ -141,13 +179,19 @@ public enum RestoreActivationService {
         knownMigrationIdentifiers: [String] = SupraMigrator.makeMigrator().migrations,
         fileManager: FileManager = .default
     ) -> RestoreActivationResult {
-        activatePendingRestore(
+        let result = activatePendingRestore(
             liveLayout: liveLayout,
             knownMigrationIdentifiers: knownMigrationIdentifiers,
             fileManager: fileManager,
             operations: SystemRestoreActivationFileOperations(fileManager: fileManager),
             openDatabase: { try SupraDatabase(url: $0) }
         )
+        persistOutcomeIfNeeded(
+            result,
+            stagingRootDirectory: liveLayout.stagingRootDirectory,
+            fileManager: fileManager
+        )
+        return result
     }
 
     static func activatePendingRestore(
@@ -314,6 +358,28 @@ public enum RestoreActivationService {
         }
 
         return .activated(context.intent)
+    }
+
+    private static func persistOutcomeIfNeeded(
+        _ result: RestoreActivationResult,
+        stagingRootDirectory: URL,
+        fileManager: FileManager
+    ) {
+        guard result.status != .noPendingRestore else { return }
+        let record = RestoreOutcomeRecord(result: result, completedAt: Date())
+        let destination = stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        do {
+            try fileManager.createDirectory(
+                at: stagingRootDirectory,
+                withIntermediateDirectories: true
+            )
+            try SystemRestoreFileOperations(fileManager: fileManager)
+                .writeIntentAtomically(RestoreOutcomeRecord.encode(record), to: destination)
+        } catch {
+            // Activation and verified rollback are safety-critical. Failure to
+            // persist display metadata must not change either validated result.
+        }
     }
 
     private static func finishFailure(

@@ -137,6 +137,7 @@ fi
 
 bash "${repo_root}/Scripts/verify-entitlements.sh" || status=1
 bash "${repo_root}/Scripts/verify-product-claims.sh" || status=1
+bash "${repo_root}/Tests/Scripts/test-backup-restore-documentation.sh" || status=1
 bash "${repo_root}/Scripts/verify-public-font-license.sh" || status=1
 bash "${repo_root}/Scripts/verify-release-protection.sh" || status=1
 

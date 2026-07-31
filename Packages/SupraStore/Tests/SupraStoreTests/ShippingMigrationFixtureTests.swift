@@ -85,6 +85,7 @@ final class ShippingMigrationFixtureTests: XCTestCase {
                 let liveBlobsDirectory = liveDirectory.appendingPathComponent("blobs", isDirectory: true)
                 let stagingRoot = liveDirectory.appendingPathComponent("RestoreStaging", isDirectory: true)
                 try FileManager.default.createDirectory(at: dbDirectory, withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(at: liveDirectory, withIntermediateDirectories: true)
 
                 let stem = "SupraAI-20260731-120000-000"
                 let snapshotURL = dbDirectory.appendingPathComponent("\(stem).sqlite")
