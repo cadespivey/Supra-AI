@@ -264,10 +264,22 @@ public enum RestoreService {
                 // before its operation tree; if marker removal itself fails,
                 // preserve the complete tree rather than leave a dangling marker.
                 if fileManager.fileExists(atPath: pendingMarker.path) {
-                    try? fileManager.removeItem(at: pendingMarker)
+                    if (try? fileManager.removeItem(at: pendingMarker)) != nil {
+                        // The atomic marker rename may already have become visible
+                        // before its writer reported a durability error. Publish
+                        // this compensating unlink before removing the tree it
+                        // names, so a crash cannot resurrect a ready marker.
+                        try? operations.synchronizeItem(at: liveLayout.stagingRootDirectory)
+                    }
                 }
                 if !fileManager.fileExists(atPath: pendingMarker.path) {
-                    try? fileManager.removeItem(at: operationDirectory)
+                    if (try? fileManager.removeItem(at: operationDirectory)) != nil {
+                        // Likewise make the bounded operation cleanup durable.
+                        // A resurrected orphan tree is not activatable, but it is
+                        // still failed staging residue that the caller was told
+                        // had been cleaned.
+                        try? operations.synchronizeItem(at: operationsRoot)
+                    }
                 }
             }
         }
