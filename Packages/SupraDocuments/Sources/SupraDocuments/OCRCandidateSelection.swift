@@ -330,7 +330,7 @@ public enum OCRCandidateSelection {
     ) -> Double {
         guard let json,
               let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)),
-              let boxes = object as? [[String: Any]],
+              let boxes = boundingBoxObjects(from: object),
               !boxes.isEmpty else {
             return fallbackConfidence < threshold ? 1 : 0
         }
@@ -341,6 +341,19 @@ public enum OCRCandidateSelection {
         }
         guard !confidences.isEmpty else { return fallbackConfidence < threshold ? 1 : 0 }
         return Double(confidences.filter { $0 < threshold }.count) / Double(confidences.count)
+    }
+
+    private static func boundingBoxObjects(from root: Any) -> [[String: Any]]? {
+        if let legacy = root as? [[String: Any]] {
+            return legacy
+        }
+        guard let envelope = root as? [String: Any],
+              let version = envelope["schemaVersion"] as? NSNumber,
+              version.intValue == 1,
+              let regions = envelope["regions"] as? [[String: Any]] else {
+            return nil
+        }
+        return regions
     }
 
     private static func clamp(_ value: Double) -> Double {

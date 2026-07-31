@@ -58,7 +58,7 @@ public struct VisionOCRService: DocumentOCRService {
                 ImportPolicyViolation(.pixelLimit, "Image exceeds the \(policy.maxPixels)-pixel OCR limit.")
             )
         }
-        return try Self.recognize(cgImage: cgImage)
+        return try Self.recognize(cgImage: cgImage, orientation: Self.orientation(for: source))
     }
 
     public func recognizePDFPages(at url: URL, pageIndices: [Int]?) async throws -> [Int: OCRTextResult] {
@@ -84,7 +84,7 @@ public struct VisionOCRService: DocumentOCRService {
                 )
             }
             guard let cgImage = render(page: page) else { continue }
-            results[index] = try Self.recognize(cgImage: cgImage)
+            results[index] = try Self.recognize(cgImage: cgImage, orientation: .up)
         }
         return results
     }
@@ -105,34 +105,72 @@ public struct VisionOCRService: DocumentOCRService {
         return context.makeImage()
     }
 
-    static func recognize(cgImage: CGImage) throws -> OCRTextResult {
+    static func recognize(
+        cgImage: CGImage,
+        orientation: CGImagePropertyOrientation = .up
+    ) throws -> OCRTextResult {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:])
         try handler.perform([request])
 
         let observations = request.results ?? []
         var lines: [String] = []
         var confidences: [Float] = []
-        var boxes: [[String: Double]] = []
+        var regions: [OCRRegionPayload] = []
         for observation in observations {
             guard let candidate = observation.topCandidates(1).first else { continue }
             lines.append(candidate.string)
             confidences.append(candidate.confidence)
             let box = observation.boundingBox
-            boxes.append([
-                "x": Double(box.origin.x), "y": Double(box.origin.y),
-                "w": Double(box.size.width), "h": Double(box.size.height),
-                "confidence": Double(candidate.confidence)
-            ])
+            regions.append(OCRRegionPayload(
+                x: Double(box.origin.x),
+                y: Double(box.origin.y),
+                width: Double(box.size.width),
+                height: Double(box.size.height),
+                confidence: Double(candidate.confidence),
+                text: candidate.string
+            ))
         }
         let meanConfidence = confidences.isEmpty ? 0 : Double(confidences.reduce(0, +)) / Double(confidences.count)
-        let boxesJSON = (try? JSONSerialization.data(withJSONObject: boxes)).flatMap { String(data: $0, encoding: .utf8) }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let boxesJSON = (try? encoder.encode(OCRPayloadEnvelope(schemaVersion: 1, regions: regions)))
+            .flatMap { String(data: $0, encoding: .utf8) }
         return OCRTextResult(
             text: TextNormalization.normalize(lines.joined(separator: "\n")),
             confidence: meanConfidence,
             boundingBoxesJSON: boxesJSON
         )
+    }
+
+    private static func orientation(for source: CGImageSource) -> CGImagePropertyOrientation {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let rawValue = properties[kCGImagePropertyOrientation] as? NSNumber,
+              let orientation = CGImagePropertyOrientation(rawValue: rawValue.uint32Value) else {
+            return .up
+        }
+        return orientation
+    }
+}
+
+private struct OCRPayloadEnvelope: Encodable {
+    var schemaVersion: Int
+    var regions: [OCRRegionPayload]
+}
+
+private struct OCRRegionPayload: Encodable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+    var confidence: Double
+    var text: String
+
+    private enum CodingKeys: String, CodingKey {
+        case x, y, confidence, text
+        case width = "w"
+        case height = "h"
     }
 }
