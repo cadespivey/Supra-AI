@@ -78,6 +78,8 @@ tag="v${version}"
   || release_die 'GitHub release authentication is unavailable'
 "$gh_command" api "repos/${repository}" --silent >/dev/null 2>&1 \
   || release_die 'unable to confirm GitHub release state'
+"$gh_command" api "repos/${repository}/releases?per_page=1" --silent >/dev/null 2>&1 \
+  || release_die 'unable to confirm GitHub release read permission'
 if (( allow_released_candidate == 0 )); then
   release_lookup_status=0
   release_lookup_output="$(
