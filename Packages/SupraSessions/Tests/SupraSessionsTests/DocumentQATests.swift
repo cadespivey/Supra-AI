@@ -244,6 +244,86 @@ final class DocumentQATests: XCTestCase {
         XCTAssertTrue(selection.blockingReasons.contains { $0.contains("Beacon Draft.txt") })
     }
 
+    func testGuidedSourceWithoutCurrentPartBindingFailsClosed() async throws {
+        // T-GQA-01/03: a revision ID alone is not enough to prove that a chunk
+        // belongs to the current selected part projection.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Orphaned Guided Source Matter")
+        let fixture = try await indexRevisionBoundDoc(
+            store,
+            matter.id,
+            "Orphaned Passage.txt",
+            "ORPHANED_GUIDED_CANARY. This passage must not reach generation."
+        )
+        var chunk = try XCTUnwrap(store.documentIndex.fetchChunk(id: fixture.chunkID))
+        chunk.pagePartID = nil
+        try store.documentIndex.replaceChunks(documentID: fixture.documentID, chunks: [chunk])
+
+        let recorder = GenerateCallRecorder()
+        let runtime = StubRuntimeClient(outcome: { request in
+            recorder.record(request)
+            return .events([
+                .event(request, 0, .token, token: "Unsafe answer [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let source = try XCTUnwrap(qa.guidedSources().first { $0.chunkID == fixture.chunkID })
+        XCTAssertFalse(source.isReady)
+        XCTAssertTrue(source.blockingReason?.contains("current part") == true)
+
+        let result = await qa.generate(
+            question: "What does the orphaned passage say?",
+            guidedChunkIDs: [fixture.chunkID],
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+        XCTAssertNil(result)
+        XCTAssertEqual(recorder.count, 0)
+        XCTAssertTrue(try store.structuredOutputs.fetchOutputs(matterID: matter.id).isEmpty)
+    }
+
+    func testGuidedPersistenceRetainsOCRBoundingBoxLocatorPayload() async throws {
+        // T-GQA-04...10 + D-07: guided selection must preserve the complete
+        // source locator, including the typed OCR overlay payload.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Guided OCR Matter")
+        let fixture = try await indexRevisionBoundDoc(
+            store,
+            matter.id,
+            "Scanned Agreement.txt",
+            "OCR_GUIDED_CANARY. The signed date is September 9, 2026."
+        )
+        let boxes = #"{"version":1,"regions":[{"text":"September 9, 2026","confidence":0.91,"x":0.1,"y":0.2,"width":0.3,"height":0.04}]}"#
+        var chunk = try XCTUnwrap(store.documentIndex.fetchChunk(id: fixture.chunkID))
+        chunk.boundingBoxesJSON = boxes
+        try store.documentIndex.replaceChunks(documentID: fixture.documentID, chunks: [chunk])
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "The signed date is September 9, 2026 [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let generated = await qa.generate(
+            question: "When was the agreement signed?",
+            guidedChunkIDs: [fixture.chunkID],
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+        let result = try XCTUnwrap(generated)
+        let row = try XCTUnwrap(
+            store.documentSources.fetchSources(structuredOutputVersionID: result.versionID).first
+        )
+        let locator = try JSONDecoder().decode(
+            DocumentSourceLocator.self,
+            from: Data(row.locatorJSON.utf8)
+        )
+        XCTAssertEqual(locator.boundingBoxesJSON, boxes)
+    }
+
     func testGuidedSelectionWireProofPersistsOnlyTheNondefaultSource() async throws {
         // T-GQA-04...06 expected RED: the controller has no public guided
         // catalog/source-reference surface even though its private generation seam
