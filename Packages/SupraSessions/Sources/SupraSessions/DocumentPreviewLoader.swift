@@ -69,8 +69,8 @@ public struct DocumentPreviewModel: Sendable, Equatable {
         /// Original PDF rendering, navigated to a page, with best-effort text
         /// highlight.
         case pdf(path: String, pageIndex: Int?, highlightText: String?)
-        /// Original image rendering, with optional OCR bounding boxes.
-        case image(path: String, boundingBoxesJSON: String?)
+        /// Original image rendering with validated OCR overlay data.
+        case image(path: String, overlay: OCRPreviewOverlay)
         /// Original file (Word, RTF, spreadsheet, email, …) rendered with QuickLook
         /// so it looks like Finder's preview instead of stripped plain text.
         /// QuickLook can't highlight a char range, so the cited `excerpt` (when a
@@ -155,7 +155,7 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
                 kind: .unavailable(reason: "Document not found.", fallbackText: "")
             )
         }
-        let warnings = Self.warnings(for: document)
+        var warnings = Self.warnings(for: document)
         let parts = (try? store.documentIndex.fetchParts(documentID: documentID)) ?? []
         let currentRevisionIDs = Set(parts.compactMap(\.currentRevisionID))
         let structure = structurePreview(
@@ -179,7 +179,12 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
             }
         case .image:
             if blobExists, let blobURL {
-                kind = .image(path: blobURL.path, boundingBoxesJSON: part?.boundingBoxesJSON ?? locator.boundingBoxesJSON)
+                let overlay = OCRPreviewOverlayParser.parse(
+                    part?.boundingBoxesJSON ?? locator.boundingBoxesJSON,
+                    highlightedText: matchText
+                )
+                if let warning = overlay.warning { warnings.append(warning) }
+                kind = .image(path: blobURL.path, overlay: overlay)
             } else {
                 kind = .unavailable(reason: "Original image unavailable.", fallbackText: fallbackText)
             }

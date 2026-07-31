@@ -54,5 +54,14 @@ final class Milestone3ValidationFixturesTests: XCTestCase {
             image.ocrConfidenceSummary,
             "OCR confidence summary must be persisted — exactly what the app's `ocr` validation check asserts"
         )
+        let part = try XCTUnwrap(store.documentIndex.fetchParts(documentID: image.id).first)
+        let payloadData = try XCTUnwrap(part.boundingBoxesJSON?.data(using: .utf8))
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
+        )
+        XCTAssertEqual((payload["schemaVersion"] as? NSNumber)?.intValue, 1)
+        let regions = try XCTUnwrap(payload["regions"] as? [[String: Any]])
+        XCTAssertFalse(regions.isEmpty)
+        XCTAssertTrue(regions.allSatisfy { !($0["text"] as? String ?? "").isEmpty })
     }
 }

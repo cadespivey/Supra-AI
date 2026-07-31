@@ -116,6 +116,30 @@ final class OCRCandidateSelectionTests: XCTestCase {
         XCTAssertFalse(decision.needsReview)
     }
 
+    func testVersionedOCRPayloadPreservesPerRegionLowConfidenceScore() throws {
+        let regions: [[String: Any]] = [
+            ["x": 0.0, "y": 0.5, "w": 0.08, "h": 0.04, "confidence": 0.20, "text": "one"],
+            ["x": 0.1, "y": 0.5, "w": 0.08, "h": 0.04, "confidence": 0.30, "text": "two"],
+            ["x": 0.2, "y": 0.5, "w": 0.08, "h": 0.04, "confidence": 0.90, "text": "three"],
+        ]
+        let data = try JSONSerialization.data(
+            withJSONObject: ["schemaVersion": 1, "regions": regions],
+            options: [.sortedKeys]
+        )
+        let candidate = OCRCandidateSelection.RevisionCandidate(
+            id: "versioned-ocr",
+            origin: .ocr,
+            text: "One two three with enough additional recognized text for the quality floor.",
+            confidence: 0.90,
+            boundingBoxesJSON: String(decoding: data, as: UTF8.self)
+        )
+
+        let decision = OCRCandidateSelection.selectSingle(candidate)
+
+        let score = try XCTUnwrap(decision.scores[candidate.id])
+        XCTAssertEqual(score.lowConfidenceBoxFraction, 2.0 / 3.0, accuracy: 0.0001)
+    }
+
     private func boxesJSON(_ confidences: [Double]) -> String {
         let boxes = confidences.enumerated().map { index, confidence in
             [

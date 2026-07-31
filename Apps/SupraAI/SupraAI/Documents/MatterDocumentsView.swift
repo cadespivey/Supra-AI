@@ -1118,14 +1118,8 @@ struct DocumentPreviewView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-        case let .image(path, _):
-            ScrollView([.horizontal, .vertical]) {
-                if let image = NSImage(contentsOf: URL(fileURLWithPath: path)) {
-                    Image(nsImage: image).resizable().scaledToFit()
-                } else {
-                    Text("Image could not be loaded.").foregroundStyle(.secondary).padding()
-                }
-            }
+        case let .image(path, overlay):
+            OCRImagePreview(url: URL(fileURLWithPath: path), overlay: overlay)
         case let .text(content, start, end):
             ScrollView {
                 Text(Self.highlighted(content, start: start, end: end))
@@ -1184,6 +1178,120 @@ struct DocumentPreviewView: View {
         }
         .padding(.horizontal).padding(.vertical, 8)
         .background(Color.yellow.opacity(0.12))
+    }
+}
+
+/// Renders the original image with OCR line geometry in the same normalized
+/// coordinate space emitted by Vision. The boxes are visual aids; recognized
+/// text remains available as selectable, accessible content below the image.
+struct OCRImagePreview: View {
+    let url: URL
+    let overlay: OCRPreviewOverlay
+
+    private var recognizedRegions: [OCRPreviewRegion] {
+        overlay.regions.filter { !($0.text ?? "").isEmpty }
+    }
+
+    var body: some View {
+        if let image = NSImage(contentsOf: url) {
+            VStack(spacing: 0) {
+                GeometryReader { geometry in
+                    ZStack(alignment: .topLeading) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+
+                        ForEach(overlay.regions) { region in
+                            if let rect = OCRPreviewGeometry.displayRect(
+                                for: region,
+                                imageSize: image.size,
+                                containerSize: geometry.size
+                            ) {
+                                OCRRegionOutline(region: region)
+                                    .frame(width: rect.width, height: rect.height)
+                                    .position(x: rect.midX, y: rect.midY)
+                            }
+                        }
+                    }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Document image with \(overlay.regions.count) recognized text regions")
+                .accessibilityIdentifier("documentPreview.ocrImage")
+
+                if !recognizedRegions.isEmpty {
+                    Divider()
+                    OCRRecognizedTextList(regions: recognizedRegions)
+                        .frame(maxHeight: 150)
+                }
+            }
+        } else {
+            Label("Image could not be loaded.", systemImage: "photo.badge.exclamationmark")
+                .font(.supraCaption)
+                .foregroundStyle(.secondary)
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+private struct OCRRegionOutline: View {
+    let region: OCRPreviewRegion
+
+    private var color: Color {
+        if region.isHighlighted { return .yellow }
+        if region.confidence < 0.5 { return .orange }
+        return .accentColor
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 2)
+            .fill(color.opacity(region.isHighlighted ? 0.24 : 0.08))
+            .overlay {
+                RoundedRectangle(cornerRadius: 2)
+                    .stroke(color.opacity(region.isHighlighted ? 0.95 : 0.58), lineWidth: region.isHighlighted ? 2 : 1)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct OCRRecognizedTextList: View {
+    let regions: [OCRPreviewRegion]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Recognized text")
+                .font(.supraCaption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(regions) { region in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(region.text ?? "")
+                                .font(.supraBody)
+                                .textSelection(.enabled)
+                            Spacer(minLength: 12)
+                            Text(region.confidence, format: .percent.precision(.fractionLength(0)))
+                                .font(.supraCaption.monospacedDigit())
+                                .foregroundStyle(region.confidence < 0.5 ? Color.orange : Color.secondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(region.isHighlighted ? Color.yellow.opacity(0.14) : Color.clear)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(region.text ?? "Recognized text")
+                        .accessibilityValue("Confidence \(region.confidence, format: .percent.precision(.fractionLength(0)))")
+                        .accessibilityIdentifier("documentPreview.ocrRegion.\(region.id)")
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("documentPreview.ocrText")
     }
 }
 

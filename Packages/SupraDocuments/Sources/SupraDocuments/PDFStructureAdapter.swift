@@ -259,7 +259,8 @@ public enum PDFStructureAdapter {
     private static func ocrBoxes(_ json: String?) -> [OCRBox] {
         guard let json,
               let data = json.data(using: .utf8),
-              let objects = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+              let root = try? JSONSerialization.jsonObject(with: data),
+              let objects = ocrRegionObjects(from: root) else {
             return []
         }
         return objects.compactMap { object in
@@ -272,6 +273,18 @@ public enum PDFStructureAdapter {
                 confidence: number(object["confidence"])
             )
         }
+    }
+
+    private static func ocrRegionObjects(from root: Any) -> [[String: Any]]? {
+        if let legacy = root as? [[String: Any]] {
+            return legacy
+        }
+        guard let envelope = root as? [String: Any],
+              number(envelope["schemaVersion"]) == 1,
+              let regions = envelope["regions"] as? [[String: Any]] else {
+            return nil
+        }
+        return regions
     }
 
     private static func number(_ value: Any?) -> Double? {
