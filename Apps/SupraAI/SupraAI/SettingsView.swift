@@ -267,6 +267,7 @@ private struct BackupSection: View {
 
             HStack(spacing: 10) {
                 Button(folderButtonTitle) { chooseFolder() }
+                    .disabled(backup.isAnyBackupOperationBusy)
                 Button("Back Up Now") {
                     Task { await backup.backUpNow() }
                 }

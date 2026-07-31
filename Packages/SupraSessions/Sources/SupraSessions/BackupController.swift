@@ -367,6 +367,7 @@ public final class BackupController: ObservableObject {
     /// reset because the new folder has not received any backup yet.
     @discardableResult
     public func configureDestination(bookmarkData: Data, url: URL) -> Bool {
+        guard activeOperation == nil else { return false }
         let candidate = BackupConfiguration(
             bookmarkData: bookmarkData,
             destinationPath: url.path,
