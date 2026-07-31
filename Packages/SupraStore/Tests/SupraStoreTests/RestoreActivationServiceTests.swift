@@ -125,7 +125,30 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(result.activationFailure, .databaseReplacementFailed)
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
         XCTAssertTrue(operations.events.contains(.replaceSafetyDatabase))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(operations.events.contains(.synchronizeMarkerDirectory))
+    }
+
+    // A verified rollback consumes the failed request. Replaying that request
+    // on every later cold launch could eventually replace newer live work.
+    func testVerifiedRollbackConsumesIntentAndSecondActivationIsNoOp() throws {
+        let staged = try stage()
+        let firstOperations = RecordingRestoreActivationOperations(
+            failures: [.replaceSelectedDatabase]
+        )
+
+        let first = activate(operations: firstOperations)
+
+        XCTAssertEqual(first.status, .failedAndRolledBack)
+        XCTAssertEqual(first.activationFailure, .databaseReplacementFailed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        let secondOperations = RecordingRestoreActivationOperations()
+
+        let second = activate(operations: secondOperations)
+
+        XCTAssertEqual(second.status, .noPendingRestore)
+        XCTAssertTrue(secondOperations.events.isEmpty)
+        XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
     }
 
     // T-RST-24 expected RED: first-open failure can leave selected data live.
@@ -148,7 +171,7 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(result.activationFailure, .databaseOpenFailed)
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
         XCTAssertTrue(operations.events.contains(.openSafetyDatabase))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.markerURL.path))
     }
 
     // T-RST-25 expected RED: migration failure has no automatic rollback path.
@@ -212,27 +235,46 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
     }
 
-    // T-RST-28 expected RED: the marker has no retry-safe retention contract
-    // when its final removal fails after selected-state validation.
-    func testMarkerRemovalFailureRollsBackAndRetainsRetryableIntent() throws {
+    // T-RST-28: if the selected-state marker cannot be durably consumed even
+    // after rollback, launch must stop in recovery instead of replaying it.
+    func testMarkerRemovalFailureAfterVerifiedRollbackRequiresRecovery() throws {
         let staged = try stage()
         let failingOperations = RecordingRestoreActivationOperations(failures: [.removeMarker])
 
         let failed = activate(operations: failingOperations)
 
-        XCTAssertEqual(failed.status, .failedAndRolledBack)
+        XCTAssertEqual(failed.status, .recoveryRequired)
         XCTAssertEqual(failed.activationFailure, .markerRemovalFailed)
+        XCTAssertEqual(failed.rollbackFailure, .markerRemovalFailed)
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
         XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
         XCTAssertLessThan(
             try XCTUnwrap(failingOperations.events.firstIndex(of: .openSelectedDatabase)),
             try XCTUnwrap(failingOperations.events.firstIndex(of: .removeMarker))
         )
+        XCTAssertEqual(
+            failingOperations.events.filter { $0 == .removeMarker }.count,
+            2
+        )
+    }
 
-        let retry = activate(operations: RecordingRestoreActivationOperations())
-        XCTAssertEqual(retry.status, .activated)
-        XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "selected canary")
+    func testMarkerDurabilityFailureAfterVerifiedRollbackRequiresRecovery() throws {
+        let staged = try stage()
+        let failingOperations = RecordingRestoreActivationOperations(
+            failures: [.synchronizeMarkerDirectory]
+        )
+
+        let failed = activate(operations: failingOperations)
+
+        XCTAssertEqual(failed.status, .recoveryRequired)
+        XCTAssertEqual(failed.activationFailure, .markerRemovalFailed)
+        XCTAssertEqual(failed.rollbackFailure, .markerRemovalFailed)
+        XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
         XCTAssertFalse(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertEqual(
+            failingOperations.events.filter { $0 == .synchronizeMarkerDirectory }.count,
+            2
+        )
     }
 
     private func stage(
@@ -291,6 +333,7 @@ final class RestoreActivationServiceTests: XCTestCase {
 private enum ActivationTestError: Error {
     case selectedOpen
     case safetyOpen
+    case markerSync
 }
 
 private final class RecordingRestoreActivationOperations: RestoreActivationFileOperations {
@@ -304,6 +347,7 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
         case replaceSafetyDatabase
         case openSafetyDatabase
         case removeMarker
+        case synchronizeMarkerDirectory
     }
 
     private let system = SystemRestoreActivationFileOperations()
@@ -335,6 +379,12 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
     }
 
     func synchronizeItem(at url: URL) throws {
+        if url.lastPathComponent == "RestoreStaging" {
+            events.append(.synchronizeMarkerDirectory)
+            if failures.contains(.synchronizeMarkerDirectory) {
+                throw ActivationTestError.markerSync
+            }
+        }
         try system.synchronizeItem(at: url)
     }
 
