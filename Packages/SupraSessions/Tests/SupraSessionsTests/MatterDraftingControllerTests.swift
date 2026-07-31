@@ -139,7 +139,7 @@ final class MatterDraftingControllerTests: XCTestCase {
     // MARK: - Multi-kind request layer
 
     @MainActor
-    func testAvailableDraftKindsEnablesOnlyWiredNoticeWithReasons() throws {
+    func testAvailableDraftKindsEnablesWiredNoticeAndMotionWithReasons() throws {
         let store = try makeStore()
         let controller = MatterDraftingController(store: store, storage: makeStorage())
         let kinds = controller.availableDraftKinds()
@@ -148,13 +148,12 @@ final class MatterDraftingControllerTests: XCTestCase {
         let notice = kinds.first { $0.id == .noticeAppearance }
         XCTAssertEqual(notice?.isEnabled, true)
         XCTAssertNil(notice?.disabledReason)
-        // The other kinds exist in the registry but are NOT wired, so they must be
-        // disabled with a reason — not silently hidden or wrongly enabled.
-        for kind in [DraftKindID.motionToDismiss, .letterDemand] {
-            let availability = kinds.first { $0.id == kind }
-            XCTAssertEqual(availability?.isEnabled, false, "\(kind) should be disabled")
-            XCTAssertNotNil(availability?.disabledReason, "\(kind) needs a disabled reason")
-        }
+        let motion = kinds.first { $0.id == .motionToDismiss }
+        XCTAssertEqual(motion?.isEnabled, true)
+        XCTAssertNil(motion?.disabledReason)
+        let letter = kinds.first { $0.id == .letterDemand }
+        XCTAssertEqual(letter?.isEnabled, false)
+        XCTAssertNotNil(letter?.disabledReason)
     }
 
     @MainActor

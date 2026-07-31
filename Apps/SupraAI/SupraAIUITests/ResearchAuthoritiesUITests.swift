@@ -757,6 +757,126 @@ final class DraftingBlockedStateUITests: XCTestCase {
     }
 }
 
+/// T-UI-MTD-01...06: production navigation exposes the complete supported motion
+/// form, produces an independently openable DOCX for the hermetic success fixture,
+/// and keeps deterministic blockers free of file actions.
+@MainActor
+final class MotionToDismissWorkspaceUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() throws {
+        let storageRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MotionDraftUITest-\(UUID().uuidString)", isDirectory: true)
+        let app = launchMotionApp(flag: "-uiTestMotionDraftSuccess", storageRoot: storageRoot)
+
+        let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
+        XCTAssertTrue(matter.waitForExistence(timeout: 20))
+        let motion = app.buttons["drafting.kind.motionToDismiss"]
+        XCTAssertTrue(motion.waitForExistence(timeout: 10))
+        XCTAssertTrue(motion.isEnabled)
+        motion.click()
+
+        XCTAssertTrue(app.textFields["drafting.motion.respondingTo"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["drafting.motion.relief"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.factSources"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.authoritySources"].exists)
+        let readiness = app.descendants(matching: .any)["drafting.motion.readiness"]
+        XCTAssertTrue(readiness.waitForExistence(timeout: 5))
+        XCTAssertTrue(readiness.label.localizedCaseInsensitiveContains("ready"), readiness.debugDescription)
+
+        let generate = app.buttons["drafting.generate"]
+        XCTAssertTrue(generate.isEnabled)
+        XCTAssertTrue(generate.isHittable)
+        let windowFrame = app.windows.firstMatch.frame
+        generate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+
+        let result = app.descendants(matching: .any)["drafting.result"]
+        XCTAssertTrue(result.waitForExistence(timeout: 15), result.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any)["drafting.open"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["drafting.reveal"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["drafting.share"].exists)
+        assertVerticalWindowFrame(app.windows.firstMatch.frame, equals: windowFrame, context: "publishing a motion result")
+
+        let docx = try waitForDOCX(in: storageRoot)
+        XCTAssertEqual(Array(try Data(contentsOf: docx).prefix(2)), [0x50, 0x4B])
+        let textURL = storageRoot.appendingPathComponent("opened-motion.txt")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/textutil")
+        process.arguments = ["-convert", "txt", "-output", textURL.path, docx.path]
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0, "TextEdit's document conversion process rejected the DOCX")
+        let openedText = try String(contentsOf: textURL, encoding: .utf8)
+        XCTAssertTrue(openedText.contains("STATEMENT OF FACTS"))
+        XCTAssertTrue(openedText.contains("MEMORANDUM OF LAW"))
+        XCTAssertTrue(openedText.contains("CERTIFICATE OF SERVICE"))
+    }
+
+    func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() throws {
+        let storageRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MotionDraftBlockedUITest-\(UUID().uuidString)", isDirectory: true)
+        let app = launchMotionApp(flag: "-uiTestMotionDraftBlocked", storageRoot: storageRoot)
+
+        let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
+        XCTAssertTrue(matter.waitForExistence(timeout: 20))
+        let motion = app.buttons["drafting.kind.motionToDismiss"]
+        XCTAssertTrue(motion.waitForExistence(timeout: 10))
+        motion.click()
+        let readiness = app.descendants(matching: .any)["drafting.motion.readiness"]
+        XCTAssertTrue(readiness.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            readiness.label.localizedCaseInsensitiveContains("authority")
+                || readiness.value.debugDescription.localizedCaseInsensitiveContains("authority"),
+            readiness.debugDescription
+        )
+        XCTAssertFalse(app.buttons["drafting.generate"].isEnabled)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.open"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.reveal"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.share"].exists)
+
+        let files: [URL]
+        if FileManager.default.fileExists(atPath: storageRoot.path) {
+            let enumerator = FileManager.default.enumerator(at: storageRoot, includingPropertiesForKeys: nil)
+            files = enumerator?.compactMap { $0 as? URL }.filter { $0.pathExtension == "docx" } ?? []
+        } else {
+            files = []
+        }
+        XCTAssertTrue(files.isEmpty)
+    }
+
+    private func launchMotionApp(flag: String, storageRoot: URL) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestOpenDraftSheet",
+            flag,
+        ]
+        app.launchEnvironment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"] = storageRoot.path
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        return app
+    }
+
+    private func waitForDOCX(in root: URL, timeout: TimeInterval = 10) throws -> URL {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil),
+               let match = enumerator.compactMap({ $0 as? URL }).first(where: { $0.pathExtension == "docx" }) {
+                return match
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        } while Date() < deadline
+        XCTFail("motion generation did not create a DOCX beneath \(root.path)")
+        throw CocoaError(.fileNoSuchFile)
+    }
+}
+
 @MainActor
 private func assertVerticalWindowFrame(
     _ actual: CGRect,
