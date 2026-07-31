@@ -147,6 +147,67 @@ final class DocumentImportRecoveryUITests: XCTestCase {
     }
 }
 
+/// T-UI-GQA-01...05 exercises the guided document-Q&A entry point and its
+/// keyboard/VoiceOver contract in the hermetic synthetic UI-test store.
+@MainActor
+final class GuidedDocumentQAUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testGuidedChooserAnnouncesReadinessAndBlocksReviewRequiredSource() {
+        // T-UI-GQA-01...05 expected RED: the Documents toolbar has no Ask action
+        // or guided Q&A sheet/accessibility identifiers.
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestGuidedQA",
+            "-uiTestInitialMatterTab", "Documents",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+
+        let ask = app.buttons["documents.ask"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 20))
+        ask.click()
+
+        XCTAssertTrue(app.descendants(matching: .any)["documentQA.sheet"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textViews["documentQA.question"].exists)
+        XCTAssertTrue(app.buttons["documentQA.sourceMode.auto"].exists)
+        let choose = app.buttons["documentQA.sourceMode.choose"]
+        XCTAssertTrue(choose.exists)
+        choose.click()
+
+        XCTAssertTrue(app.searchFields["documentQA.sourceSearch"].waitForExistence(timeout: 10))
+        let ready = app.buttons["documentQA.source.ready-guided-chunk"]
+        XCTAssertTrue(ready.waitForExistence(timeout: 10))
+        ready.click()
+        let readiness = app.descendants(matching: .any)["documentQA.readiness"]
+        XCTAssertTrue(readiness.exists)
+        XCTAssertEqual(readiness.value as? String, "1 of 1 selected sources ready")
+
+        let blocked = app.buttons["documentQA.source.review-guided-chunk"]
+        XCTAssertTrue(blocked.exists)
+        XCTAssertFalse(blocked.isEnabled)
+        XCTAssertTrue((blocked.value as? String)?.contains("needs review") == true)
+        let generate = app.buttons["documentQA.generate"]
+        XCTAssertTrue(generate.exists)
+        XCTAssertFalse(generate.isEnabled)
+
+        let preview = app.buttons["documentQA.preview.ready-guided-chunk"]
+        XCTAssertTrue(preview.exists)
+        preview.click()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documentPreview"].waitForExistence(timeout: 10),
+            "The selected source must open in the production document preview"
+        )
+    }
+}
+
 /// T-OPS-07 proves a completed policy rejection remains actionable in the
 /// Documents surface instead of being reduced to an aggregate Audit event.
 @MainActor

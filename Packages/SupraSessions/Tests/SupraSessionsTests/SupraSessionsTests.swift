@@ -1791,6 +1791,24 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(try store.chats.fetchMatterChats(matterID: matter.id).count, 2)
     }
 
+    func testMattersControllerVendsMatterScopedDocumentQAController() throws {
+        // T-GQA-01 expected RED: MattersController no longer exposes a
+        // documentQAController, so the Documents tab cannot receive the production
+        // matter-scoped Q&A path.
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in
+            .events([.event(request, 1, .generationCompleted)])
+        }
+        let controller = MattersController(store: store, runtimeClient: stub)
+        let first = try controller.createMatter(name: "First Guided Matter")
+        XCTAssertEqual(controller.documentQAController?.matterID, first.id)
+
+        let second = try controller.createMatter(name: "Second Guided Matter")
+        XCTAssertEqual(controller.documentQAController?.matterID, second.id)
+        controller.select(matterID: nil)
+        XCTAssertNil(controller.documentQAController)
+    }
+
     func testMattersControllerCreateEditDeleteFlow() async throws {
         let store = try makeStore()
         let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
