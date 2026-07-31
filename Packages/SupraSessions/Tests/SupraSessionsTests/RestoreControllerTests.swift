@@ -25,12 +25,14 @@ final class RestoreControllerTests: XCTestCase {
         )
         configure(controller, destination: fixture.destinationURL)
 
-        XCTAssertTrue(await controller.inspectRestoreSnapshots())
+        let didInspect = await controller.inspectRestoreSnapshots()
+        XCTAssertTrue(didInspect)
         XCTAssertEqual(controller.restoreState, .incompatible)
         XCTAssertEqual(controller.restoreSnapshots.single?.incompatibility, .databaseIntegrityFailed)
         XCTAssertFalse(controller.selectRestoreSnapshot(id: invalid.identifier))
         XCTAssertFalse(controller.prepareRestoreConfirmation())
-        XCTAssertFalse(await controller.stageConfirmedRestore())
+        let didStage = await controller.stageConfirmedRestore()
+        XCTAssertFalse(didStage)
         XCTAssertEqual(stageCount, 0)
     }
 
@@ -55,17 +57,21 @@ final class RestoreControllerTests: XCTestCase {
 
         let backup = Task { await controller.backUpNow() }
         await waitUntil { controller.state == .backingUp }
-        XCTAssertFalse(await controller.inspectRestoreSnapshots())
+        let rejectedInspection = await controller.inspectRestoreSnapshots()
+        XCTAssertFalse(rejectedInspection)
         XCTAssertEqual(controller.restoreState, .failed)
         backupGate.open()
-        XCTAssertTrue(await backup.value)
+        let backupResult = await backup.value
+        XCTAssertTrue(backupResult)
 
         let inspection = Task { await controller.inspectRestoreSnapshots() }
         await waitUntil { controller.restoreState == .inspecting }
-        XCTAssertFalse(await controller.backUpNow())
+        let rejectedBackup = await controller.backUpNow()
+        XCTAssertFalse(rejectedBackup)
         XCTAssertEqual(controller.state, .succeeded, "a rejected backup must not corrupt prior backup state")
         restoreGate.open()
-        XCTAssertTrue(await inspection.value)
+        let inspectionResult = await inspection.value
+        XCTAssertTrue(inspectionResult)
         XCTAssertEqual(controller.restoreState, .ready)
     }
 
@@ -82,7 +88,8 @@ final class RestoreControllerTests: XCTestCase {
         )
         configure(controller, destination: fixture.destinationURL)
 
-        XCTAssertFalse(await controller.inspectRestoreSnapshots())
+        let didInspect = await controller.inspectRestoreSnapshots()
+        XCTAssertFalse(didInspect)
         XCTAssertEqual(inspectCount, 0)
         XCTAssertEqual(controller.state, .needsDestinationRepick)
         XCTAssertEqual(controller.restoreState, .needsDestinationRepick)
@@ -108,7 +115,8 @@ final class RestoreControllerTests: XCTestCase {
         )
         configure(controller, destination: fixture.destinationURL)
 
-        XCTAssertFalse(await controller.inspectRestoreSnapshots())
+        let didInspect = await controller.inspectRestoreSnapshots()
+        XCTAssertFalse(didInspect)
         XCTAssertEqual(controller.restoreState, .failed)
         XCTAssertFalse(try XCTUnwrap(controller.restoreStatusMessage).contains(secretPath))
 
@@ -153,12 +161,14 @@ final class RestoreControllerTests: XCTestCase {
         )
         configure(controller, destination: fixture.destinationURL)
 
-        XCTAssertTrue(await controller.inspectRestoreSnapshots())
+        let didInspect = await controller.inspectRestoreSnapshots()
+        XCTAssertTrue(didInspect)
         XCTAssertTrue(controller.selectRestoreSnapshot(id: original.identifier))
         XCTAssertTrue(controller.prepareRestoreConfirmation())
         XCTAssertEqual(controller.restoreConfirmation?.snapshotIdentifier, original.identifier)
 
-        XCTAssertFalse(await controller.stageConfirmedRestore())
+        let didStage = await controller.stageConfirmedRestore()
+        XCTAssertFalse(didStage)
         XCTAssertEqual(stageCount, 0)
         XCTAssertEqual(controller.restoreState, .failed)
         XCTAssertNil(controller.restoreConfirmation)
@@ -181,10 +191,12 @@ final class RestoreControllerTests: XCTestCase {
         )
         configure(controller, destination: fixture.destinationURL)
 
-        XCTAssertTrue(await controller.inspectRestoreSnapshots())
+        let didInspect = await controller.inspectRestoreSnapshots()
+        XCTAssertTrue(didInspect)
         XCTAssertTrue(controller.selectRestoreSnapshot(id: valid.identifier))
         XCTAssertTrue(controller.prepareRestoreConfirmation())
-        XCTAssertTrue(await controller.stageConfirmedRestore())
+        let didStage = await controller.stageConfirmedRestore()
+        XCTAssertTrue(didStage)
 
         XCTAssertEqual(controller.restoreState, .stagedRestartRequired)
         XCTAssertTrue(controller.requiresRestartForRestore)

@@ -114,6 +114,8 @@ private struct DatabaseRecoveryView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 620)
+                .accessibilityIdentifier("restore.recovery.instructions")
+                .accessibilityLabel(state.message)
 
             HStack(spacing: 12) {
                 if let snapshotURL = state.snapshotURL {
@@ -121,12 +123,14 @@ private struct DatabaseRecoveryView: View {
                         NSWorkspace.shared.activateFileViewerSelecting([snapshotURL])
                     }
                     .accessibilityHint("Opens Finder with the verified recovery database selected.")
+                    .accessibilityIdentifier("restore.recovery.snapshot")
                 }
                 Button("Quit Without Changes") {
                     NSApplication.shared.terminate(nil)
                 }
                 .keyboardShortcut(.cancelAction)
                 .accessibilityHint("Quits without allowing new work to be saved to temporary storage.")
+                .accessibilityIdentifier("restore.recovery.quit")
             }
         }
         .padding(40)
@@ -134,6 +138,7 @@ private struct DatabaseRecoveryView: View {
         .background(.background)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Database recovery required")
+        .accessibilityIdentifier("restore.recovery.shell")
     }
 }
 

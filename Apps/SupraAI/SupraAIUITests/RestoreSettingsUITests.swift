@@ -23,7 +23,7 @@ final class RestoreSettingsUITests: XCTestCase {
         XCTAssertTrue(invalid.label.contains("391"))
         let reason = app.staticTexts["restore.reason.supra-20260730-081500-000"]
         XCTAssertTrue(reason.exists)
-        XCTAssertTrue(reason.label.localizedCaseInsensitiveContains("integrity"))
+        XCTAssertTrue(renderedText(of: reason).localizedCaseInsensitiveContains("integrity"))
 
         XCTAssertFalse(app.buttons["restore.review"].isEnabled)
     }
@@ -41,8 +41,9 @@ final class RestoreSettingsUITests: XCTestCase {
 
         let dialog = app.dialogs.firstMatch.exists ? app.dialogs.firstMatch : app.sheets.firstMatch
         XCTAssertTrue(dialog.waitForExistence(timeout: 5))
-        let dialogText = dialog.descendants(matching: .staticText).allElementsBoundByIndex
-            .map(\.label).joined(separator: " ")
+        let message = app.descendants(matching: .any)["restore.confirmation.message"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        let dialogText = renderedText(of: message)
         XCTAssertTrue(dialogText.contains("supra-20260731-090000-000"))
         XCTAssertTrue(dialogText.localizedCaseInsensitiveContains("replace"))
         XCTAssertTrue(dialogText.localizedCaseInsensitiveContains("relaunch"))
@@ -89,7 +90,7 @@ final class RestoreSettingsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Restore recovery required"].exists)
         let instructions = app.staticTexts["restore.recovery.instructions"]
         XCTAssertTrue(instructions.exists)
-        XCTAssertTrue(instructions.label.localizedCaseInsensitiveContains("preserve"))
+        XCTAssertTrue(renderedText(of: instructions).localizedCaseInsensitiveContains("preserve"))
         XCTAssertTrue(app.buttons["Show Recovery Snapshot"].exists)
         XCTAssertTrue(app.buttons["Quit Without Changes"].exists)
     }
@@ -119,5 +120,9 @@ final class RestoreSettingsUITests: XCTestCase {
         }
         XCTAssertTrue(element.waitForExistence(timeout: 5), "Missing restore control: \(identifier)")
         return element
+    }
+
+    private func renderedText(of element: XCUIElement) -> String {
+        [element.label, element.value as? String].compactMap { $0 }.joined(separator: " ")
     }
 }

@@ -26,6 +26,11 @@ public struct RestoreActivationResult: Equatable, Sendable {
     public let status: RestoreActivationStatus
     public let activationFailure: RestoreActivationFailure?
     public let rollbackFailure: RestoreActivationFailure?
+    /// Content-free identifiers copied from the authenticated pending intent.
+    /// They let the newly opened store persist an outcome after activation has
+    /// replaced the database that originally recorded the staging event.
+    public let operationID: String?
+    public let snapshotIdentifier: String?
     /// The verified staged safety database is exposed only in memory so the app
     /// can offer recovery when neither automatic activation nor rollback works.
     public let recoveryDatabaseURL: URL?
@@ -34,24 +39,37 @@ public struct RestoreActivationResult: Equatable, Sendable {
         status: RestoreActivationStatus,
         activationFailure: RestoreActivationFailure? = nil,
         rollbackFailure: RestoreActivationFailure? = nil,
+        operationID: String? = nil,
+        snapshotIdentifier: String? = nil,
         recoveryDatabaseURL: URL? = nil
     ) {
         self.status = status
         self.activationFailure = activationFailure
         self.rollbackFailure = rollbackFailure
+        self.operationID = operationID
+        self.snapshotIdentifier = snapshotIdentifier
         self.recoveryDatabaseURL = recoveryDatabaseURL
     }
 
     static let noPendingRestore = RestoreActivationResult(status: .noPendingRestore)
-    static let activated = RestoreActivationResult(status: .activated)
+    static func activated(_ intent: RestoreIntent) -> RestoreActivationResult {
+        RestoreActivationResult(
+            status: .activated,
+            operationID: intent.operationID,
+            snapshotIdentifier: intent.selectedSnapshotIdentifier
+        )
+    }
 
     static func failedAndRolledBack(
         _ failure: RestoreActivationFailure,
+        intent: RestoreIntent,
         safetyDatabaseURL: URL
     ) -> RestoreActivationResult {
         RestoreActivationResult(
             status: .failedAndRolledBack,
             activationFailure: failure,
+            operationID: intent.operationID,
+            snapshotIdentifier: intent.selectedSnapshotIdentifier,
             recoveryDatabaseURL: safetyDatabaseURL
         )
     }
@@ -59,12 +77,15 @@ public struct RestoreActivationResult: Equatable, Sendable {
     static func recoveryRequired(
         activation failure: RestoreActivationFailure,
         rollback rollbackFailure: RestoreActivationFailure?,
+        intent: RestoreIntent? = nil,
         safetyDatabaseURL: URL?
     ) -> RestoreActivationResult {
         RestoreActivationResult(
             status: .recoveryRequired,
             activationFailure: failure,
             rollbackFailure: rollbackFailure,
+            operationID: intent?.operationID,
+            snapshotIdentifier: intent?.selectedSnapshotIdentifier,
             recoveryDatabaseURL: safetyDatabaseURL
         )
     }
@@ -172,6 +193,7 @@ public enum RestoreActivationService {
             return .recoveryRequired(
                 activation: .safetyStateInvalid,
                 rollback: .safetyStateInvalid,
+                intent: context.intent,
                 safetyDatabaseURL: nil
             )
         }
@@ -291,7 +313,7 @@ public enum RestoreActivationService {
             )
         }
 
-        return .activated
+        return .activated(context.intent)
     }
 
     private static func finishFailure(
@@ -318,6 +340,7 @@ public enum RestoreActivationService {
             return .recoveryRequired(
                 activation: activationFailure,
                 rollback: .blobInstallationFailed,
+                intent: context.intent,
                 safetyDatabaseURL: context.safetyDatabaseURL
             )
         }
@@ -335,6 +358,7 @@ public enum RestoreActivationService {
             return .recoveryRequired(
                 activation: activationFailure,
                 rollback: .databaseReplacementFailed,
+                intent: context.intent,
                 safetyDatabaseURL: context.safetyDatabaseURL
             )
         }
@@ -352,6 +376,7 @@ public enum RestoreActivationService {
             return .recoveryRequired(
                 activation: activationFailure,
                 rollback: .databaseOpenFailed,
+                intent: context.intent,
                 safetyDatabaseURL: context.safetyDatabaseURL
             )
         }
@@ -372,6 +397,7 @@ public enum RestoreActivationService {
 
         return .failedAndRolledBack(
             activationFailure,
+            intent: context.intent,
             safetyDatabaseURL: context.safetyDatabaseURL
         )
     }

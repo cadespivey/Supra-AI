@@ -166,12 +166,34 @@ final class AppEnvironment: ObservableObject {
             appVersion: appVersion,
             tokenStore: tokenStore
         )
-        self.backupController = BackupController(
+        let documentStorage = DocumentStorage.makeDefault()
+#if DEBUG
+        let restoreUITestFixture = AppEnvironment.makeRestoreUITestFixtureIfRequested()
+#else
+        let restoreUITestFixture: RestoreUITestFixture? = nil
+#endif
+        let restoreLiveLayout = restoreUITestFixture?.liveLayout
+            ?? AppEnvironment.makeRestoreLiveLayoutForController(
+                blobsDirectory: documentStorage.blobsDirectory
+            )
+        let backupController = BackupController(
             store: store,
-            blobsDirectory: DocumentStorage.makeDefault().blobsDirectory,
+            blobsDirectory: documentStorage.blobsDirectory,
             appVersion: appVersion.marketingVersion,
-            appBuild: appVersion.buildNumber
+            appBuild: appVersion.buildNumber,
+            destinationFactory: restoreUITestFixture?.destinationFactory,
+            restoreLiveLayout: restoreLiveLayout,
+            restoreInspector: restoreUITestFixture?.inspector,
+            restoreRunner: restoreUITestFixture?.runner,
+            launchRestoreResult: restoreActivation
         )
+        if let restoreUITestFixture {
+            _ = backupController.configureDestination(
+                bookmarkData: Data("synthetic-ui-bookmark".utf8),
+                url: restoreUITestFixture.destinationURL
+            )
+        }
+        self.backupController = backupController
         self.assistantProfileController = AssistantProfileController(store: store, basePrompt: systemPrompt)
         // Firm structural style: autosaves to the store; MatterDraftingController reads the
         // persisted profile fresh at draft time via effectiveStyle(), so no threading is needed.
@@ -1834,7 +1856,19 @@ final class AppEnvironment: ObservableObject {
             // erase-on-schema-change hazard for probe runs.
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("SupraAI-\(headlessProbeRequiresIsolatedStore ? "Probe" : "UITest")-\(UUID().uuidString).sqlite")
-            if let store = try? SupraStore(url: url) { return (store, false, nil) }
+            if let store = try? SupraStore(url: url) {
+#if DEBUG
+                if isUITestMode,
+                   ProcessInfo.processInfo.arguments.contains("-uiTestRestoreRecoveryRequired") {
+                    return (
+                        store,
+                        true,
+                        DatabaseRecoveryState(failure: .restore, snapshotURL: url)
+                    )
+                }
+#endif
+                return (store, false, nil)
+            }
 
             // A failed temporary-store open must not widen this launch's authority
             // to the user's Application Support database. Stay hermetic even in the
@@ -1889,6 +1923,98 @@ final class AppEnvironment: ObservableObject {
         )
         return RestoreActivationService.activatePendingRestore(liveLayout: layout)
     }
+
+    private static func makeRestoreLiveLayoutForController(
+        blobsDirectory: URL
+    ) -> RestoreLiveLayout? {
+        guard !isUITestMode, !isDemoMode, !isHeadlessProbeMode,
+              let databaseURL = try? DatabasePath.appSupportDatabaseURL()
+        else { return nil }
+        return RestoreLiveLayout(
+            databaseURL: databaseURL,
+            blobsDirectory: blobsDirectory,
+            stagingRootDirectory: databaseURL.deletingLastPathComponent()
+                .appendingPathComponent(RestoreService.stagingDirectoryName, isDirectory: true)
+        )
+    }
+
+#if DEBUG
+    /// Synthetic controller dependencies for the hosted restore UI tests. They
+    /// are reachable only with both `-uiTestMode` and the dedicated scenario flag.
+    private static func makeRestoreUITestFixtureIfRequested() -> RestoreUITestFixture? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard isUITestMode,
+              let marker = arguments.firstIndex(of: "-uiTestRestoreScenario"),
+              arguments.indices.contains(marker + 1),
+              arguments[marker + 1] == "mixed"
+        else { return nil }
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "SupraAI-UITest-Restore-\(ProcessInfo.processInfo.processIdentifier)",
+            isDirectory: true
+        )
+        let destination = root.appendingPathComponent("Backups", isDirectory: true)
+        let createdAt = Date(timeIntervalSince1970: 1_786_000_500)
+
+        func candidate(
+            identifier: String,
+            incompatibility: RestoreIncompatibility?
+        ) -> RestoreSnapshotCandidate {
+            let manifest = BackupManifest(
+                appVersion: "2.3.2",
+                appBuild: "391",
+                schemaMigrationIdentifiers: ["v069_add_verification_dimensions"],
+                createdAt: createdAt,
+                sourceDbBytes: 8_388_608,
+                referencedBlobCount: 3
+            )
+            return RestoreSnapshotCandidate(
+                identifier: identifier,
+                backupDirectoryURL: destination,
+                snapshotURL: destination.appendingPathComponent("db/\(identifier).sqlite"),
+                manifestURL: destination.appendingPathComponent("db/\(identifier).json"),
+                manifest: manifest,
+                summary: RestoreSnapshotSummary(
+                    createdAt: createdAt,
+                    appVersion: manifest.appVersion,
+                    appBuild: manifest.appBuild,
+                    databaseBytes: manifest.sourceDbBytes,
+                    referencedBlobCount: manifest.referencedBlobCount
+                ),
+                databaseSHA256: String(repeating: incompatibility == nil ? "a" : "b", count: 64),
+                referencedBlobs: [],
+                incompatibility: incompatibility
+            )
+        }
+
+        let candidates = [
+            candidate(identifier: "supra-20260731-090000-000", incompatibility: nil),
+            candidate(
+                identifier: "supra-20260730-081500-000",
+                incompatibility: .databaseIntegrityFailed
+            ),
+        ]
+        let layout = RestoreLiveLayout(
+            databaseURL: root.appendingPathComponent("Live/SupraAI.sqlite"),
+            blobsDirectory: root.appendingPathComponent("Live/Documents/blobs", isDirectory: true),
+            stagingRootDirectory: root.appendingPathComponent("Live/RestoreStaging", isDirectory: true)
+        )
+        return RestoreUITestFixture(
+            destinationURL: destination,
+            liveLayout: layout,
+            destinationFactory: { _ in RestoreUITestDestination(url: destination) },
+            inspector: { _ in candidates },
+            runner: { selected, _ in
+                try await Task.sleep(for: .milliseconds(250))
+                return RestoreStageSummary(
+                    operationID: "22222222-2222-2222-2222-222222222222",
+                    snapshotIdentifier: selected.identifier,
+                    stagedAt: Date(timeIntervalSince1970: 1_786_000_800)
+                )
+            }
+        )
+    }
+#endif
 
     private static func makeFallbackStore() -> SupraStore {
         // Unique-named on-disk fallback so a corrupt/locked leftover fallback file
@@ -2037,4 +2163,21 @@ private final class GuidedQAUITestRuntimeClient: RuntimeClientProtocol, @uncheck
     }
 
     func restartRuntimeService() async throws {}
+}
+
+private struct RestoreUITestFixture {
+    let destinationURL: URL
+    let liveLayout: RestoreLiveLayout
+    let destinationFactory: BackupController.DestinationFactory
+    let inspector: BackupController.RestoreInspector
+    let runner: BackupController.RestoreRunner
+}
+
+@MainActor
+private struct RestoreUITestDestination: BackupDestination {
+    let url: URL
+
+    func withAccess<T: Sendable>(_ operation: (URL) async throws -> T) async throws -> T {
+        try await operation(url)
+    }
 }
