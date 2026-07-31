@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import SupraCore
 import SupraDocuments
 import SupraResearch
@@ -596,6 +597,59 @@ final class DocumentQATests: XCTestCase {
         XCTAssertTrue(recorder.requests.allSatisfy { $0.prompt.contains("BETA_REGEN_SELECTED") })
         XCTAssertFalse(recorder.requests.contains { $0.prompt.contains("ALPHA_REGEN_UNSELECTED") })
         XCTAssertFalse(qa.sourceReferences(versionID: regenerated.versionID).map(\.chunkID).contains(alpha.chunkID))
+    }
+
+    func testGuidedRegenerationRejectsABoundChunkWhoseSavedProvenanceChanged() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Guided Provenance Drift Matter")
+        let selected = try await indexRevisionBoundDoc(
+            store,
+            matter.id,
+            "Selected Provenance.txt",
+            "ORIGINAL_GUIDED_PROVENANCE. The saved passage controls."
+        )
+        let recorder = GenerateCallRecorder()
+        let runtime = StubRuntimeClient(outcome: { request in
+            recorder.record(request)
+            return .events([
+                .event(request, 0, .token, token: "The saved passage controls [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let generated = await qa.generate(
+            question: "What does the saved passage say?",
+            guidedChunkIDs: [selected.chunkID],
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+        let initial = try XCTUnwrap(generated)
+        try await store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE document_chunks SET page_label = ?, display_excerpt = ?, normalized_text = ? WHERE id = ?",
+                arguments: [
+                    "silently-changed-locator",
+                    "SILENTLY_CHANGED_EXCERPT",
+                    "SILENTLY_CHANGED_TEXT. This must not replace the saved passage.",
+                    selected.chunkID,
+                ]
+            )
+        }
+
+        let regenerated = await qa.regenerate(
+            outputID: initial.outputID,
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+
+        XCTAssertNil(regenerated)
+        XCTAssertEqual(recorder.count, 1, "changed live provenance must not reach generation")
+        XCTAssertTrue(qa.message?.contains("no longer available") == true)
+        XCTAssertEqual(
+            try store.structuredOutputs.fetchVersions(structuredOutputID: initial.outputID).count,
+            1
+        )
     }
 
     func testGuidedRegenerationRehydratesEveryPersistedSourceAfterReindexNullsOneChunkForeignKey() async throws {
