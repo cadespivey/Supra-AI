@@ -164,7 +164,8 @@ pbxproj_has_only_routine_version_changes() {
       *) continue ;;
     esac
     saw_change=1
-    if [[ "$setting_line" =~ ^[[:space:]]*(CURRENT_PROJECT_VERSION|MARKETING_VERSION)[[:space:]]*= ]]; then
+    if [[ "$setting_line" =~ ^[[:space:]]*CURRENT_PROJECT_VERSION[[:space:]]*=[[:space:]]*[0-9]+[[:space:]]*\;[[:space:]]*$ ]] \
+        || [[ "$setting_line" =~ ^[[:space:]]*MARKETING_VERSION[[:space:]]*=[[:space:]]*[0-9]+[.][0-9]+[.][0-9]+[[:space:]]*\;[[:space:]]*$ ]]; then
       continue
     fi
     return 1
