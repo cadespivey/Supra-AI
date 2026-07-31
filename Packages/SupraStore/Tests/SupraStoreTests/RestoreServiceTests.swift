@@ -73,6 +73,29 @@ final class RestoreServiceTests: XCTestCase {
         XCTAssertEqual(try fixture.fingerprint(pair.snapshot), sourceFingerprint)
     }
 
+    func testStageRejectsSnapshotReplacedAfterSelection() throws {
+        try fixture.writeLiveState(sentinel: "current row")
+        let original = try fixture.writeCompleteSnapshot(sentinel: "original selected row")
+        let candidate = try compatibleCandidate()
+        try FileManager.default.removeItem(at: original.snapshot)
+        try FileManager.default.removeItem(at: original.manifest)
+        _ = try fixture.writeCompleteSnapshot(sentinel: "replacement selected row")
+
+        XCTAssertThrowsError(try RestoreService.stageRestore(
+            candidate: candidate,
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations
+        )) { error in
+            XCTAssertEqual(error as? RestoreStageError, .sourceSnapshotChanged)
+        }
+
+        XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current row")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.stagingRootDirectory
+                .appendingPathComponent(RestoreIntent.pendingFileName).path
+        ))
+    }
+
     // Expected RED: there is no marker-last, content-free staging handoff.
     func testIntentMarkerIsLastAndContainsNoAbsoluteSourcePaths() throws {
         let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
@@ -91,6 +114,21 @@ final class RestoreServiceTests: XCTestCase {
 
         XCTAssertEqual(operations.events.last, .writeMarker)
         XCTAssertTrue(operations.markerObservedCompleteTrees)
+        let safetyTreeSync = try XCTUnwrap(operations.events.lastIndex(of: .synchronizeSafetyTree))
+        let safetyMove = try XCTUnwrap(operations.events.firstIndex(of: .moveSafetyTree))
+        let selectedTreeSync = try XCTUnwrap(operations.events.lastIndex(of: .synchronizeSelectedTree))
+        let selectedMove = try XCTUnwrap(operations.events.firstIndex(of: .moveSelectedTree))
+        let operationDirectorySyncs = operations.events.indices.filter {
+            operations.events[$0] == .synchronizeOperationDirectory
+        }
+        XCTAssertLessThan(safetyTreeSync, safetyMove)
+        XCTAssertTrue(operationDirectorySyncs.contains { $0 > safetyMove && $0 < selectedTreeSync })
+        XCTAssertLessThan(selectedTreeSync, selectedMove)
+        XCTAssertTrue(operationDirectorySyncs.contains { $0 > selectedMove })
+        XCTAssertEqual(
+            Array(operations.events.suffix(3)),
+            [.synchronizeOperationsRoot, .synchronizeStagingRoot, .writeMarker]
+        )
         XCTAssertEqual(result.intent.schemaVersion, 1)
         XCTAssertEqual(result.intent.selectedBlobCount, 1)
         XCTAssertEqual(
@@ -212,13 +250,17 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
         case synchronizeSafetyDatabase
         case copySafetyBlob
         case synchronizeSafetyBlob
+        case synchronizeSafetyTree
         case moveSafetyTree
         case copySelectedDatabase
         case synchronizeSelectedDatabase
         case copySelectedBlob
         case synchronizeSelectedBlob
+        case synchronizeSelectedTree
         case moveSelectedTree
         case synchronizeOperationDirectory
+        case synchronizeOperationsRoot
+        case synchronizeStagingRoot
         case writeMarker
     }
 
@@ -262,10 +304,21 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
 
     func synchronizeItem(at url: URL) throws {
         let event: Event
+        var isDirectory: ObjCBool = false
+        let directory = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            && isDirectory.boolValue
         if url.lastPathComponent == RestoreService.safetyDatabaseFileName {
             event = .synchronizeSafetyDatabase
         } else if url.lastPathComponent == RestoreService.stagedDatabaseFileName {
             event = .synchronizeSelectedDatabase
+        } else if directory, url.path.contains("/safety.tmp") {
+            event = .synchronizeSafetyTree
+        } else if directory, url.path.contains("/selected.tmp") {
+            event = .synchronizeSelectedTree
+        } else if url.lastPathComponent == "operations" {
+            event = .synchronizeOperationsRoot
+        } else if url.lastPathComponent == "RestoreStaging" {
+            event = .synchronizeStagingRoot
         } else if url.path.contains("/safety.tmp/") {
             event = .synchronizeSafetyBlob
         } else if url.path.contains("/selected.tmp/") {
