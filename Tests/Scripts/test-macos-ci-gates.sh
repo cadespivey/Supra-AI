@@ -336,6 +336,13 @@ run_case \
     SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$guided_class_only_hook" \
     bash "${scripts}/run-app-smoke-tests.sh" --check
 
+run_case \
+  "a missing restore Settings smoke test fails closed" \
+  1 \
+  "restore Settings/recovery accessibility smoke tests are missing" \
+  env SUPRA_RESTORE_UI_TEST_FILE="$missing_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
 accessibility_hook="${temporary_dir}/ResearchAuthoritiesUITests.swift"
 printf '%s\n' \
   'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
@@ -345,12 +352,20 @@ printf '%s\n' \
   '  func testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult() {}' \
   '}' \
   >"$accessibility_hook"
+restore_hook="${temporary_dir}/RestoreSettingsUITests.swift"
+printf '%s\n' \
+  'func testInvalidSnapshotShowsFactsAndCannotBeSelected() {}' \
+  'func testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel() {}' \
+  'func testSuccessfulStageOffersColdRestartWithoutLiveSwap() {}' \
+  'func testRecoveryRequiredShellProvidesPreservationAndQuitInstructions() {}' \
+  >"$restore_hook"
 run_case \
   "the exact hosted XPC and accessibility selectors satisfy the hook" \
   0 \
   "Hosted XPC integration hook passed." \
   env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
     SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    SUPRA_RESTORE_UI_TEST_FILE="$restore_hook" \
     bash "${scripts}/run-app-smoke-tests.sh" --check
 
 run_case \
@@ -417,6 +432,12 @@ if grep -Fq 'classificationService: Self.isUITestMode ? nil : DocumentClassifica
   printf '%s\n' 'PASS: UI-test launches cannot consume the guided Q&A runtime through background classification'
 else
   record_failure 'UI-test launch can consume the guided Q&A runtime through background classification'
+fi
+
+if grep -Fq -- '-only-testing:SupraAIUITests/RestoreSettingsUITests' "$app_smoke_script"; then
+  printf '%s\n' 'PASS: app smoke executes the restore Settings and recovery hosted guards'
+else
+  record_failure 'app smoke does not execute the restore Settings and recovery hosted guards'
 fi
 
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \
