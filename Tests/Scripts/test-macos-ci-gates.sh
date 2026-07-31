@@ -395,12 +395,11 @@ else
   record_failure 'guided Q&A model fixture can escape its authorized temporary root'
 fi
 
-if sed -n '/classificationService: DocumentClassificationService(/,/^            )/p' "$app_environment" \
-      | grep -Fq 'runtimeClient: taskRuntimeClient' \
+if grep -Fq 'classificationService: Self.isUITestMode ? nil : DocumentClassificationService(' "$app_environment" \
     && grep -Fq '.filter { $0 && !Self.isUITestMode }' "$app_environment"; then
-  printf '%s\n' 'PASS: guided Q&A UI launch cannot leak work into the production classification runtime'
+  printf '%s\n' 'PASS: UI-test launches cannot consume the guided Q&A runtime through background classification'
 else
-  record_failure 'guided Q&A UI launch can leak work into the production classification runtime'
+  record_failure 'UI-test launch can consume the guided Q&A runtime through background classification'
 fi
 
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \
