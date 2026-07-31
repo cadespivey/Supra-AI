@@ -49,7 +49,9 @@ struct RestoreTestFixture {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true
         )
-        let queue = try DatabaseQueue(path: url.path)
+        var configuration = Configuration()
+        configuration.foreignKeysEnabled = !foreignKeyViolation
+        let queue = try DatabaseQueue(path: url.path, configuration: configuration)
         try queue.write { db in
             try db.execute(sql: "CREATE TABLE grdb_migrations (identifier TEXT NOT NULL PRIMARY KEY)")
             for migration in migrations {
@@ -88,7 +90,6 @@ struct RestoreTestFixture {
                 )
                 """)
             if foreignKeyViolation {
-                try db.execute(sql: "PRAGMA foreign_keys = OFF")
                 try db.execute(sql: "INSERT INTO restore_child (id, parent_id) VALUES (1, 999)")
             }
         }

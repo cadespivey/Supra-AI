@@ -33,13 +33,17 @@ final class RestoreServiceTests: XCTestCase {
 
         XCTAssertEqual(try fixture.sentinel(in: result.safetyDatabaseURL), "current row")
         XCTAssertEqual(
-            try String(contentsOf: result.safetyBlobsDirectory.appendingPathComponent("aa/current.bin")),
+            try String(
+                contentsOf: result.safetyBlobsDirectory.appendingPathComponent("aa/current.bin"),
+                encoding: .utf8
+            ),
             "CURRENT BLOB"
         )
         XCTAssertEqual(result.intent.safetyBlobCount, 1)
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.markerURL.path))
     }
 
+    // Expected RED: selected-state staging and source/live immutability are not implemented.
     func testStageCopiesSelectedStateWithoutMutatingLiveOrBackupSource() throws {
         let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
         try fixture.writeLiveState(blobs: [currentBlob], sentinel: "current row")
@@ -56,8 +60,12 @@ final class RestoreServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(try fixture.sentinel(in: result.stagedDatabaseURL), "selected row")
+        XCTAssertEqual(result.intent.stagedDatabaseSHA256, sourceFingerprint)
         XCTAssertEqual(
-            try String(contentsOf: result.stagedBlobsDirectory.appendingPathComponent("bb/selected.bin")),
+            try String(
+                contentsOf: result.stagedBlobsDirectory.appendingPathComponent("bb/selected.bin"),
+                encoding: .utf8
+            ),
             "SELECTED BLOB"
         )
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current row")
@@ -65,6 +73,7 @@ final class RestoreServiceTests: XCTestCase {
         XCTAssertEqual(try fixture.fingerprint(pair.snapshot), sourceFingerprint)
     }
 
+    // Expected RED: there is no marker-last, content-free staging handoff.
     func testIntentMarkerIsLastAndContainsNoAbsoluteSourcePaths() throws {
         let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
         try fixture.writeLiveState(blobs: [currentBlob])
@@ -84,6 +93,10 @@ final class RestoreServiceTests: XCTestCase {
         XCTAssertTrue(operations.markerObservedCompleteTrees)
         XCTAssertEqual(result.intent.schemaVersion, 1)
         XCTAssertEqual(result.intent.selectedBlobCount, 1)
+        XCTAssertEqual(
+            try RestoreIntent.decode(Data(contentsOf: result.markerURL)),
+            result.intent
+        )
         let markerText = try String(contentsOf: result.markerURL, encoding: .utf8)
         XCTAssertFalse(markerText.contains(fixture.root.path))
         XCTAssertFalse(markerText.contains(fixture.backupDirectory.path))
@@ -283,7 +296,10 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
                 atPath: entries[0].appendingPathComponent("selected", isDirectory: true).path
             )
             && !FileManager.default.fileExists(atPath: url.path)
-        if failurePoint == .markerWrite { throw InjectedRestoreFailure.requested(.markerWrite) }
+        if failurePoint == .markerWrite {
+            try system.writeIntentAtomically(data, to: url)
+            throw InjectedRestoreFailure.requested(.markerWrite)
+        }
         try system.writeIntentAtomically(data, to: url)
     }
 }

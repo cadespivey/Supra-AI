@@ -24,6 +24,9 @@ final class RestoreSnapshotInspectorTests: XCTestCase {
             to: dbDirectory.appendingPathComponent("SupraAI-20260731-120001-000.sqlite")
         )
         try Data("unrelated".utf8).write(to: dbDirectory.appendingPathComponent("notes.txt"))
+        try Data("{}".utf8).write(
+            to: dbDirectory.appendingPathComponent("SupraAI-client-name.json")
+        )
 
         let candidates = try RestoreSnapshotInspector.discover(
             in: fixture.backupDirectory,
@@ -35,6 +38,7 @@ final class RestoreSnapshotInspectorTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(candidates.first).isRestorable)
     }
 
+    // Expected RED: no read-only summary or referenced-blob projection exists.
     func testDiscoveryReportsReadOnlySnapshotSummary() throws {
         let blob = RestoreTestBlob("aa/brief.bin", "SELECTED BLOB")
         _ = try fixture.writeCompleteSnapshot(blobs: [blob])
@@ -49,10 +53,12 @@ final class RestoreSnapshotInspectorTests: XCTestCase {
         XCTAssertEqual(summary.appBuild, "654")
         XCTAssertGreaterThan(summary.databaseBytes, 0)
         XCTAssertEqual(summary.referencedBlobCount, 1)
+        XCTAssertEqual(candidate.databaseSHA256, try fixture.fingerprint(candidate.snapshotURL))
         XCTAssertEqual(candidate.referencedBlobs.map(\.relativePath), ["aa/brief.bin"])
         XCTAssertNil(candidate.incompatibility)
     }
 
+    // Expected RED: no discovery boundary exists whose source immutability can be proven.
     func testDiscoveryDoesNotMutateSnapshotManifestOrPool() throws {
         let blob = RestoreTestBlob("aa/brief.bin", "IMMUTABLE SOURCE")
         let pair = try fixture.writeCompleteSnapshot(blobs: [blob])
@@ -154,6 +160,7 @@ final class RestoreSnapshotInspectorTests: XCTestCase {
         XCTAssertEqual(reasons["SupraAI-20260731-120001-000"]!, .unsupportedFutureSchema)
     }
 
+    // Expected RED: a non-prefix known history is not distinguished from a future schema.
     func testKnownMigrationsInWrongOrderAreBlockedAsIncompatibleHistory() throws {
         _ = try fixture.writeCompleteSnapshot(databaseMigrations: ["m2", "m1"])
 
@@ -191,6 +198,7 @@ final class RestoreSnapshotInspectorTests: XCTestCase {
         XCTAssertEqual(reasons["SupraAI-20260731-120001-000"]!, .missingReferencedBlob)
     }
 
+    // Expected RED: blob metadata and manifest counts are not independently validated.
     func testBlobDigestAndManifestCountMismatchAreBlocked() throws {
         let tampered = RestoreTestBlob("aa/tampered.bin", "EXPECTED")
         _ = try fixture.writeCompleteSnapshot(
