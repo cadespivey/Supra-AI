@@ -272,14 +272,11 @@ public enum RestoreActivationService {
         }
 
         do {
-            guard try Data(contentsOf: context.markerURL) == context.markerData else {
-                throw RestoreActivationFailure.invalidIntent
-            }
-            try operations.removeItem(at: context.markerURL)
-            // A failed parent-directory fsync cannot make the already validated
-            // selected state unsafe. If a crash resurrects the marker, the next
-            // launch repeats this idempotent activation from the preserved stage.
-            try? operations.synchronizeItem(at: liveLayout.stagingRootDirectory)
+            try consumePendingMarker(
+                context: context,
+                stagingRootDirectory: liveLayout.stagingRootDirectory,
+                operations: operations
+            )
         } catch {
             activationFailure = .markerRemovalFailed
             return finishFailure(
@@ -359,10 +356,42 @@ public enum RestoreActivationService {
             )
         }
 
+        do {
+            try consumePendingMarker(
+                context: context,
+                stagingRootDirectory: liveLayout.stagingRootDirectory,
+                operations: operations
+            )
+        } catch {
+            return .recoveryRequired(
+                activation: activationFailure,
+                rollback: .markerRemovalFailed,
+                safetyDatabaseURL: context.safetyDatabaseURL
+            )
+        }
+
         return .failedAndRolledBack(
             activationFailure,
             safetyDatabaseURL: context.safetyDatabaseURL
         )
+    }
+
+    /// Consume an authenticated request only after the selected state or the
+    /// safety rollback has been fully validated. Synchronizing the containing
+    /// directory is part of consumption: without it, a crash may resurrect a
+    /// marker and replay a restore that already reached a terminal outcome.
+    private static func consumePendingMarker(
+        context: ActivationContext,
+        stagingRootDirectory: URL,
+        operations: any RestoreActivationFileOperations
+    ) throws {
+        if itemExists(at: context.markerURL) {
+            guard try Data(contentsOf: context.markerURL) == context.markerData else {
+                throw RestoreActivationFailure.invalidIntent
+            }
+            try operations.removeItem(at: context.markerURL)
+        }
+        try operations.synchronizeItem(at: stagingRootDirectory)
     }
 
     private static func loadContext(
