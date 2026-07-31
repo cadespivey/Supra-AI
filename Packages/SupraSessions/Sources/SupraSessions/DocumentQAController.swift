@@ -6,6 +6,64 @@ import SupraRuntimeClient
 import SupraRuntimeInterface
 import SupraStore
 
+/// One human-readable passage offered by the guided document-Q&A chooser.
+/// `chunkID` is retained as the stable selection value, but the UI presents the
+/// document name, locator, and excerpt instead of asking users to understand it.
+public struct GuidedDocumentSource: Identifiable, Sendable, Equatable {
+    public var id: String { chunkID }
+    public let chunkID: String
+    public let documentID: String
+    public let documentName: String
+    public let locatorDisplay: String
+    public let excerpt: String
+    public let revisionID: String?
+    public let isReady: Bool
+    public let blockingReason: String?
+
+    public init(
+        chunkID: String,
+        documentID: String,
+        documentName: String,
+        locatorDisplay: String,
+        excerpt: String,
+        revisionID: String?,
+        isReady: Bool,
+        blockingReason: String?
+    ) {
+        self.chunkID = chunkID
+        self.documentID = documentID
+        self.documentName = documentName
+        self.locatorDisplay = locatorDisplay
+        self.excerpt = excerpt
+        self.revisionID = revisionID
+        self.isReady = isReady
+        self.blockingReason = blockingReason
+    }
+}
+
+/// Readiness of the exact hand-picked set, independent from unselected matter
+/// documents. Every selected ID must still resolve to a current ready passage.
+public struct GuidedDocumentSelectionReadiness: Sendable, Equatable {
+    public let selectedCount: Int
+    public let readyCount: Int
+    public let blockingReasons: [String]
+
+    public var canGenerate: Bool {
+        selectedCount > 0 && readyCount == selectedCount && blockingReasons.isEmpty
+    }
+}
+
+/// A persisted source rendered beneath a Q&A result. It is loaded from the saved
+/// version, not reconstructed from the current chooser state.
+public struct DocumentQASourceReference: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let chunkID: String
+    public let documentName: String
+    public let citationLabel: String
+    public let locatorDisplay: String
+    public let excerpt: String
+}
+
 /// Generates source-grounded Q&A answers over a matter's documents (plan §8):
 /// auto-source or guided retrieval, short or memo answer modes, citation checks,
 /// a source appendix, saved as a structured output with a version-scoped source
@@ -37,8 +95,11 @@ public final class DocumentQAController: ObservableObject {
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
     private let retrieval: DocumentRetrievalService
+    private let previewLoader: DocumentPreviewLoader
+    private let requiresSemanticIndex: Bool
     private let defaultSystemPrompt: String?
     private let lowConfidenceThreshold = OCRPolicy.lowConfidenceThreshold
+    private var activeGenerationID: GenerationID?
 
     public init(
         matterID: String,
@@ -51,11 +112,164 @@ public final class DocumentQAController: ObservableObject {
         self.store = store
         self.runtimeClient = runtimeClient
         self.retrieval = DocumentRetrievalService(store: store, embedder: embedder)
+        self.previewLoader = DocumentPreviewLoader(store: store)
+        self.requiresSemanticIndex = embedder != nil
         self.defaultSystemPrompt = defaultSystemPrompt
     }
 
     public func scopeReadiness(scope: RetrievalScope) -> ScopeReadiness? {
         try? retrieval.scopeReadiness(matterID: matterID, scope: scope)
+    }
+
+    /// Builds the chooser catalog from the current matter scope. A document with
+    /// stale/failed/review-required state remains visible but disabled; a ready
+    /// chunk is selectable only when it binds the part's current immutable
+    /// revision. Documents without a current chunk get one named disabled row so
+    /// an omitted source never disappears silently from readiness UI.
+    public func guidedSources(scope: RetrievalScope = .wholeMatter) -> [GuidedDocumentSource] {
+        guard let scopedIDs = try? store.documentLibrary.resolveScopeDocumentIDs(
+            matterID: matterID,
+            folderIDs: scope.folderIDs,
+            documentIDs: scope.documentIDs,
+            tagIDs: scope.tagIDs,
+            dateStart: scope.dateStart,
+            dateEnd: scope.dateEnd
+        ) else { return [] }
+        let allowed = Set(scopedIDs)
+        let documents = ((try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? [])
+            .filter { allowed.contains($0.id) }
+            .sorted {
+                let order = $0.displayName.localizedCaseInsensitiveCompare($1.displayName)
+                return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+            }
+
+        return documents.flatMap { document -> [GuidedDocumentSource] in
+            let documentBlocker = guidedDocumentBlocker(document)
+            let parts = (try? store.documentIndex.fetchParts(documentID: document.id)) ?? []
+            let currentRevisionByPartID = Dictionary(
+                uniqueKeysWithValues: parts.compactMap { part in
+                    part.currentRevisionID.map { (part.id, $0) }
+                }
+            )
+            let chunks = (try? store.documentIndex.fetchChunks(documentID: document.id)) ?? []
+            guard !chunks.isEmpty else {
+                return [GuidedDocumentSource(
+                    chunkID: "unavailable-document:\(document.id)",
+                    documentID: document.id,
+                    documentName: document.displayName,
+                    locatorDisplay: "No indexed passages",
+                    excerpt: "Reprocess this document before selecting it.",
+                    revisionID: nil,
+                    isReady: false,
+                    blockingReason: documentBlocker ?? "\(document.displayName): no indexed passages are available"
+                )]
+            }
+            return chunks.map { chunk in
+                let locator = Self.locator(for: chunk)
+                let revisionBlocker: String? = if chunk.revisionID == nil {
+                    "\(document.displayName): passage has no current revision binding"
+                } else if let partID = chunk.pagePartID,
+                          currentRevisionByPartID[partID] != chunk.revisionID {
+                    "\(document.displayName): passage belongs to an older revision"
+                } else {
+                    nil
+                }
+                let blocker = documentBlocker ?? revisionBlocker
+                return GuidedDocumentSource(
+                    chunkID: chunk.id,
+                    documentID: document.id,
+                    documentName: document.displayName,
+                    locatorDisplay: locator.displayString,
+                    excerpt: chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText),
+                    revisionID: chunk.revisionID,
+                    isReady: blocker == nil,
+                    blockingReason: blocker
+                )
+            }
+        }
+    }
+
+    /// Re-resolves each selected ID so deletion, reprocessing, or review state
+    /// changes between opening the sheet and pressing Generate fail closed.
+    public func guidedSelectionReadiness(
+        chunkIDs: [String],
+        scope: RetrievalScope = .wholeMatter
+    ) -> GuidedDocumentSelectionReadiness {
+        let uniqueIDs = chunkIDs.reduce(into: [String]()) { result, id in
+            if !result.contains(id) { result.append(id) }
+        }
+        guard !uniqueIDs.isEmpty else {
+            return GuidedDocumentSelectionReadiness(
+                selectedCount: 0,
+                readyCount: 0,
+                blockingReasons: ["Choose at least one ready source."]
+            )
+        }
+        let byID = Dictionary(
+            guidedSources(scope: scope).map { ($0.chunkID, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var readyCount = 0
+        var blockers: [String] = []
+        for id in uniqueIDs {
+            guard let source = byID[id] else {
+                blockers.append("A selected source is no longer available. Refresh the source list and choose again.")
+                continue
+            }
+            if source.isReady {
+                readyCount += 1
+            } else {
+                blockers.append(source.blockingReason ?? "\(source.documentName): source is unavailable")
+            }
+        }
+        return GuidedDocumentSelectionReadiness(
+            selectedCount: uniqueIDs.count,
+            readyCount: readyCount,
+            blockingReasons: Array(NSOrderedSet(array: blockers)) as? [String] ?? blockers
+        )
+    }
+
+    /// Loads the immutable source rows attached to one saved answer version.
+    public func sourceReferences(versionID: String) -> [DocumentQASourceReference] {
+        let names = Dictionary(
+            ((try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []).map {
+                ($0.id, $0.displayName)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return ((try? store.documentSources.fetchSources(structuredOutputVersionID: versionID)) ?? [])
+            .compactMap { row in
+                guard let chunkID = row.chunkID else { return nil }
+                let locator = (try? JSONDecoder().decode(
+                    DocumentSourceLocator.self,
+                    from: Data(row.locatorJSON.utf8)
+                )) ?? DocumentSourceLocator(sourceKind: .text)
+                return DocumentQASourceReference(
+                    id: row.id,
+                    chunkID: chunkID,
+                    documentName: row.documentID.flatMap { names[$0] } ?? "Document",
+                    citationLabel: row.citationLabel,
+                    locatorDisplay: locator.displayString,
+                    excerpt: row.excerpt
+                )
+            }
+    }
+
+    public func preview(chunkID: String) -> DocumentPreviewModel? {
+        guard let chunk = try? store.documentIndex.fetchChunk(id: chunkID) else { return nil }
+        return previewLoader.load(
+            documentID: chunk.documentID,
+            locator: Self.locator(for: chunk),
+            matchText: chunk.normalizedText
+        )
+    }
+
+    /// Stops the active runtime request. The sheet also cancels its awaiting Task,
+    /// and the generation path checks cancellation before any persistence boundary.
+    public func cancel() {
+        guard let activeGenerationID else { return }
+        let runtimeClient = runtimeClient
+        Task { _ = try? await runtimeClient.cancelGeneration(activeGenerationID) }
     }
 
     /// Runs a Q&A: retrieves sources (auto or guided), generates a cited answer,
@@ -94,8 +308,28 @@ public final class DocumentQAController: ObservableObject {
             return nil
         }
 
-        // Block until the selected scope is fully indexed (plan §8.1).
-        let readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope)) ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
+        let isGuided = guidedChunkIDs != nil
+        // Auto preserves its historical whole-scope readiness contract. Guided
+        // mode validates the exact selected passages, so an unrelated unselected
+        // document cannot expand or block the user's explicit source set.
+        let readiness: ScopeReadiness
+        if let guidedChunkIDs {
+            let selected = guidedSelectionReadiness(chunkIDs: guidedChunkIDs, scope: scope)
+            guard selected.canGenerate else {
+                message = selected.blockingReasons.first ?? "Choose at least one ready source."
+                return nil
+            }
+            readiness = ScopeReadiness(
+                totalDocuments: selected.selectedCount,
+                readyDocuments: selected.readyCount,
+                pendingDocuments: 0,
+                requiresSemanticIndex: requiresSemanticIndex,
+                isFullyReady: true
+            )
+        } else {
+            readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope))
+                ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
+        }
         guard readiness.isFullyReady else {
             message = "The selected documents are still indexing (\(readiness.readyDocuments)/\(readiness.totalDocuments) ready). Try again once indexing finishes."
             return nil
@@ -111,8 +345,8 @@ public final class DocumentQAController: ObservableObject {
         sourceSetPackingReport = nil
         defer { isGenerating = false }
 
-        let isGuided = (guidedChunkIDs?.isEmpty == false)
         do {
+            try Task.checkCancellation()
             var effectiveDepth = depth
             var prepared = try await prepareSources(question: trimmed, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute, depth: effectiveDepth)
             // Empty fast packet → run the deep pass once, silently (§8.2). Never
@@ -125,15 +359,23 @@ public final class DocumentQAController: ObservableObject {
                 message = "No matching sources were found in the selected scope."
                 return nil
             }
+            if let guidedChunkIDs,
+               Set(prepared.map(\.chunkID)) != Set(guidedChunkIDs) {
+                message = "A selected source is no longer available. Refresh the source list and choose again."
+                return nil
+            }
+            try Task.checkCancellation()
             let budgeted = try await collectBudgetedAnswer(
                 question: trimmed,
                 mode: mode,
                 prepared: prepared,
                 modelID: modelID,
-                route: effectiveRoute
+                route: effectiveRoute,
+                requiresExactSourceSet: isGuided
             )
             prepared = budgeted.prepared
             let answer = budgeted.answer
+            try Task.checkCancellation()
 
             let verification = try verify(
                 answer: answer,
@@ -155,8 +397,16 @@ public final class DocumentQAController: ObservableObject {
             )
             lastResult = result
             return result
+        } catch is CancellationError {
+            message = "Generation cancelled."
+            return nil
+        } catch let error as GenerationStreamError where error == .cancelled {
+            message = "Generation cancelled."
+            return nil
         } catch {
-            message = "Q&A generation failed: \(error.localizedDescription)"
+            message = Task.isCancelled
+                ? "Generation cancelled."
+                : "Q&A generation failed: \(error.localizedDescription)"
             return nil
         }
     }
@@ -191,7 +441,9 @@ public final class DocumentQAController: ObservableObject {
             let priorChunkIDs = ((try? store.documentSources.fetchSources(structuredOutputVersionID: activeVersionID)) ?? [])
                 .sorted { $0.rank < $1.rank }
                 .compactMap(\.chunkID)
-            guidedChunkIDs = priorChunkIDs.isEmpty ? nil : priorChunkIDs
+            // Keep the guided mode even if its persisted rows were removed. An
+            // empty guided set must fail closed, never widen into auto-retrieval.
+            guidedChunkIDs = priorChunkIDs
         }
         return await regenerateExisting(
             outputID: outputID,
@@ -227,7 +479,7 @@ public final class DocumentQAController: ObservableObject {
     static let fastPackedSourceLimit = 8
 
     private func prepareSources(question: String, scope: RetrievalScope, guidedChunkIDs: [String]?, modelID: ModelID?, route: ModelRoute?, depth: RetrievalDepth) async throws -> [PreparedSource] {
-        if let guidedChunkIDs, !guidedChunkIDs.isEmpty {
+        if let guidedChunkIDs {
             return prepareGuided(chunkIDs: guidedChunkIDs)
         }
         let pool = depth == .fast ? Self.fastCandidatePoolSize : Self.candidatePoolSize
@@ -337,6 +589,42 @@ public final class DocumentQAController: ObservableObject {
             }
     }
 
+    private func guidedDocumentBlocker(_ document: MatterDocumentRecord) -> String? {
+        if document.extractionStatus == DocumentExtractionStatus.failed.rawValue
+            || document.status == MatterDocumentStatus.failed.rawValue {
+            return "\(document.displayName): failed processing"
+        }
+        if document.status == MatterDocumentStatus.needsReview.rawValue {
+            return "\(document.displayName): needs review"
+        }
+        if document.indexStatus == DocumentIndexStatus.stale.rawValue {
+            return "\(document.displayName): index is stale"
+        }
+        let textReady = document.indexStatus == DocumentIndexStatus.ready.rawValue
+            || (!requiresSemanticIndex && document.indexStatus == DocumentIndexStatus.textIndexed.rawValue)
+        if !textReady || document.status != MatterDocumentStatus.ready.rawValue {
+            return "\(document.displayName): indexing is incomplete"
+        }
+        if document.extractionMethod?.hasPrefix("converted_lossy@toolchain:") == true {
+            return "\(document.displayName): converted text requires review"
+        }
+        return nil
+    }
+
+    private static func locator(for chunk: DocumentChunkRecord) -> DocumentSourceLocator {
+        DocumentSourceLocator(
+            sourceKind: DocumentSourceKind(rawValue: chunk.sourceKind) ?? .text,
+            pageIndex: chunk.pageIndex,
+            pageLabel: chunk.pageLabel,
+            sheetName: chunk.sheetName,
+            cellRange: chunk.cellRange,
+            emailPartPath: chunk.emailPartPath,
+            charStart: chunk.charStart,
+            charEnd: chunk.charEnd,
+            boundingBoxesJSON: chunk.boundingBoxesJSON
+        )
+    }
+
     private func makeAppendix(_ prepared: [PreparedSource]) -> SourceAppendix {
         SourceAppendix(entries: prepared.map { source in
             SourceAppendix.Entry(
@@ -437,20 +725,45 @@ public final class DocumentQAController: ObservableObject {
         lastPackingReport = nil
         sourceSetPackingReport = nil
         defer { isGenerating = false }
-        let isGuided = (guidedChunkIDs?.isEmpty == false)
+        let isGuided = guidedChunkIDs != nil
         do {
-            let readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope)) ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
+            let readiness: ScopeReadiness
+            if let guidedChunkIDs {
+                let selected = guidedSelectionReadiness(chunkIDs: guidedChunkIDs, scope: scope)
+                guard selected.canGenerate else {
+                    message = selected.blockingReasons.first ?? "Choose at least one ready source."
+                    return nil
+                }
+                readiness = ScopeReadiness(
+                    totalDocuments: selected.selectedCount,
+                    readyDocuments: selected.readyCount,
+                    pendingDocuments: 0,
+                    requiresSemanticIndex: requiresSemanticIndex,
+                    isFullyReady: true
+                )
+            } else {
+                readiness = (try? retrieval.scopeReadiness(matterID: matterID, scope: scope))
+                    ?? ScopeReadiness(totalDocuments: 0, readyDocuments: 0, pendingDocuments: 0, requiresSemanticIndex: false, isFullyReady: false)
+            }
+            try Task.checkCancellation()
             var prepared = try await prepareSources(question: question, scope: scope, guidedChunkIDs: guidedChunkIDs, modelID: modelID, route: effectiveRoute, depth: depth)
             guard !prepared.isEmpty else { message = "No matching sources were found."; return nil }
+            if let guidedChunkIDs,
+               Set(prepared.map(\.chunkID)) != Set(guidedChunkIDs) {
+                message = "A selected source is no longer available. Refresh the source list and choose again."
+                return nil
+            }
             let budgeted = try await collectBudgetedAnswer(
                 question: question,
                 mode: mode,
                 prepared: prepared,
                 modelID: modelID,
-                route: effectiveRoute
+                route: effectiveRoute,
+                requiresExactSourceSet: isGuided
             )
             prepared = budgeted.prepared
             let answer = budgeted.answer
+            try Task.checkCancellation()
             let verification = try verify(
                 answer: answer,
                 prepared: prepared,
@@ -507,8 +820,16 @@ public final class DocumentQAController: ObservableObject {
             )
             lastResult = result
             return result
+        } catch is CancellationError {
+            message = "Generation cancelled."
+            return nil
+        } catch let error as GenerationStreamError where error == .cancelled {
+            message = "Generation cancelled."
+            return nil
         } catch {
-            message = "Regeneration failed: \(error.localizedDescription)"
+            message = Task.isCancelled
+                ? "Generation cancelled."
+                : "Regeneration failed: \(error.localizedDescription)"
             return nil
         }
     }
@@ -601,7 +922,10 @@ public final class DocumentQAController: ObservableObject {
             systemPrompt: routedSystemPrompt(route),
             options: route?.options ?? GenerationOptions()
         )
+        activeGenerationID = request.generationID
+        defer { activeGenerationID = nil }
         let output = try await runtimeClient.collectGeneratedText(request)
+        try Task.checkCancellation()
         return ReasoningContent.answer(from: output)
     }
 
@@ -613,9 +937,15 @@ public final class DocumentQAController: ObservableObject {
 
     private enum QABudgetError: LocalizedError {
         case requiredPacketTooLarge
+        case explicitSourcesTooLarge
 
         var errorDescription: String? {
-            "The grounded question and its first source cannot fit the selected model's context window."
+            switch self {
+            case .requiredPacketTooLarge:
+                "The grounded question and its first source cannot fit the selected model's context window."
+            case .explicitSourcesTooLarge:
+                "The selected sources do not all fit the assigned model's context window. Choose fewer sources or assign a model with a larger context window."
+            }
         }
     }
 
@@ -627,7 +957,8 @@ public final class DocumentQAController: ObservableObject {
         mode: DocumentAnswerMode,
         prepared: [PreparedSource],
         modelID: ModelID,
-        route: ModelRoute?
+        route: ModelRoute?,
+        requiresExactSourceSet: Bool = false
     ) async throws -> BudgetedAnswer {
         let systemPrompt = routedSystemPrompt(route)
         let packetPrompts = prepared.indices.map { upperBound in
@@ -646,7 +977,14 @@ public final class DocumentQAController: ObservableObject {
             runtimeClient: runtimeClient
         )
         lastPackingReport = report
-        guard report.canPack else { throw QABudgetError.requiredPacketTooLarge }
+        guard report.canPack else {
+            throw requiresExactSourceSet
+                ? QABudgetError.explicitSourcesTooLarge
+                : QABudgetError.requiredPacketTooLarge
+        }
+        if requiresExactSourceSet, report.packedItemCount != prepared.count {
+            throw QABudgetError.explicitSourcesTooLarge
+        }
 
         var selected = Array(prepared.prefix(report.packedItemCount))
         var prompt = DocumentQAPromptBuilder.buildQAPrompt(
@@ -673,6 +1011,7 @@ public final class DocumentQAController: ObservableObject {
                 prompt: prompt
             )
         } catch let error as GenerationStreamError where error == .contextOverflowed {
+            if requiresExactSourceSet { throw QABudgetError.explicitSourcesTooLarge }
             guard selected.count > 1 else { throw error }
         }
 

@@ -45,6 +45,7 @@ extension View {
 struct SupraSheetScaffold<Content: View, Footer: View>: View {
     private let title: String
     private let doneLabel: String
+    private let titleAccessibilityIdentifier: String?
     private let onClose: () -> Void
     private let content: Content
     private let footer: Footer
@@ -53,12 +54,14 @@ struct SupraSheetScaffold<Content: View, Footer: View>: View {
     init(
         _ title: String,
         doneLabel: String = "Done",
+        titleAccessibilityIdentifier: String? = nil,
         onClose: @escaping () -> Void,
         @ViewBuilder content: () -> Content,
         @ViewBuilder footer: () -> Footer
     ) {
         self.title = title
         self.doneLabel = doneLabel
+        self.titleAccessibilityIdentifier = titleAccessibilityIdentifier
         self.onClose = onClose
         self.content = content()
         self.footer = footer()
@@ -68,11 +71,13 @@ struct SupraSheetScaffold<Content: View, Footer: View>: View {
     init(
         _ title: String,
         doneLabel: String = "Done",
+        titleAccessibilityIdentifier: String? = nil,
         onClose: @escaping () -> Void,
         @ViewBuilder content: () -> Content
     ) where Footer == EmptyView {
         self.title = title
         self.doneLabel = doneLabel
+        self.titleAccessibilityIdentifier = titleAccessibilityIdentifier
         self.onClose = onClose
         self.content = content()
         self.footer = EmptyView()
@@ -82,7 +87,14 @@ struct SupraSheetScaffold<Content: View, Footer: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
-                Text(title).font(.supraTitle).lineLimit(1)
+                if let titleAccessibilityIdentifier {
+                    Text(title)
+                        .font(.supraTitle)
+                        .lineLimit(1)
+                        .accessibilityIdentifier(titleAccessibilityIdentifier)
+                } else {
+                    Text(title).font(.supraTitle).lineLimit(1)
+                }
                 Spacer()
                 Button(doneLabel, action: onClose)
                     .buttonStyle(.ghost)

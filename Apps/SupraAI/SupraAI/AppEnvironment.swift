@@ -832,6 +832,113 @@ final class AppEnvironment: ObservableObject {
         seedUITestInterruptedImportIfNeeded()
         seedUITestDocumentCorrectionIfNeeded()
         seedUITestDocumentRelationsIfNeeded()
+        seedUITestGuidedQAIfNeeded()
+    }
+
+    /// Seeds one ready and one review-required revision-bound passage for the
+    /// guided Q&A chooser accessibility test. No model is needed: the hosted test
+    /// proves entry, selection/readiness, and fail-closed UI state while package
+    /// tests drive generation and persistence with the synthetic runtime.
+    private func seedUITestGuidedQAIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA"),
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            guard !(try store.documentLibrary.fetchDocuments(matterID: matterID)).contains(where: {
+                $0.id == "ready-guided-document"
+            }) else { return }
+
+            func insertFixture(
+                documentID: String,
+                chunkID: String,
+                name: String,
+                text: String,
+                status: MatterDocumentStatus
+            ) throws {
+                let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                    id: "\(documentID)-blob",
+                    sha256: "\(documentID)-synthetic-sha",
+                    byteSize: text.utf8.count,
+                    originalExtension: "txt",
+                    managedRelativePath: "uitest/\(name)"
+                )).blob
+                let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+                    id: documentID,
+                    matterID: matterID,
+                    blobID: blob.id,
+                    displayName: name,
+                    status: status.rawValue,
+                    extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                    indexStatus: DocumentIndexStatus.textIndexed.rawValue,
+                    extractionMethod: "synthetic@toolchain:guided-qa-uitest"
+                ))
+                let part = DocumentPagePartRecord(
+                    id: "\(documentID)-part",
+                    documentID: document.id,
+                    partIndex: 0,
+                    sourceKind: DocumentSourceKind.text.rawValue,
+                    normalizedText: text,
+                    charCount: text.count
+                )
+                let revision = DocumentPartRevisionRecord(
+                    id: "\(documentID)-revision",
+                    documentID: document.id,
+                    partIndex: 0,
+                    derivationKey: "guided-qa-uitest:\(documentID)",
+                    origin: "parser",
+                    method: "synthetic",
+                    text: text,
+                    charCount: text.count
+                )
+                let selection = DocumentPartSelectionRecord(
+                    id: "\(documentID)-selection",
+                    documentID: document.id,
+                    partIndex: 0,
+                    selectedRevisionID: revision.id,
+                    selectionKey: "guided-qa-uitest:\(documentID)",
+                    selectedBy: "policy",
+                    policyVersion: 1,
+                    decisionJSON: #"{"rule":"synthetic_guided_qa_ui_fixture"}"#
+                )
+                _ = try store.documentRevisions.replacePartsAndPersistLineage(
+                    documentID: document.id,
+                    parts: [part],
+                    revisions: [revision],
+                    selections: [selection]
+                )
+                try store.documentIndex.replaceChunks(documentID: document.id, chunks: [
+                    DocumentChunkRecord(
+                        id: chunkID,
+                        documentID: document.id,
+                        pagePartID: part.id,
+                        revisionID: revision.id,
+                        chunkerVersion: 2,
+                        chunkIndex: 0,
+                        sourceKind: DocumentSourceKind.text.rawValue,
+                        charStart: 0,
+                        charEnd: text.count,
+                        normalizedText: text,
+                        displayExcerpt: text
+                    ),
+                ])
+            }
+
+            try insertFixture(
+                documentID: "ready-guided-document",
+                chunkID: "ready-guided-chunk",
+                name: "Atlas Ready Agreement.txt",
+                text: "ATLAS_READY_UI_CANARY. Rent is due on the first business day.",
+                status: .ready
+            )
+            try insertFixture(
+                documentID: "review-guided-document",
+                chunkID: "review-guided-chunk",
+                name: "Beacon Review Draft.txt",
+                text: "BEACON_REVIEW_UI_CANARY. This draft needs attorney review.",
+                status: .needsReview
+            )
+        } catch {
+            assertionFailure("Could not seed guided Q&A accessibility fixture: \(error)")
+        }
     }
 
     /// Seeds one completed encrypted-source rejection for the T-OPS-07 warning
