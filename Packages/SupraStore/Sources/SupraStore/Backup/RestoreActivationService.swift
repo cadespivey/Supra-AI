@@ -172,7 +172,7 @@ public enum RestoreActivationService {
             return .recoveryRequired(
                 activation: .safetyStateInvalid,
                 rollback: .safetyStateInvalid,
-                safetyDatabaseURL: context.safetyDatabaseURL
+                safetyDatabaseURL: nil
             )
         }
 
