@@ -60,6 +60,7 @@ public struct RestoreStagingResult: Equatable, Sendable {
 public enum RestoreStageError: Error, Equatable, LocalizedError {
     case restoreAlreadyPending
     case sourceSnapshotUnavailable
+    case sourceSnapshotChanged
     case sourceSnapshotIncompatible(RestoreIncompatibility)
     case liveDatabaseMissing
     case liveStateIncompatible(RestoreIncompatibility)
@@ -73,6 +74,8 @@ public enum RestoreStageError: Error, Equatable, LocalizedError {
             return "A restore is already staged and waiting for restart."
         case .sourceSnapshotUnavailable:
             return "The selected backup snapshot is no longer available."
+        case .sourceSnapshotChanged:
+            return "The selected backup snapshot changed after it was inspected. Select it again before restoring."
         case let .sourceSnapshotIncompatible(reason):
             return reason.errorDescription
         case .liveDatabaseMissing:
@@ -201,6 +204,12 @@ public enum RestoreService {
         let selectedDatabaseSHA256 = try refreshed.databaseSHA256.unwrap(
             or: RestoreStageError.sourceSnapshotUnavailable
         )
+        guard refreshed.manifest == candidate.manifest,
+              refreshed.databaseSHA256 == candidate.databaseSHA256,
+              refreshed.referencedBlobs == candidate.referencedBlobs
+        else {
+            throw RestoreStageError.sourceSnapshotChanged
+        }
 
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(
@@ -294,7 +303,13 @@ public enum RestoreService {
         ), safetyValidation == liveValidation else {
             throw RestoreStageError.copiedSafetyStateMismatch
         }
+        try synchronizeDirectoryTree(
+            at: safetyTemporary,
+            fileManager: fileManager,
+            operations: operations
+        )
         try operations.moveItem(from: safetyTemporary, to: safetyFinal)
+        try operations.synchronizeItem(at: operationDirectory)
 
         let selectedDatabaseTemporary = selectedTemporary.appendingPathComponent(stagedDatabaseFileName)
         let selectedBlobsTemporary = selectedTemporary.appendingPathComponent("blobs", isDirectory: true)
@@ -321,6 +336,11 @@ public enum RestoreService {
         ), selectedValidation.blobs == refreshed.referencedBlobs else {
             throw RestoreStageError.copiedSelectedStateMismatch
         }
+        try synchronizeDirectoryTree(
+            at: selectedTemporary,
+            fileManager: fileManager,
+            operations: operations
+        )
         try operations.moveItem(from: selectedTemporary, to: selectedFinal)
         try operations.synchronizeItem(at: operationDirectory)
 
@@ -341,6 +361,8 @@ public enum RestoreService {
             selectedBlobCount: refreshed.referencedBlobs.count,
             safetyBlobCount: liveValidation.blobs.count
         )
+        try operations.synchronizeItem(at: operationsRoot)
+        try operations.synchronizeItem(at: liveLayout.stagingRootDirectory)
         try operations.writeIntentAtomically(RestoreIntent.encode(intent), to: pendingMarker)
         markerPublished = true
 
@@ -371,6 +393,43 @@ public enum RestoreService {
             try operations.copyItem(from: source, to: target)
             try operations.synchronizeItem(at: target)
         }
+    }
+
+    /// Synchronizes directory entries from the leaves to the root. Individual
+    /// database and blob bytes are synchronized as they are written; this pass
+    /// makes the completed tree durable before its final-directory rename.
+    private static func synchronizeDirectoryTree(
+        at root: URL,
+        fileManager: FileManager,
+        operations: any RestoreFileOperations
+    ) throws {
+        var enumerationError: Error?
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles],
+            errorHandler: { _, error in
+                enumerationError = error
+                return false
+            }
+        ) else {
+            throw CocoaError(.fileReadUnknown)
+        }
+
+        var directories: [URL] = []
+        while let item = enumerator.nextObject() as? URL {
+            if try item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true {
+                directories.append(item)
+            }
+        }
+        if let enumerationError { throw enumerationError }
+
+        for directory in directories.sorted(by: {
+            $0.pathComponents.count > $1.pathComponents.count
+        }) {
+            try operations.synchronizeItem(at: directory)
+        }
+        try operations.synchronizeItem(at: root)
     }
 
     private static func sameVolume(
