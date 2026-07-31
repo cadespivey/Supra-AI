@@ -11,6 +11,8 @@
 # intent: preflight must prune it and continue. Every state that could
 # represent a real publication — the tag present on origin, or a GitHub
 # release existing for the version — must stay exactly as fatal as today.
+# An ambiguous release lookup (authentication, transport, or API failure) is
+# not proof of absence and must fail closed without deleting the local tag.
 #
 # Expected RED reason: release-preflight.sh has no prune path, so the
 # local-only unpublished case exits 1 with "release tag already exists
@@ -146,7 +148,29 @@ else
   fail 'prune pass did not create its manifest'
 fi
 
-# --- Case 2 (standing guard): local tag + published release stays fatal ------
+# --- Case 2: ambiguous release lookup fails closed before pruning ------------
+# Expected RED reason: the current preflight treats every nonzero
+# `gh release view` result as "release absent", deletes the local tag, and
+# continues. The mock's non-not-found failure therefore destroys the sentinel
+# tag and reaches a passing preflight instead of returning this refusal.
+make_source_repo local-lookup-error
+git -C "$SOURCE_REPO" tag v9.4.7
+lookup_error_output="${temporary_dir}/local-lookup-error.log"
+lookup_error_status=0
+MOCK_RELEASE_LOOKUP_ERROR=1 preflight "$SOURCE_REPO" "$SOURCE_SHA" \
+  "${temporary_dir}/local-lookup-error.json" >"$lookup_error_output" 2>&1 \
+  || lookup_error_status=$?
+if [[ "$lookup_error_status" -ne 1 ]] \
+  || ! grep -Fq 'unable to confirm GitHub release state' "$lookup_error_output"; then
+  fail 'ambiguous GitHub release lookup did not fail closed before pruning'
+  sed 's/^/  | /' "$lookup_error_output" >&2
+else
+  printf '%s\n' 'PASS: ambiguous GitHub release lookup fails closed'
+fi
+git -C "$SOURCE_REPO" show-ref --verify --quiet refs/tags/v9.4.7 \
+  || fail 'ambiguous release lookup pruned the local tag'
+
+# --- Case 3 (standing guard): local tag + published release stays fatal ------
 # The prune must never fire when a GitHub release exists for the version even
 # though the tag is absent from origin — that state is a real publication.
 make_source_repo local-published
@@ -165,7 +189,7 @@ fi
 git -C "$SOURCE_REPO" show-ref --verify --quiet refs/tags/v9.4.7 \
   || fail 'fatal published-release case pruned the local tag anyway'
 
-# --- Case 3 (standing guard): local tag also on origin stays fatal -----------
+# --- Case 4 (standing guard): local tag also on origin stays fatal -----------
 make_source_repo local-and-origin
 git -C "$SOURCE_REPO" tag v9.4.7
 git -C "$SOURCE_REPO" push --quiet origin v9.4.7
@@ -183,7 +207,7 @@ fi
 git -C "$SOURCE_REPO" show-ref --verify --quiet refs/tags/v9.4.7 \
   || fail 'fatal on-origin case pruned the local tag anyway'
 
-# --- Case 4 (standing guard): origin-only tag stays fatal --------------------
+# --- Case 5 (standing guard): origin-only tag stays fatal --------------------
 make_source_repo origin-only
 git -C "$ORIGIN_REPO" update-ref refs/tags/v9.4.7 "$SOURCE_SHA"
 origin_only_output="${temporary_dir}/origin-only.log"

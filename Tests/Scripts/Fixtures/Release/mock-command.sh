@@ -67,6 +67,10 @@ case "$name" in
         [[ "${MOCK_DEPLOY_FAIL:-0}" != "1" ]]
         ;;
       "release view")
+        if [[ "${MOCK_RELEASE_LOOKUP_ERROR:-0}" == "1" ]]; then
+          printf '%s\n' 'synthetic release lookup transport failure' >&2
+          exit 2
+        fi
         if [[ " $* " == *" --json "* ]]; then
           jq -n \
             --arg tagName "${MOCK_RELEASE_TAG:-v2.3.0}" \
@@ -75,6 +79,17 @@ case "$name" in
             '{tagName: $tagName, targetCommitish: $targetCommitish, url: $url, isDraft: false}'
         else
           [[ "${MOCK_RELEASE_EXISTS:-0}" == "1" ]]
+        fi
+        ;;
+      "api --include")
+        if [[ "${MOCK_RELEASE_LOOKUP_ERROR:-0}" == "1" ]]; then
+          printf '%s\n' 'synthetic release lookup transport failure' >&2
+          exit 2
+        elif [[ "${MOCK_RELEASE_EXISTS:-0}" == "1" ]]; then
+          printf 'HTTP/2.0 200 OK\r\n\r\n{}\n'
+        else
+          printf 'HTTP/2.0 404 Not Found\r\n\r\n{"message":"Not Found"}\n'
+          exit 1
         fi
         ;;
       "release create")
