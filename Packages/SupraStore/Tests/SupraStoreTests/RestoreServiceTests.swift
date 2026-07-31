@@ -176,6 +176,32 @@ final class RestoreServiceTests: XCTestCase {
         try assertInjectedFailure(.markerWrite)
     }
 
+    // T-RST-18: a marker writer may make the atomic rename visible and then
+    // report a durability failure. Cleanup must synchronize both directory
+    // mutations so a crash cannot resurrect either the pending marker or the
+    // failed operation tree after the caller was told staging failed.
+    func testMarkerWriteFailureDurablyPublishesCleanup() throws {
+        let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
+        try fixture.writeLiveState(blobs: [currentBlob], sentinel: "current row")
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        _ = try fixture.writeCompleteSnapshot(blobs: [selectedBlob], sentinel: "selected row")
+        let candidate = try compatibleCandidate()
+        let operations = RecordingRestoreFileOperations(failurePoint: .markerWrite)
+
+        XCTAssertThrowsError(try RestoreService.stageRestore(
+            candidate: candidate,
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: operations
+        ))
+
+        let markerFailure = try XCTUnwrap(operations.events.lastIndex(of: .writeMarker))
+        XCTAssertEqual(
+            Array(operations.events.suffix(from: operations.events.index(after: markerFailure))),
+            [.synchronizeStagingRoot, .synchronizeOperationsRoot]
+        )
+    }
+
     private func assertInjectedFailure(_ point: RecordingRestoreFileOperations.FailurePoint) throws {
         let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
         try fixture.writeLiveState(blobs: [currentBlob], sentinel: "current row")
