@@ -321,12 +321,29 @@ run_case \
     SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$missing_hook" \
     bash "${scripts}/run-app-smoke-tests.sh" --check
 
-accessibility_hook="${temporary_dir}/ResearchAuthoritiesUITests.swift"
+guided_class_only_hook="${temporary_dir}/GuidedClassOnlyUITests.swift"
 printf '%s\n' \
   'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
   'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
   'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
   'final class GuidedDocumentQAUITests: XCTestCase {}' \
+  >"$guided_class_only_hook"
+run_case \
+  "a guided Q&A class without the shipping method fails closed" \
+  1 \
+  "remediation accessibility smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$guided_class_only_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+accessibility_hook="${temporary_dir}/ResearchAuthoritiesUITests.swift"
+printf '%s\n' \
+  'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
+  'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
+  'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class GuidedDocumentQAUITests: XCTestCase {' \
+  '  func testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult() {}' \
+  '}' \
   >"$accessibility_hook"
 run_case \
   "the exact hosted XPC and accessibility selectors satisfy the hook" \
@@ -367,7 +384,7 @@ fi
 
 # Guided document Q&A is a production hosted-runtime workflow, so the protected
 # smoke selector must execute its deterministic generate/preview/cancel contract.
-if grep -Fq -- '-only-testing:SupraAIUITests/GuidedDocumentQAUITests' "$app_smoke_script"; then
+if grep -Fq -- '-only-testing:SupraAIUITests/GuidedDocumentQAUITests/testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult' "$app_smoke_script"; then
   printf '%s\n' 'PASS: app smoke executes the guided document Q&A hosted guard'
 else
   record_failure 'app smoke does not execute the guided document Q&A hosted guard'
