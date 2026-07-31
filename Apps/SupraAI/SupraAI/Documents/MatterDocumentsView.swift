@@ -928,6 +928,9 @@ struct DocumentQASheet: View {
         guard scopeThisFolder, let scopeFolderID else { return .wholeMatter }
         return RetrievalScope(folderIDs: [scopeFolderID])
     }
+    private var autoReadiness: ScopeReadiness? {
+        qa.scopeReadiness(scope: scope)
+    }
     private var orderedSelectedChunkIDs: [String] {
         availableSources.filter { selectedChunkIDs.contains($0.chunkID) }.map(\.chunkID)
     }
@@ -962,7 +965,9 @@ struct DocumentQASheet: View {
         !isWorking
             && routeModel != nil
             && !questionIsEmpty
-            && (sourceMode == .auto || selectionReadiness.canGenerate)
+            && (sourceMode == .auto
+                ? autoReadiness?.isFullyReady == true
+                : selectionReadiness.canGenerate)
     }
 
     var body: some View {
@@ -974,7 +979,11 @@ struct DocumentQASheet: View {
             qaContent
         } footer: {
             if let result = qa.lastResult {
-                Button(result.depth == .fast ? "Search All Documents" : "Regenerate") {
+                Button(
+                    result.sourceMode == .guided
+                        ? "Regenerate Selected Sources"
+                        : (result.depth == .fast ? "Search All Documents" : "Regenerate")
+                ) {
                     startRegenerate(outputID: result.outputID)
                 }
                 .buttonStyle(.ghost)
@@ -1016,6 +1025,10 @@ struct DocumentQASheet: View {
         .onChange(of: sourceMode) { _, newMode in
             if newMode == .choose { reloadSources() }
         }
+        .onDisappear {
+            if isWorking { cancelGeneration() }
+        }
+        .interactiveDismissDisabled(isWorking)
         .sheet(item: $sourcePreview) { item in
             DocumentPreviewView(model: item.model) { sourcePreview = nil }
                 .frame(minWidth: 720, minHeight: 600)
@@ -1084,7 +1097,7 @@ struct DocumentQASheet: View {
     @ViewBuilder
     private var readinessSummary: some View {
         if sourceMode == .auto {
-            if let readiness = qa.scopeReadiness(scope: scope) {
+            if let readiness = autoReadiness {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(readiness.summaryText)
                     ForEach(readiness.blockingReasons, id: \.self) { reason in
@@ -1096,6 +1109,12 @@ struct DocumentQASheet: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("documentQA.readiness")
                 .accessibilityValue(readiness.isFullyReady ? "Ready" : "Blocked")
+            } else {
+                Text("Document readiness is unavailable. Close this sheet and try again.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("documentQA.readiness")
+                    .accessibilityValue("Blocked")
             }
         } else {
             let readiness = selectionReadiness
@@ -1209,7 +1228,9 @@ struct DocumentQASheet: View {
                 }
                 if result.depth == .fast {
                     Label(
-                        "Preliminary — searched the most relevant passages. Search All Documents runs the full pass.",
+                        result.sourceMode == .guided
+                            ? "Preliminary — answered from your selected passages. Regenerate Selected Sources runs a full pass over that saved selection."
+                            : "Preliminary — searched the most relevant passages. Search All Documents runs the full pass.",
                         systemImage: "hare"
                     )
                     .font(.supraCaption)
@@ -1241,12 +1262,17 @@ struct DocumentQASheet: View {
                             }
                             Spacer()
                             Button("Preview") {
-                                if let model = qa.preview(chunkID: source.chunkID) {
+                                if let model = qa.preview(sourceID: source.id) {
                                     sourcePreview = PreviewItem(model: model)
                                 }
                             }
                             .buttonStyle(.ghost)
-                            .accessibilityIdentifier("documentQA.resultPreview.\(source.chunkID)")
+                            .disabled(!source.canPreview)
+                            .help(source.canPreview ? "Preview saved source" : "Saved source preview is unavailable")
+                            .accessibilityLabel(
+                                "Preview \(source.citationLabel), \(source.documentName), \(source.locatorDisplay)"
+                            )
+                            .accessibilityIdentifier("documentQA.resultPreview.\(source.id)")
                         }
                     }
                 }
@@ -1276,6 +1302,14 @@ struct DocumentQASheet: View {
     private var generateAccessibilityHint: String {
         if routeModel == nil { return "Assign the routed model in Models first" }
         if questionIsEmpty { return "Enter a question first" }
+        if sourceMode == .auto {
+            guard let readiness = autoReadiness else {
+                return "Document readiness is unavailable"
+            }
+            if !readiness.isFullyReady {
+                return readiness.blockingReasons.first ?? readiness.summaryText
+            }
+        }
         if sourceMode == .choose, !selectionReadiness.canGenerate {
             return selectionReadiness.blockingReasons.first ?? "Choose at least one ready source"
         }
@@ -1312,7 +1346,7 @@ struct DocumentQASheet: View {
     }
 
     private func close() {
-        if qa.isGenerating { cancelGeneration() }
+        if isWorking { cancelGeneration() }
         onClose()
     }
 

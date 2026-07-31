@@ -326,6 +326,7 @@ printf '%s\n' \
   'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
   'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
   'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class GuidedDocumentQAUITests: XCTestCase {}' \
   >"$accessibility_hook"
 run_case \
   "the exact hosted XPC and accessibility selectors satisfy the hook" \

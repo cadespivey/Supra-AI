@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CryptoKit
 import Foundation
 import SupraCore
 import SupraDocuments
@@ -119,11 +120,14 @@ final class AppEnvironment: ObservableObject {
     init() {
         let restoreActivation = AppEnvironment.prepareColdStartRestore()
         let runtimeClient = RuntimeClient()
+        let taskRuntimeClient: any RuntimeClientProtocol = ProcessInfo.processInfo.arguments.contains(
+            "-uiTestGuidedQA"
+        ) ? GuidedQAUITestRuntimeClient() : runtimeClient
         let storeResult = AppEnvironment.makeStore(after: restoreActivation)
         let store = storeResult.store
         let systemPrompt = DefaultSystemPrompt.milestone1()
         let appVersion = AppEnvironment.currentAppVersion()
-        let modelLibrary = ModelLibrary(store: store, runtimeClient: runtimeClient)
+        let modelLibrary = ModelLibrary(store: store, runtimeClient: taskRuntimeClient)
         let tokenStore = APIKeyStoreComposition.live()
         self.store = store
         self.usingFallbackStore = storeResult.isFallback
@@ -236,7 +240,7 @@ final class AppEnvironment: ObservableObject {
         self.documentQueue = queue
         self.mattersController = MattersController(
             store: store,
-            runtimeClient: runtimeClient,
+            runtimeClient: taskRuntimeClient,
             defaultSystemPrompt: systemPrompt,
             documentQueue: queue,
             isImportReady: { documentSetup.isReadyForImport }
@@ -843,6 +847,7 @@ final class AppEnvironment: ObservableObject {
         guard ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA"),
               let matterID = mattersController.matters.first?.id else { return }
         do {
+            try seedUITestGuidedQAModel()
             guard !(try store.documentLibrary.fetchDocuments(matterID: matterID)).contains(where: {
                 $0.id == "ready-guided-document"
             }) else { return }
@@ -939,6 +944,57 @@ final class AppEnvironment: ObservableObject {
         } catch {
             assertionFailure("Could not seed guided Q&A accessibility fixture: \(error)")
         }
+    }
+
+    /// Installs a tiny integrity-valid model fixture and routes legal reasoning to
+    /// it. The app still exercises ModelLibrary's production load + stable-lineage
+    /// checks; only the runtime implementation is deterministic under the explicit
+    /// guided-Q&A UI-test launch flag.
+    private func seedUITestGuidedQAModel() throws {
+        let modelID = "77777777-7777-4777-8777-777777777777"
+        let modelDirectory = ManagedModelStorage.modelsDirectory()
+            .appendingPathComponent("guided-qa-ui-model", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: modelDirectory,
+            withIntermediateDirectories: true
+        )
+        let artifacts: [(String, Data)] = [
+            ("config.json", Data(#"{"model_type":"guided_qa_ui_test"}"#.utf8)),
+            ("model.safetensors", Data("guided-qa-ui-test-weights".utf8)),
+        ]
+        for (name, data) in artifacts {
+            try data.write(
+                to: modelDirectory.appendingPathComponent(name, isDirectory: false),
+                options: .atomic
+            )
+        }
+        let manifest = ModelArtifactManifest(
+            repositoryID: "supra-test/guided-qa",
+            revision: String(repeating: "7", count: 40),
+            files: artifacts.map { name, data in
+                ModelArtifactManifest.File(
+                    relativePath: name,
+                    size: Int64(data.count),
+                    digestAlgorithm: .sha256,
+                    digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                )
+            }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(manifest).write(
+            to: ManagedModelStorage.manifestURL(in: modelDirectory),
+            options: .atomic
+        )
+        try store.models.upsertModel(ModelRecord(
+            id: modelID,
+            displayName: "Guided Q&A UI Test Model",
+            path: modelDirectory.path,
+            isActive: true,
+            validationStatus: "verified"
+        ))
+        modelLibrary.refresh()
+        modelLibrary.assignModel(modelID, to: .legalReasoning)
     }
 
     /// Seeds one completed encrypted-source rejection for the T-OPS-07 warning
@@ -1855,4 +1911,112 @@ final class AppEnvironment: ObservableObject {
             buildNumber: info?["CFBundleVersion"] as? String ?? "0"
         )
     }
+}
+
+/// Deterministic app-side runtime used only by the explicit guided-Q&A UI-test
+/// launch. The first answer completes through the production streaming path; a
+/// second answer remains in flight until the production cancellation RPC closes
+/// it, giving the hosted test a stable no-partial-write boundary without XPC/model
+/// timing variance.
+private final class GuidedQAUITestRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var loadedModelID: ModelID?
+    private var generationCount = 0
+    private var heldGenerationID: GenerationID?
+    private var heldContinuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation?
+
+    func connect() async throws {}
+
+    func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
+        lock.withLock { loadedModelID = request.modelID }
+        return LoadModelResponse(status: .loaded, modelID: request.modelID)
+    }
+
+    func generate(_ request: GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error> {
+        let call = lock.withLock { () -> Int in
+            generationCount += 1
+            return generationCount
+        }
+        if call == 1 {
+            return AsyncThrowingStream { continuation in
+                continuation.yield(GenerationEvent(
+                    generationID: request.generationID,
+                    sequenceNumber: 0,
+                    timestamp: Date(),
+                    type: .token,
+                    tokenText: "Rent is due on the first business day [S1]."
+                ))
+                continuation.yield(GenerationEvent(
+                    generationID: request.generationID,
+                    sequenceNumber: 1,
+                    timestamp: Date(),
+                    type: .generationCompleted
+                ))
+                continuation.finish()
+            }
+        }
+        return AsyncThrowingStream { continuation in
+            lock.withLock {
+                heldGenerationID = request.generationID
+                heldContinuation = continuation
+            }
+        }
+    }
+
+    func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
+        CountTokensResponse(
+            modelID: request.modelID,
+            counts: request.texts.map { max(1, ($0.utf8.count + 3) / 4) }
+        )
+    }
+
+    func cancelGeneration(_ generationID: GenerationID) async throws -> CancelGenerationResponse {
+        let continuation = lock.withLock { () -> AsyncThrowingStream<GenerationEvent, Error>.Continuation? in
+            guard heldGenerationID == generationID else { return nil }
+            defer {
+                heldGenerationID = nil
+                heldContinuation = nil
+            }
+            return heldContinuation
+        }
+        continuation?.finish()
+        return CancelGenerationResponse(
+            status: continuation == nil ? .notFound : .cancelled,
+            generationID: generationID
+        )
+    }
+
+    func recentEvents(
+        for generationID: GenerationID,
+        after sequenceNumber: Int
+    ) async throws -> [GenerationEvent] { [] }
+
+    func unloadModel() async throws -> UnloadModelResponse {
+        lock.withLock { loadedModelID = nil }
+        return UnloadModelResponse(status: .unloaded)
+    }
+
+    func reloadCurrentModel() async throws -> LoadModelResponse {
+        let modelID = lock.withLock { loadedModelID }
+        return LoadModelResponse(
+            status: modelID == nil ? .failed : .loaded,
+            modelID: modelID,
+            error: modelID == nil
+                ? RuntimeError(category: "ui_test", message: "No UI-test model is loaded.")
+                : nil
+        )
+    }
+
+    func runtimeStatus() async throws -> RuntimeStatus {
+        let state = lock.withLock { (loadedModelID, heldGenerationID) }
+        return RuntimeStatus(
+            state: state.1 == nil ? (state.0 == nil ? .modelUnloaded : .modelLoaded) : .generating,
+            loadedModelID: state.0,
+            activeGenerationID: state.1,
+            message: nil,
+            metrics: nil
+        )
+    }
+
+    func restartRuntimeService() async throws {}
 }

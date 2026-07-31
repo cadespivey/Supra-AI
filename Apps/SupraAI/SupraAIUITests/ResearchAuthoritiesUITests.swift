@@ -203,7 +203,7 @@ final class GuidedDocumentQAUITests: XCTestCase {
             app.descendants(matching: .any)["documentPreview"].waitForExistence(timeout: 10),
             "The selected source must open in the production document preview"
         )
-        app.buttons["Done"].click()
+        app.descendants(matching: .any)["documentPreview"].buttons["Done"].click()
 
         let question = app.textViews["documentQA.question"]
         question.click()
@@ -236,7 +236,7 @@ final class GuidedDocumentQAUITests: XCTestCase {
         resultPreview.click()
         XCTAssertTrue(app.descendants(matching: .any)["documentPreview"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.descendants(matching: .any)["documentPreview.revisionNotice"].exists)
-        app.buttons["Done"].click()
+        app.descendants(matching: .any)["documentPreview"].buttons["Done"].click()
 
         // The deterministic UI-test runtime holds the second request until the
         // production cancel path terminates it. The first saved result must remain.
@@ -246,7 +246,8 @@ final class GuidedDocumentQAUITests: XCTestCase {
         cancel.click()
         let message = app.descendants(matching: .any)["documentQA.message"]
         XCTAssertTrue(message.waitForExistence(timeout: 10))
-        XCTAssertTrue(message.label.localizedCaseInsensitiveContains("cancelled"))
+        let messageText = message.label + " " + ((message.value as? String) ?? "")
+        XCTAssertTrue(messageText.localizedCaseInsensitiveContains("cancelled"))
         XCTAssertTrue(result.exists)
         let retainedResultText = result.label + " " + ((result.value as? String) ?? "")
         XCTAssertTrue(retainedResultText.localizedCaseInsensitiveContains("first business day"))

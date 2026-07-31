@@ -57,11 +57,14 @@ public struct GuidedDocumentSelectionReadiness: Sendable, Equatable {
 /// version, not reconstructed from the current chooser state.
 public struct DocumentQASourceReference: Identifiable, Sendable, Equatable {
     public let id: String
-    public let chunkID: String
+    /// Live chunk IDs are intentionally optional: reindexing deletes and
+    /// recreates chunks, and the historical citation FK is `ON DELETE SET NULL`.
+    public let chunkID: String?
     public let documentName: String
     public let citationLabel: String
     public let locatorDisplay: String
     public let excerpt: String
+    public let canPreview: Bool
 }
 
 /// Generates source-grounded Q&A answers over a matter's documents (plan §8):
@@ -85,6 +88,10 @@ public final class DocumentQAController: ObservableObject {
         public var warnings: [String]
         public var citationLabels: [String]
         public var unsupported: Bool
+        /// Whether the answer came from automatic retrieval or an explicit saved
+        /// source packet. Fast guided results must never advertise a scope-wide
+        /// "Search All Documents" action that regeneration will not perform.
+        public var sourceMode: DocumentSourceSetMode = .autoSource
         /// Which retrieval tier grounded this answer — `.fast` answers are
         /// preliminary and the UI offers "search all documents" (spec §3.2).
         public var depth: RetrievalDepth = .deep
@@ -168,6 +175,8 @@ public final class DocumentQAController: ObservableObject {
                 let locator = Self.locator(for: chunk)
                 let revisionBlocker: String? = if chunk.revisionID == nil {
                     "\(document.displayName): passage has no current revision binding"
+                } else if chunk.pagePartID == nil {
+                    "\(document.displayName): passage has no current part binding"
                 } else if let partID = chunk.pagePartID,
                           currentRevisionByPartID[partID] != chunk.revisionID {
                     "\(document.displayName): passage belongs to an older revision"
@@ -238,23 +247,33 @@ public final class DocumentQAController: ObservableObject {
             uniquingKeysWith: { first, _ in first }
         )
         return ((try? store.documentSources.fetchSources(structuredOutputVersionID: versionID)) ?? [])
-            .compactMap { row in
-                guard let chunkID = row.chunkID else { return nil }
+            .map { row in
                 let locator = (try? JSONDecoder().decode(
                     DocumentSourceLocator.self,
                     from: Data(row.locatorJSON.utf8)
                 )) ?? DocumentSourceLocator(sourceKind: .text)
                 return DocumentQASourceReference(
                     id: row.id,
-                    chunkID: chunkID,
+                    chunkID: row.chunkID,
                     documentName: row.documentID.flatMap { names[$0] } ?? "Document",
                     citationLabel: row.citationLabel,
                     locatorDisplay: locator.displayString,
-                    excerpt: row.excerpt
+                    excerpt: row.excerpt,
+                    canPreview: row.documentID != nil || !row.excerpt.isEmpty
                 )
             }
     }
 
+    /// Loads a saved source row rather than refetching its mutable live chunk.
+    /// The preview loader resolves the row's exact revision + denormalized
+    /// locator/excerpt, so old answers stay inspectable after reindexing.
+    public func preview(sourceID: String) -> DocumentPreviewModel? {
+        guard let source = try? store.documentSources.fetchSource(id: sourceID) else { return nil }
+        return previewLoader.load(outputSource: source)
+    }
+
+    /// Chooser previews are intentionally live; result previews use
+    /// `preview(sourceID:)` above.
     public func preview(chunkID: String) -> DocumentPreviewModel? {
         guard let chunk = try? store.documentIndex.fetchChunk(id: chunkID) else { return nil }
         return previewLoader.load(
@@ -438,12 +457,13 @@ public final class DocumentQAController: ObservableObject {
         // sources the answer is grounded in without the user knowing.
         var guidedChunkIDs: [String]?
         if sourceSet.mode == DocumentSourceSetMode.guided.rawValue {
-            let priorChunkIDs = ((try? store.documentSources.fetchSources(structuredOutputVersionID: activeVersionID)) ?? [])
-                .sorted { $0.rank < $1.rank }
-                .compactMap(\.chunkID)
-            // Keep the guided mode even if its persisted rows were removed. An
-            // empty guided set must fail closed, never widen into auto-retrieval.
-            guidedChunkIDs = priorChunkIDs
+            guard let priorRows = try? store.documentSources.fetchSources(
+                structuredOutputVersionID: activeVersionID
+            ), let resolved = rehydratePersistedGuidedChunkIDs(priorRows) else {
+                message = "A selected source is no longer available. The saved source set was not changed."
+                return nil
+            }
+            guidedChunkIDs = resolved
         }
         return await regenerateExisting(
             outputID: outputID,
@@ -458,12 +478,54 @@ public final class DocumentQAController: ObservableObject {
         )
     }
 
+    /// Reindexing deletes/reinserts live chunks, which correctly nulls historical
+    /// `chunk_id` foreign keys. A guided regeneration may recover a nil binding
+    /// only by finding one exact current chunk with the saved document, immutable
+    /// revision, locator, and excerpt. Any missing/ambiguous row rejects the whole
+    /// packet; it is never legal to `compactMap` into a smaller selection.
+    private func rehydratePersistedGuidedChunkIDs(
+        _ rows: [DocumentOutputSourceRecord]
+    ) -> [String]? {
+        let orderedRows = rows.sorted {
+            $0.rank == $1.rank ? $0.id < $1.id : $0.rank < $1.rank
+        }
+        guard !orderedRows.isEmpty else { return nil }
+        var resolved: [String] = []
+        resolved.reserveCapacity(orderedRows.count)
+
+        for row in orderedRows {
+            if let chunkID = row.chunkID {
+                guard (try? store.documentIndex.fetchChunk(id: chunkID)) != nil else { return nil }
+                resolved.append(chunkID)
+                continue
+            }
+            guard let documentID = row.documentID,
+                  let revisionID = row.revisionID,
+                  let locator = try? JSONDecoder().decode(
+                      DocumentSourceLocator.self,
+                      from: Data(row.locatorJSON.utf8)
+                  ) else { return nil }
+            let matches = ((try? store.documentIndex.fetchChunks(documentID: documentID)) ?? [])
+                .filter { chunk in
+                    chunk.revisionID == revisionID
+                        && Self.locator(for: chunk) == locator
+                        && (chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText)) == row.excerpt
+                }
+            guard matches.count == 1 else { return nil }
+            resolved.append(matches[0].id)
+        }
+
+        guard Set(resolved).count == orderedRows.count else { return nil }
+        return resolved
+    }
+
     // MARK: - Internals
 
     private struct PreparedSource {
         var source: GroundingSource
         var documentID: String
         var chunkID: String
+        var revisionID: String?
         var locatorJSON: String
         var rank: Int
         var warnings: [String]
@@ -480,7 +542,7 @@ public final class DocumentQAController: ObservableObject {
 
     private func prepareSources(question: String, scope: RetrievalScope, guidedChunkIDs: [String]?, modelID: ModelID?, route: ModelRoute?, depth: RetrievalDepth) async throws -> [PreparedSource] {
         if let guidedChunkIDs {
-            return prepareGuided(chunkIDs: guidedChunkIDs)
+            return prepareGuided(chunkIDs: guidedChunkIDs, scope: scope)
         }
         let pool = depth == .fast ? Self.fastCandidatePoolSize : Self.candidatePoolSize
         let result = try await retrieval.retrieve(matterID: matterID, query: question, scope: scope, limit: pool, depth: depth)
@@ -492,7 +554,9 @@ public final class DocumentQAController: ObservableObject {
                     label: "S\(index + 1)",
                     lowConfidence: low
                 ),
-                documentID: retrieved.documentID, chunkID: retrieved.chunkID,
+                documentID: retrieved.documentID,
+                chunkID: retrieved.chunkID,
+                revisionID: retrieved.revisionID,
                 locatorJSON: retrieved.locator.encodedJSON(), rank: index,
                 warnings: low ? ["low OCR confidence"] : []
             )
@@ -549,13 +613,22 @@ public final class DocumentQAController: ObservableObject {
         DocumentRerank.parsePacketLabels(text)
     }
 
-    private func prepareGuided(chunkIDs: [String]) -> [PreparedSource] {
-        let nameByID = Dictionary((try? store.documentLibrary.fetchDocuments(matterID: matterID))?.map { ($0.id, $0.displayName) } ?? [], uniquingKeysWith: { a, _ in a })
-        // Matter-scope the hand-picked chunks: only chunks belonging to documents
-        // in THIS matter may be used, so a stray/other-matter chunk id can never
-        // leak another matter's content into this answer.
+    private func prepareGuided(
+        chunkIDs: [String],
+        scope: RetrievalScope
+    ) -> [PreparedSource] {
+        let readySourcesByID = Dictionary(
+            guidedSources(scope: scope)
+                .filter(\.isReady)
+                .map { ($0.chunkID, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        // Re-resolve readiness at the packing boundary as well as submission.
+        // Only exact ready passages in this matter/scope may reach the prompt.
         let chunks = ((try? store.documentIndex.fetchChunks(ids: chunkIDs)) ?? [])
-            .filter { nameByID[$0.documentID] != nil }
+            .filter { chunk in
+                readySourcesByID[chunk.id]?.documentID == chunk.documentID
+            }
         // `chunkIDs` is caller-supplied (guided generation / regenerate), so it isn't
         // guaranteed unique the way a primary-key fetch is — dedupe keys to keep the
         // ordering map from trapping on a repeated id.
@@ -563,12 +636,7 @@ public final class DocumentQAController: ObservableObject {
         return chunks
             .sorted { (order[$0.id] ?? 0) < (order[$1.id] ?? 0) }
             .enumerated().map { index, chunk in
-                let locator = DocumentSourceLocator(
-                    sourceKind: DocumentSourceKind(rawValue: chunk.sourceKind) ?? .text,
-                    pageIndex: chunk.pageIndex, pageLabel: chunk.pageLabel, sheetName: chunk.sheetName,
-                    cellRange: chunk.cellRange, emailPartPath: chunk.emailPartPath,
-                    charStart: chunk.charStart, charEnd: chunk.charEnd
-                )
+                let locator = Self.locator(for: chunk)
                 let low = (chunk.ocrConfidence.map { $0 < lowConfidenceThreshold } ?? false)
                 let structureContext = chunk.chunkerVersion == 2
                     ? chunk.nodeID.flatMap { try? store.documentStructure.retrievalContext(nodeID: $0) }
@@ -576,14 +644,17 @@ public final class DocumentQAController: ObservableObject {
                 return PreparedSource(
                     source: GroundingSource(
                         sourceID: "\(matterID)/\(chunk.id)",
-                        label: "S\(index + 1)", documentName: nameByID[chunk.documentID] ?? "Document",
+                        label: "S\(index + 1)",
+                        documentName: readySourcesByID[chunk.id]?.documentName ?? "Document",
                         locatorDisplay: locator.displayString, text: chunk.normalizedText,
                         excerpt: chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText),
                         lowConfidence: low,
                         unitKind: chunk.chunkerVersion == 2 ? (chunk.unitKind ?? structureContext?.unitKind) : nil,
                         hiddenDerived: structureContext?.hiddenDerived ?? false
                     ),
-                    documentID: chunk.documentID, chunkID: chunk.id,
+                    documentID: chunk.documentID,
+                    chunkID: chunk.id,
+                    revisionID: chunk.revisionID,
                     locatorJSON: locator.encodedJSON(), rank: index, warnings: low ? ["low OCR confidence"] : []
                 )
             }
@@ -643,13 +714,13 @@ public final class DocumentQAController: ObservableObject {
         route: ModelRoute?, prompt: String
     ) throws -> QAResult {
         let title = "Q&A: \(question.prefix(60))"
-        let output = try store.structuredOutputs.createOutput(
+        let output = StructuredOutputRecord(
             matterID: matterID,
             title: String(title),
-            outputType: mode.outputType,
-            status: .draft
+            outputType: mode.outputType.rawValue,
+            status: StructuredOutputStatus.draft.rawValue
         )
-        let sourceSetID = try prepareSourceSet(
+        let preparedSourceSet = try makeSourceSet(
             prepared: prepared,
             scope: scope,
             question: question,
@@ -662,18 +733,20 @@ public final class DocumentQAController: ObservableObject {
             prompt: prompt,
             route: route
         )
-        let version = try store.structuredOutputs.createVersion(
-            structuredOutputID: output.id, contentMarkdown: markdown,
-            requiredSections: [], presentSections: [], missingSections: [],
-            generationSessionID: generation.id,
+        let version = try store.structuredOutputs.createVersionWithSourceSetAtomically(
+            structuredOutputID: output.id,
+            newOutput: output,
+            sourceSet: preparedSourceSet.sourceSet,
+            outputSources: preparedSourceSet.sources,
+            contentMarkdown: markdown,
             verificationStatus: verification.verificationStatus,
             verificationVersion: DocumentSupportVerifier.version,
             verificationResults: verification.results,
             verificationDimensions: VerificationDimensionsMapper.dimensions(for: verification),
-            sourceSetID: sourceSetID,
+            outputStatus: status,
+            generationSessionID: generation.id,
             promptBuilderVersion: Self.promptBuilderVersion,
-            assuranceState: depth == .fast ? .preliminary : nil,
-            outputStatus: status
+            assuranceState: depth == .fast ? .preliminary : nil
         )
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "qa_generated", actor: "runtime",
@@ -684,6 +757,7 @@ public final class DocumentQAController: ObservableObject {
             warnings: verification.warnings,
             citationLabels: verification.usedLabels,
             unsupported: verification.appearsUnsupported,
+            sourceMode: sourceMode,
             depth: depth,
             assuranceState: version.assuranceState.flatMap(OutputAssuranceState.init(rawValue:))
         )
@@ -774,9 +848,7 @@ public final class DocumentQAController: ObservableObject {
                 ? .needsReview
                 : .complete
 
-            let existingVersions = (try? store.structuredOutputs.fetchVersions(structuredOutputID: outputID)) ?? []
-            let parentVersionID = existingVersions.max(by: { $0.versionIndex < $1.versionIndex })?.id
-            let sourceSetID = try prepareSourceSet(
+            let preparedSourceSet = try makeSourceSet(
                 prepared: prepared,
                 scope: scope,
                 question: question,
@@ -789,19 +861,20 @@ public final class DocumentQAController: ObservableObject {
                 prompt: budgeted.prompt,
                 route: effectiveRoute
             )
-            let version = try store.structuredOutputs.createVersion(
-                structuredOutputID: outputID, contentMarkdown: markdown,
-                requiredSections: [], presentSections: [], missingSections: [],
-                parentVersionID: parentVersionID,
-                generationSessionID: generation.id,
+            let version = try store.structuredOutputs.createVersionWithSourceSetAtomically(
+                structuredOutputID: outputID,
+                newOutput: nil,
+                sourceSet: preparedSourceSet.sourceSet,
+                outputSources: preparedSourceSet.sources,
+                contentMarkdown: markdown,
                 verificationStatus: verification.verificationStatus,
                 verificationVersion: DocumentSupportVerifier.version,
                 verificationResults: verification.results,
                 verificationDimensions: VerificationDimensionsMapper.dimensions(for: verification),
-                sourceSetID: sourceSetID,
+                outputStatus: status,
+                generationSessionID: generation.id,
                 promptBuilderVersion: Self.promptBuilderVersion,
-                assuranceState: depth == .fast ? .preliminary : nil,
-                outputStatus: status
+                assuranceState: depth == .fast ? .preliminary : nil
             )
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "qa_generated", actor: "runtime",
@@ -815,6 +888,7 @@ public final class DocumentQAController: ObservableObject {
                 warnings: verification.warnings,
                 citationLabels: verification.usedLabels,
                 unsupported: verification.appearsUnsupported,
+                sourceMode: isGuided ? .guided : .autoSource,
                 depth: depth,
                 assuranceState: version.assuranceState.flatMap(OutputAssuranceState.init(rawValue:))
             )
@@ -854,10 +928,22 @@ public final class DocumentQAController: ObservableObject {
         )
     }
 
-    /// Creates a pending, matter-scoped source set. `createVersion` attaches it
-    /// together with provenance, active version, and output status in one database
-    /// transaction.
-    private func prepareSourceSet(prepared: [PreparedSource], scope: RetrievalScope, question: String, mode: DocumentSourceSetMode, depth: RetrievalDepth) throws -> String {
+    private struct PreparedSourceSet {
+        var sourceSet: DocumentSourceSetRecord
+        var sources: [DocumentOutputSourceRecord]
+    }
+
+    /// Builds pending provenance records in memory. The structured-output
+    /// repository inserts these records together with the output/version and
+    /// attaches them inside one transaction, so a failed source FK can never
+    /// strand a draft output or pending source set.
+    private func makeSourceSet(
+        prepared: [PreparedSource],
+        scope: RetrievalScope,
+        question: String,
+        mode: DocumentSourceSetMode,
+        depth: RetrievalDepth
+    ) throws -> PreparedSourceSet {
         let scopeJSON = (try? JSONEncoder().encode(scope)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let report = sourceSetPackingReport ?? DocumentSourceLineageBuilder.report(
             summary: lastPackingReport,
@@ -890,8 +976,11 @@ public final class DocumentQAController: ObservableObject {
             configuration: configuration,
             packingReport: report
         )
-        let sourceSet = try store.documentSources.createSourceSet(
-            matterID: matterID, mode: mode, scopeJSON: scopeJSON, retrievalQuery: question,
+        let sourceSet = DocumentSourceSetRecord(
+            matterID: matterID,
+            mode: mode.rawValue,
+            scopeJSON: scopeJSON,
+            retrievalQuery: question,
             retrievalDepth: depth.rawValue,
             packingReportJSON: lineage.packingReportJSON,
             embeddingModelID: lineage.embeddingModelID,
@@ -902,14 +991,16 @@ public final class DocumentQAController: ObservableObject {
         )
         let rows = prepared.map { source in
             DocumentOutputSourceRecord(
-                sourceSetID: sourceSet.id, documentID: source.documentID, chunkID: source.chunkID,
+                sourceSetID: sourceSet.id,
+                documentID: source.documentID,
+                chunkID: source.chunkID,
+                revisionID: source.revisionID,
                 citationLabel: source.source.label, locatorJSON: source.locatorJSON,
                 excerpt: source.source.excerpt, rank: source.rank,
                 warningsJSON: source.warnings.isEmpty ? nil : (try? JSONEncoder.encodeToString(source.warnings))
             )
         }
-        try store.documentSources.addOutputSources(rows)
-        return sourceSet.id
+        return PreparedSourceSet(sourceSet: sourceSet, sources: rows)
     }
 
     private func collect(prompt: String, modelID: ModelID, route: ModelRoute?) async throws -> String {
