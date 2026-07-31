@@ -68,6 +68,82 @@ final class ShippingMigrationFixtureTests: XCTestCase {
         }
     }
 
+    // T-RST-37 expected RED: shipping fixtures are only opened directly; none
+    // exercises discovery, staging, cold-start activation, and migration as one path.
+    func testTRST37EverySupportedShippingFixtureRestoresAndMigratesThroughColdStart() throws {
+        let fixtureCatalog = try loadManifest()
+        let shippingMigrations = SupraMigrator.makeMigrator().migrations
+
+        for shippingFixture in fixtureCatalog.fixtures {
+            try XCTContext.runActivity(named: shippingFixture.seedVersion) { _ in
+                let directory = try temporaryDirectory(prefix: "T-RST-37-")
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let backupDirectory = directory.appendingPathComponent("Backup", isDirectory: true)
+                let dbDirectory = backupDirectory.appendingPathComponent("db", isDirectory: true)
+                let liveDirectory = directory.appendingPathComponent("Live", isDirectory: true)
+                let liveDatabaseURL = liveDirectory.appendingPathComponent("SupraAI.sqlite")
+                let liveBlobsDirectory = liveDirectory.appendingPathComponent("blobs", isDirectory: true)
+                let stagingRoot = liveDirectory.appendingPathComponent("RestoreStaging", isDirectory: true)
+                try FileManager.default.createDirectory(at: dbDirectory, withIntermediateDirectories: true)
+
+                let stem = "SupraAI-20260731-120000-000"
+                let snapshotURL = dbDirectory.appendingPathComponent("\(stem).sqlite")
+                try authenticatedFixtureData(shippingFixture).write(to: snapshotURL)
+                let snapshotBytes = try XCTUnwrap(
+                    snapshotURL.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                )
+                let backupManifest = BackupManifest(
+                    appVersion: shippingFixture.seedVersion,
+                    appBuild: "shipping-fixture",
+                    schemaMigrationIdentifiers: try fixtureCatalog.migrationIdentifiers(
+                        for: shippingFixture
+                    ),
+                    createdAt: Date(timeIntervalSince1970: 1_785_499_200),
+                    sourceDbBytes: snapshotBytes,
+                    referencedBlobCount: 0
+                )
+                let manifestURL = dbDirectory.appendingPathComponent("\(stem).json")
+                try BackupManifest.encode(backupManifest).write(to: manifestURL)
+                let sourceFingerprint = try [snapshotURL, manifestURL]
+                    .map { try sha256(Data(contentsOf: $0)) }
+
+                try createCurrentShippingDatabase(at: liveDatabaseURL)
+                let liveLayout = RestoreLiveLayout(
+                    databaseURL: liveDatabaseURL,
+                    blobsDirectory: liveBlobsDirectory,
+                    stagingRootDirectory: stagingRoot
+                )
+                let candidate = try XCTUnwrap(RestoreSnapshotInspector.discover(
+                    in: backupDirectory,
+                    knownMigrationIdentifiers: shippingMigrations
+                ).first)
+                XCTAssertTrue(candidate.isRestorable)
+                let staged = try RestoreService.stageRestore(
+                    candidate: candidate,
+                    liveLayout: liveLayout,
+                    knownMigrationIdentifiers: shippingMigrations
+                )
+
+                let result = RestoreActivationService.activatePendingRestore(
+                    liveLayout: liveLayout,
+                    knownMigrationIdentifiers: shippingMigrations
+                )
+
+                XCTAssertEqual(result.status, .activated)
+                XCTAssertEqual(result.operationID, staged.intent.operationID)
+                XCTAssertEqual(result.snapshotIdentifier, stem)
+                let restored = try SupraStore(url: liveDatabaseURL)
+                try assertHealthyCurrentStore(restored, seedVersion: shippingFixture.seedVersion)
+                XCTAssertEqual(
+                    try [snapshotURL, manifestURL]
+                        .map { try sha256(Data(contentsOf: $0)) },
+                    sourceFingerprint,
+                    "restore must not mutate the backup source for \(shippingFixture.seedVersion)"
+                )
+            }
+        }
+    }
+
     func testTMIG01V059ImportSourceLedgerUpgradesWithoutInventingHistory() throws {
         // T-MIG-01 expected RED: the migration registry still ends at v058 and
         // the import-source table / batch target columns do not exist.
@@ -313,6 +389,14 @@ final class ShippingMigrationFixtureTests: XCTestCase {
             }
         }
         return migrator
+    }
+
+    private func createCurrentShippingDatabase(at url: URL) throws {
+        let database = try SupraDatabase(url: url)
+        try database.writer.read { db in
+            XCTAssertEqual(try String.fetchOne(db, sql: "PRAGMA integrity_check"), "ok")
+            XCTAssertEqual(try appliedMigrations(db), SupraMigrator.makeMigrator().migrations)
+        }
     }
 
     private func loadManifest() throws -> ShippingFixtureManifest {

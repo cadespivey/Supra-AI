@@ -57,7 +57,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: staged.markerURL.path))
     }
 
-    // T-RST-20 expected RED: selected blobs are not installed at cold start.
+    // T-RST-20/T-RST-38: selected managed blobs install at cold start while
+    // unrelated live content remains untouched.
     func testActivationInstallsSelectedBlobsAndPreservesUnrelatedLiveObjects() throws {
         let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
         let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
@@ -100,7 +101,7 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertFalse(operations.events.contains(.copySelectedBlob))
     }
 
-    // T-RST-22 expected RED: a consumed marker cannot yet be proven a no-op.
+    // T-RST-22/T-RST-41: a consumed marker makes every later launch a no-op.
     func testActivationIsNoOpAfterSuccessfulMarkerConsumption() throws {
         _ = try stage()
         let operations = RecordingRestoreActivationOperations()
@@ -289,6 +290,54 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(
             failingOperations.events.filter { $0 == .synchronizeMarkerDirectory }.count,
             2
+        )
+    }
+
+    // T-RST-40...42 expected RED: the launch service has no durable,
+    // content-free outcome record whose bytes remain stable on a second launch.
+    func testTRST40Through42OutcomeIsContentFreeIdempotentAndLeavesBackupUntouched() throws {
+        try fixture.writeShippingLiveState(sentinel: "current private canary")
+        let source = try fixture.writeCompleteShippingSnapshot(
+            sentinel: "selected private canary"
+        )
+        let sourceFingerprint = try [source.snapshot, source.manifest].map(fixture.fingerprint)
+        let shippingMigrations = SupraMigrator.makeMigrator().migrations
+        let staged = try stageCandidate(knownMigrations: shippingMigrations)
+
+        let first = RestoreActivationService.activatePendingRestore(
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: shippingMigrations
+        )
+
+        XCTAssertEqual(first.status, .activated)
+        XCTAssertEqual(first.operationID, staged.intent.operationID)
+        XCTAssertEqual(first.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let firstOutcomeData = try Data(contentsOf: outcomeURL)
+        let outcome = try RestoreOutcomeRecord.decode(firstOutcomeData)
+        XCTAssertEqual(outcome.schemaVersion, RestoreOutcomeRecord.currentSchemaVersion)
+        XCTAssertEqual(outcome.status, .activated)
+        XCTAssertEqual(outcome.operationID, staged.intent.operationID)
+        XCTAssertEqual(outcome.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertNil(outcome.activationFailure)
+        XCTAssertNil(outcome.rollbackFailure)
+
+        let serialized = try XCTUnwrap(String(data: firstOutcomeData, encoding: .utf8))
+        XCTAssertFalse(serialized.contains(fixture.root.path))
+        XCTAssertFalse(serialized.contains(source.snapshot.path))
+        XCTAssertFalse(serialized.contains("private canary"))
+
+        let second = RestoreActivationService.activatePendingRestore(
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: shippingMigrations
+        )
+
+        XCTAssertEqual(second.status, .noPendingRestore)
+        XCTAssertEqual(try Data(contentsOf: outcomeURL), firstOutcomeData)
+        XCTAssertEqual(
+            try [source.snapshot, source.manifest].map(fixture.fingerprint),
+            sourceFingerprint
         )
     }
 
