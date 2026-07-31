@@ -494,23 +494,28 @@ public final class DocumentQAController: ObservableObject {
         resolved.reserveCapacity(orderedRows.count)
 
         for row in orderedRows {
-            if let chunkID = row.chunkID {
-                guard (try? store.documentIndex.fetchChunk(id: chunkID)) != nil else { return nil }
-                resolved.append(chunkID)
-                continue
-            }
             guard let documentID = row.documentID,
                   let revisionID = row.revisionID,
                   let locator = try? JSONDecoder().decode(
                       DocumentSourceLocator.self,
                       from: Data(row.locatorJSON.utf8)
                   ) else { return nil }
+
+            func matchesSavedProvenance(_ chunk: DocumentChunkRecord) -> Bool {
+                chunk.documentID == documentID
+                    && chunk.revisionID == revisionID
+                    && Self.locator(for: chunk) == locator
+                    && (chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText)) == row.excerpt
+            }
+
+            if let chunkID = row.chunkID {
+                guard let chunk = try? store.documentIndex.fetchChunk(id: chunkID),
+                      matchesSavedProvenance(chunk) else { return nil }
+                resolved.append(chunkID)
+                continue
+            }
             let matches = ((try? store.documentIndex.fetchChunks(documentID: documentID)) ?? [])
-                .filter { chunk in
-                    chunk.revisionID == revisionID
-                        && Self.locator(for: chunk) == locator
-                        && (chunk.displayExcerpt ?? DocumentChunker.excerpt(chunk.normalizedText)) == row.excerpt
-                }
+                .filter(matchesSavedProvenance)
             guard matches.count == 1 else { return nil }
             resolved.append(matches[0].id)
         }
