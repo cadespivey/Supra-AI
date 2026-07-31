@@ -243,7 +243,9 @@ final class AppEnvironment: ObservableObject {
             // Suggests a taxonomy category for each imported document using the
             // assigned task model. Self-skips when no model is loadable.
             classificationService: DocumentClassificationService(
-                store: store, modelLibrary: modelLibrary, runtimeClient: runtimeClient
+                store: store,
+                modelLibrary: modelLibrary,
+                runtimeClient: taskRuntimeClient
             )
         )
         documentSetup.setReindexEnqueuer { [weak queue] matterID in
@@ -281,7 +283,7 @@ final class AppEnvironment: ObservableObject {
                 if case .loaded = state { return true } else { return false }
             }
             .removeDuplicates()
-            .filter { $0 }
+            .filter { $0 && !Self.isUITestMode }
             .sink { [weak self] _ in
                 guard let self, let matterID = self.mattersController.selectedMatterID else { return }
                 self.documentQueue.enqueueClassify(matterID: matterID)
