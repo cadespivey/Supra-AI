@@ -44,15 +44,30 @@ public final class PolicyEnforcingURLSessionTransport: @unchecked Sendable {
     /// throttled to ~2 MB increments (URLSession's `didWriteData` fires per
     /// buffer — far too often to forward for multi-gigabyte model weights).
     /// Called on URLSession's delegate queue; callers hop executors themselves.
+    ///
+    /// Deliberately built on a classic `downloadTask(with:)` + `task.delegate`
+    /// rather than the async `download(for:delegate:)` convenience: on macOS 27
+    /// the convenience wrapper never delivers
+    /// `URLSessionDownloadDelegate.didWriteData` to the per-task delegate
+    /// (byte progress silently dies while the transfer proceeds) and traps in
+    /// its own completion closure when the delegate rejects a redirect.
+    /// `PolicyTransportDownloadTests` pins both behaviors.
     public func download(
         for request: URLRequest,
         policy: RedirectPolicy,
         onBytes: (@Sendable (Int64) -> Void)? = nil
     ) async throws -> PolicyHTTPDownload {
         let delegate = RedirectTaskDelegate(initialRequest: request, policy: policy, onBytes: onBytes)
+        let task = session.downloadTask(with: request)
+        task.delegate = delegate
         do {
-            let (temporaryURL, response) = try await session.download(for: request, delegate: delegate)
-            try delegate.throwIfRejected()
+            let (temporaryURL, response) = try await delegate.completeDownload(driving: task)
+            do {
+                try delegate.throwIfRejected()
+            } catch {
+                try? FileManager.default.removeItem(at: temporaryURL)
+                throw error
+            }
             return PolicyHTTPDownload(
                 temporaryURL: temporaryURL,
                 response: response,
@@ -77,6 +92,9 @@ private final class RedirectTaskDelegate: NSObject, URLSessionTaskDelegate, URLS
     private var storedRedirects: [RedirectAuditHop] = []
     private var rejection: RedirectRejection?
     private var lastReportedBytes: Int64 = 0
+    private var downloadContinuation: CheckedContinuation<(URL, URLResponse), Error>?
+    private var movedTemporaryURL: URL?
+    private var fileMoveError: Error?
 
     init(
         initialRequest: URLRequest,
@@ -88,13 +106,71 @@ private final class RedirectTaskDelegate: NSObject, URLSessionTaskDelegate, URLS
         self.onBytes = onBytes
     }
 
-    /// Required by URLSessionDownloadDelegate; the async `download(for:)` API
-    /// returns the temporary URL directly, so nothing to do here.
+    /// Resumes `task.resume()` wrapped in a continuation so the transport can
+    /// await a classic download task. Cancellation of the surrounding Swift
+    /// task cancels the URL session task, which then completes with
+    /// `URLError.cancelled` through `didCompleteWithError`.
+    func completeDownload(driving task: URLSessionDownloadTask) async throws -> (URL, URLResponse) {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.lock()
+                downloadContinuation = continuation
+                lock.unlock()
+                task.resume()
+            }
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    /// The system deletes `location` the moment this method returns, so the
+    /// file must move to a caller-owned path synchronously here.
     func urlSession(
         _: URLSession,
         downloadTask _: URLSessionDownloadTask,
-        didFinishDownloadingTo _: URL
-    ) {}
+        didFinishDownloadingTo location: URL
+    ) {
+        let stable = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "policy-download-\(UUID().uuidString).tmp",
+            isDirectory: false
+        )
+        do {
+            try FileManager.default.moveItem(at: location, to: stable)
+            lock.lock()
+            movedTemporaryURL = stable
+            lock.unlock()
+        } catch {
+            lock.lock()
+            fileMoveError = error
+            lock.unlock()
+        }
+    }
+
+    func urlSession(_: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        let continuation = downloadContinuation
+        downloadContinuation = nil
+        let movedURL = movedTemporaryURL
+        let moveError = fileMoveError
+        lock.unlock()
+        // Data-task flows (`data(for:)`) share this delegate but never set a
+        // continuation; their completion is owned by the async convenience.
+        guard let continuation else { return }
+        if let error {
+            if let movedURL { try? FileManager.default.removeItem(at: movedURL) }
+            continuation.resume(throwing: error)
+        } else if let moveError {
+            continuation.resume(throwing: moveError)
+        } else if let movedURL, let response = task.response {
+            continuation.resume(returning: (movedURL, response))
+        } else {
+            // Completed with neither a file nor an error: the shape a rejected
+            // redirect leaves behind (the 302 became the final response). The
+            // transport's throwIfRejected() turns this into the policy error;
+            // anything else is a genuinely malformed exchange.
+            continuation.resume(throwing: URLError(.badServerResponse))
+        }
+    }
 
     func urlSession(
         _: URLSession,
