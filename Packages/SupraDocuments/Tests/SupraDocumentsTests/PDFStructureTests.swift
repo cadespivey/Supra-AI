@@ -51,6 +51,29 @@ final class PDFStructureTests: XCTestCase {
         XCTAssertFalse(result.structure.nodes.contains { $0.kind == .region && $0.partIndex == 1 })
     }
 
+    func testVersionedOCRPayloadProducesLineRegionsWithBoxesAndConfidence() throws {
+        let payload = #"{"schemaVersion":1,"regions":[{"x":0.12,"y":0.34,"w":0.56,"h":0.08,"confidence":0.87,"text":"OCR-LINE-742"}]}"#
+        let part = ExtractedPart(
+            sourceKind: .pdfPage,
+            text: "OCR-LINE-742",
+            pageIndex: 0,
+            ocrConfidence: 0.87,
+            boundingBoxesJSON: payload
+        )
+
+        let structure = PDFStructureAdapter.structure(for: [part])
+
+        let region = try XCTUnwrap(structure.nodes.first { $0.kind == .region })
+        let regionPayload = self.payload(region)
+        XCTAssertEqual(regionPayload["semanticKind"] as? String, "ocr_line")
+        XCTAssertEqual(try XCTUnwrap(regionPayload["confidence"] as? Double), 0.87, accuracy: 0.0001)
+        let box = try XCTUnwrap(regionPayload["box"] as? [String: Any])
+        XCTAssertEqual(try XCTUnwrap(box["x"] as? Double), 0.12, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(box["y"] as? Double), 0.34, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(box["width"] as? Double), 0.56, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(box["height"] as? Double), 0.08, accuracy: 0.0001)
+    }
+
     func testTSTR10FormValuesAndSignaturePresenceRemainStructuredOutsideBodyFlow() async throws {
         // T-STR-10 expected RED: widget values and signature widgets are ignored;
         // there is no form-field region or page-level signature signal.
