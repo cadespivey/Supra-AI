@@ -846,7 +846,46 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         XCTAssertTrue(files.isEmpty)
     }
 
-    private func launchMotionApp(flag: String, storageRoot: URL) -> XCUIApplication {
+    func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() throws {
+        let storageRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MotionDraftCancelledUITest-\(UUID().uuidString)", isDirectory: true)
+        let app = launchMotionApp(
+            flag: "-uiTestMotionDraftSuccess",
+            storageRoot: storageRoot,
+            additionalArguments: ["-uiTestMotionDraftDelayed"]
+        )
+
+        let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
+        XCTAssertTrue(matter.waitForExistence(timeout: 20))
+        let motion = app.buttons["drafting.kind.motionToDismiss"]
+        XCTAssertTrue(motion.waitForExistence(timeout: 10))
+        motion.click()
+        let generate = app.buttons["drafting.generate"]
+        XCTAssertTrue(generate.waitForExistence(timeout: 5))
+        XCTAssertTrue(generate.isEnabled)
+        generate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+
+        let cancel = app.buttons["drafting.cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5), "The deterministic UI fixture never held generation in flight")
+        cancel.click()
+        let cancelled = app.descendants(matching: .any)["drafting.blocked"]
+        XCTAssertTrue(cancelled.waitForExistence(timeout: 5), cancelled.debugDescription)
+        XCTAssertTrue(cancelled.label.localizedCaseInsensitiveContains("cancelled"), cancelled.debugDescription)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.result"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.open"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.reveal"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.share"].exists)
+
+        let artifactCount = app.descendants(matching: .any)["drafting.motion.artifactCount"]
+        XCTAssertTrue(artifactCount.waitForExistence(timeout: 5), artifactCount.debugDescription)
+        XCTAssertEqual(artifactCount.label, "0", artifactCount.debugDescription)
+    }
+
+    private func launchMotionApp(
+        flag: String,
+        storageRoot: URL,
+        additionalArguments: [String] = []
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
@@ -856,6 +895,7 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
             "-uiTestOpenDraftSheet",
             flag,
         ]
+        app.launchArguments += additionalArguments
         app.launchEnvironment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"] = storageRoot.path
         app.launch()
         app.activate()
