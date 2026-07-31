@@ -373,6 +373,28 @@ else
   record_failure 'app smoke does not execute the guided document Q&A hosted guard'
 fi
 
+# The deterministic guided-Q&A runtime and model fixture are test authority, not
+# ordinary launch flags. They must require the hermetic XCUITest launch and keep
+# their artifacts out of the user's managed model directory.
+app_environment="${repo_root}/Apps/SupraAI/SupraAI/AppEnvironment.swift"
+if grep -Eq 'guidedQAUITestAuthorized[[:space:]]*=[[:space:]]*Self\.isUITestMode[[:space:]]*&&' "$app_environment" \
+    && grep -Fq 'guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient' "$app_environment"; then
+  printf '%s\n' 'PASS: guided Q&A synthetic runtime requires hermetic UI-test authority'
+else
+  record_failure 'guided Q&A synthetic runtime is not gated by hermetic UI-test authority'
+fi
+
+if grep -Fq 'guidedQAUITestModelRoot = guidedQAUITestAuthorized' "$app_environment" \
+    && grep -Fq 'FileManager.default.temporaryDirectory' "$app_environment" \
+    && grep -Fq 'managedModelRoots: guidedQAUITestManagedRoots' "$app_environment" \
+    && ! grep -Fq 'ManagedModelStorage.modelsDirectory()' < <(
+      sed -n '/private func seedUITestGuidedQAModel/,/^    }/p' "$app_environment"
+    ); then
+  printf '%s\n' 'PASS: guided Q&A model fixture stays in its authorized temporary root'
+else
+  record_failure 'guided Q&A model fixture can escape its authorized temporary root'
+fi
+
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_ALLOWED=YES' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_REQUIRED=YES' "$app_smoke_script" \
