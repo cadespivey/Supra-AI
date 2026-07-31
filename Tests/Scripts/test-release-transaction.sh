@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Scripts under test (release-preflight.sh, the manifest signer) default
+# DEVELOPER_DIR to Xcode-beta — the release runner's toolchain. GitHub's stock
+# macos-15 image has no Xcode-beta.app, and a nonexistent DEVELOPER_DIR makes
+# every xcrun-backed tool die with "missing DEVELOPER_DIR path" before any
+# assertion runs. Resolve the selected toolchain instead; an explicit
+# DEVELOPER_DIR always wins. Same pattern as test-release-preflight.sh.
+if [[ -z "${DEVELOPER_DIR:-}" && ! -d '/Applications/Xcode-beta.app/Contents/Developer' ]]; then
+  DEVELOPER_DIR="$(xcode-select -p)"
+  export DEVELOPER_DIR
+fi
+
 repo_root="$(git rev-parse --show-toplevel)"
 scripts="${repo_root}/Scripts"
 fixture_command="${repo_root}/Tests/Scripts/Fixtures/Release/mock-command.sh"
