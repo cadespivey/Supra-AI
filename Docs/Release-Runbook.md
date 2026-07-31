@@ -106,14 +106,20 @@ bash Scripts/release-rehearsal-required.sh
 `--base SHA`.) Exit 0 is the only "no rehearsal needed" signal; a REQUIRED verdict and
 every error path exit nonzero, so a failure can never read as permission to skip.
 Signed-output machinery — scripts whose inputs are real signing/notarization/packaging
-tool behavior (build, sign, smoke, artifact verification, appcast preparation, the
-publish transaction), the release workflows, entitlements, `ExportOptions.plist`,
+tool behavior (build, sign, smoke, artifact verification, appcast preparation), the
+release workflows, entitlements, `ExportOptions.plist`,
 runner provisioning, and `Scripts/lib/release-common.sh` — re-arms the rehearsal;
 anything machinery-shaped that the script cannot classify fails safe to REQUIRED.
 Orchestration and gate scripts that consume only git/GitHub state (cut-release,
 dispatch, finish, preflight) do not re-arm it: they are covered fail-closed by the
 hermetic harnesses in protected CI, and a green rehearsal exercises none of their
-fail-paths anyway. Toolchain changes (Xcode, Sparkle tools, signing identities) are
+fail-paths anyway. The production-only publish path
+(`publish-release-transaction.sh`, `publish-release-appcast.sh`,
+`rollback-release-appcast.sh`) does not re-arm it either, for a structural reason:
+`release.sh --no-publish` exits before the publish transaction is invoked, so a
+rehearsal cannot exercise those scripts — their only coverage is the hermetic
+transaction suite, and the verdict lists them on a distinct production-only line
+rather than issuing a false REQUIRED. Toolchain changes (Xcode, Sparkle tools, signing identities) are
 invisible to the diff and still require a rehearsal. Routine releases that change only
 product code proceed directly to production (owner decision, 2026-07-19); the hermetic
 mock transaction (`bash Tests/Scripts/test-release-transaction.sh`) continues to cover
