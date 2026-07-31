@@ -35,8 +35,14 @@ public enum OoxmlWriter {
 
     private static func paragraphPropsXML(_ style: String?, _ props: ParaProps) -> String {
         var children = ""
-        // Schema order: pStyle, pBdr, tabs, spacing, ind, jc
+        // Schema order: pStyle, numPr, pBdr, tabs, spacing, ind, jc
         if let style { children += #"<w:pStyle w:val="\#(style)"/>"# }
+        if let numberingID = props.numberingID {
+            children += "<w:numPr>"
+            children += #"<w:ilvl w:val="\#(props.numberingLevel ?? 0)"/>"#
+            children += #"<w:numId w:val="\#(numberingID)"/>"#
+            children += "</w:numPr>"
+        }
         if let bottom = props.bottomBorder {
             children += "<w:pBdr>" + borderXML("bottom", bottom) + "</w:pBdr>"
         }
@@ -91,10 +97,17 @@ public enum OoxmlWriter {
     private static func runPropsXML(_ props: RunProps) -> String {
         guard !props.isEmpty else { return "" }
         var children = ""
-        // Schema order: b, i, caps, sz, szCs, u
+        // Schema order: rFonts, b, i, caps, color, sz, szCs, u
+        if let fontName = props.fontName {
+            let escaped = escape(fontName)
+            children += #"<w:rFonts w:ascii="\#(escaped)" w:hAnsi="\#(escaped)"/>"#
+        }
         if props.bold { children += "<w:b/>" }
         if props.italic { children += "<w:i/>" }
         if props.caps { children += "<w:caps/>" }
+        if let color = props.colorHex {
+            children += #"<w:color w:val="\#(escape(color))"/>"#
+        }
         if let sz = props.fontHalfPoints {
             children += #"<w:sz w:val="\#(sz)"/>"#
             children += #"<w:szCs w:val="\#(sz)"/>"#
@@ -115,10 +128,18 @@ public enum OoxmlWriter {
         if table.layoutFixed {
             out += #"<w:tblLayout w:type="fixed"/>"#
         }
-        if let margin = table.cellMarginTwips {
+        if table.cellMarginTwips != nil || table.cellMarginTopTwips != nil || table.cellMarginBottomTwips != nil {
             out += "<w:tblCellMar>"
-            out += #"<w:left w:w="\#(margin)" w:type="dxa"/>"#
-            out += #"<w:right w:w="\#(margin)" w:type="dxa"/>"#
+            if let top = table.cellMarginTopTwips {
+                out += #"<w:top w:w="\#(top)" w:type="dxa"/>"#
+            }
+            if let margin = table.cellMarginTwips {
+                out += #"<w:left w:w="\#(margin)" w:type="dxa"/>"#
+                out += #"<w:right w:w="\#(margin)" w:type="dxa"/>"#
+            }
+            if let bottom = table.cellMarginBottomTwips {
+                out += #"<w:bottom w:w="\#(bottom)" w:type="dxa"/>"#
+            }
             out += "</w:tblCellMar>"
         }
         out += "</w:tblPr>"
@@ -142,6 +163,12 @@ public enum OoxmlWriter {
         var out = "<w:tc><w:tcPr>"
         out += #"<w:tcW w:w="\#(cell.widthTwips)" w:type="dxa"/>"#
         out += bordersXML("tcBorders", cell.borders)
+        if let fill = cell.shadingFill {
+            out += #"<w:shd w:val="clear" w:color="auto" w:fill="\#(escape(fill))"/>"#
+        }
+        if let alignment = cell.verticalAlignment {
+            out += #"<w:vAlign w:val="\#(escape(alignment))"/>"#
+        }
         out += "</w:tcPr>"
         if cell.content.isEmpty {
             out += "<w:p/>"
@@ -181,6 +208,9 @@ public enum OoxmlWriter {
 
     private static func sectionXML(_ s: SectionProps) -> String {
         var out = "<w:sectPr>"
+        if let id = s.defaultHeaderRelId {
+            out += #"<w:headerReference w:type="default" r:id="\#(id)"/>"#
+        }
         if let id = s.defaultFooterRelId {
             out += #"<w:footerReference w:type="default" r:id="\#(id)"/>"#
         }
@@ -188,7 +218,7 @@ public enum OoxmlWriter {
             out += #"<w:footerReference w:type="first" r:id="\#(id)"/>"#
         }
         out += #"<w:pgSz w:w="\#(s.pageWidthTwips)" w:h="\#(s.pageHeightTwips)"/>"#
-        out += #"<w:pgMar w:top="\#(s.marginTopTwips)" w:right="\#(s.marginRightTwips)" w:bottom="\#(s.marginBottomTwips)" w:left="\#(s.marginLeftTwips)" w:header="720" w:footer="720" w:gutter="0"/>"#
+        out += #"<w:pgMar w:top="\#(s.marginTopTwips)" w:right="\#(s.marginRightTwips)" w:bottom="\#(s.marginBottomTwips)" w:left="\#(s.marginLeftTwips)" w:header="\#(s.headerDistanceTwips)" w:footer="\#(s.footerDistanceTwips)" w:gutter="0"/>"#
         if let start = s.pageNumberStart {
             out += #"<w:pgNumType w:start="\#(start)"/>"#
         }

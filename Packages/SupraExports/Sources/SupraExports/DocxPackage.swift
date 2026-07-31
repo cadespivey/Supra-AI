@@ -17,7 +17,7 @@ public struct DocxPackage: Sendable {
     ) -> DocxPackage {
         let relsType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
         return DocxPackage(parts: [
-            "[Content_Types].xml": contentTypes(includeFooters: true),
+            "[Content_Types].xml": contentTypes(includeFooters: true, includeEmptyFooter: true),
             "_rels/.rels": """
             <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -69,6 +69,50 @@ public struct DocxPackage: Sendable {
         ])
     }
 
+    /// General rich-export package assembled from the shared typed OOXML
+    /// model/writer. Includes styles, numbering, a running title, and PAGE
+    /// footer so relationship validation covers every presentation part.
+    public static func richExport(
+        documentXML: String,
+        stylesXML: String,
+        settingsXML: String,
+        numberingXML: String,
+        headerXML: String,
+        footerXML: String = pageNumberFooterXML
+    ) -> DocxPackage {
+        let relsType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        return DocxPackage(parts: [
+            "[Content_Types].xml": contentTypes(
+                includeFooters: true,
+                includeEmptyFooter: false,
+                includeHeader: true,
+                includeNumbering: true
+            ),
+            "_rels/.rels": """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rId1" Type="\(relsType)/officeDocument" Target="word/document.xml"/>
+            </Relationships>
+            """,
+            "word/_rels/document.xml.rels": """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rIdStyles" Type="\(relsType)/styles" Target="styles.xml"/>
+              <Relationship Id="rIdSettings" Type="\(relsType)/settings" Target="settings.xml"/>
+              <Relationship Id="rIdNumbering" Type="\(relsType)/numbering" Target="numbering.xml"/>
+              <Relationship Id="rIdHeader1" Type="\(relsType)/header" Target="header1.xml"/>
+              <Relationship Id="rIdFooter1" Type="\(relsType)/footer" Target="footer1.xml"/>
+            </Relationships>
+            """,
+            "word/document.xml": documentXML,
+            "word/styles.xml": stylesXML,
+            "word/settings.xml": settingsXML,
+            "word/numbering.xml": numberingXML,
+            "word/header1.xml": headerXML,
+            "word/footer1.xml": footerXML,
+        ])
+    }
+
     /// Centered `PAGE` field footer (the DEFAULT footer, used from page 2). Exports §4.6.
     public static let pageNumberFooterXML = """
     <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -113,10 +157,23 @@ public struct DocxPackage: Sendable {
         return try Data(contentsOf: url)
     }
 
-    private static func contentTypes(includeFooters: Bool) -> String {
+    private static func contentTypes(
+        includeFooters: Bool,
+        includeEmptyFooter: Bool = false,
+        includeHeader: Bool = false,
+        includeNumbering: Bool = false
+    ) -> String {
         let footerOverrides = includeFooters ? """
           <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+        """ : ""
+        let emptyFooterOverride = includeEmptyFooter ? """
           <Override PartName="/word/footerEmpty.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+        """ : ""
+        let headerOverride = includeHeader ? """
+          <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+        """ : ""
+        let numberingOverride = includeNumbering ? """
+          <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
         """ : ""
         return """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -126,7 +183,10 @@ public struct DocxPackage: Sendable {
           <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
           <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
           <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
+        \(headerOverride)
+        \(numberingOverride)
         \(footerOverrides)
+        \(emptyFooterOverride)
         </Types>
         """
     }

@@ -1,0 +1,261 @@
+import Foundation
+import SupraExports
+
+enum RichDOCXExportRenderer {
+    static func render(_ payload: DocumentExportPayload) throws -> Data {
+        let semantic = RichExportDocument(payload: payload)
+        var body: [BodyElement] = []
+        var orderedListIndex = 0
+        var orderedStarts: [Int] = []
+
+        for block in semantic.blocks {
+            switch block {
+            case let .title(content):
+                body.append(.paragraph(paragraph(content, style: "ExportTitle")))
+            case let .reviewBanner(content):
+                guard !plainText(content).isEmpty else { continue }
+                body.append(.paragraph(paragraph(content, style: "ReviewBanner")))
+            case let .heading(level, content):
+                body.append(.paragraph(paragraph(content, style: "ExportHeading\(min(max(level, 1), 6))")))
+            case let .paragraph(content):
+                body.append(.paragraph(paragraph(content, style: "ExportBody")))
+            case let .blockQuote(content):
+                body.append(.paragraph(paragraph(content, style: "ExportQuote")))
+            case let .unorderedList(items):
+                for item in items {
+                    body.append(.paragraph(paragraph(
+                        item,
+                        style: "ExportList",
+                        props: ParaProps(numberingLevel: 0, numberingID: 1)
+                    )))
+                }
+            case let .orderedList(start, items):
+                orderedStarts.append(start)
+                let numberingID = orderedListIndex + 2
+                orderedListIndex += 1
+                for item in items {
+                    body.append(.paragraph(paragraph(
+                        item,
+                        style: "ExportList",
+                        props: ParaProps(numberingLevel: 0, numberingID: numberingID)
+                    )))
+                }
+            case let .table(table):
+                body.append(.table(ooxmlTable(table)))
+            case let .sourceAppendix(sources):
+                guard !sources.isEmpty else { continue }
+                body.append(.paragraph(paragraph([.text("Sources")], style: "SourceHeading")))
+                body.append(.table(sourceTable(sources)))
+            }
+        }
+
+        let section = SectionProps(
+            pageWidthTwips: 12_240,
+            pageHeightTwips: 15_840,
+            marginTopTwips: 1_440,
+            marginRightTwips: 1_440,
+            marginBottomTwips: 1_440,
+            marginLeftTwips: 1_440,
+            defaultHeaderRelId: "rIdHeader1",
+            defaultFooterRelId: "rIdFooter1",
+            pageNumberStart: 1,
+            headerDistanceTwips: 708,
+            footerDistanceTwips: 708
+        )
+        let documentXML = OoxmlWriter.documentXML(OoxmlDocument(body: body, section: section))
+        let package = DocxPackage.richExport(
+            documentXML: documentXML,
+            stylesXML: StyleSheetCompiler.richExportStylesXML(),
+            settingsXML: StyleSheetCompiler.settingsXML(),
+            numberingXML: numberingXML(orderedStarts: orderedStarts),
+            headerXML: headerXML(title: payload.title),
+            footerXML: footerXML
+        )
+        return try package.render()
+    }
+
+    private static func paragraph(
+        _ content: [RichExportDocument.Inline],
+        style: String,
+        props: ParaProps = ParaProps()
+    ) -> OoxmlParagraph {
+        OoxmlParagraph(style: style, props: props, runs: runs(content))
+    }
+
+    private static func runs(_ content: [RichExportDocument.Inline]) -> [OoxmlRun] {
+        content.map { inline in
+            switch inline {
+            case let .text(value):
+                .text(value)
+            case let .emphasis(value):
+                .text(value, props: RunProps(italic: true))
+            case let .strong(value):
+                .text(value, props: RunProps(bold: true))
+            case let .code(value):
+                .text(value, props: RunProps(fontHalfPoints: 20, fontName: "Menlo"))
+            case let .citation(label):
+                .text("[\(label)]", props: RunProps(bold: true))
+            case let .link(label, destination):
+                .text("\(label) (\(destination))", props: RunProps(underline: true, colorHex: "2E74B5"))
+            }
+        }
+    }
+
+    private static func ooxmlTable(_ table: RichExportDocument.Table) -> OoxmlTable {
+        let columnCount = max(table.headers.count, 1)
+        let width = 9_360
+        let columnWidth = width / columnCount
+        let grid = Array(repeating: columnWidth, count: columnCount)
+        let border = Border(val: "single", size: 4, space: 0, color: "B7B7B7")
+        let borders = Borders(top: border, left: border, bottom: border, right: border, insideH: border, insideV: border)
+        var rows: [[OoxmlCell]] = [
+            table.headers.enumerated().map { index, content in
+                OoxmlCell(
+                    widthTwips: columnWidth,
+                    borders: borders,
+                    content: [paragraph(
+                        content,
+                        style: "ExportTableHeader",
+                        props: ParaProps(jc: alignment(table.alignments[safe: index] ?? .leading))
+                    )],
+                    shadingFill: "F2F4F7",
+                    verticalAlignment: "center"
+                )
+            },
+        ]
+        rows.append(contentsOf: table.rows.map { row in
+            row.enumerated().map { index, content in
+                OoxmlCell(
+                    widthTwips: columnWidth,
+                    borders: borders,
+                    content: [paragraph(
+                        content,
+                        style: "ExportTableBody",
+                        props: ParaProps(jc: alignment(table.alignments[safe: index] ?? .leading))
+                    )],
+                    verticalAlignment: "center"
+                )
+            }
+        })
+        return OoxmlTable(
+            widthTwips: width,
+            borders: borders,
+            grid: grid,
+            rows: rows,
+            cellMarginTwips: 120,
+            indentTwips: 120,
+            cellMarginTopTwips: 80,
+            cellMarginBottomTwips: 80
+        )
+    }
+
+    private static func sourceTable(_ sources: [RichExportDocument.Source]) -> OoxmlTable {
+        let widths = [1_700, 1_700, 1_100, 1_700, 3_160]
+        let headers = ["Relationship ID", "Document", "Locator", "Warnings", "Excerpt"]
+        let border = Border(val: "single", size: 4, space: 0, color: "B7B7B7")
+        let borders = Borders(top: border, left: border, bottom: border, right: border, insideH: border, insideV: border)
+        var rows: [[OoxmlCell]] = [
+            zip(headers, widths).map { label, width in
+                OoxmlCell(
+                    widthTwips: width,
+                    borders: borders,
+                    content: [paragraph([.text(label)], style: "ExportTableHeader")],
+                    shadingFill: "F2F4F7",
+                    verticalAlignment: "center"
+                )
+            },
+        ]
+        rows.append(contentsOf: sources.map { source in
+            let values = [source.label, source.documentName, source.locator, source.warnings, source.excerpt]
+            return zip(values, widths).map { value, width in
+                OoxmlCell(
+                    widthTwips: width,
+                    borders: borders,
+                    content: [paragraph([.text(value)], style: "SourceBody")],
+                    verticalAlignment: "center"
+                )
+            }
+        })
+        return OoxmlTable(
+            widthTwips: widths.reduce(0, +),
+            borders: borders,
+            grid: widths,
+            rows: rows,
+            cellMarginTwips: 120,
+            indentTwips: 120,
+            cellMarginTopTwips: 80,
+            cellMarginBottomTwips: 80
+        )
+    }
+
+    private static func alignment(_ value: RichExportDocument.TableAlignment) -> Jc {
+        switch value {
+        case .leading: .left
+        case .center: .center
+        case .trailing: .right
+        }
+    }
+
+    private static func headerXML(title: String) -> String {
+        let titleRun = OoxmlWriter.runXML(.text(
+            title,
+            props: RunProps(fontHalfPoints: 18, fontName: "Calibri", colorHex: "666666")
+        ))
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/></w:pPr>\(titleRun)</w:p></w:hdr>
+        """
+    }
+
+    private static let footerXML: String = {
+        let runs = [
+            OoxmlRun.text("Page ", props: RunProps(fontHalfPoints: 18, fontName: "Calibri", colorHex: "666666")),
+            OoxmlRun(.fieldChar(.begin)),
+            OoxmlRun(.instrText(" PAGE ")),
+            OoxmlRun(.fieldChar(.separate)),
+            OoxmlRun.text("1", props: RunProps(fontHalfPoints: 18, fontName: "Calibri", colorHex: "666666")),
+            OoxmlRun(.fieldChar(.end)),
+            OoxmlRun.text(" of ", props: RunProps(fontHalfPoints: 18, fontName: "Calibri", colorHex: "666666")),
+            OoxmlRun(.fieldChar(.begin)),
+            OoxmlRun(.instrText(" NUMPAGES ")),
+            OoxmlRun(.fieldChar(.separate)),
+            OoxmlRun.text("1", props: RunProps(fontHalfPoints: 18, fontName: "Calibri", colorHex: "666666")),
+            OoxmlRun(.fieldChar(.end)),
+        ].map(OoxmlWriter.runXML).joined()
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/></w:pPr>\(runs)</w:p></w:ftr>
+        """
+    }()
+
+    private static func numberingXML(orderedStarts: [Int]) -> String {
+        let instances = orderedStarts.enumerated().map { offset, start in
+            #"<w:num w:numId="\#(offset + 2)"><w:abstractNumId w:val="1"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="\#(max(start, 1))"/></w:lvlOverride></w:num>"#
+        }.joined()
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="singleLevel"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:tabs><w:tab w:val="num" w:pos="720"/></w:tabs><w:spacing w:after="160" w:line="280" w:lineRule="auto"/><w:ind w:left="720" w:hanging="360"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr></w:lvl></w:abstractNum>
+          <w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="singleLevel"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/><w:pPr><w:tabs><w:tab w:val="num" w:pos="720"/></w:tabs><w:spacing w:after="160" w:line="280" w:lineRule="auto"/><w:ind w:left="720" w:hanging="360"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/></w:rPr></w:lvl></w:abstractNum>
+          <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+          \(instances)
+        </w:numbering>
+        """
+    }
+
+    private static func plainText(_ content: [RichExportDocument.Inline]) -> String {
+        content.map { inline in
+            switch inline {
+            case let .text(value), let .emphasis(value), let .strong(value), let .code(value): value
+            case let .citation(label): "[\(label)]"
+            case let .link(label, _): label
+            }
+        }.joined()
+    }
+}
+
+private extension Array {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}

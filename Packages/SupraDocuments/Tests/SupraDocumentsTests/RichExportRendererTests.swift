@@ -9,13 +9,19 @@ final class RichExportRendererTests: XCTestCase {
     private var directory = URL(fileURLWithPath: "/tmp")
 
     override func setUpWithError() throws {
-        directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RichExportRendererTests-\(UUID().uuidString)", isDirectory: true)
+        if let retainedPath = ProcessInfo.processInfo.environment["SUPRA_EXPORT_QA_DIR"] {
+            directory = URL(fileURLWithPath: retainedPath, isDirectory: true)
+        } else {
+            directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("RichExportRendererTests-\(UUID().uuidString)", isDirectory: true)
+        }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
     override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: directory)
+        if ProcessInfo.processInfo.environment["SUPRA_EXPORT_QA_DIR"] == nil {
+            try? FileManager.default.removeItem(at: directory)
+        }
     }
 
     // T-EXP-10/11: PDFKit sees every semantic section and a measurable title/
@@ -34,11 +40,12 @@ final class RichExportRendererTests: XCTestCase {
         XCTAssertTrue((document.string ?? "").contains("Sources"))
         XCTAssertTrue((document.string ?? "").contains("agreement.pdf"))
 
-        let titleHeight = try selectionHeight(for: "Quarterly Findings", in: document)
-        let headingHeight = try selectionHeight(for: "Findings", in: document, occurrence: 1)
-        let bodyHeight = try selectionHeight(for: "Payment was due", in: document)
-        XCTAssertGreaterThan(titleHeight, headingHeight)
-        XCTAssertGreaterThan(headingHeight, bodyHeight)
+        let titleSize = try fontSize(for: "Quarterly Findings", in: attributed)
+        let headingSize = try fontSize(for: "Findings", in: attributed, occurrence: 1)
+        let bodySize = try fontSize(for: "Payment was material", in: attributed)
+        XCTAssertEqual(titleSize, 22, accuracy: 0.5)
+        XCTAssertEqual(headingSize, 16, accuracy: 0.5)
+        XCTAssertEqual(bodySize, 11, accuracy: 0.5)
     }
 
     // T-EXP-12/13/14: letter geometry is stable, page numbers are visible,
@@ -95,6 +102,7 @@ final class RichExportRendererTests: XCTestCase {
             "word/styles.xml",
             "word/settings.xml",
             "word/numbering.xml",
+            "word/header1.xml",
             "word/footer1.xml",
             "word/_rels/document.xml.rels",
         ]
@@ -114,17 +122,28 @@ final class RichExportRendererTests: XCTestCase {
         XCTAssertTrue(document.contains("agreement.pdf"))
         XCTAssertFalse(document.contains("**material**"))
         XCTAssertFalse(document.contains("| --- |"))
+        XCTAssertTrue(document.contains(#"<w:pgSz w:w="12240" w:h="15840"/>"#))
+        XCTAssertTrue(document.contains(#"<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/>"#))
+        XCTAssertTrue(document.contains(#"<w:tblW w:w="9360" w:type="dxa"/>"#))
+        XCTAssertTrue(document.contains(#"<w:tblInd w:w="120" w:type="dxa"/>"#))
+        XCTAssertTrue(document.contains(#"<w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:right w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/></w:tblCellMar>"#))
+        XCTAssertTrue(document.contains(#"<w:shd w:val="clear" w:color="auto" w:fill="F2F4F7"/>"#))
 
         let styles = try entryString("word/styles.xml", in: url)
         XCTAssertTrue(styles.contains(#"w:styleId="ExportTitle""#))
         XCTAssertTrue(styles.contains(#"w:styleId="ExportHeading1""#))
+        let contentTypes = try entryString("[Content_Types].xml", in: url)
+        XCTAssertTrue(contentTypes.contains(#"PartName="/word/footer1.xml""#))
+        XCTAssertFalse(contentTypes.contains("/word/footerEmpty.xml"))
         let numbering = try entryString("word/numbering.xml", in: url)
         XCTAssertTrue(numbering.contains(#"w:numFmt w:val="bullet""#))
         XCTAssertTrue(numbering.contains(#"w:numFmt w:val="decimal""#))
         let relationships = try entryString("word/_rels/document.xml.rels", in: url)
         XCTAssertTrue(relationships.contains(#"Target="styles.xml""#))
         XCTAssertTrue(relationships.contains(#"Target="numbering.xml""#))
+        XCTAssertTrue(relationships.contains(#"Target="header1.xml""#))
         XCTAssertTrue(relationships.contains(#"Target="footer1.xml""#))
+        XCTAssertTrue(try entryString("word/header1.xml", in: url).contains("Quarterly Findings"))
         XCTAssertTrue(try entryString("word/footer1.xml", in: url).contains(" PAGE "))
     }
 
@@ -174,6 +193,7 @@ final class RichExportRendererTests: XCTestCase {
         XCTAssertTrue(output.contains(#"<c r="A2" s="1"><v>1</v></c>"#))
         XCTAssertTrue(output.contains("'=Quarterly Findings"))
         XCTAssertTrue(output.contains("S1"))
+        XCTAssertTrue(output.contains(#"<c r="E11" s="1" t="inlineStr"><is><t xml:space="preserve">S1</t></is></c>"#))
 
         let sources = try entryString("xl/worksheets/sheet2.xml", in: url)
         XCTAssertTrue(sources.contains(#"state="frozen""#))
@@ -224,7 +244,7 @@ final class RichExportRendererTests: XCTestCase {
 
             | Date | Amount |
             | --- | ---: |
-            | 2024-03-03 | $5,000 |
+            | 2024-03-03 | $5,000 [S1] |
             """,
             reviewWarning: "Verify before external use.",
             sources: [
@@ -239,16 +259,25 @@ final class RichExportRendererTests: XCTestCase {
         )
     }
 
-    private func selectionHeight(
+    private func fontSize(
         for needle: String,
-        in document: PDFDocument,
+        in attributed: NSAttributedString,
         occurrence: Int = 0
     ) throws -> CGFloat {
-        let selections = document.findString(needle, withOptions: [])
-        XCTAssertGreaterThan(selections.count, occurrence)
-        let selection = selections[occurrence]
-        let page = try XCTUnwrap(selection.pages.first)
-        return selection.bounds(for: page).height
+        let text = attributed.string as NSString
+        var searchRange = NSRange(location: 0, length: text.length)
+        var found = NSRange(location: NSNotFound, length: 0)
+        for _ in 0...occurrence {
+            found = text.range(of: needle, options: [], range: searchRange)
+            guard found.location != NSNotFound else {
+                XCTFail("missing \(needle) occurrence \(occurrence)")
+                return 0
+            }
+            let nextLocation = found.location + found.length
+            searchRange = NSRange(location: nextLocation, length: text.length - nextLocation)
+        }
+        let font = try XCTUnwrap(attributed.attribute(.font, at: found.location, effectiveRange: nil) as? NSFont)
+        return font.pointSize
     }
 
     private func entry(_ path: String, in archive: URL) throws -> Data {
@@ -267,6 +296,7 @@ final class RichExportRendererTests: XCTestCase {
     }
 
     private func makeArchive(at url: URL, parts: [String: String]) throws {
+        try? FileManager.default.removeItem(at: url)
         let archive = try XCTUnwrap(Archive(url: url, accessMode: .create, pathEncoding: nil))
         for (path, text) in parts.sorted(by: { $0.key < $1.key }) {
             let data = Data(text.utf8)
