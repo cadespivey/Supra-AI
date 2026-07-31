@@ -23,6 +23,7 @@ import SupraStore
 @MainActor
 public final class MatterDraftingController: ObservableObject {
     public typealias DraftAuditRecorder = (AuditEventRecord) throws -> Void
+    public typealias AsyncDraftCheckpoint = @Sendable () async throws -> Void
 
     public struct DraftArtifact: Sendable, Equatable {
         /// What produced this artifact — a wired catalog kind, or a free-form custom
@@ -49,9 +50,11 @@ public final class MatterDraftingController: ObservableObject {
         case incompleteFirmProfile(missing: [String])
         case missingCaptionField(String)
         case missingRequiredSlots([String])
+        case motionBlocked([String])
         case unsupportedJurisdiction(String)
         case unsupportedKind(DraftKindID)
         case emptyDescription
+        case cancelled
         case verificationBlocked([String])
         case renderFailed(String)
 
@@ -66,11 +69,16 @@ public final class MatterDraftingController: ObservableObject {
             case let .missingCaptionField(field):
                 return "This matter is missing its \(field). Add it to the matter before drafting a court filing."
             case let .missingRequiredSlots(slots):
-                return "Complete the Notice of Appearance fields before drafting — still needed: \(slots.joined(separator: ", "))."
+                return "Complete the required drafting fields — still needed: \(slots.joined(separator: ", "))."
+            case let .motionBlocked(reasons):
+                let detail = reasons.isEmpty ? "The motion inputs or selected sources are not ready." : reasons.joined(separator: " ")
+                return "Motion generation was blocked before a file was created. \(detail)"
             case let .unsupportedJurisdiction(jurisdiction):
-                return "Notice of Appearance drafting is currently wired for Florida filings only. This matter looks like \(jurisdiction)."
+                return "This court-filing workflow is currently wired for Florida matters only. This matter looks like \(jurisdiction)."
             case let .unsupportedKind(kind):
                 return "Drafting for \(kind.rawValue) isn't wired into chat yet."
+            case .cancelled:
+                return "Draft generation was cancelled before a file was created."
             case let .verificationBlocked(summaries):
                 let detail = summaries.isEmpty ? "The content was not fully supported." : summaries.joined(separator: " ")
                 return "Draft generation was blocked before a file was created. \(detail)"
@@ -90,13 +98,20 @@ public final class MatterDraftingController: ObservableObject {
     private let fileStampProvider: @Sendable () -> String
     private let auditRecorder: DraftAuditRecorder
     private let pipelineFactory: @Sendable () -> DraftPipeline
+    private let beforeMotionPersistence: AsyncDraftCheckpoint
     /// Present when the app can call the on-device model — required for the LLM-backed
-    /// kinds (`letterDemand`). The deterministic notice path works without it.
+    /// kinds (`letterDemand`). The deterministic notice and supported-motion
+    /// paths work without it.
     private let runtimeClient: (any RuntimeClientProtocol)?
     /// The firm's structural style overrides (letterhead/caption/signature/…), or nil to use the
     /// house default. Injected as the raw value type; in the app, `FirmStyleProfileController`
     /// (M2) supplies its `.profile` here. `nil` ⇒ output is byte-for-byte `.defaultFL`.
     private let firmStyleProfile: FirmStyleProfile?
+
+    /// Durable lineage identifiers for the first supported motion vertical. These
+    /// values change only when the deterministic definition or verifier contract does.
+    public nonisolated static let motionDefinitionVersion = "motion-to-dismiss-fl-v1"
+    public nonisolated static let motionVerifierVersion = "SupraDrafting.DraftVerifier/v1"
 
     public init(
         store: SupraStore,
@@ -106,7 +121,8 @@ public final class MatterDraftingController: ObservableObject {
         fileStampProvider: (@Sendable () -> String)? = nil,
         auditRecorder: DraftAuditRecorder? = nil,
         firmStyleProfile: FirmStyleProfile? = nil,
-        pipelineFactory: (@Sendable () -> DraftPipeline)? = nil
+        pipelineFactory: (@Sendable () -> DraftPipeline)? = nil,
+        beforeMotionPersistence: AsyncDraftCheckpoint? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
@@ -119,6 +135,7 @@ public final class MatterDraftingController: ObservableObject {
         self.firmStyleProfile = firmStyleProfile
         // Default: deterministic verifier + the court/letter renderers. Injectable for tests.
         self.pipelineFactory = pipelineFactory ?? { DraftPipeline.makeDefault() }
+        self.beforeMotionPersistence = beforeMotionPersistence ?? {}
     }
 
     public func refreshLegacyDraftReviewState(matterID: String) {
@@ -169,7 +186,7 @@ public final class MatterDraftingController: ObservableObject {
 
     /// Drafts a Notice of Appearance for a matter, writing a `.docx` to managed
     /// storage and returning its URL + review notes. The deterministic, no-LLM kind
-    /// — the first wired into chat.
+    /// — the first kind wired into chat.
     public func draftNoticeOfAppearance(
         matterID: String,
         parties: [PartyLine],
@@ -252,7 +269,7 @@ public final class MatterDraftingController: ObservableObject {
     /// The kinds the app can actually generate, with display titles and a reason for
     /// any that are present in the catalog but not yet wired into the app. `isEnabled`
     /// is keyed off the controller's wired generation paths — NOT registry membership,
-    /// since all three kinds have full registry definitions but only the notice is wired.
+    /// since registry membership alone does not prove an end-to-end app path.
     public func availableDraftKinds() -> [DraftKindAvailability] {
         let wired = wiredKinds
         return DraftKindID.allCases.map { kind in
@@ -268,8 +285,8 @@ public final class MatterDraftingController: ObservableObject {
     }
 
     /// Single entry point for the Draft Workspace. Dispatches a typed request to the
-    /// matching generation path. The notice path renders a `.docx`; the custom path
-    /// writes a markdown work-product description (clearly labeled — not a filing).
+    /// matching generation path. Notice and supported-motion paths render `.docx`;
+    /// the custom path writes a clearly labeled markdown work-product description.
     public func draft(_ request: MatterDraftRequest, matterID: String) async -> Result<DraftArtifact, DraftError> {
         switch request {
         case let .noticeAppearance(input):
@@ -281,6 +298,8 @@ public final class MatterDraftingController: ObservableObject {
                 recipients: input.recipients,
                 serviceDate: input.serviceDate
             )
+        case let .motionToDismiss(input):
+            return await draftMotionToDismiss(matterID: matterID, input: input)
         case let .customDescription(input):
             return await draftCustomDescription(matterID: matterID, input: input)
         }
@@ -414,9 +433,476 @@ public final class MatterDraftingController: ObservableObject {
     }
 
     /// The kinds this controller can actually generate. `letterDemand` is LLM-backed, so it
-    /// is only wired when a runtime is available; the notice path is always deterministic.
+    /// is only wired when a runtime is available; notice and motion are deterministic.
     private var wiredKinds: Set<DraftKindID> {
-        runtimeClient == nil ? [.noticeAppearance] : [.noticeAppearance, .letterDemand]
+        runtimeClient == nil
+            ? [.noticeAppearance, .motionToDismiss]
+            : [.noticeAppearance, .motionToDismiss, .letterDemand]
+    }
+
+    // MARK: - Supported Florida Motion to Dismiss
+
+    /// Current, revision-bound fact excerpts that can be selected for the motion.
+    /// Ineligible rows remain visible with a concrete reason so a missing source is
+    /// never silently treated as grounded evidence.
+    public func motionFactSources(matterID: String) -> [MotionDraftFactSource] {
+        do {
+            return try loadMotionFactSources(matterID: matterID)
+        } catch {
+            message = "Could not load motion fact sources: \(error.localizedDescription)"
+            return []
+        }
+    }
+
+    /// Saved authorities for this matter, annotated with the first motion
+    /// vertical's review, citation-shape, and proposition-support requirements.
+    public func motionAuthoritySources(matterID: String) -> [MotionDraftAuthoritySource] {
+        do {
+            return try loadMotionAuthoritySources(matterID: matterID)
+        } catch {
+            message = "Could not load motion authorities: \(error.localizedDescription)"
+            return []
+        }
+    }
+
+    /// One fail-closed readiness decision shared by the form and the generate
+    /// boundary. Generation resolves every selected ID again immediately before
+    /// assembly so stale/deleted sources cannot slip through a previously green UI.
+    public func motionReadiness(input: MotionToDismissDraftInput, matterID: String) -> MotionDraftReadiness {
+        var reasons: [String] = []
+        let selectedFactIDs = Self.uniqueNonEmpty(input.selectedFactChunkIDs)
+        let selectedAuthorityIDs = Self.uniqueNonEmpty(input.selectedAuthorityIDs)
+
+        let matter: MatterRecord?
+        do {
+            matter = try store.matters.fetchMatter(id: matterID)
+        } catch {
+            matter = nil
+            reasons.append("The matter could not be loaded.")
+        }
+
+        if let matter {
+            let profile: AssistantProfile
+            do {
+                profile = try store.appSettings.getSetting(AssistantProfile.profileKey, as: AssistantProfile.self) ?? .empty
+            } catch {
+                profile = .empty
+                reasons.append("The firm profile could not be loaded.")
+            }
+            let courtHeader = Self.courtHeader(for: matter)
+            if !Self.isSupportedNoticeJurisdiction(matter: matter, courtHeader: courtHeader) {
+                reasons.append("Only Florida motion-to-dismiss filings are supported in this workflow.")
+            }
+            let noticeInputs = NoticeAppearance.Inputs(
+                courtHeader: courtHeader,
+                parties: Self.normalizedParties(input.parties),
+                partyRepresented: input.partyRepresented.trimmingCharacters(in: .whitespacesAndNewlines),
+                representedPartyName: input.representedPartyName.trimmingCharacters(in: .whitespacesAndNewlines),
+                caseNumber: matter.docketNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+                division: matter.judge?.trimmingCharacters(in: .whitespacesAndNewlines),
+                serviceDate: input.serviceDate,
+                recipients: Self.normalizedRecipients(input.recipients)
+            )
+            let firm = Self.firmProfile(from: profile, jurisdiction: matter.court ?? matter.jurisdiction)
+            reasons.append(contentsOf: NoticeAppearanceInputValidator.validate(inputs: noticeInputs, profile: firm)
+                .map { "Missing or invalid \($0)." })
+        } else if !reasons.contains("The matter could not be loaded.") {
+            reasons.append("The matter was not found.")
+        }
+
+        if input.respondingTo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            reasons.append("Identify the pleading the motion responds to.")
+        }
+        if input.reliefSought.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            reasons.append("State the relief sought.")
+        }
+        if input.grounds.isEmpty {
+            reasons.append("Select a supported ground.")
+        } else {
+            for ground in input.grounds {
+                do {
+                    _ = try MotionGroundSpec.knownGround(for: ground)
+                } catch {
+                    let label = ground.trimmingCharacters(in: .whitespacesAndNewlines)
+                    reasons.append("Unsupported ground “\(label.isEmpty ? "blank" : label)”. This workflow supports failure to state a claim.")
+                }
+            }
+        }
+
+        if selectedFactIDs.count != input.selectedFactChunkIDs.count {
+            reasons.append("Fact-source selections must contain unique, nonblank IDs.")
+        }
+        if selectedFactIDs.isEmpty {
+            reasons.append("Select at least one current fact excerpt.")
+        }
+        do {
+            let availableFacts = Dictionary(
+                uniqueKeysWithValues: try loadMotionFactSources(matterID: matterID).map { ($0.chunkID, $0) }
+            )
+            for id in selectedFactIDs {
+                guard let source = availableFacts[id] else {
+                    reasons.append("Selected fact source \(id) is unavailable in this matter.")
+                    continue
+                }
+                if !source.isReady {
+                    reasons.append("Fact source “\(source.documentName)” is unavailable: \(source.blockingReason ?? "it is not current and ready").")
+                }
+            }
+        } catch {
+            reasons.append("Selected fact sources could not be verified.")
+        }
+
+        if selectedAuthorityIDs.count != input.selectedAuthorityIDs.count {
+            reasons.append("Authority selections must contain unique, nonblank IDs.")
+        }
+        if selectedAuthorityIDs.isEmpty {
+            reasons.append("Select at least one reviewed authority.")
+        }
+        do {
+            let availableAuthorities = Dictionary(
+                uniqueKeysWithValues: try loadMotionAuthoritySources(matterID: matterID).map { ($0.authorityID, $0) }
+            )
+            for id in selectedAuthorityIDs {
+                guard let source = availableAuthorities[id] else {
+                    reasons.append("Selected authority \(id) is unavailable in this matter.")
+                    continue
+                }
+                if !source.isReady {
+                    reasons.append("Authority “\(source.caseName)” is unavailable: \(source.blockingReason ?? "it is not reviewed and supported").")
+                }
+            }
+        } catch {
+            reasons.append("Selected authorities could not be verified.")
+        }
+
+        let uniqueReasons = Self.uniqueStrings(reasons)
+        return MotionDraftReadiness(
+            selectedFactCount: selectedFactIDs.count,
+            selectedAuthorityCount: selectedAuthorityIDs.count,
+            blockingReasons: uniqueReasons
+        )
+    }
+
+    /// Exact selected-only packet used by the deterministic assembler and exposed
+    /// internally for adversarial source-containment tests.
+    func motionPacket(input: MotionToDismissDraftInput, matterID: String) throws -> MotionDraftPacket {
+        let readiness = motionReadiness(input: input, matterID: matterID)
+        guard readiness.canGenerate else { throw DraftError.motionBlocked(readiness.blockingReasons) }
+
+        let factByID = Dictionary(
+            uniqueKeysWithValues: try loadMotionFactSources(matterID: matterID).map { ($0.chunkID, $0) }
+        )
+        let authorityByID = Dictionary(
+            uniqueKeysWithValues: try loadMotionAuthoritySources(matterID: matterID).map { ($0.authorityID, $0) }
+        )
+        let facts = try input.selectedFactChunkIDs.map { id -> MotionDraftPacket.Fact in
+            guard let source = factByID[id], source.isReady else {
+                throw DraftError.motionBlocked(["Selected fact source \(id) changed before generation."])
+            }
+            return MotionDraftPacket.Fact(
+                chunkID: source.chunkID,
+                documentID: source.documentID,
+                revisionID: source.documentRevisionID,
+                documentName: source.documentName,
+                locator: source.locator,
+                text: source.text
+            )
+        }
+        let authorities = try input.selectedAuthorityIDs.map { id -> MotionDraftPacket.Authority in
+            guard let source = authorityByID[id], source.isReady else {
+                throw DraftError.motionBlocked(["Selected authority \(id) changed before generation."])
+            }
+            return MotionDraftPacket.Authority(
+                authorityID: source.authorityID,
+                caseName: source.caseName,
+                citation: source.citation,
+                snippet: source.snippet
+            )
+        }
+        let groundSpecs = try input.grounds.map { ground -> MotionGroundSpec in
+            do {
+                return try MotionGroundSpec.knownGround(for: ground)
+            } catch {
+                throw DraftError.motionBlocked(["Unsupported ground “\(ground)”."])
+            }
+        }
+        return MotionDraftPacket(facts: facts, authorities: authorities, groundSpecs: groundSpecs)
+    }
+
+    public func draftMotionToDismiss(
+        matterID: String,
+        input: MotionToDismissDraftInput
+    ) async -> Result<DraftArtifact, DraftError> {
+        guard !isGenerating else {
+            message = "A draft is already generating. Wait for it to finish."
+            return .failure(.renderFailed("already generating"))
+        }
+        isGenerating = true
+        message = nil
+        defer { isGenerating = false }
+
+        do {
+            try Task.checkCancellation()
+            guard let matter = try store.matters.fetchMatter(id: matterID) else {
+                return .failure(.matterNotFound)
+            }
+            let packet = try motionPacket(input: input, matterID: matterID)
+            let profile = try store.appSettings.getSetting(AssistantProfile.profileKey, as: AssistantProfile.self) ?? .empty
+            guard profile.hasDraftingIdentity else {
+                return .failure(.incompleteFirmProfile(missing: profile.missingDraftingIdentityFields))
+            }
+            let courtHeader = Self.courtHeader(for: matter)
+            guard Self.isSupportedNoticeJurisdiction(matter: matter, courtHeader: courtHeader) else {
+                return .failure(.unsupportedJurisdiction(courtHeader))
+            }
+            guard let caseNumber = matter.docketNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !caseNumber.isEmpty else {
+                return .failure(.missingCaptionField("case/docket number"))
+            }
+
+            let firm = Self.firmProfile(from: profile, jurisdiction: matter.court ?? matter.jurisdiction)
+            let noticeInputs = NoticeAppearance.Inputs(
+                courtHeader: courtHeader,
+                parties: Self.normalizedParties(input.parties),
+                partyRepresented: input.partyRepresented.trimmingCharacters(in: .whitespacesAndNewlines),
+                representedPartyName: input.representedPartyName.trimmingCharacters(in: .whitespacesAndNewlines),
+                caseNumber: caseNumber,
+                division: matter.judge?.trimmingCharacters(in: .whitespacesAndNewlines),
+                serviceDate: input.serviceDate,
+                recipients: Self.normalizedRecipients(input.recipients)
+            )
+            let shell = NoticeAppearance.assemble(noticeInputs, profile: firm)
+            guard var signature = shell.signature, var certificate = shell.certificate else {
+                return .failure(.verificationBlocked(["The required signature or certificate shell was unavailable."]))
+            }
+            signature.respectfullySubmitted = input.serviceDate
+            let respondingTo = input.respondingTo.trimmingCharacters(in: .whitespacesAndNewlines)
+            let representedName = input.representedPartyName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let representedRole = input.partyRepresented.trimmingCharacters(in: .whitespacesAndNewlines)
+            let relief = input.reliefSought.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = MotionToDismiss.title(
+                party: representedName,
+                partyRole: representedRole,
+                pleading: respondingTo
+            )
+            certificate.documentTitle = title
+
+            let introduction = [BodyBlock.paragraph(
+                "\(representedRole), \(representedName), moves to dismiss \(respondingTo) for failure to state a claim. This motion is assembled from the factual excerpts and reviewed authorities selected by counsel."
+            )]
+            let authorityParagraphs = packet.authorities.map { authority in
+                BodyBlock.paragraph("\(authority.citation): \(authority.snippet)")
+            }
+            let argument = MotionToDismiss.ArgumentPoint(
+                heading: "THE \(respondingTo.uppercased()) FAILS TO STATE A CLAIM.",
+                body: authorityParagraphs + [.paragraph(
+                    "Counsel submits that the selected factual excerpts should be evaluated under these cited standards."
+                )]
+            )
+            let conclusion = "WHEREFORE, \(representedName) respectfully requests \(relief)."
+            let model = MotionToDismiss.assemble(
+                caption: shell.caption,
+                title: title,
+                introduction: introduction,
+                numberedFacts: packet.facts.map(\.text),
+                argumentPoints: [argument],
+                conclusion: conclusion,
+                signature: signature,
+                certificate: certificate
+            )
+
+            try Task.checkCancellation()
+            let result = try await pipelineFactory().runMotion(model: model, style: effectiveStyle())
+            try Task.checkCancellation()
+            try await beforeMotionPersistence()
+            try Task.checkCancellation()
+
+            let lineage = MotionDraftAuditLineage(
+                kindID: DraftKindID.motionToDismiss.rawValue,
+                factChunkIDs: packet.facts.map(\.chunkID),
+                documentIDs: packet.facts.map(\.documentID),
+                documentRevisionIDs: packet.facts.map(\.revisionID),
+                authorityIDs: packet.authorities.map(\.authorityID),
+                groundKeys: packet.groundSpecs.map(\.key),
+                respondingToSHA256: DocumentStorage.sha256Hex(of: Data(respondingTo.utf8)),
+                reliefSoughtSHA256: DocumentStorage.sha256Hex(of: Data(relief.utf8)),
+                modelRepository: "not_applicable",
+                modelRevision: "deterministic_assembly",
+                definitionVersion: Self.motionDefinitionVersion,
+                verifierVersion: Self.motionVerifierVersion,
+                verificationStatus: "passed",
+                outputFileName: ""
+            )
+            let url = try persist(
+                data: result.docx,
+                matterID: matterID,
+                title: "Motion to Dismiss",
+                format: .docx,
+                auditLabel: DraftKindID.motionToDismiss.rawValue,
+                motionLineage: lineage
+            )
+            let followUps = result.followUps.map {
+                DraftFollowUp(isBlocking: $0.severity == .blocking, message: $0.message)
+            }
+            return .success(DraftArtifact(
+                source: .kind(.motionToDismiss),
+                format: .docx,
+                title: title,
+                fileURL: url,
+                followUps: followUps
+            ))
+        } catch is CancellationError {
+            return .failure(.cancelled)
+        } catch let error as DraftError {
+            return .failure(error)
+        } catch let error as SupraDraftingCore.DraftError {
+            return .failure(Self.mapCoreDraftError(error))
+        } catch {
+            return .failure(.renderFailed(error.localizedDescription))
+        }
+    }
+
+    private func loadMotionFactSources(matterID: String) throws -> [MotionDraftFactSource] {
+        let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
+        var sources: [MotionDraftFactSource] = []
+        for document in documents {
+            let partsByID = Dictionary(
+                uniqueKeysWithValues: try store.documentIndex.fetchParts(documentID: document.id).map { ($0.id, $0) }
+            )
+            for chunk in try store.documentIndex.fetchChunks(documentID: document.id) {
+                var blockers: [String] = []
+                if document.status != MatterDocumentStatus.ready.rawValue {
+                    blockers.append("the document is not ready")
+                }
+                if ![DocumentExtractionStatus.extracted.rawValue, DocumentExtractionStatus.ocrComplete.rawValue, DocumentExtractionStatus.edited.rawValue]
+                    .contains(document.extractionStatus) {
+                    blockers.append("text extraction is not ready")
+                }
+                if ![DocumentIndexStatus.textIndexed.rawValue, DocumentIndexStatus.ready.rawValue]
+                    .contains(document.indexStatus) {
+                    blockers.append("the text index is not current")
+                }
+                let revisionID = chunk.revisionID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if revisionID.isEmpty {
+                    blockers.append("the excerpt has no immutable revision")
+                }
+                if let partID = chunk.pagePartID, let part = partsByID[partID] {
+                    if part.currentRevisionID != chunk.revisionID {
+                        blockers.append("the excerpt is stale relative to the current revision")
+                    }
+                } else {
+                    blockers.append("the excerpt is not bound to a current document part")
+                }
+                let text = chunk.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if text.isEmpty { blockers.append("the excerpt is empty") }
+                if InstructionShapeDetector.isBlocking(text) {
+                    blockers.append("the excerpt contains instruction-shaped text")
+                }
+                let sourceKind = DocumentSourceKind(rawValue: chunk.sourceKind) ?? .text
+                let locator = DocumentSourceLocator(
+                    sourceKind: sourceKind,
+                    pageIndex: chunk.pageIndex,
+                    pageLabel: chunk.pageLabel,
+                    sheetName: chunk.sheetName,
+                    cellRange: chunk.cellRange,
+                    emailPartPath: chunk.emailPartPath,
+                    charStart: chunk.charStart,
+                    charEnd: chunk.charEnd,
+                    boundingBoxesJSON: chunk.boundingBoxesJSON
+                ).displayString
+                sources.append(MotionDraftFactSource(
+                    chunkID: chunk.id,
+                    documentID: document.id,
+                    documentRevisionID: revisionID,
+                    documentName: document.displayName,
+                    locator: locator,
+                    text: text,
+                    isReady: blockers.isEmpty,
+                    blockingReason: blockers.isEmpty ? nil : blockers.joined(separator: ", ")
+                ))
+            }
+        }
+        return sources
+    }
+
+    private func loadMotionAuthoritySources(matterID: String) throws -> [MotionDraftAuthoritySource] {
+        try store.authorities.fetchAuthorities(matterID: matterID).map { authority in
+            let citation = Self.motionCitation(from: authority)
+            let snippet = Self.firstNonEmpty(authority.caseSummary, authority.opinionText)
+            var blockers: [String] = []
+            if authority.reviewState != ResearchResultReviewState.notAdverse.rawValue {
+                blockers.append("adverse-authority review is incomplete")
+            }
+            if authority.useStatus != AuthorityUseStatus.userMarkedVerified.rawValue {
+                blockers.append("the authority has not been marked verified")
+            }
+            if !Self.isSupportedFloridaCitation(citation) {
+                blockers.append("the citation is missing or unsupported")
+            }
+            if snippet.isEmpty {
+                blockers.append("no supporting proposition text is saved")
+            } else if !Self.supportsFailureToStateClaim(snippet) {
+                blockers.append("the saved text does not support the failure-to-state-a-claim proposition")
+            }
+            if InstructionShapeDetector.isBlocking(snippet) {
+                blockers.append("the saved text contains instruction-shaped content")
+            }
+            return MotionDraftAuthoritySource(
+                authorityID: authority.id,
+                caseName: authority.caseName,
+                citation: citation,
+                snippet: snippet,
+                isReady: blockers.isEmpty,
+                blockingReason: blockers.isEmpty ? nil : blockers.joined(separator: ", ")
+            )
+        }
+    }
+
+    nonisolated private static func motionCitation(from authority: AuthorityRecord) -> String {
+        if let preferred = authority.preferredCitation?.trimmingCharacters(in: .whitespacesAndNewlines), !preferred.isEmpty {
+            return preferred
+        }
+        guard let data = authority.citationJSON.data(using: .utf8),
+              let citations = try? JSONDecoder().decode([String].self, from: data) else {
+            return ""
+        }
+        return citations.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    nonisolated private static func isSupportedFloridaCitation(_ citation: String) -> Bool {
+        let folded = citation.lowercased()
+        let hasFloridaCourt = folded.contains("fla.") || folded.contains("florida")
+        let hasReporter = folded.contains("so. ") || folded.contains("f. supp.") || folded.contains("fla. l. weekly")
+        return hasFloridaCourt && hasReporter && citation.rangeOfCharacter(from: .decimalDigits) != nil
+    }
+
+    nonisolated private static func supportsFailureToStateClaim(_ text: String) -> Bool {
+        let value = text.lowercased()
+        let identifiesMotion = value.contains("motion to dismiss") || value.contains("1.140")
+        let identifiesStandard = value.contains("legal sufficiency")
+            || (value.contains("failure") && value.contains("state") && (value.contains("claim") || value.contains("cause of action")))
+        let identifiesPleading = value.contains("complaint") || value.contains("pleading")
+            || value.contains("allegation") || value.contains("cause of action")
+        return identifiesMotion && identifiesStandard && identifiesPleading
+    }
+
+    nonisolated private static func firstNonEmpty(_ candidates: String?...) -> String {
+        candidates.lazy
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? ""
+    }
+
+    nonisolated private static func uniqueNonEmpty(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
+            return trimmed
+        }
+    }
+
+    nonisolated private static func uniqueStrings(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { seen.insert($0).inserted }
     }
 
     nonisolated private static func letterFacts(from input: LetterDraftInput, claim: String) -> [GroundedFact] {
@@ -638,7 +1124,8 @@ public final class MatterDraftingController: ObservableObject {
         matterID: String,
         title: String,
         format: DocumentExportFormat,
-        auditLabel: String
+        auditLabel: String,
+        motionLineage: MotionDraftAuditLineage? = nil
     ) throws -> URL {
         let directory = storage.exportsDirectory(forMatterID: matterID)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -655,13 +1142,24 @@ public final class MatterDraftingController: ObservableObject {
             try DocumentExportValidator.validate(temporaryURL, as: format)
         }
 
+        var completedLineage = motionLineage
+        completedLineage?.outputFileName = fileName
+        let metadataJSON: String?
+        if let completedLineage {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            metadataJSON = String(decoding: try encoder.encode(completedLineage), as: UTF8.self)
+        } else {
+            metadataJSON = nil
+        }
         let event = AuditEventRecord(
             matterID: matterID,
             eventType: "draft_generated",
             actor: "user",
             summary: "Generated \(auditLabel) draft (\(fileName))",
             relatedTable: "matters",
-            relatedID: matterID
+            relatedID: matterID,
+            metadataJSON: metadataJSON
         )
         do {
             try auditRecorder(event)
@@ -761,6 +1259,195 @@ public struct NoticeAppearanceDraftInput: Sendable, Equatable {
     }
 }
 
+/// Attorney-supplied slots plus explicit, immutable source selections for the
+/// first supported Florida motion vertical. No notice defaults are smuggled into
+/// this request; the form must supply every caption/service value deliberately.
+public struct MotionToDismissDraftInput: Sendable, Equatable {
+    public var parties: [PartyLine]
+    public var partyRepresented: String
+    public var representedPartyName: String
+    public var recipients: [ServiceRecipient]
+    public var serviceDate: DateOnly
+    public var respondingTo: String
+    public var grounds: [String]
+    public var reliefSought: String
+    public var selectedFactChunkIDs: [String]
+    public var selectedAuthorityIDs: [String]
+
+    public init(
+        parties: [PartyLine],
+        partyRepresented: String,
+        representedPartyName: String,
+        recipients: [ServiceRecipient],
+        serviceDate: DateOnly = .today,
+        respondingTo: String,
+        grounds: [String],
+        reliefSought: String,
+        selectedFactChunkIDs: [String],
+        selectedAuthorityIDs: [String]
+    ) {
+        self.parties = parties
+        self.partyRepresented = partyRepresented
+        self.representedPartyName = representedPartyName
+        self.recipients = recipients
+        self.serviceDate = serviceDate
+        self.respondingTo = respondingTo
+        self.grounds = grounds
+        self.reliefSought = reliefSought
+        self.selectedFactChunkIDs = selectedFactChunkIDs
+        self.selectedAuthorityIDs = selectedAuthorityIDs
+    }
+}
+
+public struct MotionDraftFactSource: Sendable, Equatable, Identifiable {
+    public var id: String { chunkID }
+    public let chunkID: String
+    public let documentID: String
+    public let documentRevisionID: String
+    public let documentName: String
+    public let locator: String
+    public let text: String
+    public let isReady: Bool
+    public let blockingReason: String?
+
+    public var displayExcerpt: String { String(text.prefix(240)) }
+
+    public init(
+        chunkID: String,
+        documentID: String,
+        documentRevisionID: String,
+        documentName: String,
+        locator: String,
+        text: String,
+        isReady: Bool,
+        blockingReason: String?
+    ) {
+        self.chunkID = chunkID
+        self.documentID = documentID
+        self.documentRevisionID = documentRevisionID
+        self.documentName = documentName
+        self.locator = locator
+        self.text = text
+        self.isReady = isReady
+        self.blockingReason = blockingReason
+    }
+}
+
+public struct MotionDraftAuthoritySource: Sendable, Equatable, Identifiable {
+    public var id: String { authorityID }
+    public let authorityID: String
+    public let caseName: String
+    public let citation: String
+    public let snippet: String
+    public let isReady: Bool
+    public let blockingReason: String?
+
+    public var displayExcerpt: String { String(snippet.prefix(240)) }
+
+    public init(
+        authorityID: String,
+        caseName: String,
+        citation: String,
+        snippet: String,
+        isReady: Bool,
+        blockingReason: String?
+    ) {
+        self.authorityID = authorityID
+        self.caseName = caseName
+        self.citation = citation
+        self.snippet = snippet
+        self.isReady = isReady
+        self.blockingReason = blockingReason
+    }
+}
+
+public struct MotionDraftReadiness: Sendable, Equatable {
+    public let selectedFactCount: Int
+    public let selectedAuthorityCount: Int
+    public let blockingReasons: [String]
+
+    public var canGenerate: Bool { blockingReasons.isEmpty }
+
+    public init(selectedFactCount: Int, selectedAuthorityCount: Int, blockingReasons: [String]) {
+        self.selectedFactCount = selectedFactCount
+        self.selectedAuthorityCount = selectedAuthorityCount
+        self.blockingReasons = blockingReasons
+    }
+}
+
+struct MotionDraftPacket: Sendable, Equatable {
+    struct Fact: Sendable, Equatable {
+        let chunkID: String
+        let documentID: String
+        let revisionID: String
+        let documentName: String
+        let locator: String
+        let text: String
+    }
+
+    struct Authority: Sendable, Equatable {
+        let authorityID: String
+        let caseName: String
+        let citation: String
+        let snippet: String
+    }
+
+    let facts: [Fact]
+    let authorities: [Authority]
+    let groundSpecs: [MotionGroundSpec]
+}
+
+/// Stored on the required `draft_generated` audit row. Text inputs are retained
+/// as hashes while immutable row/revision IDs preserve exact source lineage.
+public struct MotionDraftAuditLineage: Codable, Sendable, Equatable {
+    public let kindID: String
+    public let factChunkIDs: [String]
+    public let documentIDs: [String]
+    public let documentRevisionIDs: [String]
+    public let authorityIDs: [String]
+    public let groundKeys: [String]
+    public let respondingToSHA256: String
+    public let reliefSoughtSHA256: String
+    public let modelRepository: String
+    public let modelRevision: String
+    public let definitionVersion: String
+    public let verifierVersion: String
+    public let verificationStatus: String
+    public var outputFileName: String
+
+    public init(
+        kindID: String,
+        factChunkIDs: [String],
+        documentIDs: [String],
+        documentRevisionIDs: [String],
+        authorityIDs: [String],
+        groundKeys: [String],
+        respondingToSHA256: String,
+        reliefSoughtSHA256: String,
+        modelRepository: String,
+        modelRevision: String,
+        definitionVersion: String,
+        verifierVersion: String,
+        verificationStatus: String,
+        outputFileName: String
+    ) {
+        self.kindID = kindID
+        self.factChunkIDs = factChunkIDs
+        self.documentIDs = documentIDs
+        self.documentRevisionIDs = documentRevisionIDs
+        self.authorityIDs = authorityIDs
+        self.groundKeys = groundKeys
+        self.respondingToSHA256 = respondingToSHA256
+        self.reliefSoughtSHA256 = reliefSoughtSHA256
+        self.modelRepository = modelRepository
+        self.modelRevision = modelRevision
+        self.definitionVersion = definitionVersion
+        self.verifierVersion = verifierVersion
+        self.verificationStatus = verificationStatus
+        self.outputFileName = outputFileName
+    }
+}
+
 /// The user-facing inputs for a Demand Letter. The claim/amount/deadline become the
 /// grounded facts the model may use; the rest fill the deterministic letter scaffold.
 public struct LetterDraftInput: Sendable, Equatable {
@@ -825,6 +1512,7 @@ public struct CustomDraftDescriptionInput: Sendable, Equatable {
 /// A typed drafting request dispatched by the Draft Workspace.
 public enum MatterDraftRequest: Sendable, Equatable {
     case noticeAppearance(NoticeAppearanceDraftInput)
+    case motionToDismiss(MotionToDismissDraftInput)
     case customDescription(CustomDraftDescriptionInput)
 }
 

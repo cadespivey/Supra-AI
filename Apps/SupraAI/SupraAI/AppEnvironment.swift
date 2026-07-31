@@ -315,12 +315,32 @@ final class AppEnvironment: ObservableObject {
             _ = queue?.enqueueReindex(matterID: matterID)
         }
         self.documentQueue = queue
+        let draftingStorage: DocumentStorage?
+        if Self.isUITestMode,
+           let root = ProcessInfo.processInfo.environment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !root.isEmpty {
+            draftingStorage = DocumentStorage(root: URL(fileURLWithPath: root, isDirectory: true))
+        } else {
+            draftingStorage = nil
+        }
+        let beforeMotionPersistence: MatterDraftingController.AsyncDraftCheckpoint?
+        if Self.isUITestMode,
+           ProcessInfo.processInfo.arguments.contains("-uiTestMotionDraftDelayed") {
+            beforeMotionPersistence = {
+                try await Task.sleep(for: .seconds(30))
+            }
+        } else {
+            beforeMotionPersistence = nil
+        }
         self.mattersController = MattersController(
             store: store,
             runtimeClient: taskRuntimeClient,
             defaultSystemPrompt: systemPrompt,
             documentQueue: queue,
-            isImportReady: { documentSetup.isReadyForImport }
+            isImportReady: { documentSetup.isReadyForImport },
+            draftingStorage: draftingStorage,
+            beforeMotionPersistence: beforeMotionPersistence
         )
         // Keep the ScratchPad `@matter` autocomplete in lockstep with the matter list,
         // so a matter created while the app is running is mentionable right away
@@ -914,6 +934,7 @@ final class AppEnvironment: ObservableObject {
         seedUITestDocumentCorrectionIfNeeded()
         seedUITestDocumentRelationsIfNeeded()
         seedUITestGuidedQAIfNeeded()
+        seedUITestMotionDraftIfNeeded()
     }
 
     /// Seeds one ready and one review-required revision-bound passage plus a
@@ -1071,6 +1092,151 @@ final class AppEnvironment: ObservableObject {
         ))
         modelLibrary.refresh()
         modelLibrary.assignModel(modelID, to: .legalReasoning)
+    }
+
+    /// A fully fictional, revision-bound motion fixture used only by the hosted
+    /// motion XCUITests. The success and blocked variants share the same complete
+    /// Florida caption/service inputs; only authority readiness differs.
+    private func seedUITestMotionDraftIfNeeded() {
+        let arguments = ProcessInfo.processInfo.arguments
+        let success = arguments.contains("-uiTestMotionDraftSuccess")
+        let blocked = arguments.contains("-uiTestMotionDraftBlocked")
+        guard success || blocked, let matterID = mattersController.matters.first?.id else { return }
+
+        do {
+            if var draft = mattersController.draft(forMatter: matterID) {
+                draft.jurisdiction = "Florida"
+                draft.partyPerspective = .defendant
+                draft.court = "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA"
+                draft.judge = "CV-G"
+                draft.docketNumber = "2026-CA-001847"
+                try mattersController.updateMatter(id: matterID, draft: draft)
+            }
+
+            var profile = AssistantProfile()
+            profile.fullName = "Harvey Specter"
+            profile.organization = "Pearson Specter Litt"
+            profile.barNumber = "100847"
+            profile.officeStreet = "200 West Forsyth Street"
+            profile.officeSuite = "Suite 1400"
+            profile.officeCity = "Jacksonville"
+            profile.officeState = "Florida"
+            profile.officeZip = "32202"
+            profile.officePhone = "(904) 555-0142"
+            profile.officeFax = "(904) 555-0143"
+            profile.primaryEmail = "hspecter@pearsonspecterlitt.example"
+            profile.secondaryEmails = ["litdocket@pearsonspecterlitt.example"]
+            try store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)
+
+            let factName = "Motion Draft First Amended Complaint.txt"
+            if !(try store.documentLibrary.fetchDocuments(matterID: matterID)).contains(where: { $0.displayName == factName }) {
+                let text = "The fictional pleading alleges that Liberty Rail received rail components, without alleging a breached contractual duty."
+                let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                    sha256: DocumentStorage.sha256Hex(of: Data("uitest-motion-fact".utf8)),
+                    byteSize: text.utf8.count,
+                    originalExtension: "txt",
+                    managedRelativePath: "uitest/\(factName)"
+                )).blob
+                let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+                    matterID: matterID,
+                    blobID: blob.id,
+                    displayName: factName,
+                    status: MatterDocumentStatus.ready.rawValue,
+                    extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                    indexStatus: DocumentIndexStatus.textIndexed.rawValue,
+                    extractionMethod: "synthetic@toolchain:motion-uitest"
+                ))
+                let part = DocumentPagePartRecord(
+                    documentID: document.id,
+                    partIndex: 0,
+                    sourceKind: DocumentSourceKind.text.rawValue,
+                    normalizedText: text,
+                    charCount: text.count
+                )
+                let revision = DocumentPartRevisionRecord(
+                    documentID: document.id,
+                    partIndex: 0,
+                    derivationKey: "motion-uitest:\(document.id)",
+                    origin: "parser",
+                    method: "synthetic",
+                    text: text,
+                    charCount: text.count
+                )
+                let selection = DocumentPartSelectionRecord(
+                    documentID: document.id,
+                    partIndex: 0,
+                    selectedRevisionID: revision.id,
+                    selectionKey: "motion-uitest:\(document.id)",
+                    selectedBy: "policy",
+                    policyVersion: 1,
+                    decisionJSON: #"{"rule":"synthetic_motion_ui_fixture"}"#
+                )
+                _ = try store.documentRevisions.replacePartsAndPersistLineage(
+                    documentID: document.id,
+                    parts: [part],
+                    revisions: [revision],
+                    selections: [selection]
+                )
+                try store.documentIndex.replaceChunks(documentID: document.id, chunks: [
+                    DocumentChunkRecord(
+                        documentID: document.id,
+                        pagePartID: part.id,
+                        revisionID: revision.id,
+                        chunkIndex: 0,
+                        sourceKind: DocumentSourceKind.text.rawValue,
+                        charStart: 0,
+                        charEnd: text.count,
+                        normalizedText: text,
+                        displayExcerpt: text,
+                        tokenCount: 24
+                    )
+                ])
+            }
+
+            let authorityName = blocked
+                ? "Fictional Motion Authority — Review Required"
+                : "Fictional Marine, LLC v. Harbor Works, Inc."
+            if !(try store.authorities.fetchAuthorities(matterID: matterID)).contains(where: { $0.caseName == authorityName }) {
+                let session = try store.research.createSession(
+                    matterID: matterID,
+                    title: "Fictional motion authority fixture",
+                    issueText: "Failure to state a claim",
+                    jurisdiction: "Florida",
+                    status: .approved
+                )
+                let query = try store.research.createQuery(
+                    researchSessionID: session.id,
+                    queryText: "Florida motion to dismiss standard",
+                    queryIndex: 0,
+                    status: .approved
+                )
+                let result = try store.research.insertResult(ResearchResultRecord(
+                    researchQueryID: query.id,
+                    caseName: authorityName
+                ))
+                let citation = "Fictional Marine, LLC v. Harbor Works, Inc., 345 So. 3d 100, 104 (Fla. 1st DCA 2025)"
+                let support = "A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
+                _ = try store.authorities.insertAuthority(AuthorityRecord(
+                    matterID: matterID,
+                    researchSessionID: session.id,
+                    researchResultID: result.id,
+                    caseName: authorityName,
+                    citationJSON: String(decoding: try JSONEncoder().encode([citation]), as: UTF8.self),
+                    preferredCitation: citation,
+                    court: "Florida District Court of Appeal",
+                    courtID: "fladistctapp",
+                    reviewState: blocked
+                        ? ResearchResultReviewState.needsLaterReview.rawValue
+                        : ResearchResultReviewState.notAdverse.rawValue,
+                    useStatus: AuthorityUseStatus.userMarkedVerified.rawValue,
+                    opinionText: support,
+                    caseSummary: support
+                ))
+            }
+            mattersController.loadMatters()
+        } catch {
+            assertionFailure("Could not seed motion drafting UI fixture: \(error)")
+        }
     }
 
     /// Seeds one completed encrypted-source rejection for the T-OPS-07 warning

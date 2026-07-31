@@ -767,9 +767,9 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
     }
 
     func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() throws {
-        let storageRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MotionDraftUITest-\(UUID().uuidString)", isDirectory: true)
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "MotionDraftUITest")
         let app = launchMotionApp(flag: "-uiTestMotionDraftSuccess", storageRoot: storageRoot)
+        let documentConsumer = try registeredDOCXConsumer()
 
         let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
         XCTAssertTrue(matter.waitForExistence(timeout: 20))
@@ -788,35 +788,46 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
 
         let generate = app.buttons["drafting.generate"]
         XCTAssertTrue(generate.isEnabled)
-        XCTAssertTrue(generate.isHittable)
+        XCTAssertTrue(generate.isHittable, app.windows.debugDescription)
         let windowFrame = app.windows.firstMatch.frame
         generate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         let result = app.descendants(matching: .any)["drafting.result"]
         XCTAssertTrue(result.waitForExistence(timeout: 15), result.debugDescription)
-        XCTAssertTrue(app.descendants(matching: .any)["drafting.open"].exists)
+        let generatedFile = app.descendants(matching: .any)["drafting.result.filename"]
+        XCTAssertTrue(generatedFile.waitForExistence(timeout: 5), generatedFile.debugDescription)
+        let fileNamePrefix = "Draft generated: "
+        let generatedDescription = (generatedFile.value as? String) ?? generatedFile.label
+        XCTAssertTrue(generatedDescription.hasPrefix(fileNamePrefix), generatedFile.debugDescription)
+        let fileName = String(generatedDescription.dropFirst(fileNamePrefix.count))
+        XCTAssertEqual((fileName as NSString).pathExtension.lowercased(), "docx")
+
+        let open = app.buttons["drafting.open"]
+        XCTAssertTrue(open.exists)
         XCTAssertTrue(app.descendants(matching: .any)["drafting.reveal"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["drafting.share"].exists)
         assertVerticalWindowFrame(app.windows.firstMatch.frame, equals: windowFrame, context: "publishing a motion result")
 
-        let docx = try waitForDOCX(in: storageRoot)
-        XCTAssertEqual(Array(try Data(contentsOf: docx).prefix(2)), [0x50, 0x4B])
-        let textURL = storageRoot.appendingPathComponent("opened-motion.txt")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/textutil")
-        process.arguments = ["-convert", "txt", "-output", textURL.path, docx.path]
-        try process.run()
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0, "TextEdit's document conversion process rejected the DOCX")
-        let openedText = try String(contentsOf: textURL, encoding: .utf8)
-        XCTAssertTrue(openedText.contains("STATEMENT OF FACTS"))
-        XCTAssertTrue(openedText.contains("MEMORANDUM OF LAW"))
-        XCTAssertTrue(openedText.contains("CERTIFICATE OF SERVICE"))
+        // Exercise the shipping Open action. The registered DOCX consumer is
+        // TextEdit on stock hosted macOS and may be Word on a developer machine.
+        open.click()
+        XCTAssertTrue(
+            documentConsumer.application.wait(for: .runningForeground, timeout: 20),
+            "The production Open action did not activate \(documentConsumer.bundleIdentifier)"
+        )
+        let fileStem = (fileName as NSString).deletingPathExtension
+        let openedWindow = documentConsumer.application.windows.matching(
+            NSPredicate(format: "title CONTAINS[c] %@ OR label CONTAINS[c] %@", fileStem, fileStem)
+        ).firstMatch
+        XCTAssertTrue(
+            openedWindow.waitForExistence(timeout: 20),
+            "\(documentConsumer.bundleIdentifier) did not open \(fileName): \(documentConsumer.application.windows.debugDescription)"
+        )
+        openedWindow.typeKey("w", modifierFlags: .command)
     }
 
     func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() throws {
-        let storageRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MotionDraftBlockedUITest-\(UUID().uuidString)", isDirectory: true)
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "MotionDraftBlockedUITest")
         let app = launchMotionApp(flag: "-uiTestMotionDraftBlocked", storageRoot: storageRoot)
 
         let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
@@ -835,20 +846,10 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["drafting.open"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["drafting.reveal"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["drafting.share"].exists)
-
-        let files: [URL]
-        if FileManager.default.fileExists(atPath: storageRoot.path) {
-            let enumerator = FileManager.default.enumerator(at: storageRoot, includingPropertiesForKeys: nil)
-            files = enumerator?.compactMap { $0 as? URL }.filter { $0.pathExtension == "docx" } ?? []
-        } else {
-            files = []
-        }
-        XCTAssertTrue(files.isEmpty)
     }
 
     func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() throws {
-        let storageRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MotionDraftCancelledUITest-\(UUID().uuidString)", isDirectory: true)
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "MotionDraftCancelledUITest")
         let app = launchMotionApp(
             flag: "-uiTestMotionDraftSuccess",
             storageRoot: storageRoot,
@@ -875,10 +876,6 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["drafting.open"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["drafting.reveal"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["drafting.share"].exists)
-
-        let artifactCount = app.descendants(matching: .any)["drafting.motion.artifactCount"]
-        XCTAssertTrue(artifactCount.waitForExistence(timeout: 5), artifactCount.debugDescription)
-        XCTAssertEqual(artifactCount.label, "0", artifactCount.debugDescription)
     }
 
     private func launchMotionApp(
@@ -903,18 +900,37 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         return app
     }
 
-    private func waitForDOCX(in root: URL, timeout: TimeInterval = 10) throws -> URL {
-        let deadline = Date().addingTimeInterval(timeout)
-        repeat {
-            if let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil),
-               let match = enumerator.compactMap({ $0 as? URL }).first(where: { $0.pathExtension == "docx" }) {
-                return match
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        } while Date() < deadline
-        XCTFail("motion generation did not create a DOCX beneath \(root.path)")
-        throw CocoaError(.fileNoSuchFile)
+    /// The launched app is sandboxed, so its injected drafting root must live
+    /// inside that app's own container. Artifact absence is asserted by the
+    /// controller companion tests; this hosted class observes only production UI.
+    private func appSandboxWritableStorageRoot(prefix: String) -> URL {
+        let runnerHome = FileManager.default.homeDirectoryForCurrentUser.path
+        let containerMarker = "/Library/Containers/"
+        let hostHome = runnerHome.range(of: containerMarker).map {
+            String(runnerHome[..<$0.lowerBound])
+        } ?? runnerHome
+        return URL(fileURLWithPath: hostHome, isDirectory: true)
+            .appendingPathComponent("Library/Containers/ai.supra.SupraAI/Data/tmp", isDirectory: true)
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
     }
+
+    private func registeredDOCXConsumer() throws -> (application: XCUIApplication, bundleIdentifier: String) {
+        let probe = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SupraAI-DOCX-handler-probe-\(UUID().uuidString).docx")
+        try Data().write(to: probe, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: probe) }
+
+        let applicationURL = try XCTUnwrap(
+            NSWorkspace.shared.urlForApplication(toOpen: probe),
+            "macOS has no registered DOCX consumer"
+        )
+        let bundleIdentifier = try XCTUnwrap(
+            Bundle(url: applicationURL)?.bundleIdentifier,
+            "The registered DOCX consumer has no bundle identifier: \(applicationURL.path)"
+        )
+        return (XCUIApplication(bundleIdentifier: bundleIdentifier), bundleIdentifier)
+    }
+
 }
 
 @MainActor

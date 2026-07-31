@@ -395,6 +395,23 @@ printf '%s\n' \
   '}' \
   >"$restore_hook"
 run_case \
+  "missing supported motion hosted smoke tests fail closed" \
+  1 \
+  "supported motion hosted smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+printf '%s\n' \
+  'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
+  'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
+  'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class MotionToDismissWorkspaceUITests: XCTestCase {}' \
+  'func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
+  'func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
+  'func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() {}' \
+  >"$accessibility_hook"
+run_case \
   "the exact hosted XPC and accessibility selectors satisfy the hook" \
   0 \
   "Hosted XPC integration hook passed." \
@@ -473,6 +490,12 @@ if grep -Fq -- '-only-testing:SupraAIUITests/RestoreSettingsUITests' "$app_smoke
   printf '%s\n' 'PASS: app smoke executes the restore Settings and recovery hosted guards'
 else
   record_failure 'app smoke does not execute the restore Settings and recovery hosted guards'
+fi
+
+if grep -Fq -- '-only-testing:SupraAIUITests/MotionToDismissWorkspaceUITests' "$app_smoke_script"; then
+  printf '%s\n' 'PASS: app smoke executes the supported motion hosted guards'
+else
+  record_failure 'app smoke does not execute the supported motion hosted guards'
 fi
 
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \

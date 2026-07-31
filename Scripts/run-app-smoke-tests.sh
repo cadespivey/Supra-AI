@@ -60,6 +60,13 @@ if [[ ! -f "$accessibility_test" ]] \
   printf '%s\n' 'ERROR: remediation accessibility smoke tests are missing' >&2
   exit 1
 fi
+if ! grep -Eq 'class[[:space:]]+MotionToDismissWorkspaceUITests' "$accessibility_test" \
+    || ! grep -Fq 'testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX' "$accessibility_test" \
+    || ! grep -Fq 'testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions' "$accessibility_test" \
+    || ! grep -Fq 'testTUIMTD06CancellingInFlightMotionLeavesNoArtifact' "$accessibility_test"; then
+  printf '%s\n' 'ERROR: supported motion hosted smoke tests are missing' >&2
+  exit 1
+fi
 printf '%s\n' 'Hosted XPC integration hook passed.'
 (( check_only != 0 )) && exit 0
 
@@ -79,5 +86,6 @@ xcodebuild \
   -only-testing:SupraAIUITests/ResearchAuthoritiesUITests/testLegacyBillingWarningAnnouncesReviewAndUnavailableExport \
   -only-testing:SupraAIUITests/GuidedDocumentQAUITests/testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult \
   -only-testing:SupraAIUITests/RestoreSettingsUITests \
+  -only-testing:SupraAIUITests/MotionToDismissWorkspaceUITests \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \
   test

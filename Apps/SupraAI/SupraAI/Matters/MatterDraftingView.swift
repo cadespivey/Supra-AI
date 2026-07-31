@@ -53,6 +53,15 @@ struct MatterDraftingView: View {
     @State private var letterDelivery = ""
     @State private var routingMessage: String?
 
+    // Supported Florida motion inputs and exact source selections.
+    @State private var motionRespondingTo = ""
+    @State private var motionRelief = ""
+    @State private var motionFactSources: [MotionDraftFactSource] = []
+    @State private var motionAuthoritySources: [MotionDraftAuthoritySource] = []
+    @State private var selectedMotionFactIDs: Set<String> = []
+    @State private var selectedMotionAuthorityIDs: Set<String> = []
+    @State private var generationTask: Task<Void, Never>?
+
     private enum WorkProductSelection: Hashable {
         case kind(DraftKindID)
         case custom
@@ -112,6 +121,11 @@ struct MatterDraftingView: View {
             recipient.emails = "dhardman@example.test"
             recipient.role = "Counsel for Plaintiff"
             _recipients = State(initialValue: [recipient])
+            if ProcessInfo.processInfo.arguments.contains("-uiTestMotionDraftSuccess")
+                || ProcessInfo.processInfo.arguments.contains("-uiTestMotionDraftBlocked") {
+                _motionRespondingTo = State(initialValue: "Plaintiff's First Amended Complaint")
+                _motionRelief = State(initialValue: "dismissal without prejudice and leave to amend")
+            }
         }
     }
 
@@ -151,6 +165,7 @@ struct MatterDraftingView: View {
             library.refresh()
             controller.refreshLegacyDraftReviewState(matterID: matterID)
             if availableKinds.isEmpty { availableKinds = controller.availableDraftKinds() }
+            loadMotionSourcesIfNeeded()
         }
         // The result/error banner belongs to one work product — clear it when the
         // user switches to a different kind so a stale notice result doesn't linger
@@ -159,7 +174,9 @@ struct MatterDraftingView: View {
             result = nil
             errorText = nil
             routingMessage = nil
+            if selection == .kind(.motionToDismiss) { loadMotionSourcesIfNeeded() }
         }
+        .onDisappear { generationTask?.cancel() }
     }
 
     private var legacyDraftReviewSection: some View {
@@ -219,6 +236,7 @@ struct MatterDraftingView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!kind.isEnabled)
+                .accessibilityIdentifier("drafting.kind.\(kind.id.rawValue)")
             }
             Button { selection = .custom } label: {
                 workProductRow(
@@ -259,13 +277,128 @@ struct MatterDraftingView: View {
             captionSection
             representedSection
             recipientsSection
+        case .kind(.motionToDismiss):
+            captionSection
+            representedSection
+            motionSection
+            recipientsSection
         case .kind(.letterDemand):
             letterSection
-        case .kind:
-            EmptyView()   // unwired kinds aren't selectable
         case .custom:
             customSection
         }
+    }
+
+    private var motionSection: some View {
+        Section {
+            LabeledTextField(
+                label: "Responding to",
+                text: $motionRespondingTo,
+                prompt: "e.g. Plaintiff's First Amended Complaint"
+            )
+            .accessibilityIdentifier("drafting.motion.respondingTo")
+            LabeledTextField(
+                label: "Relief sought",
+                text: $motionRelief,
+                prompt: "e.g. dismissal without prejudice and leave to amend"
+            )
+            .accessibilityIdentifier("drafting.motion.relief")
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Ground").font(.supraCaption).foregroundStyle(.secondary)
+                Label("Failure to state a claim", systemImage: "checkmark.circle.fill")
+                    .accessibilityLabel("Selected ground: Failure to state a claim")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Fact excerpts").font(.supraHeadline)
+                if motionFactSources.isEmpty {
+                    Text("No current, indexed fact excerpts are available in this matter.")
+                        .font(.supraCaption).foregroundStyle(.orange)
+                } else {
+                    ForEach(motionFactSources) { source in
+                        sourceChoice(
+                            selected: selectedMotionFactIDs.contains(source.chunkID),
+                            enabled: source.isReady,
+                            title: "\(source.documentName) — \(source.locator)",
+                            detail: source.blockingReason ?? source.displayExcerpt
+                        ) {
+                            toggle(source.chunkID, in: &selectedMotionFactIDs)
+                        }
+                    }
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("drafting.motion.factSources")
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Reviewed authorities").font(.supraHeadline)
+                if motionAuthoritySources.isEmpty {
+                    Text("No saved authorities are available in this matter.")
+                        .font(.supraCaption).foregroundStyle(.orange)
+                } else {
+                    ForEach(motionAuthoritySources) { source in
+                        sourceChoice(
+                            selected: selectedMotionAuthorityIDs.contains(source.authorityID),
+                            enabled: source.isReady,
+                            title: source.caseName,
+                            detail: source.blockingReason ?? source.citation
+                        ) {
+                            toggle(source.authorityID, in: &selectedMotionAuthorityIDs)
+                        }
+                    }
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("drafting.motion.authoritySources")
+
+            let readiness = currentMotionReadiness
+            Label(
+                readiness.canGenerate
+                    ? "Ready — \(readiness.selectedFactCount) fact excerpt and \(readiness.selectedAuthorityCount) reviewed authority selected."
+                    : readiness.blockingReasons.joined(separator: " "),
+                systemImage: readiness.canGenerate ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+            )
+            .font(.supraCaption)
+            .foregroundStyle(readiness.canGenerate ? Color.secondary : Color.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier("drafting.motion.readiness")
+            .accessibilityLabel(
+                readiness.canGenerate
+                    ? "Motion ready to generate"
+                    : "Motion blocked. \(readiness.blockingReasons.joined(separator: " "))"
+            )
+        } header: {
+            Text("Supported Florida motion")
+        } footer: {
+            Text("Supra assembles this motion locally from only the fact excerpts and reviewed authorities you select. This first supported ground is failure to state a claim; no drafting model is used. Review every proposition and citation before filing.")
+        }
+    }
+
+    private func sourceChoice(
+        selected: Bool,
+        enabled: Bool,
+        title: String,
+        detail: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: selected ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(enabled ? Color.accentColor : Color.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).foregroundStyle(enabled ? .primary : .secondary)
+                    Text(detail).font(.supraCaption)
+                        .foregroundStyle(enabled ? Color.secondary : Color.orange)
+                        .lineLimit(3)
+                }
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 
     @ViewBuilder
@@ -417,6 +550,7 @@ struct MatterDraftingView: View {
         Section {
             Label("Draft generated: \(artifact.fileURL.lastPathComponent)", systemImage: "doc.fill")
                 .font(.supraCaption)
+                .accessibilityIdentifier("drafting.result.filename")
             if !artifact.reviewNotes.isEmpty {
                 ForEach(artifact.reviewNotes, id: \.self) { note in
                     Label(note, systemImage: "flag.fill")
@@ -447,6 +581,8 @@ struct MatterDraftingView: View {
                 Text("A work-product description in your own words — a drafting brief, not a court-ready or model-generated filing.")
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("drafting.result")
     }
 
     private var footer: some View {
@@ -458,7 +594,16 @@ struct MatterDraftingView: View {
             }
             Spacer()
             Button("Close") { dismiss() }
-            Button(generateLabel) { Task { await generate() } }
+            if controller.isGenerating, selection == .kind(.motionToDismiss) {
+                Button("Cancel") { generationTask?.cancel() }
+                    .accessibilityIdentifier("drafting.cancel")
+            }
+            Button(generateLabel) {
+                generationTask = Task {
+                    await generate()
+                    generationTask = nil
+                }
+            }
                 .keyboardShortcut(.defaultAction)
                 .disabled(controller.isGenerating || !isReady)
                 .accessibilityIdentifier("drafting.generate")
@@ -469,8 +614,8 @@ struct MatterDraftingView: View {
     private var generateLabel: String {
         switch selection {
         case .kind(.noticeAppearance): return "Generate Notice of Appearance"
+        case .kind(.motionToDismiss): return "Generate Motion to Dismiss"
         case .kind(.letterDemand): return "Generate Demand Letter"
-        case .kind: return "Generate"
         case .custom: return "Generate work-product description"
         }
     }
@@ -478,8 +623,8 @@ struct MatterDraftingView: View {
     private var isReady: Bool {
         switch selection {
         case .kind(.noticeAppearance): return noticeReady
+        case .kind(.motionToDismiss): return currentMotionReadiness.canGenerate
         case .kind(.letterDemand): return letterReady
-        case .kind: return false
         case .custom: return !trimmed(customDescription).isEmpty
         }
     }
@@ -490,12 +635,12 @@ struct MatterDraftingView: View {
         switch selection {
         case .kind(.noticeAppearance):
             return "Add the caption parties, your client, and at least one complete service recipient."
+        case .kind(.motionToDismiss):
+            return currentMotionReadiness.blockingReasons.first
         case .kind(.letterDemand):
             return routeModel == nil
                 ? "Assign a drafting model in Models, then fill the recipient and claim."
                 : "Fill the recipient address and the claim."
-        case .kind:
-            return nil
         case .custom:
             return "Describe the work product to enable Generate."
         }
@@ -555,8 +700,10 @@ struct MatterDraftingView: View {
                 representedPartyName: trimmed(representedPartyName),
                 recipients: serviceRecipients
             ))
-        case .kind:
-            return
+        case .kind(.motionToDismiss):
+            request = .motionToDismiss(currentMotionInput)
+        case .kind(.letterDemand):
+            return // handled by the routed-model branch above
         case .custom:
             request = .customDescription(CustomDraftDescriptionInput(
                 title: trimmed(customTitle),
@@ -602,6 +749,79 @@ struct MatterDraftingView: View {
             result = artifact
         case let .failure(error):
             errorText = error.errorDescription ?? "The letter could not be generated."
+        }
+    }
+
+    private var currentMotionInput: MotionToDismissDraftInput {
+        let partyLines = parties
+            .filter { !trimmed($0.name).isEmpty || !trimmed($0.designation).isEmpty }
+            .map { PartyLine(name: trimmed($0.name), designation: trimmed($0.designation)) }
+        let serviceRecipients = completeRecipientDrafts.map { recipient in
+            ServiceRecipient(
+                name: trimmed(recipient.name),
+                firm: trimmed(recipient.firm),
+                address: OfficeBlock(
+                    street: trimmed(recipient.street),
+                    suite: nil,
+                    city: trimmed(recipient.city),
+                    state: trimmed(recipient.state),
+                    zip: trimmed(recipient.zip),
+                    phone: "",
+                    fax: nil
+                ),
+                emails: splitEmails(recipient.emails),
+                role: trimmed(recipient.role)
+            )
+        }
+        return MotionToDismissDraftInput(
+            parties: partyLines,
+            partyRepresented: trimmed(partyRepresented),
+            representedPartyName: trimmed(representedPartyName),
+            recipients: serviceRecipients,
+            respondingTo: trimmed(motionRespondingTo),
+            grounds: ["failure to state a claim"],
+            reliefSought: trimmed(motionRelief),
+            selectedFactChunkIDs: motionFactSources
+                .filter { selectedMotionFactIDs.contains($0.chunkID) }
+                .map(\.chunkID),
+            selectedAuthorityIDs: motionAuthoritySources
+                .filter { selectedMotionAuthorityIDs.contains($0.authorityID) }
+                .map(\.authorityID)
+        )
+    }
+
+    private var currentMotionReadiness: MotionDraftReadiness {
+        controller.motionReadiness(input: currentMotionInput, matterID: matterID)
+    }
+
+    private func loadMotionSourcesIfNeeded() {
+        motionFactSources = controller.motionFactSources(matterID: matterID)
+        motionAuthoritySources = controller.motionAuthoritySources(matterID: matterID)
+        let currentFactIDs = Set(motionFactSources.map(\.chunkID))
+        let currentAuthorityIDs = Set(motionAuthoritySources.map(\.authorityID))
+        selectedMotionFactIDs.formIntersection(currentFactIDs)
+        selectedMotionAuthorityIDs.formIntersection(currentAuthorityIDs)
+
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-uiTestMotionDraftSuccess") || arguments.contains("-uiTestMotionDraftBlocked") {
+            if selectedMotionFactIDs.isEmpty,
+               let fact = motionFactSources.first(where: { $0.isReady && $0.documentName.contains("Motion Draft") })
+                    ?? motionFactSources.first(where: \.isReady) {
+                selectedMotionFactIDs.insert(fact.chunkID)
+            }
+            if arguments.contains("-uiTestMotionDraftSuccess"),
+               selectedMotionAuthorityIDs.isEmpty,
+               let authority = motionAuthoritySources.first(where: \.isReady) {
+                selectedMotionAuthorityIDs.insert(authority.authorityID)
+            }
+        }
+    }
+
+    private func toggle(_ id: String, in selection: inout Set<String>) {
+        if selection.contains(id) {
+            selection.remove(id)
+        } else {
+            selection.insert(id)
         }
     }
 
