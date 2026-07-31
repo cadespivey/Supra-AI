@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SupraResearch
 import XCTest
@@ -6,6 +7,9 @@ final class LegalPropositionSupportTests: XCTestCase {
     private struct Corpus: Decodable {
         var schemaVersion: Int
         var reviewStatus: String
+        var reviewedBy: String
+        var reviewedAt: String
+        var casesSHA256: String
         var cases: [CorpusCase]
     }
 
@@ -71,7 +75,10 @@ final class LegalPropositionSupportTests: XCTestCase {
         // support results, and short/contradictory sources can still pass.
         let corpus = try loadCorpus()
         XCTAssertEqual(corpus.schemaVersion, 1)
-        XCTAssertEqual(corpus.reviewStatus, "pending_attorney_review")
+        XCTAssertEqual(corpus.reviewStatus, "attorney_reviewed")
+        XCTAssertEqual(corpus.reviewedBy, "Cade Spivey")
+        XCTAssertEqual(corpus.reviewedAt, "2026-07-31")
+        XCTAssertEqual(corpus.casesSHA256, try casesDigest())
 
         for fixture in corpus.cases {
             let report = LegalCitationVerifier.verify(
@@ -141,14 +148,26 @@ final class LegalPropositionSupportTests: XCTestCase {
     }
 
     private func loadCorpus() throws -> Corpus {
-        let url = try XCTUnwrap(
+        try JSONDecoder().decode(Corpus.self, from: Data(contentsOf: corpusURL()))
+    }
+
+    private func casesDigest() throws -> String {
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: corpusURL())) as? [String: Any]
+        )
+        let cases = try XCTUnwrap(object["cases"])
+        let canonical = try JSONSerialization.data(withJSONObject: cases, options: [.sortedKeys])
+        return SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func corpusURL() throws -> URL {
+        try XCTUnwrap(
             Bundle.module.url(
                 forResource: "legal-proposition-support",
                 withExtension: "json",
                 subdirectory: "Fixtures/Legal"
             )
         )
-        return try JSONDecoder().decode(Corpus.self, from: Data(contentsOf: url))
     }
 
     private func serializedReport(_ report: LegalVerificationReport) throws -> SerializedReport {

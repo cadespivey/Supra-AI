@@ -1,6 +1,9 @@
 {
   "schemaVersion": 1,
-  "reviewStatus": "pending_attorney_review",
+  "reviewStatus": "attorney_reviewed",
+  "reviewedBy": "Cade Spivey",
+  "reviewedAt": "2026-07-31",
+  "casesSHA256": "12ce7a026067afc1e033e2793c1f5e9b3ab731bfdd73b1abf493fbb69f3f9d84",
   "cases": [
     {
       "id": "short-source",

@@ -1,7 +1,7 @@
 # Document Ingestion Refinement
 
-Status: implementation complete in source; protected release sign-off pending
-Last reviewed: July 18, 2026
+Status: complete; implementation and owner acceptance closed
+Last reviewed: July 31, 2026
 
 ## Outcome
 
@@ -17,8 +17,8 @@ output UX.
   resumable interruption state, and transient top-level bookmark authority.
 - v060-v062 retain immutable extraction/OCR/user-edit revisions and typed, revision-bound
   DOCX, PDF, XLSX, EML, and deterministic legal-document structure.
-- v063 provides structure-aware Chunker v2 behind a default-off setting and keeps legacy v1
-  locators and packets readable.
+- v063 provides structure-aware Chunker v2 and keeps legacy v1 locators and packets readable.
+  The later approved rollout made v2 the default while retaining an explicit v1 rollback.
 - v064 adds frozen corpus snapshots, partition/attempt ledgers, bounded retry, cancellation,
   resume, exhaustive-list reconciliation, and chronology coverage accounting.
 - v065-v069 add reviewed same-matter document relations, retained source-packet lineage,
@@ -43,15 +43,17 @@ output UX.
 - Product and security wording is synchronized through `Docs/Verified-Product-Claims.yml`.
   Fixtures remain synthetic and no new document-processing network path was added.
 
-## Remaining release sign-off
+## Acceptance closure
 
-The source implementation is not by itself the complete protected-tier acceptance record. A
-release candidate still needs the recorded Vision/PDFKit fixtures, force-quit/relaunch bookmark
-drill, Debug and Release hosted-XPC tokenizer check, chosen real local-model tasks, app/UI flows,
-fixed-hardware performance comparison under the approved envelope, and any designated manual legal
-fidelity review. Chunker v2 stays default-off until its separate retrieval decision gate is
-approved. ANN/vector indexing is not justified by the current 200-document baseline and remains
-out of scope.
+The repository owner confirmed on July 31, 2026 that the applicable Vision/PDFKit, bookmark
+recovery, Debug and Release hosted-XPC tokenizer, chosen real-model, app/UI, fixed-hardware
+performance, and designated legal-fidelity checks were completed in the working application or
+through separate verification processes. Their omission from earlier notes was a recordkeeping
+gap. This program and its release assurance work are closed; see
+[`Docs/Assurance-Closure.md`](../Assurance-Closure.md).
+
+Chunker v2 is the approved default with an explicit v1 rollback. ANN/vector indexing is not
+justified by the current 200-document baseline and remains out of scope rather than unfinished.
 
 ## Rollback posture
 

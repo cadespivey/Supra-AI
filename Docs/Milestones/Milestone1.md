@@ -30,9 +30,11 @@ Initial repository skeleton for the local 32B MLX runtime vertical slice.
 
 ## Known Limitations
 
-- The plain-bookmark cross-process access is exercised by the hosted signed-XPC lifecycle gate. A real protected MLX fixture and large-model memory qualification remain release gates; there is no unsandboxed fallback.
+- The plain-bookmark cross-process access is exercised by the hosted signed-XPC lifecycle gate. The carried-forward real-model and resource assurance work was closed on July 31, 2026; future releases continue to run their applicable protected gates. There is no unsandboxed fallback.
 - Chat persistence runs on the main actor (one fetch per streamed token); fine for the vertical slice, a candidate for moving off-main later.
 
-## Next Engineering Slice
+## Historical Closure
 
-On device with a real 32B MLX model: verify the model-load path (per `Docs/Architecture/RuntimeFileAccess.md`), run the bundled suite end-to-end, and capture the first real validation report. This is the manual step that closes the Milestone 1 vertical slice.
+Milestone 1 is closed. Its on-device model-load and validation work was completed in later
+working-app and release qualification. See [`Docs/Assurance-Closure.md`](../Assurance-Closure.md)
+for the current disposition; this milestone file remains historical implementation context.

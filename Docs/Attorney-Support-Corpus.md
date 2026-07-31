@@ -15,13 +15,11 @@ injection.
 
 ## Review state
 
-The checked-in corpus is `pending_attorney_review`. That value is intentionally
-enforced by the test until an attorney reviewer evaluates every case. Code
-owners must not substitute a developer approval for that review or change an
-expected result merely to make a verifier pass.
+The checked-in corpus is `attorney_reviewed`. The repository owner and attorney
+approved the current fixture expectations and rationales on July 31, 2026; the
+fixture metadata and tests pin the reviewer, date, and cases-only digest. See
+[`Docs/Assurance-Closure.md`](Assurance-Closure.md).
 
-To record review, the attorney reviewer must approve the corpus version and
-every rationale in the private release ledger. A follow-up reviewed commit may
-then change `reviewStatus` to `attorney_reviewed` and record the reviewer, date,
-and approved corpus digest in the release evidence. Any later fixture or
-expectation change returns the corpus to `pending_attorney_review`.
+Code owners must not change an expected result merely to make a verifier pass.
+Any later fixture or expectation change returns the changed corpus to
+`pending_attorney_review` until an attorney approves its new cases-only digest.
