@@ -21,7 +21,8 @@ if [[ ! -f "$accessibility_test" ]] \
     || ! grep -Fq 'testDiagnosticsShowsPromptClassifierAvailability' "$accessibility_test" \
     || ! grep -Fq 'testLegacyOutputWarningAnnouncesStatusAndUnavailableExport' "$accessibility_test" \
     || ! grep -Fq 'testLegacyBillingWarningAnnouncesReviewAndUnavailableExport' "$accessibility_test" \
-    || ! grep -Eq 'class[[:space:]]+GuidedDocumentQAUITests' "$accessibility_test"; then
+    || ! grep -Eq 'class[[:space:]]+GuidedDocumentQAUITests' "$accessibility_test" \
+    || ! grep -Fq 'testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult' "$accessibility_test"; then
   printf '%s\n' 'ERROR: remediation accessibility smoke tests are missing' >&2
   exit 1
 fi
@@ -42,6 +43,6 @@ xcodebuild \
   -only-testing:SupraAIUITests/DocumentChunkerRolloutUITests/testDiagnosticsShowsPromptClassifierAvailability \
   -only-testing:SupraAIUITests/ResearchAuthoritiesUITests/testLegacyOutputWarningAnnouncesStatusAndUnavailableExport \
   -only-testing:SupraAIUITests/ResearchAuthoritiesUITests/testLegacyBillingWarningAnnouncesReviewAndUnavailableExport \
-  -only-testing:SupraAIUITests/GuidedDocumentQAUITests \
+  -only-testing:SupraAIUITests/GuidedDocumentQAUITests/testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \
   test
