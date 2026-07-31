@@ -4,10 +4,19 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 xpc_test="${SUPRA_XPC_INTEGRATION_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/RuntimeXPCIntegrationTests.swift}"
 accessibility_test="${SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift}"
+restore_test="${SUPRA_RESTORE_UI_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/RestoreSettingsUITests.swift}"
 check_only=0
 if [[ "${1:-}" == "--check" ]]; then
   check_only=1
   shift
+fi
+if [[ ! -f "$restore_test" ]] \
+    || ! grep -Fq 'testInvalidSnapshotShowsFactsAndCannotBeSelected' "$restore_test" \
+    || ! grep -Fq 'testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel' "$restore_test" \
+    || ! grep -Fq 'testSuccessfulStageOffersColdRestartWithoutLiveSwap' "$restore_test" \
+    || ! grep -Fq 'testRecoveryRequiredShellProvidesPreservationAndQuitInstructions' "$restore_test"; then
+  printf '%s\n' 'ERROR: restore Settings/recovery accessibility smoke tests are missing' >&2
+  exit 1
 fi
 if (( $# != 0 )); then
   printf 'Usage: %s [--check]\n' "$0" >&2
@@ -44,5 +53,6 @@ xcodebuild \
   -only-testing:SupraAIUITests/ResearchAuthoritiesUITests/testLegacyOutputWarningAnnouncesStatusAndUnavailableExport \
   -only-testing:SupraAIUITests/ResearchAuthoritiesUITests/testLegacyBillingWarningAnnouncesReviewAndUnavailableExport \
   -only-testing:SupraAIUITests/GuidedDocumentQAUITests/testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult \
+  -only-testing:SupraAIUITests/RestoreSettingsUITests \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \
   test
