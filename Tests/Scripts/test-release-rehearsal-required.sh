@@ -71,6 +71,9 @@ make_fixture_repo() {
     "${FIXTURE_REPO}/Apps/SupraAI/SupraAI.xcodeproj" \
     "${FIXTURE_REPO}/Docs"
   printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/Scripts/release.sh"
+  printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/Scripts/publish-release-transaction.sh"
+  printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/Scripts/publish-release-appcast.sh"
+  printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/Scripts/rollback-release-appcast.sh"
   printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/Scripts/cut-release.sh"
   printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/Scripts/lib/release-common.sh"
   printf '%s\n' 'fixture-v1' >"${FIXTURE_REPO}/.github/workflows/release.yml"
@@ -100,6 +103,7 @@ verdict() {
 required_verdict='VERDICT: signed rehearsal REQUIRED'
 not_required_verdict='VERDICT: no signed rehearsal required'
 toolchain_reminder='invisible to this diff'
+production_only_listing='production-only publish path'
 
 # --- Signed-output machinery re-arms the rehearsal ---------------------------
 make_fixture_repo transaction-driver
@@ -138,6 +142,53 @@ run_case \
   1 "$required_verdict" verdict
 grep -Fq 'unclassified' "$LAST_CASE_OUTPUT" \
   || fail 'fail-safe verdict does not say the path is unclassified'
+
+# --- Production-only publish path does not re-arm ----------------------------
+# Scripts/release.sh under --no-publish exits before it would invoke
+# Scripts/publish-release-transaction.sh (release.sh, publish gate), so a
+# rehearsal is STRUCTURALLY INCAPABLE of exercising the publish/rollback
+# scripts; their only real coverage is the hermetic suite
+# Tests/Scripts/test-release-transaction.sh. They must not re-arm a rehearsal,
+# but the verdict must stay honest by listing them under a distinct
+# production-only heading.
+#
+# Expected RED reason: the helper still classifies these scripts as
+# signed-output machinery, so each run exits 1 with the REQUIRED verdict —
+# the exit-0 expectation and the production-only listing assertion both fail.
+make_fixture_repo publish-transaction
+commit_change Scripts/publish-release-transaction.sh
+run_case \
+  'changing only the publish transaction does not require a rehearsal' \
+  0 "$production_only_listing" verdict
+grep -Fq 'Scripts/publish-release-transaction.sh' "$LAST_CASE_OUTPUT" \
+  || fail 'production-only listing does not name the publish transaction script'
+grep -Fq "$not_required_verdict" "$LAST_CASE_OUTPUT" \
+  || fail 'publish-transaction-only run omits the not-required verdict'
+# Wire-proof, scoped to the exact opposite verdict line: the REQUIRED verdict
+# must be absent when only the rehearsal-unreachable publish path changed.
+grep -Fq "$required_verdict" "$LAST_CASE_OUTPUT" \
+  && fail 'publish-transaction-only run still printed the REQUIRED verdict'
+
+make_fixture_repo appcast-rollback
+commit_change Scripts/rollback-release-appcast.sh
+run_case \
+  'changing only the appcast rollback does not require a rehearsal' \
+  0 "$production_only_listing" verdict
+grep -Fq 'Scripts/rollback-release-appcast.sh' "$LAST_CASE_OUTPUT" \
+  || fail 'production-only listing does not name the appcast rollback script'
+grep -Fq "$not_required_verdict" "$LAST_CASE_OUTPUT" \
+  || fail 'appcast-rollback-only run omits the not-required verdict'
+grep -Fq "$required_verdict" "$LAST_CASE_OUTPUT" \
+  && fail 'appcast-rollback-only run still printed the REQUIRED verdict'
+
+# Standing guard (expected to pass at RED and at GREEN by design): the
+# reclassification above must not swallow Scripts/release.sh itself — its
+# build/sign/notarize path IS exactly what a rehearsal exercises.
+make_fixture_repo publish-guard
+commit_change Scripts/release.sh
+run_case \
+  'standing guard: the release driver itself still requires a rehearsal' \
+  1 "$required_verdict" verdict
 
 # --- Hermetically covered orchestration does not re-arm ----------------------
 make_fixture_repo orchestration
