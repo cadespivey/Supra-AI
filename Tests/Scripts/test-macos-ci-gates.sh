@@ -364,6 +364,14 @@ else
   record_failure 'app smoke does not execute the prompt-routing Diagnostics guard'
 fi
 
+# Guided document Q&A is a production hosted-runtime workflow, so the protected
+# smoke selector must execute its deterministic generate/preview/cancel contract.
+if grep -Fq -- '-only-testing:SupraAIUITests/GuidedDocumentQAUITests' "$app_smoke_script"; then
+  printf '%s\n' 'PASS: app smoke executes the guided document Q&A hosted guard'
+else
+  record_failure 'app smoke does not execute the guided document Q&A hosted guard'
+fi
+
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_ALLOWED=YES' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_REQUIRED=YES' "$app_smoke_script" \

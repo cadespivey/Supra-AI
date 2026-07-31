@@ -544,6 +544,7 @@ final class DocumentQATests: XCTestCase {
         XCTAssertFalse(qa.isGenerating)
         XCTAssertNil(qa.lastResult)
         XCTAssertTrue(try store.structuredOutputs.fetchOutputs(matterID: matter.id).isEmpty)
+        XCTAssertTrue(try store.documentSources.fetchSourceSets(matterID: matter.id).isEmpty)
     }
 
     func testGuidedRegenerationRetainsExactSourcesAndCreatesANewVersion() async throws {
@@ -595,6 +596,235 @@ final class DocumentQATests: XCTestCase {
         XCTAssertTrue(recorder.requests.allSatisfy { $0.prompt.contains("BETA_REGEN_SELECTED") })
         XCTAssertFalse(recorder.requests.contains { $0.prompt.contains("ALPHA_REGEN_UNSELECTED") })
         XCTAssertFalse(qa.sourceReferences(versionID: regenerated.versionID).map(\.chunkID).contains(alpha.chunkID))
+    }
+
+    func testGuidedRegenerationRehydratesEveryPersistedSourceAfterReindexNullsOneChunkForeignKey() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Guided Reindex Matter")
+        let alpha = try await indexRevisionBoundDoc(
+            store,
+            matter.id,
+            "Alpha Reindexed.txt",
+            "ALPHA_REINDEXED_SELECTED. Alpha remains part of the saved guided packet."
+        )
+        let beta = try await indexRevisionBoundDoc(
+            store,
+            matter.id,
+            "Beta Stable.txt",
+            "BETA_STABLE_SELECTED. Beta remains part of the saved guided packet."
+        )
+        let recorder = GenerateCallRecorder()
+        let runtime = StubRuntimeClient(outcome: { request in
+            recorder.record(request)
+            return .events([
+                .event(request, 0, .token, token: "Both selected passages remain controlling [S1] [S2]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let generated = await qa.generate(
+            question: "What do both selected passages say?",
+            guidedChunkIDs: [alpha.chunkID, beta.chunkID],
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+        let initial = try XCTUnwrap(generated)
+        let alphaChunk = try XCTUnwrap(store.documentIndex.fetchChunk(id: alpha.chunkID))
+        try store.documentIndex.replaceChunks(documentID: alpha.documentID, chunks: [alphaChunk])
+
+        let historicalRows = try store.documentSources.fetchSources(
+            structuredOutputVersionID: initial.versionID
+        )
+        XCTAssertEqual(historicalRows.count, 2)
+        XCTAssertNil(
+            historicalRows.first(where: { $0.documentID == alpha.documentID })?.chunkID,
+            "ON DELETE SET NULL must model the production reindex boundary"
+        )
+
+        let regeneratedResult = await qa.regenerate(
+            outputID: initial.outputID,
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+        let regenerated = try XCTUnwrap(regeneratedResult)
+
+        XCTAssertEqual(recorder.count, 2)
+        XCTAssertTrue(recorder.requests[1].prompt.contains("ALPHA_REINDEXED_SELECTED"))
+        XCTAssertTrue(recorder.requests[1].prompt.contains("BETA_STABLE_SELECTED"))
+        let regeneratedRows = try store.documentSources.fetchSources(
+            structuredOutputVersionID: regenerated.versionID
+        )
+        XCTAssertEqual(regeneratedRows.count, 2)
+        XCTAssertEqual(Set(regeneratedRows.compactMap(\.documentID)), [alpha.documentID, beta.documentID])
+    }
+
+    func testGuidedRegenerationFailsClosedWhenAnyPersistedSourceCannotBeRehydrated() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Guided Missing Reindex Matter")
+        let alpha = try await indexRevisionBoundDoc(
+            store,
+            matter.id,
+            "Alpha Removed.txt",
+            "ALPHA_REMOVED_SELECTED. This selected source will become impossible to resolve."
+        )
+        let beta = try await indexRevisionBoundDoc(
+            store,
+            matter.id,
+            "Beta Still Present.txt",
+            "BETA_PRESENT_SELECTED. This source alone must never become the replacement packet."
+        )
+        let recorder = GenerateCallRecorder()
+        let runtime = StubRuntimeClient(outcome: { request in
+            recorder.record(request)
+            return .events([
+                .event(request, 0, .token, token: "Selected packet answer [S1] [S2]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let generated = await qa.generate(
+            question: "What does the selected packet say?",
+            guidedChunkIDs: [alpha.chunkID, beta.chunkID],
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+        let initial = try XCTUnwrap(generated)
+        try store.documentIndex.replaceChunks(documentID: alpha.documentID, chunks: [])
+
+        let regenerated = await qa.regenerate(
+            outputID: initial.outputID,
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+
+        XCTAssertNil(regenerated)
+        XCTAssertEqual(recorder.count, 1, "no partial guided packet may reach generation")
+        XCTAssertTrue(qa.message?.contains("no longer available") == true)
+        XCTAssertEqual(
+            try store.structuredOutputs.fetchVersions(structuredOutputID: initial.outputID).count,
+            1
+        )
+        XCTAssertEqual(try store.documentSources.fetchSourceSets(matterID: matter.id).count, 1)
+    }
+
+    func testHistoricalGuidedSourceReferenceRemainsVisibleAfterChunkForeignKeyIsNulled() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Historical Guided Reference Matter")
+        let selected = try await indexRevisionBoundDoc(
+            store,
+            matter.id,
+            "Historical Source.txt",
+            "HISTORICAL_GUIDED_SOURCE. The original saved excerpt remains inspectable."
+        )
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "The original excerpt remains inspectable [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime)
+        let generated = await qa.generate(
+            question: "What remains inspectable?",
+            guidedChunkIDs: [selected.chunkID],
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+        let result = try XCTUnwrap(generated)
+
+        let originalChunk = try XCTUnwrap(store.documentIndex.fetchChunk(id: selected.chunkID))
+        try store.documentIndex.replaceChunks(documentID: selected.documentID, chunks: [originalChunk])
+        let historicalRow = try XCTUnwrap(
+            store.documentSources.fetchSources(structuredOutputVersionID: result.versionID).first
+        )
+        XCTAssertNil(historicalRow.chunkID)
+
+        let references = qa.sourceReferences(versionID: result.versionID)
+        XCTAssertEqual(references.count, 1)
+        XCTAssertEqual(references.first?.documentName, "Historical Source.txt")
+        XCTAssertTrue(references.first?.excerpt.contains("HISTORICAL_GUIDED_SOURCE") == true)
+        XCTAssertFalse(references.first?.locatorDisplay.isEmpty == true)
+    }
+
+    func testInitialPersistenceRollsBackDraftAndPendingSourceSetWhenSourceInsertFails() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Initial Atomic QA Matter")
+        let selected = try await indexRevisionBoundDoc(
+            store,
+            matter.id,
+            "Atomic Initial.txt",
+            "ATOMIC_INITIAL_SELECTED. The chunk disappears after generation starts."
+        )
+        let runtime = StubRuntimeClient(outcome: { request in
+            try! store.documentIndex.replaceChunks(documentID: selected.documentID, chunks: [])
+            return .events([
+                .event(request, 0, .token, token: "Generated before the injected write failure [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime)
+
+        let result = await qa.generate(
+            question: "Can any partial persistence survive?",
+            guidedChunkIDs: [selected.chunkID],
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+
+        XCTAssertNil(result)
+        XCTAssertTrue(try store.structuredOutputs.fetchOutputs(matterID: matter.id).isEmpty)
+        XCTAssertTrue(try store.documentSources.fetchSourceSets(matterID: matter.id).isEmpty)
+    }
+
+    func testRegenerationPersistenceRollsBackPendingSourceSetAndPreservesActiveVersionOnSourceInsertFailure() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Regeneration Atomic QA Matter")
+        let selected = try await indexRevisionBoundDoc(
+            store,
+            matter.id,
+            "Atomic Regeneration.txt",
+            "ATOMIC_REGEN_SELECTED. The original saved version must remain active."
+        )
+        let recorder = GenerateCallRecorder()
+        let runtime = StubRuntimeClient(outcome: { request in
+            recorder.record(request)
+            if recorder.count == 2 {
+                try! store.documentIndex.replaceChunks(documentID: selected.documentID, chunks: [])
+            }
+            return .events([
+                .event(request, 0, .token, token: "The original version remains authoritative [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let qa = DocumentQAController(matterID: matter.id, store: store, runtimeClient: runtime)
+        let generated = await qa.generate(
+            question: "Which version remains authoritative?",
+            guidedChunkIDs: [selected.chunkID],
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+        let initial = try XCTUnwrap(generated)
+
+        let regenerated = await qa.regenerate(
+            outputID: initial.outputID,
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+
+        XCTAssertNil(regenerated)
+        XCTAssertEqual(recorder.count, 2)
+        XCTAssertEqual(
+            try store.structuredOutputs.fetchVersions(structuredOutputID: initial.outputID).count,
+            1
+        )
+        let output = try XCTUnwrap(
+            store.structuredOutputs.fetchOutputs(matterID: matter.id).first(where: { $0.id == initial.outputID })
+        )
+        XCTAssertEqual(output.activeVersionID, initial.versionID)
+        let sourceSets = try store.documentSources.fetchSourceSets(matterID: matter.id)
+        XCTAssertEqual(sourceSets.count, 1)
+        XCTAssertTrue(sourceSets.allSatisfy { $0.status == DocumentSourceSetStatus.attached.rawValue })
     }
 
     func testAutoSourceQAGeneratesCitedAnswerSavedWithSourceSet() async throws {

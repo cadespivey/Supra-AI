@@ -155,9 +155,7 @@ final class GuidedDocumentQAUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testGuidedChooserAnnouncesReadinessAndBlocksReviewRequiredSource() {
-        // T-UI-GQA-01...05 expected RED: the Documents toolbar has no Ask action
-        // or guided Q&A sheet/accessibility identifiers.
+    func testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult() {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
@@ -204,6 +202,60 @@ final class GuidedDocumentQAUITests: XCTestCase {
         XCTAssertTrue(
             app.descendants(matching: .any)["documentPreview"].waitForExistence(timeout: 10),
             "The selected source must open in the production document preview"
+        )
+        app.buttons["Done"].click()
+
+        let question = app.textViews["documentQA.question"]
+        question.click()
+        question.typeText("When is rent due?")
+        let generateEnabled = NSPredicate(format: "enabled == YES")
+        expectation(for: generateEnabled, evaluatedWith: generate)
+        waitForExpectations(timeout: 20)
+        generate.click()
+
+        let result = app.descendants(matching: .any)["documentQA.result"]
+        XCTAssertTrue(result.waitForExistence(timeout: 30))
+        let resultText = result.label + " " + ((result.value as? String) ?? "")
+        XCTAssertTrue(resultText.localizedCaseInsensitiveContains("first business day"))
+
+        let regenerate = app.buttons["documentQA.regenerate"]
+        XCTAssertTrue(regenerate.exists)
+        XCTAssertEqual(regenerate.label, "Regenerate Selected Sources")
+        XCTAssertFalse(regenerate.label.localizedCaseInsensitiveContains("Search All Documents"))
+
+        let resultPreview = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "documentQA.resultPreview.")
+        ).firstMatch
+        XCTAssertTrue(resultPreview.waitForExistence(timeout: 10))
+        XCTAssertTrue(resultPreview.label.contains("S1"), "the label must name the citation")
+        XCTAssertTrue(
+            resultPreview.label.contains("Atlas Ready Agreement.txt"),
+            "the label must name the document"
+        )
+        XCTAssertTrue(resultPreview.label.contains("chars 0"), "the label must name the saved locator")
+        resultPreview.click()
+        XCTAssertTrue(app.descendants(matching: .any)["documentPreview"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["documentPreview.revisionNotice"].exists)
+        app.buttons["Done"].click()
+
+        // The deterministic UI-test runtime holds the second request until the
+        // production cancel path terminates it. The first saved result must remain.
+        regenerate.click()
+        let cancel = app.buttons["documentQA.cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10))
+        cancel.click()
+        let message = app.descendants(matching: .any)["documentQA.message"]
+        XCTAssertTrue(message.waitForExistence(timeout: 10))
+        XCTAssertTrue(message.label.localizedCaseInsensitiveContains("cancelled"))
+        XCTAssertTrue(result.exists)
+        let retainedResultText = result.label + " " + ((result.value as? String) ?? "")
+        XCTAssertTrue(retainedResultText.localizedCaseInsensitiveContains("first business day"))
+        XCTAssertEqual(
+            app.buttons.matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "documentQA.resultPreview.")
+            ).count,
+            1,
+            "cancellation must not expose a partial replacement source set"
         )
     }
 }
