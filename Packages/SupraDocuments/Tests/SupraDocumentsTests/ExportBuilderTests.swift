@@ -72,7 +72,7 @@ final class ExportBuilderTests: XCTestCase {
         XCTAssertTrue(csv.contains("'\u{FEFF}@document"))
         XCTAssertTrue(csv.contains("'  -2"))
         XCTAssertTrue(csv.contains("'\t=cmd"))
-        let sheetData = try XCTUnwrap(ZipArchiveReader.entryData(in: xlsxURL, path: "xl/worksheets/sheet1.xml"))
+        let sheetData = try XCTUnwrap(ZipArchiveReader.entryData(in: xlsxURL, path: "xl/worksheets/sheet2.xml"))
         let sheet = String(decoding: sheetData, as: UTF8.self)
         XCTAssertTrue(sheet.contains("'=1+1"))
         XCTAssertTrue(sheet.contains("'\u{FEFF}@document"))
@@ -92,17 +92,30 @@ final class ExportBuilderTests: XCTestCase {
         try DocumentExportBuilder.write(payload, format: .docx, to: url)
         let data = try XCTUnwrap(ZipArchiveReader.entryData(in: url, path: "word/document.xml"))
         let xml = String(decoding: data, as: UTF8.self)
-        XCTAssertTrue(xml.contains("Payment was due on March 3, 2024 [S1]."))
+        XCTAssertTrue(visibleWordText(xml).contains("Payment was due on March 3, 2024 [S1]."))
         XCTAssertTrue(xml.contains("agreement.pdf"))
     }
 
     func testXLSXContainsAppendixRows() throws {
         let url = dir.appendingPathComponent("o.xlsx")
         try DocumentExportBuilder.write(payload, format: .xlsx, to: url)
-        let data = try XCTUnwrap(ZipArchiveReader.entryData(in: url, path: "xl/worksheets/sheet1.xml"))
+        let data = try XCTUnwrap(ZipArchiveReader.entryData(in: url, path: "xl/worksheets/sheet2.xml"))
         let xml = String(decoding: data, as: UTF8.self)
         XCTAssertTrue(xml.contains("S1"))
         XCTAssertTrue(xml.contains("agreement.pdf"))
-        XCTAssertTrue(xml.contains("Label"))
+        XCTAssertTrue(xml.contains("Relationship ID"))
+    }
+
+    private func visibleWordText(_ xml: String) -> String {
+        let pattern = #"<w:t(?:\s[^>]*)?>(.*?)</w:t>"#
+        let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
+        let source = xml as NSString
+        return (regex?.matches(in: xml, range: NSRange(location: 0, length: source.length)) ?? [])
+            .map { source.substring(with: $0.range(at: 1)) }
+            .joined()
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
     }
 }

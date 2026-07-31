@@ -71,18 +71,24 @@ public struct RunProps: Sendable, Equatable {
     public var underline: Bool
     public var caps: Bool
     public var fontHalfPoints: Int?
+    public var fontName: String?
+    public var colorHex: String?
 
     public init(bold: Bool = false, italic: Bool = false, underline: Bool = false,
-                caps: Bool = false, fontHalfPoints: Int? = nil) {
+                caps: Bool = false, fontHalfPoints: Int? = nil,
+                fontName: String? = nil, colorHex: String? = nil) {
         self.bold = bold
         self.italic = italic
         self.underline = underline
         self.caps = caps
         self.fontHalfPoints = fontHalfPoints
+        self.fontName = fontName
+        self.colorHex = colorHex
     }
 
     public var isEmpty: Bool {
         !bold && !italic && !underline && !caps && fontHalfPoints == nil
+            && fontName == nil && colorHex == nil
     }
 }
 
@@ -91,6 +97,10 @@ public enum RunContent: Sendable, Equatable {
     case tab
     case fieldChar(FieldCharType)
     case instrText(String)
+    case externalHyperlink(text: String, relationshipID: String)
+    case internalHyperlink(text: String, anchor: String)
+    case bookmarkStart(id: Int, name: String)
+    case bookmarkEnd(id: Int)
 }
 
 public struct OoxmlRun: Sendable, Equatable {
@@ -105,6 +115,30 @@ public struct OoxmlRun: Sendable, Equatable {
     public static func text(_ s: String, props: RunProps = RunProps()) -> OoxmlRun {
         OoxmlRun(.text(s), props: props)
     }
+
+    public static func externalHyperlink(
+        _ text: String,
+        relationshipID: String,
+        props: RunProps = RunProps()
+    ) -> OoxmlRun {
+        OoxmlRun(.externalHyperlink(text: text, relationshipID: relationshipID), props: props)
+    }
+
+    public static func internalHyperlink(
+        _ text: String,
+        anchor: String,
+        props: RunProps = RunProps()
+    ) -> OoxmlRun {
+        OoxmlRun(.internalHyperlink(text: text, anchor: anchor), props: props)
+    }
+
+    public static func bookmarkStart(id: Int, name: String) -> OoxmlRun {
+        OoxmlRun(.bookmarkStart(id: id, name: name))
+    }
+
+    public static func bookmarkEnd(id: Int) -> OoxmlRun {
+        OoxmlRun(.bookmarkEnd(id: id))
+    }
 }
 
 public struct ParaProps: Sendable, Equatable {
@@ -117,10 +151,13 @@ public struct ParaProps: Sendable, Equatable {
     public var spaceAfterTwips: Int?
     public var tabStops: [TabStop]
     public var bottomBorder: Border?
+    public var numberingLevel: Int?
+    public var numberingID: Int?
 
     public init(jc: Jc? = nil, indFirstLineTwips: Int? = nil, indLeftTwips: Int? = nil,
                 hangingTwips: Int? = nil, spacingLineUnits: Int? = nil, spacingLineRule: String? = nil,
-                spaceAfterTwips: Int? = nil, tabStops: [TabStop] = [], bottomBorder: Border? = nil) {
+                spaceAfterTwips: Int? = nil, tabStops: [TabStop] = [], bottomBorder: Border? = nil,
+                numberingLevel: Int? = nil, numberingID: Int? = nil) {
         self.jc = jc
         self.indFirstLineTwips = indFirstLineTwips
         self.indLeftTwips = indLeftTwips
@@ -130,11 +167,14 @@ public struct ParaProps: Sendable, Equatable {
         self.spaceAfterTwips = spaceAfterTwips
         self.tabStops = tabStops
         self.bottomBorder = bottomBorder
+        self.numberingLevel = numberingLevel
+        self.numberingID = numberingID
     }
 
     public var isEmpty: Bool {
         jc == nil && indFirstLineTwips == nil && indLeftTwips == nil && hangingTwips == nil
             && spacingLineUnits == nil && spaceAfterTwips == nil && tabStops.isEmpty && bottomBorder == nil
+            && numberingLevel == nil && numberingID == nil
     }
 }
 
@@ -162,11 +202,21 @@ public struct OoxmlCell: Sendable, Equatable {
     public var widthTwips: Int
     public var borders: Borders
     public var content: [OoxmlParagraph]
+    public var shadingFill: String?
+    public var verticalAlignment: String?
 
-    public init(widthTwips: Int, borders: Borders = .none, content: [OoxmlParagraph]) {
+    public init(
+        widthTwips: Int,
+        borders: Borders = .none,
+        content: [OoxmlParagraph],
+        shadingFill: String? = nil,
+        verticalAlignment: String? = nil
+    ) {
         self.widthTwips = widthTwips
         self.borders = borders
         self.content = content
+        self.shadingFill = shadingFill
+        self.verticalAlignment = verticalAlignment
     }
 }
 
@@ -178,9 +228,12 @@ public struct OoxmlTable: Sendable, Equatable {
     public var layoutFixed: Bool
     public var cellMarginTwips: Int?
     public var indentTwips: Int?
+    public var cellMarginTopTwips: Int?
+    public var cellMarginBottomTwips: Int?
 
     public init(widthTwips: Int, borders: Borders, grid: [Int], rows: [[OoxmlCell]],
-                layoutFixed: Bool = true, cellMarginTwips: Int? = nil, indentTwips: Int? = nil) {
+                layoutFixed: Bool = true, cellMarginTwips: Int? = nil, indentTwips: Int? = nil,
+                cellMarginTopTwips: Int? = nil, cellMarginBottomTwips: Int? = nil) {
         self.widthTwips = widthTwips
         self.borders = borders
         self.grid = grid
@@ -188,6 +241,8 @@ public struct OoxmlTable: Sendable, Equatable {
         self.layoutFixed = layoutFixed
         self.cellMarginTwips = cellMarginTwips
         self.indentTwips = indentTwips
+        self.cellMarginTopTwips = cellMarginTopTwips
+        self.cellMarginBottomTwips = cellMarginBottomTwips
     }
 }
 
@@ -200,14 +255,19 @@ public struct SectionProps: Sendable, Equatable {
     public var marginBottomTwips: Int
     public var marginLeftTwips: Int
     public var titlePage: Bool
+    public var defaultHeaderRelId: String?
     public var defaultFooterRelId: String?
     public var firstFooterRelId: String?
     public var pageNumberStart: Int?
+    public var headerDistanceTwips: Int
+    public var footerDistanceTwips: Int
 
     public init(pageWidthTwips: Int, pageHeightTwips: Int,
                 marginTopTwips: Int, marginRightTwips: Int, marginBottomTwips: Int, marginLeftTwips: Int,
-                titlePage: Bool = false, defaultFooterRelId: String? = nil,
-                firstFooterRelId: String? = nil, pageNumberStart: Int? = nil) {
+                titlePage: Bool = false, defaultHeaderRelId: String? = nil,
+                defaultFooterRelId: String? = nil,
+                firstFooterRelId: String? = nil, pageNumberStart: Int? = nil,
+                headerDistanceTwips: Int = 720, footerDistanceTwips: Int = 720) {
         self.pageWidthTwips = pageWidthTwips
         self.pageHeightTwips = pageHeightTwips
         self.marginTopTwips = marginTopTwips
@@ -215,9 +275,12 @@ public struct SectionProps: Sendable, Equatable {
         self.marginBottomTwips = marginBottomTwips
         self.marginLeftTwips = marginLeftTwips
         self.titlePage = titlePage
+        self.defaultHeaderRelId = defaultHeaderRelId
         self.defaultFooterRelId = defaultFooterRelId
         self.firstFooterRelId = firstFooterRelId
         self.pageNumberStart = pageNumberStart
+        self.headerDistanceTwips = headerDistanceTwips
+        self.footerDistanceTwips = footerDistanceTwips
     }
 }
 

@@ -12,6 +12,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../SupraCore"),
+        .package(path: "../SupraExports"),
         // Pinned local archive reader for Office Open XML (.docx) and
         // spreadsheet (.xlsx) containers. MIT; runs locally, no network.
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", exact: "0.9.20")
@@ -21,6 +22,7 @@ let package = Package(
             name: "SupraDocuments",
             dependencies: [
                 .product(name: "SupraCore", package: "SupraCore"),
+                .product(name: "SupraExports", package: "SupraExports"),
                 .product(name: "ZIPFoundation", package: "ZIPFoundation")
             ]
         ),

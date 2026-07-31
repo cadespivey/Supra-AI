@@ -1,7 +1,5 @@
-import CoreText
 import Foundation
 import SupraCore
-import ZIPFoundation
 
 public enum DocumentExportFormat: String, Sendable, CaseIterable, Codable {
     case pdf
@@ -136,135 +134,17 @@ public enum DocumentExportBuilder {
         return "\"\(safe.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
 
-    // MARK: - PDF (CoreText, paginated)
+    // MARK: - Rich renderers
 
     private static func renderPDF(_ payload: DocumentExportPayload) throws -> Data {
-        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
-        let output = NSMutableData()
-        guard let consumer = CGDataConsumer(data: output as CFMutableData),
-              let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
-            throw ExtractionError.fileUnreadable("Could not create PDF context.")
-        }
-        let inset: CGFloat = 54
-        let textRect = mediaBox.insetBy(dx: inset, dy: inset)
-        let font = CTFontCreateWithName("Helvetica" as CFString, 11, nil)
-        let attributed = NSAttributedString(string: payload.plainText, attributes: [
-            .init(kCTFontAttributeName as String): font
-        ])
-        let framesetter = CTFramesetterCreateWithAttributedString(attributed)
-        let total = attributed.length
-        var start = 0
-        repeat {
-            context.beginPDFPage(nil)
-            let path = CGPath(rect: textRect, transform: nil)
-            let frame = CTFramesetterCreateFrame(framesetter, CFRangeMake(start, 0), path, nil)
-            CTFrameDraw(frame, context)
-            let visible = CTFrameGetVisibleStringRange(frame)
-            start += max(visible.length, 1)
-            context.endPDFPage()
-        } while start < total
-        context.closePDF()
-        return output as Data
+        try RichPDFExportRenderer.render(payload)
     }
-
-    // MARK: - DOCX (minimal Office Open XML)
 
     private static func renderDOCX(_ payload: DocumentExportPayload) throws -> Data {
-        let archive = try Archive(data: Data(), accessMode: .create, pathEncoding: nil)
-        let paragraphs = payload.plainText.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { "<w:p><w:r><w:t xml:space=\"preserve\">\(xmlEscape(String($0)))</w:t></w:r></w:p>" }
-            .joined()
-        let document = """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>\(paragraphs)</w:body></w:document>
-        """
-        let contentTypes = """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>
-        """
-        let rels = """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>
-        """
-        try addEntry(archive, "[Content_Types].xml", contentTypes)
-        try addEntry(archive, "_rels/.rels", rels)
-        try addEntry(archive, "word/document.xml", document)
-        guard let data = archive.data else {
-            throw ExtractionError.fileUnreadable("Could not finish DOCX.")
-        }
-        return data
+        try RichDOCXExportRenderer.render(payload)
     }
-
-    // MARK: - XLSX (minimal Office Open XML — source appendix table)
 
     private static func renderXLSX(_ payload: DocumentExportPayload) throws -> Data {
-        let archive = try Archive(data: Data(), accessMode: .create, pathEncoding: nil)
-        var rowsXML = ""
-        func row(_ number: Int, _ values: [String]) -> String {
-            let cells = values.enumerated().map { index, value in
-                let safe = CSVCellSanitizer.neutralize(value)
-                return "<c r=\"\(columnLetter(index))\(number)\" t=\"inlineStr\"><is><t xml:space=\"preserve\">\(xmlEscape(safe))</t></is></c>"
-            }.joined()
-            return "<row r=\"\(number)\">\(cells)</row>"
-        }
-        rowsXML += row(1, ["Label", "Document", "Locator", "Warnings", "Excerpt"])
-        for (offset, source) in payload.sources.enumerated() {
-            rowsXML += row(offset + 2, [source.label, source.documentName, source.locator, source.warnings, source.excerpt])
-        }
-        let sheet = """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>\(rowsXML)</sheetData></worksheet>
-        """
-        let workbook = """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sources" sheetId="1" r:id="rId1"/></sheets></workbook>
-        """
-        let workbookRels = """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>
-        """
-        let contentTypes = """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>
-        """
-        let rels = """
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>
-        """
-        try addEntry(archive, "[Content_Types].xml", contentTypes)
-        try addEntry(archive, "_rels/.rels", rels)
-        try addEntry(archive, "xl/workbook.xml", workbook)
-        try addEntry(archive, "xl/_rels/workbook.xml.rels", workbookRels)
-        try addEntry(archive, "xl/worksheets/sheet1.xml", sheet)
-        guard let data = archive.data else {
-            throw ExtractionError.fileUnreadable("Could not finish XLSX.")
-        }
-        return data
-    }
-
-    // MARK: - Helpers
-
-    private static func addEntry(_ archive: Archive, _ path: String, _ contents: String) throws {
-        let data = Data(contents.utf8)
-        try archive.addEntry(with: path, type: .file, uncompressedSize: Int64(data.count)) { position, size in
-            let start = Int(position)
-            return data.subdata(in: start..<(start + size))
-        }
-    }
-
-    private static func xmlEscape(_ value: String) -> String {
-        value.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-    }
-
-    private static func columnLetter(_ index: Int) -> String {
-        var n = index
-        var letters = ""
-        repeat {
-            letters = String(UnicodeScalar(UInt8(65 + n % 26))) + letters
-            n = n / 26 - 1
-        } while n >= 0
-        return letters
+        try RichXLSXExportRenderer.render(payload)
     }
 }

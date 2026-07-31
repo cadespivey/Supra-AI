@@ -14,6 +14,8 @@ public enum DocumentExportValidator {
         case unreadableOfficeArchive
         case missingOfficePart(String)
         case malformedOfficeXML(String)
+        case missingOfficeRelationship(source: String, id: String)
+        case danglingOfficeRelationship(source: String, id: String, target: String)
 
         public var errorDescription: String? {
             switch self {
@@ -35,6 +37,10 @@ public enum DocumentExportValidator {
                 "The Office export is missing \(path)."
             case let .malformedOfficeXML(path):
                 "The Office export contains malformed XML at \(path)."
+            case let .missingOfficeRelationship(source, id):
+                "The Office export part \(source) uses unknown relationship \(id)."
+            case let .danglingOfficeRelationship(source, id, target):
+                "The Office export relationship \(id) from \(source) targets missing part \(target)."
             }
         }
     }
@@ -105,28 +111,101 @@ public enum DocumentExportValidator {
     }
 
     private static func validateOfficeArchive(_ url: URL, requiredXMLParts: [String]) throws {
+        let paths: Set<String>
         do {
-            _ = try ZipArchiveReader.entryPaths(in: url)
+            paths = Set(try ZipArchiveReader.entryPaths(in: url))
         } catch {
             throw ValidationError.unreadableOfficeArchive
         }
+        var xmlParts: [String: Data] = [:]
         for path in requiredXMLParts {
-            let data: Data
-            do {
-                guard let extracted = try ZipArchiveReader.entryData(in: url, path: path) else {
-                    throw ValidationError.missingOfficePart(path)
-                }
-                data = extracted
-            } catch let error as ValidationError {
-                throw error
-            } catch {
-                throw ValidationError.unreadableOfficeArchive
-            }
+            guard paths.contains(path) else { throw ValidationError.missingOfficePart(path) }
+        }
+        for path in paths where path.hasSuffix(".xml") || path.hasSuffix(".rels") {
+            let data = try officeEntryData(in: url, path: path)
             let parser = XMLParser(data: data)
-            guard parser.parse() else {
-                throw ValidationError.malformedOfficeXML(path)
+            guard parser.parse() else { throw ValidationError.malformedOfficeXML(path) }
+            xmlParts[path] = data
+        }
+        try validateRelationships(paths: paths, xmlParts: xmlParts)
+    }
+
+    private static func officeEntryData(in url: URL, path: String) throws -> Data {
+        do {
+            guard let data = try ZipArchiveReader.entryData(in: url, path: path) else {
+                throw ValidationError.missingOfficePart(path)
+            }
+            return data
+        } catch let error as ValidationError {
+            throw error
+        } catch {
+            throw ValidationError.unreadableOfficeArchive
+        }
+    }
+
+    private static func validateRelationships(paths: Set<String>, xmlParts: [String: Data]) throws {
+        var relationshipsBySource: [String: [String: OfficeRelationship]] = [:]
+        for (path, data) in xmlParts where path.hasSuffix(".rels") {
+            let collector = OfficeRelationshipCollector()
+            let parser = XMLParser(data: data)
+            parser.delegate = collector
+            guard parser.parse() else { throw ValidationError.malformedOfficeXML(path) }
+            let source = relationshipSource(for: path)
+            relationshipsBySource[source] = Dictionary(
+                collector.relationships.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            for relationship in collector.relationships where !relationship.isExternal {
+                let resolved = resolvedTarget(relationship.target, from: source)
+                guard !resolved.isEmpty, paths.contains(resolved) else {
+                    throw ValidationError.danglingOfficeRelationship(
+                        source: source.isEmpty ? "package" : source,
+                        id: relationship.id,
+                        target: relationship.target
+                    )
+                }
             }
         }
+
+        for (source, data) in xmlParts where source.hasSuffix(".xml") {
+            let collector = OfficeRelationshipUseCollector()
+            let parser = XMLParser(data: data)
+            parser.delegate = collector
+            guard parser.parse() else { throw ValidationError.malformedOfficeXML(source) }
+            guard !collector.ids.isEmpty else { continue }
+            let relationships = relationshipsBySource[source, default: [:]]
+            for id in collector.ids where relationships[id] == nil {
+                throw ValidationError.missingOfficeRelationship(source: source, id: id)
+            }
+        }
+    }
+
+    private static func relationshipSource(for path: String) -> String {
+        guard path != "_rels/.rels" else { return "" }
+        let relationshipDirectory = (path as NSString).deletingLastPathComponent
+        let sourceDirectory = (relationshipDirectory as NSString).deletingLastPathComponent
+        let sourceName = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+        return sourceDirectory.isEmpty ? sourceName : "\(sourceDirectory)/\(sourceName)"
+    }
+
+    private static func resolvedTarget(_ target: String, from source: String) -> String {
+        if target.hasPrefix("/") {
+            return String(target.drop(while: { $0 == "/" }))
+        }
+        let directory = (source as NSString).deletingLastPathComponent
+        var components = directory.split(separator: "/").map(String.init)
+        for component in target.split(separator: "/").map(String.init) {
+            switch component {
+            case "", ".":
+                continue
+            case "..":
+                guard !components.isEmpty else { return "" }
+                components.removeLast()
+            default:
+                components.append(component)
+            }
+        }
+        return components.joined(separator: "/")
     }
 
     /// Small RFC 4180 state machine: quoted delimiters/newlines and doubled
@@ -206,5 +285,49 @@ public enum DocumentExportValidator {
         }
         guard !rows.isEmpty else { throw ValidationError.malformedCSV }
         return rows
+    }
+}
+
+private struct OfficeRelationship {
+    var id: String
+    var target: String
+    var isExternal: Bool
+}
+
+private final class OfficeRelationshipCollector: NSObject, XMLParserDelegate {
+    var relationships: [OfficeRelationship] = []
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String] = [:]
+    ) {
+        guard elementName == "Relationship",
+              let id = attributeDict["Id"],
+              let target = attributeDict["Target"] else { return }
+        relationships.append(OfficeRelationship(
+            id: id,
+            target: target,
+            isExternal: attributeDict["TargetMode"]?.caseInsensitiveCompare("External") == .orderedSame
+        ))
+    }
+}
+
+private final class OfficeRelationshipUseCollector: NSObject, XMLParserDelegate {
+    var ids: Set<String> = []
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String] = [:]
+    ) {
+        for (name, value) in attributeDict
+            where name == "r:id" || name == "r:embed" || name == "r:link" {
+            ids.insert(value)
+        }
     }
 }
