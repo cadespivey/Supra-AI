@@ -464,6 +464,101 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(durable.snapshotIdentifier, snapshotID)
     }
 
+    func testMatchingStagingFailureReplaysOnceAfterDurableStatusAndAudit() throws {
+        let fixture = try makeFixture()
+        let snapshotID = "supra-20260731-090800-000"
+        try fixture.store.appSettings.setSetting(
+            BackupController.restoreStatusStorageKey,
+            value: RestoreStatusRecord(
+                state: .staging,
+                message: "Restore scheduled.",
+                operationID: operationID.uuidString,
+                snapshotIdentifier: snapshotID,
+                updatedAt: now
+            )
+        )
+        let failure = try RestoreSidecarStore.recordStagingFailure(
+            operationID: operationID,
+            reason: .liveDatabaseCloseFailed,
+            stagingRootDirectory: fixture.liveLayout.stagingRootDirectory,
+            failedAt: now
+        )
+        var acknowledgeCount = 0
+
+        let controller = makeController(
+            fixture: fixture,
+            inspector: { _ in [] },
+            launchStagingFailure: failure,
+            acknowledgeStagingFailure: { acknowledgeCount += 1 }
+        )
+
+        XCTAssertEqual(controller.restoreState, .failed)
+        XCTAssertTrue(controller.restoreStatusMessage?.localizedCaseInsensitiveContains("close") == true)
+        XCTAssertEqual(acknowledgeCount, 1)
+        let durable = try XCTUnwrap(
+            fixture.store.appSettings.getSetting(
+                BackupController.restoreStatusStorageKey,
+                as: RestoreStatusRecord.self
+            )
+        )
+        XCTAssertEqual(durable.state, .failed)
+        XCTAssertEqual(durable.operationID?.lowercased(), failure.operationID)
+        XCTAssertEqual(durable.snapshotIdentifier, snapshotID)
+        XCTAssertNotNil(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: "backup_snapshots",
+                relatedID: snapshotID,
+                eventType: "restore_staging_failed"
+            ).single
+        )
+    }
+
+    func testDurableActivationOutcomeReplaysAndAcknowledgesAfterAudit() throws {
+        let fixture = try makeFixture()
+        let snapshotID = "supra-20260731-090900-000"
+        let outcome = try activationOutcome(
+            status: .activated,
+            snapshotIdentifier: snapshotID
+        )
+        var acknowledgeCount = 0
+
+        let controller = makeController(
+            fixture: fixture,
+            inspector: { _ in [] },
+            launchRestoreOutcome: outcome,
+            acknowledgeRestoreOutcome: { acknowledgeCount += 1 }
+        )
+
+        XCTAssertEqual(controller.restoreState, .succeeded)
+        XCTAssertEqual(acknowledgeCount, 1)
+        XCTAssertNotNil(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: "backup_snapshots",
+                relatedID: snapshotID,
+                eventType: "restore_activated"
+            ).single
+        )
+    }
+
+    func testRecoveryRequiredOutcomeIsNotAcknowledged() throws {
+        let fixture = try makeFixture()
+        let outcome = try activationOutcome(
+            status: .recoveryRequired,
+            snapshotIdentifier: nil
+        )
+        var acknowledgeCount = 0
+
+        let controller = makeController(
+            fixture: fixture,
+            inspector: { _ in [] },
+            launchRestoreOutcome: outcome,
+            acknowledgeRestoreOutcome: { acknowledgeCount += 1 }
+        )
+
+        XCTAssertEqual(controller.restoreState, .recoveryRequired)
+        XCTAssertEqual(acknowledgeCount, 0)
+    }
+
     private func makeFixture(
         destinationFailure: BackupDestinationError? = nil
     ) throws -> ControllerFixture {
@@ -496,7 +591,11 @@ final class RestoreControllerTests: XCTestCase {
         stager: @escaping BackupController.RestoreRunner = { _, _, _ in
             throw ControllerTestError.stageShouldNotRun
         },
-        requestProcessExit: @escaping @MainActor () -> Void = {}
+        requestProcessExit: @escaping @MainActor () -> Void = {},
+        launchRestoreOutcome: RestoreOutcomeRecord? = nil,
+        launchStagingFailure: RestoreStagingFailureRecord? = nil,
+        acknowledgeRestoreOutcome: @escaping @MainActor () throws -> Void = {},
+        acknowledgeStagingFailure: @escaping @MainActor () throws -> Void = {}
     ) -> BackupController {
         BackupController(
             store: fixture.store,
@@ -514,6 +613,10 @@ final class RestoreControllerTests: XCTestCase {
             restoreRunner: stager,
             restoreOperationIDProvider: { self.operationID },
             requestProcessExit: requestProcessExit,
+            launchRestoreOutcome: launchRestoreOutcome,
+            launchStagingFailure: launchStagingFailure,
+            acknowledgeRestoreOutcome: acknowledgeRestoreOutcome,
+            acknowledgeStagingFailure: acknowledgeStagingFailure,
             now: { self.now }
         )
     }
@@ -563,6 +666,27 @@ final class RestoreControllerTests: XCTestCase {
             operationID: (operationID ?? self.operationID).uuidString,
             snapshotIdentifier: candidate.identifier,
             stagedAt: now
+        )
+    }
+
+    private func activationOutcome(
+        status: RestoreActivationStatus,
+        snapshotIdentifier: String?
+    ) throws -> RestoreOutcomeRecord {
+        var object: [String: Any] = [
+            "schemaVersion": RestoreOutcomeRecord.currentSchemaVersion,
+            "status": status.rawValue,
+            "completedAt": "2026-07-31T13:00:00Z",
+        ]
+        if status != .recoveryRequired {
+            object["operationID"] = operationID.uuidString.lowercased()
+            object["operationTreeCleanupPending"] = false
+        }
+        if let snapshotIdentifier {
+            object["snapshotIdentifier"] = snapshotIdentifier
+        }
+        return try RestoreOutcomeRecord.decode(
+            JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         )
     }
 
