@@ -12,7 +12,7 @@ final class RestoreControllerTests: XCTestCase {
     func testInvalidCandidateCannotBeSelectedConfirmedOrStaged() async throws {
         let fixture = try makeFixture()
         let invalid = candidate(
-            identifier: "supra-20260731-090000-000",
+            identifier: "SupraAI-20260731-090000-000",
             incompatibility: .databaseIntegrityFailed
         )
         var stageCount = 0
@@ -40,7 +40,7 @@ final class RestoreControllerTests: XCTestCase {
     // T-RST-30: the @MainActor controller is a single-flight owner for both operations.
     func testBackupAndRestoreRejectConcurrentCrossOperationRuns() async throws {
         let fixture = try makeFixture()
-        let valid = candidate(identifier: "supra-20260731-090100-000")
+        let valid = candidate(identifier: "SupraAI-20260731-090100-000")
         let backupGate = AsyncGate()
         let restoreGate = AsyncGate()
         let controller = makeController(
@@ -173,7 +173,7 @@ final class RestoreControllerTests: XCTestCase {
     func testConfirmedSnapshotMustMatchFreshlyInspectedIdentity() async throws {
         let fixture = try makeFixture()
         let original = candidate(
-            identifier: "supra-20260731-090200-000",
+            identifier: "SupraAI-20260731-090200-000",
             databaseSHA256: String(repeating: "a", count: 64)
         )
         let replacement = candidate(
@@ -213,7 +213,7 @@ final class RestoreControllerTests: XCTestCase {
     // quiesced, and invoking that boundary always requests process exit.
     func testSuccessfulStagePersistsScheduleBeforeRunnerAndRequestsExitExactlyOnce() async throws {
         let fixture = try makeFixture()
-        let valid = candidate(identifier: "supra-20260731-090300-000")
+        let valid = candidate(identifier: "SupraAI-20260731-090300-000")
         let summary = stageSummary(for: valid, operationID: operationID)
         var events: [String] = []
         var discoveryCount = 0
@@ -287,7 +287,7 @@ final class RestoreControllerTests: XCTestCase {
 
     func testRestoreProcessIsTerminalWhileQuiescedRunnerIsInFlight() async throws {
         let fixture = try makeFixture()
-        let valid = candidate(identifier: "supra-20260731-090400-000")
+        let valid = candidate(identifier: "SupraAI-20260731-090400-000")
         let stageGate = AsyncGate()
         var backupCount = 0
         var inspectionCount = 0
@@ -362,7 +362,7 @@ final class RestoreControllerTests: XCTestCase {
     func testChangedCandidateNeverEntersTerminalModeOrRequestsExit() async throws {
         let fixture = try makeFixture()
         let original = candidate(
-            identifier: "supra-20260731-090500-000",
+            identifier: "SupraAI-20260731-090500-000",
             databaseSHA256: String(repeating: "a", count: 64)
         )
         let replacement = candidate(
@@ -400,7 +400,7 @@ final class RestoreControllerTests: XCTestCase {
 
     func testRunnerFailureAfterWriterCloseStillExitsWithoutPostCloseStoreWrites() async throws {
         let fixture = try makeFixture()
-        let valid = candidate(identifier: "supra-20260731-090600-000")
+        let valid = candidate(identifier: "SupraAI-20260731-090600-000")
         var exitCount = 0
         var inspectionCount = 0
         var runnerCount = 0
@@ -457,7 +457,7 @@ final class RestoreControllerTests: XCTestCase {
 
     func testStrandedStagingStatusBecomesInterruptedFailureOnNextLaunch() throws {
         let fixture = try makeFixture()
-        let snapshotID = "supra-20260731-090700-000"
+        let snapshotID = "SupraAI-20260731-090700-000"
         try fixture.store.appSettings.setSetting(
             BackupController.restoreStatusStorageKey,
             value: RestoreStatusRecord(
@@ -486,7 +486,7 @@ final class RestoreControllerTests: XCTestCase {
 
     func testMatchingStagingFailureReplaysOnceAfterDurableStatusAndAudit() throws {
         let fixture = try makeFixture()
-        let snapshotID = "supra-20260731-090800-000"
+        let snapshotID = "SupraAI-20260731-090800-000"
         try fixture.store.appSettings.setSetting(
             BackupController.restoreStatusStorageKey,
             value: RestoreStatusRecord(
@@ -535,7 +535,7 @@ final class RestoreControllerTests: XCTestCase {
 
     func testDurableActivationOutcomeReplaysAndAcknowledgesAfterAudit() throws {
         let fixture = try makeFixture()
-        let snapshotID = "supra-20260731-090900-000"
+        let snapshotID = "SupraAI-20260731-090900-000"
         let outcome = try activationOutcome(
             status: .activated,
             snapshotIdentifier: snapshotID

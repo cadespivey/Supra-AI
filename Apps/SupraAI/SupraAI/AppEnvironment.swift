@@ -2041,9 +2041,9 @@ final class AppEnvironment: ObservableObject {
         }
 
         let candidates = [
-            candidate(identifier: "supra-20260731-090000-000", incompatibility: nil),
+            candidate(identifier: "SupraAI-20260731-090000-000", incompatibility: nil),
             candidate(
-                identifier: "supra-20260730-081500-000",
+                identifier: "SupraAI-20260730-081500-000",
                 incompatibility: .databaseIntegrityFailed
             ),
         ]

@@ -16,12 +16,12 @@ final class RestoreSettingsUITests: XCTestCase {
         XCTAssertTrue(inspect.isEnabled)
         inspect.click()
 
-        let invalid = reveal("restore.select.supra-20260730-081500-000", in: app)
+        let invalid = reveal("restore.select.SupraAI-20260730-081500-000", in: app)
         XCTAssertTrue(invalid.exists)
         XCTAssertFalse(invalid.isEnabled)
         XCTAssertTrue(invalid.label.contains("2.3.2"))
         XCTAssertTrue(invalid.label.contains("391"))
-        let reason = app.staticTexts["restore.reason.supra-20260730-081500-000"]
+        let reason = app.staticTexts["restore.reason.SupraAI-20260730-081500-000"]
         XCTAssertTrue(reason.exists)
         XCTAssertTrue(renderedText(of: reason).localizedCaseInsensitiveContains("integrity"))
 
@@ -33,7 +33,7 @@ final class RestoreSettingsUITests: XCTestCase {
     func testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel() {
         let app = launchSettingsScenario("mixed")
         reveal("restore.inspect", in: app).click()
-        let valid = reveal("restore.select.supra-20260731-090000-000", in: app)
+        let valid = reveal("restore.select.SupraAI-20260731-090000-000", in: app)
         XCTAssertTrue(valid.isEnabled)
         valid.click()
         let review = reveal("restore.review", in: app)
@@ -45,7 +45,7 @@ final class RestoreSettingsUITests: XCTestCase {
         let message = app.descendants(matching: .any)["restore.confirmation.message"]
         XCTAssertTrue(message.waitForExistence(timeout: 5))
         let dialogText = renderedText(of: message)
-        XCTAssertTrue(dialogText.contains("supra-20260731-090000-000"))
+        XCTAssertTrue(dialogText.contains("SupraAI-20260731-090000-000"))
         XCTAssertTrue(dialogText.localizedCaseInsensitiveContains("replace"))
         XCTAssertTrue(dialogText.localizedCaseInsensitiveContains("quit"))
         XCTAssertTrue(dialogText.localizedCaseInsensitiveContains("next launch"))
@@ -60,7 +60,7 @@ final class RestoreSettingsUITests: XCTestCase {
     func testSuccessfulStageShowsTerminalSurfaceAndQuits() {
         let app = launchSettingsScenario("mixed")
         reveal("restore.inspect", in: app).click()
-        reveal("restore.select.supra-20260731-090000-000", in: app).click()
+        reveal("restore.select.SupraAI-20260731-090000-000", in: app).click()
         reveal("restore.review", in: app).click()
 
         let confirm = app.buttons["restore.confirm"].exists
