@@ -240,13 +240,16 @@ public final class DocumentQAController: ObservableObject {
 
     /// Loads the immutable source rows attached to one saved answer version.
     public func sourceReferences(versionID: String) -> [DocumentQASourceReference] {
+        guard let sourceSet = try? store.documentSources.fetchSourceSet(
+            structuredOutputVersionID: versionID
+        ), sourceSet.matterID == matterID else { return [] }
         let names = Dictionary(
             ((try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []).map {
                 ($0.id, $0.displayName)
             },
             uniquingKeysWith: { first, _ in first }
         )
-        return ((try? store.documentSources.fetchSources(structuredOutputVersionID: versionID)) ?? [])
+        return ((try? store.documentSources.fetchSources(sourceSetID: sourceSet.id)) ?? [])
             .map { row in
                 let locator = (try? JSONDecoder().decode(
                     DocumentSourceLocator.self,
@@ -268,14 +271,18 @@ public final class DocumentQAController: ObservableObject {
     /// The preview loader resolves the row's exact revision + denormalized
     /// locator/excerpt, so old answers stay inspectable after reindexing.
     public func preview(sourceID: String) -> DocumentPreviewModel? {
-        guard let source = try? store.documentSources.fetchSource(id: sourceID) else { return nil }
+        guard let source = try? store.documentSources.fetchSource(id: sourceID),
+              let sourceSet = try? store.documentSources.fetchSourceSet(id: source.sourceSetID),
+              sourceSet.matterID == matterID else { return nil }
         return previewLoader.load(outputSource: source)
     }
 
     /// Chooser previews are intentionally live; result previews use
     /// `preview(sourceID:)` above.
     public func preview(chunkID: String) -> DocumentPreviewModel? {
-        guard let chunk = try? store.documentIndex.fetchChunk(id: chunkID) else { return nil }
+        guard let chunk = try? store.documentIndex.fetchChunk(id: chunkID),
+              let document = try? store.documentLibrary.fetchDocument(id: chunk.documentID),
+              document.matterID == matterID else { return nil }
         return previewLoader.load(
             documentID: chunk.documentID,
             locator: Self.locator(for: chunk),
