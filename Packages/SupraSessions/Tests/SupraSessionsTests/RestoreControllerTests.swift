@@ -507,6 +507,54 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedDirectory.path))
     }
 
+    func testInterruptedStagingCleanupFailureRetainsDurableRetryEvidence() throws {
+        let fixture = try makeFixture()
+        let snapshotID = "SupraAI-20260731-090750-000"
+        let operationsDirectory = fixture.liveLayout.stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+        let outsideDirectory = fixture.root.appendingPathComponent("outside", isDirectory: true)
+        let claimedPath = operationsDirectory.appendingPathComponent(
+            operationID.uuidString.lowercased(),
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: operationsDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: outsideDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: claimedPath,
+            withDestinationURL: outsideDirectory
+        )
+        try fixture.store.appSettings.setSetting(
+            BackupController.restoreStatusStorageKey,
+            value: RestoreStatusRecord(
+                state: .staging,
+                message: "Restore scheduled.",
+                operationID: operationID.uuidString,
+                snapshotIdentifier: snapshotID,
+                updatedAt: now
+            )
+        )
+
+        let controller = makeController(fixture: fixture, inspector: { _ in [] })
+
+        XCTAssertEqual(controller.restoreState, .failed)
+        XCTAssertTrue(controller.restoreStatusMessage?.localizedCaseInsensitiveContains("retry") == true)
+        let durable = try XCTUnwrap(
+            fixture.store.appSettings.getSetting(
+                BackupController.restoreStatusStorageKey,
+                as: RestoreStatusRecord.self
+            )
+        )
+        XCTAssertEqual(durable.state, .staging)
+        XCTAssertEqual(durable.operationID, operationID.uuidString)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outsideDirectory.path))
+    }
+
     func testMatchingStagingFailureReplaysOnceAfterDurableStatusAndAudit() throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090800-000"
@@ -554,6 +602,69 @@ final class RestoreControllerTests: XCTestCase {
                 eventType: "restore_staging_failed"
             ).single
         )
+    }
+
+    func testStagingFailureSidecarIsNotAcknowledgedUntilOrphanCleanupSucceeds() throws {
+        let fixture = try makeFixture()
+        let snapshotID = "SupraAI-20260731-090850-000"
+        let operationsDirectory = fixture.liveLayout.stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+        let outsideDirectory = fixture.root.appendingPathComponent("outside", isDirectory: true)
+        let claimedPath = operationsDirectory.appendingPathComponent(
+            operationID.uuidString.lowercased(),
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: operationsDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: outsideDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: claimedPath,
+            withDestinationURL: outsideDirectory
+        )
+        try fixture.store.appSettings.setSetting(
+            BackupController.restoreStatusStorageKey,
+            value: RestoreStatusRecord(
+                state: .staging,
+                message: "Restore scheduled.",
+                operationID: operationID.uuidString,
+                snapshotIdentifier: snapshotID,
+                updatedAt: now
+            )
+        )
+        let failure = try RestoreSidecarStore.recordStagingFailure(
+            operationID: operationID,
+            reason: .liveDatabaseCloseFailed,
+            stagingRootDirectory: fixture.liveLayout.stagingRootDirectory,
+            failedAt: now
+        )
+        var acknowledgeCount = 0
+
+        let controller = makeController(
+            fixture: fixture,
+            inspector: { _ in [] },
+            launchStagingFailure: failure,
+            acknowledgeStagingFailure: { acknowledgeCount += 1 }
+        )
+
+        XCTAssertEqual(controller.restoreState, .failed)
+        XCTAssertTrue(controller.restoreStatusMessage?.localizedCaseInsensitiveContains("retry") == true)
+        XCTAssertEqual(acknowledgeCount, 0)
+        let durable = try XCTUnwrap(
+            fixture.store.appSettings.getSetting(
+                BackupController.restoreStatusStorageKey,
+                as: RestoreStatusRecord.self
+            )
+        )
+        XCTAssertEqual(durable.state, .staging)
+        XCTAssertNotNil(try RestoreSidecarStore.readStagingFailure(
+            stagingRootDirectory: fixture.liveLayout.stagingRootDirectory
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outsideDirectory.path))
     }
 
     func testDurableActivationOutcomeReplaysAndAcknowledgesAfterAudit() throws {
