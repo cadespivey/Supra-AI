@@ -296,6 +296,84 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertFalse(operations.events.contains(.removeOperationTree))
     }
 
+    // A durable recovery-required outcome is a launch freeze, not permission
+    // to retry selected-state mutation on every later cold start.
+    func testDurableRecoveryOutcomeFreezesSecondLaunchBeforeMutation() throws {
+        let staged = try stage()
+        let firstOperations = RecordingRestoreActivationOperations(
+            failures: [.replaceSelectedDatabase, .replaceSafetyDatabase]
+        )
+
+        let first = activate(operations: firstOperations)
+
+        XCTAssertEqual(first.status, .recoveryRequired)
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let durableOutcome = try Data(contentsOf: outcomeURL)
+        let secondOperations = RecordingRestoreActivationOperations()
+
+        let second = activate(operations: secondOperations)
+
+        XCTAssertEqual(second.status, .recoveryRequired)
+        XCTAssertEqual(second.activationFailure, first.activationFailure)
+        XCTAssertEqual(second.rollbackFailure, first.rollbackFailure)
+        XCTAssertEqual(second.operationID, staged.intent.operationID)
+        XCTAssertEqual(second.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertEqual(second.recoveryDatabaseURL, staged.safetyDatabaseURL)
+        XCTAssertTrue(secondOperations.events.isEmpty)
+        XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertEqual(try Data(contentsOf: outcomeURL), durableOutcome)
+    }
+
+    // The terminal sidecar is the durable replay key. It must reach disk before
+    // the pending marker can be consumed, for both activation and rollback.
+    func testTerminalOutcomeIsDurableBeforePendingMarkerConsumption() throws {
+        _ = try stage()
+        let activationOperations = RecordingRestoreActivationOperations()
+
+        XCTAssertEqual(activate(operations: activationOperations).status, .activated)
+        XCTAssertLessThan(
+            try XCTUnwrap(activationOperations.events.firstIndex(of: .writeOutcome)),
+            try XCTUnwrap(activationOperations.events.firstIndex(of: .removeMarker))
+        )
+
+        fixture.remove()
+        fixture = try RestoreTestFixture()
+        _ = try stage()
+        let rollbackOperations = RecordingRestoreActivationOperations(
+            failures: [.replaceSelectedDatabase]
+        )
+
+        XCTAssertEqual(activate(operations: rollbackOperations).status, .failedAndRolledBack)
+        XCTAssertLessThan(
+            try XCTUnwrap(rollbackOperations.events.firstIndex(of: .writeOutcome)),
+            try XCTUnwrap(rollbackOperations.events.firstIndex(of: .removeMarker))
+        )
+    }
+
+    // A sidecar write fault must remain visible and must leave the authenticated
+    // request in place; otherwise a crash can silently lose status and cleanup.
+    func testOutcomeWriteFailureKeepsPendingMarkerAndBlocksLaunch() throws {
+        let staged = try stage()
+        let operations = RecordingRestoreActivationOperations(failures: [.writeOutcome])
+
+        let result = activate(operations: operations)
+
+        XCTAssertEqual(result.status, .recoveryRequired)
+        XCTAssertEqual(result.activationFailure, .outcomePersistenceFailed)
+        XCTAssertEqual(result.operationID, staged.intent.operationID)
+        XCTAssertEqual(result.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertFalse(operations.events.contains(.removeMarker))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.stagingRootDirectory
+                .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName).path
+        ))
+    }
+
     // T-RST-27 expected RED: rollback open/validation double failure can be
     // mistaken for a successful rollback.
     func testActivationAndRollbackOpenFailureRequiresRecovery() throws {
@@ -612,6 +690,7 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
 
     func writeOutcomeAtomically(_ data: Data, to url: URL) throws {
         events.append(.writeOutcome)
+        if failures.contains(.writeOutcome) { throw ActivationTestError.markerSync }
         try SystemRestoreFileOperations().writeIntentAtomically(data, to: url)
     }
 }
