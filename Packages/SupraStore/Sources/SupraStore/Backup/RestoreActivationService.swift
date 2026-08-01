@@ -62,15 +62,13 @@ public struct RestoreActivationResult: Equatable, Sendable {
 
     static func failedAndRolledBack(
         _ failure: RestoreActivationFailure,
-        intent: RestoreIntent,
-        safetyDatabaseURL: URL
+        intent: RestoreIntent
     ) -> RestoreActivationResult {
         RestoreActivationResult(
             status: .failedAndRolledBack,
             activationFailure: failure,
             operationID: intent.operationID,
-            snapshotIdentifier: intent.selectedSnapshotIdentifier,
-            recoveryDatabaseURL: safetyDatabaseURL
+            snapshotIdentifier: intent.selectedSnapshotIdentifier
         )
     }
 
@@ -104,8 +102,12 @@ public struct RestoreOutcomeRecord: Codable, Equatable, Sendable {
     public let activationFailure: RestoreActivationFailure?
     public let rollbackFailure: RestoreActivationFailure?
     public let completedAt: Date
+    /// `nil` is a legacy terminal record and is retried conservatively. New
+    /// terminal records transition from `true` to `false` only after the
+    /// operation-tree unlink and containing-directory sync both succeed.
+    public let operationTreeCleanupPending: Bool?
 
-    fileprivate init(result: RestoreActivationResult, completedAt: Date) {
+    init(result: RestoreActivationResult, completedAt: Date) {
         schemaVersion = Self.currentSchemaVersion
         operationID = result.operationID
         snapshotIdentifier = result.snapshotIdentifier
@@ -113,6 +115,28 @@ public struct RestoreOutcomeRecord: Codable, Equatable, Sendable {
         activationFailure = result.activationFailure
         rollbackFailure = result.rollbackFailure
         self.completedAt = completedAt
+        operationTreeCleanupPending = result.status == .activated
+            || result.status == .failedAndRolledBack
+    }
+
+    init(
+        schemaVersion: Int,
+        operationID: String?,
+        snapshotIdentifier: String?,
+        status: RestoreActivationStatus,
+        activationFailure: RestoreActivationFailure?,
+        rollbackFailure: RestoreActivationFailure?,
+        completedAt: Date,
+        operationTreeCleanupPending: Bool?
+    ) {
+        self.schemaVersion = schemaVersion
+        self.operationID = operationID
+        self.snapshotIdentifier = snapshotIdentifier
+        self.status = status
+        self.activationFailure = activationFailure
+        self.rollbackFailure = rollbackFailure
+        self.completedAt = completedAt
+        self.operationTreeCleanupPending = operationTreeCleanupPending
     }
 
     public static func encode(_ record: RestoreOutcomeRecord) throws -> Data {
@@ -136,6 +160,7 @@ protocol RestoreActivationFileOperations {
     func synchronizeItem(at url: URL) throws
     func atomicallyReplaceItem(at destination: URL, withItemAt prepared: URL) throws
     func removeItem(at url: URL) throws
+    func writeOutcomeAtomically(_ data: Data, to url: URL) throws
 }
 
 struct SystemRestoreActivationFileOperations: RestoreActivationFileOperations {
@@ -169,6 +194,10 @@ struct SystemRestoreActivationFileOperations: RestoreActivationFileOperations {
     func removeItem(at url: URL) throws {
         try fileManager.removeItem(at: url)
     }
+
+    func writeOutcomeAtomically(_ data: Data, to url: URL) throws {
+        try stagingOperations.writeIntentAtomically(data, to: url)
+    }
 }
 
 /// Runs only at a cold-start boundary, before the app constructs its store or
@@ -179,25 +208,57 @@ public enum RestoreActivationService {
         knownMigrationIdentifiers: [String] = SupraMigrator.makeMigrator().migrations,
         fileManager: FileManager = .default
     ) -> RestoreActivationResult {
-        let result = activatePendingRestore(
+        activatePendingRestore(
             liveLayout: liveLayout,
             knownMigrationIdentifiers: knownMigrationIdentifiers,
             fileManager: fileManager,
             operations: SystemRestoreActivationFileOperations(fileManager: fileManager),
             openDatabase: { try SupraDatabase(url: $0) }
         )
-        persistOutcomeIfNeeded(
-            result,
-            stagingRootDirectory: liveLayout.stagingRootDirectory,
-            fileManager: fileManager
-        )
-        return result
     }
 
     static func activatePendingRestore(
         liveLayout: RestoreLiveLayout,
         knownMigrationIdentifiers: [String],
         fileManager: FileManager = .default,
+        operations: any RestoreActivationFileOperations,
+        openDatabase: (URL) throws -> SupraDatabase
+    ) -> RestoreActivationResult {
+        try? RestoreSidecarStore.retryTerminalOperationCleanup(
+            stagingRootDirectory: liveLayout.stagingRootDirectory,
+            fileManager: fileManager,
+            operations: operations
+        )
+        let result = performPendingRestore(
+            liveLayout: liveLayout,
+            knownMigrationIdentifiers: knownMigrationIdentifiers,
+            fileManager: fileManager,
+            operations: operations,
+            openDatabase: openDatabase
+        )
+        guard result.status != .noPendingRestore else { return result }
+        let outcome = try? RestoreSidecarStore.recordActivationOutcome(
+            result,
+            stagingRootDirectory: liveLayout.stagingRootDirectory,
+            completedAt: Date(),
+            fileManager: fileManager,
+            operations: operations
+        )
+        if let outcome {
+            try? RestoreSidecarStore.cleanupTerminalOperation(
+                outcome,
+                stagingRootDirectory: liveLayout.stagingRootDirectory,
+                fileManager: fileManager,
+                operations: operations
+            )
+        }
+        return result
+    }
+
+    private static func performPendingRestore(
+        liveLayout: RestoreLiveLayout,
+        knownMigrationIdentifiers: [String],
+        fileManager: FileManager,
         operations: any RestoreActivationFileOperations,
         openDatabase: (URL) throws -> SupraDatabase
     ) -> RestoreActivationResult {
@@ -360,28 +421,6 @@ public enum RestoreActivationService {
         return .activated(context.intent)
     }
 
-    private static func persistOutcomeIfNeeded(
-        _ result: RestoreActivationResult,
-        stagingRootDirectory: URL,
-        fileManager: FileManager
-    ) {
-        guard result.status != .noPendingRestore else { return }
-        let record = RestoreOutcomeRecord(result: result, completedAt: Date())
-        let destination = stagingRootDirectory
-            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
-        do {
-            try fileManager.createDirectory(
-                at: stagingRootDirectory,
-                withIntermediateDirectories: true
-            )
-            try SystemRestoreFileOperations(fileManager: fileManager)
-                .writeIntentAtomically(RestoreOutcomeRecord.encode(record), to: destination)
-        } catch {
-            // Activation and verified rollback are safety-critical. Failure to
-            // persist display metadata must not change either validated result.
-        }
-    }
-
     private static func finishFailure(
         _ activationFailure: RestoreActivationFailure,
         context: ActivationContext,
@@ -463,8 +502,7 @@ public enum RestoreActivationService {
 
         return .failedAndRolledBack(
             activationFailure,
-            intent: context.intent,
-            safetyDatabaseURL: context.safetyDatabaseURL
+            intent: context.intent
         )
     }
 
@@ -503,6 +541,10 @@ public enum RestoreActivationService {
         guard intent.schemaVersion == RestoreIntent.currentSchemaVersion,
               let uuid = UUID(uuidString: intent.operationID),
               uuid.uuidString.lowercased() == intent.operationID,
+              RestoreSidecarStore.isValidSnapshotIdentifier(
+                  intent.selectedSnapshotIdentifier,
+                  required: true
+              ),
               intent.selectedBlobCount >= 0,
               intent.safetyBlobCount >= 0,
               isSHA256(intent.stagedDatabaseSHA256),
