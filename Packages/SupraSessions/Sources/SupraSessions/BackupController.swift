@@ -367,7 +367,13 @@ public final class BackupController: ObservableObject {
             self.restoreState = .needsDestinationRepick
             self.restoreStatusMessage = stored?.lastErrorDescription
         }
-        let appliedActivation = applyLaunchRestoreResult(launchRestoreResult)
+        let matchingOutcome = launchRestoreOutcome.flatMap { outcome in
+            Self.outcome(outcome, matches: launchRestoreResult) ? outcome : nil
+        }
+        let appliedActivation = applyLaunchRestoreResult(
+            launchRestoreResult,
+            completedAt: matchingOutcome?.completedAt
+        )
         if appliedActivation,
            launchRestoreResult?.status != .recoveryRequired
         {
@@ -718,14 +724,18 @@ public final class BackupController: ObservableObject {
     }
 
     @discardableResult
-    private func applyLaunchRestoreResult(_ result: RestoreActivationResult?) -> Bool {
+    private func applyLaunchRestoreResult(
+        _ result: RestoreActivationResult?,
+        completedAt: Date?
+    ) -> Bool {
         guard let result, result.status != .noPendingRestore else { return false }
         return applyLaunchRestoreEvidence(
             status: result.status,
             operationID: result.operationID,
             snapshotIdentifier: result.snapshotIdentifier,
             activationFailure: result.activationFailure,
-            rollbackFailure: result.rollbackFailure
+            rollbackFailure: result.rollbackFailure,
+            completedAt: completedAt
         )
     }
 
@@ -736,7 +746,8 @@ public final class BackupController: ObservableObject {
             operationID: outcome.operationID,
             snapshotIdentifier: outcome.snapshotIdentifier,
             activationFailure: outcome.activationFailure,
-            rollbackFailure: outcome.rollbackFailure
+            rollbackFailure: outcome.rollbackFailure,
+            completedAt: outcome.completedAt
         )
     }
 
@@ -746,7 +757,8 @@ public final class BackupController: ObservableObject {
         operationID: String?,
         snapshotIdentifier: String?,
         activationFailure: RestoreActivationFailure?,
-        rollbackFailure: RestoreActivationFailure?
+        rollbackFailure: RestoreActivationFailure?,
+        completedAt: Date?
     ) -> Bool {
         let state: RestoreControllerState
         let message: String
@@ -772,7 +784,8 @@ public final class BackupController: ObservableObject {
                 state,
                 message,
                 operationID: operationID,
-                snapshotIdentifier: snapshotIdentifier
+                snapshotIdentifier: snapshotIdentifier,
+                updatedAt: completedAt
             )
             if status != .recoveryRequired {
                 try recordRestoreAuditOrThrow(
@@ -782,7 +795,8 @@ public final class BackupController: ObservableObject {
                     snapshotIdentifier: snapshotIdentifier,
                     state: state,
                     activationFailure: activationFailure,
-                    rollbackFailure: rollbackFailure
+                    rollbackFailure: rollbackFailure,
+                    occurredAt: completedAt
                 )
             }
             return true
@@ -826,7 +840,8 @@ public final class BackupController: ObservableObject {
                 operationID: failure.operationID,
                 snapshotIdentifier: storedStatus.snapshotIdentifier,
                 state: .failed,
-                stagingFailure: failure.reason
+                stagingFailure: failure.reason,
+                occurredAt: failure.failedAt
             )
             return true
         } catch {
@@ -929,7 +944,8 @@ public final class BackupController: ObservableObject {
         state: RestoreControllerState,
         activationFailure: RestoreActivationFailure? = nil,
         rollbackFailure: RestoreActivationFailure? = nil,
-        stagingFailure: RestoreStagingFailureReason? = nil
+        stagingFailure: RestoreStagingFailureReason? = nil,
+        occurredAt: Date? = nil
     ) {
         try? recordRestoreAuditOrThrow(
             eventType: eventType,
@@ -939,7 +955,8 @@ public final class BackupController: ObservableObject {
             state: state,
             activationFailure: activationFailure,
             rollbackFailure: rollbackFailure,
-            stagingFailure: stagingFailure
+            stagingFailure: stagingFailure,
+            occurredAt: occurredAt
         )
     }
 
@@ -951,7 +968,8 @@ public final class BackupController: ObservableObject {
         state: RestoreControllerState,
         activationFailure: RestoreActivationFailure? = nil,
         rollbackFailure: RestoreActivationFailure? = nil,
-        stagingFailure: RestoreStagingFailureReason? = nil
+        stagingFailure: RestoreStagingFailureReason? = nil,
+        occurredAt: Date? = nil
     ) throws {
         if let operationID,
            try store.auditEvents.fetchEvents(
@@ -978,14 +996,27 @@ public final class BackupController: ObservableObject {
         let metadataJSON = (try? encoder.encode(metadata)).map {
             String(decoding: $0, as: UTF8.self)
         }
-        _ = try store.auditEvents.recordEvent(
+        _ = try store.auditEvents.recordEvent(AuditEventRecord(
+            timestamp: occurredAt ?? now(),
             eventType: eventType,
             actor: "user",
             summary: summary,
             relatedTable: "backup_snapshots",
             relatedID: snapshotIdentifier ?? "unknown",
             metadataJSON: metadataJSON
-        )
+        ))
+    }
+
+    private static func outcome(
+        _ outcome: RestoreOutcomeRecord,
+        matches result: RestoreActivationResult?
+    ) -> Bool {
+        guard let result, result.status != .noPendingRestore else { return false }
+        return outcome.status == result.status
+            && outcome.operationID == result.operationID
+            && outcome.snapshotIdentifier == result.snapshotIdentifier
+            && outcome.activationFailure == result.activationFailure
+            && outcome.rollbackFailure == result.rollbackFailure
     }
 
     private static func displayItem(_ candidate: RestoreSnapshotCandidate) -> RestoreSnapshotListItem {
