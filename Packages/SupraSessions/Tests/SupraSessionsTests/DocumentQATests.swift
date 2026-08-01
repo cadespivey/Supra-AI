@@ -382,6 +382,53 @@ final class DocumentQATests: XCTestCase {
         XCTAssertEqual(preview.documentName, "Beta Lease.txt")
     }
 
+    func testGuidedPublicPreviewSeamsRejectForeignMatterIdentifiers() async throws {
+        // Review RED: the new public version/source/chunk lookup seams accept opaque
+        // identifiers without re-proving that their owner is this controller's
+        // matter. A matter-A controller currently exposes matter-B provenance.
+        let store = try makeStore()
+        let localMatter = try store.matters.createMatter(name: "Synthetic Local Matter")
+        let foreignMatter = try store.matters.createMatter(name: "Synthetic Foreign Matter")
+        let foreign = try await indexRevisionBoundDoc(
+            store,
+            foreignMatter.id,
+            "Foreign Agreement.txt",
+            "FOREIGN_MATTER_CANARY. This passage must stay outside the local controller."
+        )
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(request, 0, .token, token: "The foreign passage is isolated [S1]."),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let foreignQA = DocumentQAController(
+            matterID: foreignMatter.id,
+            store: store,
+            runtimeClient: runtime
+        )
+        let generated = await foreignQA.generate(
+            question: "What must remain isolated?",
+            guidedChunkIDs: [foreign.chunkID],
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        )
+        let foreignResult = try XCTUnwrap(generated)
+        let foreignSource = try XCTUnwrap(
+            store.documentSources.fetchSources(
+                structuredOutputVersionID: foreignResult.versionID
+            ).first
+        )
+        let localQA = DocumentQAController(
+            matterID: localMatter.id,
+            store: store,
+            runtimeClient: StubRuntimeClient()
+        )
+
+        XCTAssertTrue(localQA.sourceReferences(versionID: foreignResult.versionID).isEmpty)
+        XCTAssertNil(localQA.preview(sourceID: foreignSource.id))
+        XCTAssertNil(localQA.preview(chunkID: foreign.chunkID))
+    }
+
     func testGuidedGenerationBlocksEmptyUnavailableAndReviewRequiredSelections() async throws {
         // T-GQA-11...12 expected RED: an empty nonnil guided selection currently
         // falls back to Auto and unavailable IDs are silently dropped.
