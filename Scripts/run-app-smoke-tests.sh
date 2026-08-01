@@ -10,11 +10,26 @@ if [[ "${1:-}" == "--check" ]]; then
   check_only=1
   shift
 fi
+
+class_contains_test() {
+  local file="$1"
+  local class_name="$2"
+  local method_name="$3"
+  awk -v class_name="$class_name" -v method_name="$method_name" '
+    /^final class / {
+      in_class = index($0, "final class " class_name ":") > 0
+      next
+    }
+    in_class && index($0, "func " method_name "(") > 0 { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "$file"
+}
+
 if [[ ! -f "$restore_test" ]] \
-    || ! grep -Fq 'testInvalidSnapshotShowsFactsAndCannotBeSelected' "$restore_test" \
-    || ! grep -Fq 'testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel' "$restore_test" \
-    || ! grep -Fq 'testSuccessfulStageShowsTerminalSurfaceAndQuits' "$restore_test" \
-    || ! grep -Fq 'testRecoveryRequiredShellProvidesPreservationAndQuitInstructions' "$restore_test"; then
+    || ! class_contains_test "$restore_test" RestoreSettingsUITests testInvalidSnapshotShowsFactsAndCannotBeSelected \
+    || ! class_contains_test "$restore_test" RestoreSettingsUITests testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel \
+    || ! class_contains_test "$restore_test" RestoreSettingsUITests testSuccessfulStageShowsTerminalSurfaceAndQuits \
+    || ! class_contains_test "$restore_test" RestoreSettingsUITests testRecoveryRequiredShellProvidesPreservationAndQuitInstructions; then
   printf '%s\n' 'ERROR: restore Settings/recovery accessibility smoke tests are missing' >&2
   exit 1
 fi
