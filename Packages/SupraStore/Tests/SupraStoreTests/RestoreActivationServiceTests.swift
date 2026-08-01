@@ -530,6 +530,31 @@ final class RestoreActivationServiceTests: XCTestCase {
         ))
     }
 
+    func testRecoveryOutcomeAcknowledgementPreservesDurableFreezeAndOperationTree() throws {
+        let staged = try stage()
+        let result = activate(operations: RecordingRestoreActivationOperations(
+            failures: [.replaceSelectedDatabase, .replaceSafetyDatabase]
+        ))
+        XCTAssertEqual(result.status, .recoveryRequired)
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let outcomeData = try Data(contentsOf: outcomeURL)
+
+        try RestoreSidecarStore.acknowledgeActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+
+        XCTAssertEqual(try Data(contentsOf: outcomeURL), outcomeData)
+        XCTAssertEqual(
+            try RestoreSidecarStore.readActivationOutcome(
+                stagingRootDirectory: fixture.stagingRootDirectory
+            )?.status,
+            .recoveryRequired
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+    }
+
     // T-RST-H07 expected RED: raw outcome decoding accepts a path-like snapshot
     // identifier even though the sidecar is documented as content-free.
     func testActivationOutcomeReadRejectsPathLikeSnapshotIdentifier() throws {
