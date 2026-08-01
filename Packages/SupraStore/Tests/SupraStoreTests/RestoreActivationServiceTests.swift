@@ -555,6 +555,59 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
     }
 
+    func testInterruptedStagingCleanupRemovesOnlyExactUnclaimedOperation() throws {
+        let interruptedID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let unrelatedID = "44444444-4444-4444-4444-444444444444"
+        let operationsDirectory = fixture.stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+        let interruptedDirectory = operationsDirectory.appendingPathComponent(
+            interruptedID.uuidString.lowercased(),
+            isDirectory: true
+        )
+        let unrelatedDirectory = operationsDirectory.appendingPathComponent(
+            unrelatedID,
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: interruptedDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: unrelatedDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let removed = try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: interruptedID,
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+
+        XCTAssertTrue(removed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: interruptedDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedDirectory.path))
+    }
+
+    func testInterruptedStagingCleanupPreservesMarkerAndRecoveryClaimedTrees() throws {
+        let markerClaimed = try stage()
+        let markerOperationID = try XCTUnwrap(UUID(uuidString: markerClaimed.intent.operationID))
+
+        XCTAssertFalse(try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: markerOperationID,
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: markerClaimed.operationDirectoryURL.path))
+
+        let recovery = activate(operations: RecordingRestoreActivationOperations(
+            failures: [.replaceSelectedDatabase, .replaceSafetyDatabase]
+        ))
+        XCTAssertEqual(recovery.status, .recoveryRequired)
+        XCTAssertFalse(try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: markerOperationID,
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: markerClaimed.operationDirectoryURL.path))
+    }
+
     // T-RST-H07 expected RED: raw outcome decoding accepts a path-like snapshot
     // identifier even though the sidecar is documented as content-free.
     func testActivationOutcomeReadRejectsPathLikeSnapshotIdentifier() throws {
