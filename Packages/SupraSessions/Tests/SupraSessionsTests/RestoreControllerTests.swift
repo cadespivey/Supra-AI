@@ -402,10 +402,16 @@ final class RestoreControllerTests: XCTestCase {
         let fixture = try makeFixture()
         let valid = candidate(identifier: "supra-20260731-090600-000")
         var exitCount = 0
+        var inspectionCount = 0
+        var runnerCount = 0
         let controller = makeController(
             fixture: fixture,
-            inspector: { _ in [valid] },
+            inspector: { _ in
+                inspectionCount += 1
+                return [valid]
+            },
             stager: { _, _, _ in
+                runnerCount += 1
                 try fixture.store.database.writer.close()
                 throw ControllerTestError.stagingFailedAfterClose
             },
@@ -422,6 +428,20 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(exitCount, 1)
         XCTAssertTrue(controller.restoreProcessIsTerminal)
         XCTAssertEqual(controller.restoreState, .failed)
+        let terminalMessage = controller.restoreStatusMessage
+
+        let didReinspect = await controller.inspectRestoreSnapshots()
+        XCTAssertFalse(didReinspect)
+        XCTAssertFalse(controller.selectRestoreSnapshot(id: valid.identifier))
+        XCTAssertFalse(controller.prepareRestoreConfirmation())
+        let didRestage = await controller.stageConfirmedRestore()
+        XCTAssertFalse(didRestage)
+        controller.cancelRestoreConfirmation()
+        XCTAssertEqual(inspectionCount, 2)
+        XCTAssertEqual(runnerCount, 1)
+        XCTAssertEqual(exitCount, 1)
+        XCTAssertEqual(controller.restoreState, .failed)
+        XCTAssertEqual(controller.restoreStatusMessage, terminalMessage)
 
         let reopened = try SupraStore(url: fixture.liveLayout.databaseURL)
         let durable = try XCTUnwrap(
