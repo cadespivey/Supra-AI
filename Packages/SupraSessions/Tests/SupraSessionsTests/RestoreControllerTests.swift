@@ -258,6 +258,68 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(auditText.contains(summary.operationID))
     }
 
+    func testStagedRestoreFreezesBackupAndRestoreControlsUntilColdStart() async throws {
+        let fixture = try makeFixture()
+        let valid = candidate(identifier: "supra-20260731-090400-000")
+        var backupCount = 0
+        var inspectionCount = 0
+        let controller = makeController(
+            fixture: fixture,
+            backupRunner: { _ in
+                backupCount += 1
+                return BackupRunSummary(
+                    snapshotBytes: 1,
+                    copiedBlobCount: 0,
+                    referencedBlobCount: 0
+                )
+            },
+            inspector: { _ in
+                inspectionCount += 1
+                return [valid]
+            },
+            stager: { selected, _ in self.stageSummary(for: selected) }
+        )
+        configure(controller, destination: fixture.destinationURL)
+
+        let didInspect = await controller.inspectRestoreSnapshots()
+        XCTAssertTrue(didInspect)
+        XCTAssertTrue(controller.selectRestoreSnapshot(id: valid.identifier))
+        XCTAssertTrue(controller.prepareRestoreConfirmation())
+        let didStage = await controller.stageConfirmedRestore()
+        XCTAssertTrue(didStage)
+        XCTAssertEqual(inspectionCount, 2, "staging must re-inspect the frozen selection")
+
+        let stagedMessage = controller.restoreStatusMessage
+        let stagedDestination = controller.destinationPath
+        XCTAssertFalse(
+            controller.configureDestination(
+                bookmarkData: Data([0xBA, 0xD0]),
+                url: fixture.root.appendingPathComponent("Replacement", isDirectory: true)
+            )
+        )
+        let didBackUp = await controller.backUpNow()
+        let didReinspect = await controller.inspectRestoreSnapshots()
+        XCTAssertFalse(didBackUp)
+        XCTAssertFalse(didReinspect)
+        XCTAssertFalse(controller.selectRestoreSnapshot(id: valid.identifier))
+        XCTAssertFalse(controller.prepareRestoreConfirmation())
+
+        XCTAssertEqual(backupCount, 0)
+        XCTAssertEqual(inspectionCount, 2)
+        XCTAssertEqual(controller.destinationPath, stagedDestination)
+        XCTAssertEqual(controller.restoreState, .stagedRestartRequired)
+        XCTAssertEqual(controller.restoreStatusMessage, stagedMessage)
+        XCTAssertTrue(controller.isAnyBackupOperationBusy)
+
+        let persisted = try XCTUnwrap(
+            fixture.store.appSettings.getSetting(
+                BackupController.restoreStatusStorageKey,
+                as: RestoreStatusRecord.self
+            )
+        )
+        XCTAssertEqual(persisted.state, .stagedRestartRequired)
+    }
+
     private func makeFixture(
         destinationFailure: BackupDestinationError? = nil
     ) throws -> ControllerFixture {
