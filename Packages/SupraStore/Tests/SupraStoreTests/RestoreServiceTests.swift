@@ -16,6 +16,102 @@ final class RestoreServiceTests: XCTestCase {
         fixture = nil
     }
 
+    // T-RST-H01 expected RED: the public staging entry point accepts only a
+    // layout, so a caller can stage while the app's live writer remains open.
+    // The replacement API must bind the exact on-disk SupraDatabase, close it,
+    // and preserve the caller's operation UUID before core staging begins.
+    func testQuiescedStageClosesExactWriterBeforeSafetySnapshotAndUsesCallerOperationID() throws {
+        try fixture.writeShippingLiveState(sentinel: "current canary")
+        _ = try fixture.writeCompleteShippingSnapshot(sentinel: "selected canary")
+        let candidate = try shippingCandidate()
+        let liveDatabase = try SupraDatabase(url: fixture.liveDatabaseURL)
+        let operationID = try XCTUnwrap(UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
+        var observedClosedWriter = false
+        let operations = RecordingRestoreFileOperations(
+            safetySnapshotProbe: {
+                XCTAssertThrowsError(try liveDatabase.writer.read { _ in () })
+                observedClosedWriter = true
+            }
+        )
+
+        let result = try RestoreService.stageQuiescedRestore(
+            candidate: candidate,
+            liveDatabase: liveDatabase,
+            liveLayout: liveLayout(),
+            operationID: operationID,
+            knownMigrationIdentifiers: SupraMigrator.makeMigrator().migrations,
+            operations: operations
+        )
+
+        XCTAssertTrue(observedClosedWriter, "the safety snapshot seam must execute after close")
+        XCTAssertEqual(result.intent.operationID, operationID.uuidString.lowercased())
+        XCTAssertThrowsError(try liveDatabase.writer.read { _ in () })
+    }
+
+    // T-RST-H02 expected RED: core staging cannot currently prove that the
+    // writer it is about to close owns RestoreLiveLayout.databaseURL.
+    func testQuiescedStageRejectsDifferentCanonicalDatabaseWithoutClosingWriter() throws {
+        try fixture.writeShippingLiveState(sentinel: "current canary")
+        _ = try fixture.writeCompleteShippingSnapshot(sentinel: "selected canary")
+        let candidate = try shippingCandidate()
+        let liveDatabase = try SupraDatabase(url: fixture.liveDatabaseURL)
+        let mismatchedLayout = RestoreLiveLayout(
+            databaseURL: fixture.root.appendingPathComponent("different.sqlite"),
+            blobsDirectory: fixture.liveBlobsDirectory,
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+
+        XCTAssertThrowsError(try RestoreService.stageQuiescedRestore(
+            candidate: candidate,
+            liveDatabase: liveDatabase,
+            liveLayout: mismatchedLayout,
+            operationID: UUID(),
+            knownMigrationIdentifiers: SupraMigrator.makeMigrator().migrations
+        )) { error in
+            XCTAssertEqual(error as? RestoreStageError, .liveDatabasePathMismatch)
+        }
+
+        XCTAssertNoThrow(try liveDatabase.writer.read { _ in () })
+        try liveDatabase.writer.close()
+    }
+
+    // T-RST-H03 expected RED: once the live writer is closed, staging failures
+    // have no durable database-independent handoff or acknowledgement API.
+    func testStagingFailureSidecarIsContentFreeReadableAndAcknowledgedDurably() throws {
+        let operationID = try XCTUnwrap(UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
+        let failedAt = Date(timeIntervalSince1970: 1_727_000_000)
+
+        let written = try RestoreSidecarStore.recordStagingFailure(
+            operationID: operationID,
+            reason: .liveStateInvalid,
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            failedAt: failedAt
+        )
+
+        XCTAssertEqual(written.operationID, operationID.uuidString.lowercased())
+        XCTAssertEqual(written.reason, .liveStateInvalid)
+        XCTAssertEqual(
+            try RestoreSidecarStore.readStagingFailure(
+                stagingRootDirectory: fixture.stagingRootDirectory
+            ),
+            written
+        )
+        let sidecarURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreStagingFailureRecord.lastFailureFileName)
+        let serialized = try XCTUnwrap(String(data: Data(contentsOf: sidecarURL), encoding: .utf8))
+        XCTAssertFalse(serialized.contains(fixture.root.path))
+        XCTAssertFalse(serialized.contains("current canary"))
+
+        try RestoreSidecarStore.acknowledgeStagingFailure(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+
+        XCTAssertNil(try RestoreSidecarStore.readStagingFailure(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarURL.path))
+    }
+
     // T-RST-10...12 expected RED: RestoreService has no safety capture,
     // selected staging tree, durable marker, or ordering seam.
     func testStageCapturesVerifiedCurrentDatabaseAndReferencedBlobs() throws {
@@ -248,6 +344,13 @@ final class RestoreServiceTests: XCTestCase {
         ).first)
     }
 
+    private func shippingCandidate() throws -> RestoreSnapshotCandidate {
+        try XCTUnwrap(RestoreSnapshotInspector.discover(
+            in: fixture.backupDirectory,
+            knownMigrationIdentifiers: SupraMigrator.makeMigrator().migrations
+        ).first)
+    }
+
     private func liveLayout() -> RestoreLiveLayout {
         RestoreLiveLayout(
             databaseURL: fixture.liveDatabaseURL,
@@ -292,15 +395,21 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
 
     private let system = SystemRestoreFileOperations()
     private let failurePoint: FailurePoint?
+    private let safetySnapshotProbe: (() throws -> Void)?
     private(set) var events: [Event] = []
     private(set) var markerObservedCompleteTrees = false
 
-    init(failurePoint: FailurePoint? = nil) {
+    init(
+        failurePoint: FailurePoint? = nil,
+        safetySnapshotProbe: (() throws -> Void)? = nil
+    ) {
         self.failurePoint = failurePoint
+        self.safetySnapshotProbe = safetySnapshotProbe
     }
 
     func createDatabaseSnapshot(from source: URL, to target: URL) throws {
         events.append(.createSafetyDatabase)
+        try safetySnapshotProbe?()
         if failurePoint == .safetyDatabase { throw InjectedRestoreFailure.requested(.safetyDatabase) }
         try system.createDatabaseSnapshot(from: source, to: target)
     }
