@@ -121,7 +121,8 @@ final class AppEnvironment: ObservableObject {
     private var classifyOnModelLoadCancellable: AnyCancellable?
 
     init() {
-        let restoreActivation = AppEnvironment.prepareColdStartRestore()
+        let coldStartRestore = AppEnvironment.prepareColdStartRestore()
+        let restoreActivation = coldStartRestore?.activation
         let runtimeClient = RuntimeClient()
         let guidedQAUITestAuthorized = Self.isUITestMode && ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA")
         let guidedQAUITestModelRoot = guidedQAUITestAuthorized
@@ -133,7 +134,11 @@ final class AppEnvironment: ObservableObject {
         let guidedQAUITestManagedRoots = guidedQAUITestModelRoot.map { [$0] }
             ?? [ManagedModelStorage.modelsDirectory()]
         let taskRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient
-        let storeResult = AppEnvironment.makeStore(after: restoreActivation)
+        let storeResult = AppEnvironment.makeStore(
+            after: restoreActivation,
+            replayOutcome: coldStartRestore?.outcome,
+            outcomeReadFailed: coldStartRestore?.outcomeReadFailed == true
+        )
         let store = storeResult.store
         let systemPrompt = DefaultSystemPrompt.milestone1()
         let appVersion = AppEnvironment.currentAppVersion()
@@ -186,7 +191,21 @@ final class AppEnvironment: ObservableObject {
             restoreInspector: restoreUITestFixture?.inspector,
             restoreRunner: restoreUITestFixture?.runner,
             requestProcessExit: { NSApplication.shared.terminate(nil) },
-            launchRestoreResult: restoreActivation
+            launchRestoreResult: restoreActivation,
+            launchRestoreOutcome: coldStartRestore?.outcome,
+            launchStagingFailure: coldStartRestore?.stagingFailure,
+            acknowledgeRestoreOutcome: {
+                guard let stagingRoot = coldStartRestore?.stagingRootDirectory else { return }
+                try RestoreSidecarStore.acknowledgeActivationOutcome(
+                    stagingRootDirectory: stagingRoot
+                )
+            },
+            acknowledgeStagingFailure: {
+                guard let stagingRoot = coldStartRestore?.stagingRootDirectory else { return }
+                try RestoreSidecarStore.acknowledgeStagingFailure(
+                    stagingRootDirectory: stagingRoot
+                )
+            }
         )
         if let restoreUITestFixture {
             _ = backupController.configureDestination(
@@ -1840,7 +1859,11 @@ final class AppEnvironment: ObservableObject {
     /// Opens the on-disk store, falling back to a temporary store so the app still
     /// launches if the Application Support database cannot be created. `isFallback`
     /// is true for that degraded last-resort store (not for the UI-test store).
-    private static func makeStore(after restoreActivation: RestoreActivationResult?) -> (
+    private static func makeStore(
+        after restoreActivation: RestoreActivationResult?,
+        replayOutcome: RestoreOutcomeRecord?,
+        outcomeReadFailed: Bool
+    ) -> (
         store: SupraStore,
         isFallback: Bool,
         recoveryState: DatabaseRecoveryState?
@@ -1877,7 +1900,10 @@ final class AppEnvironment: ObservableObject {
             if let store = try? SupraStore.inMemory() { return (store, true, nil) }
             return (unavailableStore(), true, nil)
         }
-        if restoreActivation?.status == .recoveryRequired {
+        if restoreActivation?.status == .recoveryRequired
+            || replayOutcome?.status == .recoveryRequired
+            || outcomeReadFailed
+        {
             return (
                 makeFallbackStore(),
                 true,
@@ -1912,7 +1938,7 @@ final class AppEnvironment: ObservableObject {
     /// Consumes a complete restore intent before any user-store writer or
     /// controller graph exists. Hermetic and headless launches skip this seam so
     /// test/demo/probe authority can never mutate the user's live data.
-    private static func prepareColdStartRestore() -> RestoreActivationResult? {
+    private static func prepareColdStartRestore() -> ColdStartRestoreEvidence? {
         guard !isUITestMode, !isDemoMode, !isHeadlessProbeMode,
               let databaseURL = try? DatabasePath.appSupportDatabaseURL()
         else { return nil }
@@ -1922,7 +1948,33 @@ final class AppEnvironment: ObservableObject {
             stagingRootDirectory: databaseURL.deletingLastPathComponent()
                 .appendingPathComponent(RestoreService.stagingDirectoryName, isDirectory: true)
         )
-        return RestoreActivationService.activatePendingRestore(liveLayout: layout)
+        let activation = RestoreActivationService.activatePendingRestore(liveLayout: layout)
+        let outcome: RestoreOutcomeRecord?
+        let outcomeReadFailed: Bool
+        do {
+            outcome = try RestoreSidecarStore.readActivationOutcome(
+                stagingRootDirectory: layout.stagingRootDirectory
+            )
+            outcomeReadFailed = false
+        } catch {
+            outcome = nil
+            outcomeReadFailed = true
+        }
+        let stagingFailure: RestoreStagingFailureRecord?
+        if activation.status == .noPendingRestore, outcome == nil, !outcomeReadFailed {
+            stagingFailure = try? RestoreSidecarStore.readStagingFailure(
+                stagingRootDirectory: layout.stagingRootDirectory
+            )
+        } else {
+            stagingFailure = nil
+        }
+        return ColdStartRestoreEvidence(
+            activation: activation,
+            outcome: outcome,
+            stagingFailure: stagingFailure,
+            outcomeReadFailed: outcomeReadFailed,
+            stagingRootDirectory: layout.stagingRootDirectory
+        )
     }
 
     private static func makeRestoreLiveLayoutForController(
@@ -2174,6 +2226,14 @@ private struct RestoreUITestFixture {
     let destinationFactory: BackupController.DestinationFactory
     let inspector: BackupController.RestoreInspector
     let runner: BackupController.RestoreRunner
+}
+
+private struct ColdStartRestoreEvidence: Sendable {
+    let activation: RestoreActivationResult
+    let outcome: RestoreOutcomeRecord?
+    let stagingFailure: RestoreStagingFailureRecord?
+    let outcomeReadFailed: Bool
+    let stagingRootDirectory: URL
 }
 
 @MainActor

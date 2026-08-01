@@ -225,6 +225,7 @@ public final class BackupController: ObservableObject {
     ) async throws -> RestoreStageSummary
     public typealias RestoreOperationIDProvider = @MainActor () -> UUID
     public typealias ProcessExitRequester = @MainActor () -> Void
+    public typealias RestoreEvidenceAcknowledger = @MainActor () throws -> Void
 
     public static let storageKey = "backup.configuration.v1"
     public static let restoreStatusStorageKey = "restore.status.v1"
@@ -272,6 +273,10 @@ public final class BackupController: ObservableObject {
         restoreOperationIDProvider: @escaping RestoreOperationIDProvider = { UUID() },
         requestProcessExit: @escaping ProcessExitRequester = {},
         launchRestoreResult: RestoreActivationResult? = nil,
+        launchRestoreOutcome: RestoreOutcomeRecord? = nil,
+        launchStagingFailure: RestoreStagingFailureRecord? = nil,
+        acknowledgeRestoreOutcome: RestoreEvidenceAcknowledger = {},
+        acknowledgeStagingFailure: RestoreEvidenceAcknowledger = {},
         now: @escaping @MainActor () -> Date = { Date() }
     ) {
         self.store = store
@@ -306,17 +311,28 @@ public final class BackupController: ObservableObject {
                 try RestoreSnapshotInspector.discover(in: destination)
             }.value
         }
-        self.restoreRunner = restoreRunner ?? { candidate, layout, _ in
+        self.restoreRunner = restoreRunner ?? { candidate, layout, operationID in
             try await Task.detached(priority: .utility) {
-                let staged = try RestoreService.stageRestore(
-                    candidate: candidate,
-                    liveLayout: layout
-                )
-                return RestoreStageSummary(
-                    operationID: staged.intent.operationID,
-                    snapshotIdentifier: staged.intent.selectedSnapshotIdentifier,
-                    stagedAt: staged.intent.createdAt
-                )
+                do {
+                    let staged = try RestoreService.stageQuiescedRestore(
+                        candidate: candidate,
+                        liveDatabase: store.database,
+                        liveLayout: layout,
+                        operationID: operationID
+                    )
+                    return RestoreStageSummary(
+                        operationID: staged.intent.operationID,
+                        snapshotIdentifier: staged.intent.selectedSnapshotIdentifier,
+                        stagedAt: staged.intent.createdAt
+                    )
+                } catch {
+                    _ = try? RestoreSidecarStore.recordStagingFailure(
+                        operationID: operationID,
+                        reason: Self.stagingFailureReason(for: error),
+                        stagingRootDirectory: layout.stagingRootDirectory
+                    )
+                    throw error
+                }
             }.value
         }
         self.restoreOperationIDProvider = restoreOperationIDProvider
@@ -351,9 +367,28 @@ public final class BackupController: ObservableObject {
             self.restoreState = .needsDestinationRepick
             self.restoreStatusMessage = stored?.lastErrorDescription
         }
-        applyLaunchRestoreResult(launchRestoreResult)
-        if restoreState == .staging,
-           let stranded = storedStatus
+        let appliedActivation = applyLaunchRestoreResult(launchRestoreResult)
+        if appliedActivation,
+           launchRestoreResult?.status != .recoveryRequired
+        {
+            try? acknowledgeRestoreOutcome()
+        } else if !appliedActivation,
+                  let launchRestoreOutcome,
+                  applyLaunchRestoreOutcome(launchRestoreOutcome)
+        {
+            if launchRestoreOutcome.status != .recoveryRequired {
+                try? acknowledgeRestoreOutcome()
+            }
+        } else if !appliedActivation,
+                  let launchStagingFailure,
+                  let storedStatus,
+                  storedStatus.state == .staging,
+                  storedStatus.operationID?.lowercased() == launchStagingFailure.operationID,
+                  applyLaunchStagingFailure(launchStagingFailure, storedStatus: storedStatus)
+        {
+            try? acknowledgeStagingFailure()
+        } else if restoreState == .staging,
+                  let stranded = storedStatus
         {
             setRestoreStatus(
                 .failed,
@@ -678,12 +713,41 @@ public final class BackupController: ObservableObject {
         }
     }
 
-    private func applyLaunchRestoreResult(_ result: RestoreActivationResult?) {
-        guard let result, result.status != .noPendingRestore else { return }
+    @discardableResult
+    private func applyLaunchRestoreResult(_ result: RestoreActivationResult?) -> Bool {
+        guard let result, result.status != .noPendingRestore else { return false }
+        return applyLaunchRestoreEvidence(
+            status: result.status,
+            operationID: result.operationID,
+            snapshotIdentifier: result.snapshotIdentifier,
+            activationFailure: result.activationFailure,
+            rollbackFailure: result.rollbackFailure
+        )
+    }
+
+    @discardableResult
+    private func applyLaunchRestoreOutcome(_ outcome: RestoreOutcomeRecord) -> Bool {
+        applyLaunchRestoreEvidence(
+            status: outcome.status,
+            operationID: outcome.operationID,
+            snapshotIdentifier: outcome.snapshotIdentifier,
+            activationFailure: outcome.activationFailure,
+            rollbackFailure: outcome.rollbackFailure
+        )
+    }
+
+    @discardableResult
+    private func applyLaunchRestoreEvidence(
+        status: RestoreActivationStatus,
+        operationID: String?,
+        snapshotIdentifier: String?,
+        activationFailure: RestoreActivationFailure?,
+        rollbackFailure: RestoreActivationFailure?
+    ) -> Bool {
         let state: RestoreControllerState
         let message: String
         let eventType: String
-        switch result.status {
+        switch status {
         case .activated:
             state = .succeeded
             message = "Restore complete. The selected backup is now active."
@@ -697,24 +761,73 @@ public final class BackupController: ObservableObject {
             message = "Restore recovery is required before normal work can continue."
             eventType = "restore_recovery_required"
         case .noPendingRestore:
-            return
+            return false
         }
-        setRestoreStatus(
-            state,
-            message,
-            operationID: result.operationID,
-            snapshotIdentifier: result.snapshotIdentifier
-        )
-        if result.status != .recoveryRequired {
-            recordRestoreAudit(
-                eventType: eventType,
-                summary: message,
-                operationID: result.operationID,
-                snapshotIdentifier: result.snapshotIdentifier,
-                state: state,
-                activationFailure: result.activationFailure,
-                rollbackFailure: result.rollbackFailure
+        do {
+            try persistRestoreStatus(
+                state,
+                message,
+                operationID: operationID,
+                snapshotIdentifier: snapshotIdentifier
             )
+            if status != .recoveryRequired {
+                try recordRestoreAuditOrThrow(
+                    eventType: eventType,
+                    summary: message,
+                    operationID: operationID,
+                    snapshotIdentifier: snapshotIdentifier,
+                    state: state,
+                    activationFailure: activationFailure,
+                    rollbackFailure: rollbackFailure
+                )
+            }
+            return true
+        } catch {
+            setRestorePresentation(state, message)
+            return false
+        }
+    }
+
+    @discardableResult
+    private func applyLaunchStagingFailure(
+        _ failure: RestoreStagingFailureRecord,
+        storedStatus: RestoreStatusRecord
+    ) -> Bool {
+        let message: String
+        switch failure.reason {
+        case .liveDatabasePathMismatch:
+            message = "Restore staging stopped because the active database did not match the live restore location. The live data was not replaced."
+        case .liveDatabaseCloseFailed:
+            message = "Restore staging stopped because the live database could not close safely. The live data was not replaced."
+        case .selectedSnapshotUnavailable, .selectedSnapshotChanged, .selectedSnapshotIncompatible:
+            message = "Restore staging stopped because the selected backup was no longer the verified snapshot. Inspect and schedule it again."
+        case .liveStateInvalid:
+            message = "Restore staging stopped because the current data could not be verified for rollback. The live data was not replaced."
+        case .stagingVolumeMismatch:
+            message = "Restore staging stopped because its safety files were not on the live database disk. The live data was not replaced."
+        case .copiedStateInvalid, .stagingIOFailed:
+            message = "Restore staging did not finish safely. The live data was not replaced."
+        }
+        do {
+            try persistRestoreStatus(
+                .failed,
+                message,
+                operationID: failure.operationID,
+                snapshotIdentifier: storedStatus.snapshotIdentifier,
+                updatedAt: failure.failedAt
+            )
+            try recordRestoreAuditOrThrow(
+                eventType: "restore_staging_failed",
+                summary: message,
+                operationID: failure.operationID,
+                snapshotIdentifier: storedStatus.snapshotIdentifier,
+                state: .failed,
+                stagingFailure: failure.reason
+            )
+            return true
+        } catch {
+            setRestorePresentation(.failed, message)
+            return false
         }
     }
 
@@ -811,7 +924,8 @@ public final class BackupController: ObservableObject {
         snapshotIdentifier: String?,
         state: RestoreControllerState,
         activationFailure: RestoreActivationFailure? = nil,
-        rollbackFailure: RestoreActivationFailure? = nil
+        rollbackFailure: RestoreActivationFailure? = nil,
+        stagingFailure: RestoreStagingFailureReason? = nil
     ) {
         try? recordRestoreAuditOrThrow(
             eventType: eventType,
@@ -820,7 +934,8 @@ public final class BackupController: ObservableObject {
             snapshotIdentifier: snapshotIdentifier,
             state: state,
             activationFailure: activationFailure,
-            rollbackFailure: rollbackFailure
+            rollbackFailure: rollbackFailure,
+            stagingFailure: stagingFailure
         )
     }
 
@@ -831,15 +946,28 @@ public final class BackupController: ObservableObject {
         snapshotIdentifier: String?,
         state: RestoreControllerState,
         activationFailure: RestoreActivationFailure? = nil,
-        rollbackFailure: RestoreActivationFailure? = nil
+        rollbackFailure: RestoreActivationFailure? = nil,
+        stagingFailure: RestoreStagingFailureReason? = nil
     ) throws {
+        if let operationID,
+           try store.auditEvents.fetchEvents(
+               relatedTable: "backup_snapshots",
+               relatedID: snapshotIdentifier ?? "unknown",
+               eventType: eventType
+           ).contains(where: {
+               $0.metadataJSON?.lowercased().contains(operationID.lowercased()) == true
+           })
+        {
+            return
+        }
         let metadata = RestoreAuditMetadata(
             schemaVersion: 1,
             operationID: operationID,
             snapshotIdentifier: snapshotIdentifier,
             state: state.rawValue,
             activationFailure: activationFailure?.rawValue,
-            rollbackFailure: rollbackFailure?.rawValue
+            rollbackFailure: rollbackFailure?.rawValue,
+            stagingFailure: stagingFailure?.rawValue
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -873,6 +1001,32 @@ public final class BackupController: ObservableObject {
             return destinationError.localizedDescription
         }
         return "Backup failed. \(error.localizedDescription)"
+    }
+
+    nonisolated private static func stagingFailureReason(
+        for error: Error
+    ) -> RestoreStagingFailureReason {
+        guard let error = error as? RestoreStageError else { return .stagingIOFailed }
+        switch error {
+        case .liveDatabasePathMismatch:
+            return .liveDatabasePathMismatch
+        case .liveDatabaseCloseFailed:
+            return .liveDatabaseCloseFailed
+        case .sourceSnapshotUnavailable:
+            return .selectedSnapshotUnavailable
+        case .sourceSnapshotChanged:
+            return .selectedSnapshotChanged
+        case .sourceSnapshotIncompatible:
+            return .selectedSnapshotIncompatible
+        case .liveDatabaseMissing, .liveStateIncompatible:
+            return .liveStateInvalid
+        case .stagingVolumeMismatch:
+            return .stagingVolumeMismatch
+        case .copiedSafetyStateMismatch, .copiedSelectedStateMismatch:
+            return .copiedStateInvalid
+        case .restoreAlreadyPending:
+            return .stagingIOFailed
+        }
     }
 
     private static func isICloudDrive(_ url: URL) -> Bool {
@@ -936,4 +1090,5 @@ private struct RestoreAuditMetadata: Codable {
     let state: String
     let activationFailure: String?
     let rollbackFailure: String?
+    let stagingFailure: String?
 }
