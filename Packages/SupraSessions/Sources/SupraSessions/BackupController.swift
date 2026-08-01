@@ -344,7 +344,9 @@ public final class BackupController: ObservableObject {
     public var hasDestination: Bool { configuration != nil }
     public var isBackingUp: Bool { state == .backingUp }
     public var isRestoreBusy: Bool { restoreState == .inspecting || restoreState == .staging }
-    public var isAnyBackupOperationBusy: Bool { activeOperation != nil }
+    public var isAnyBackupOperationBusy: Bool {
+        activeOperation != nil || requiresRestartForRestore
+    }
     public var requiresRestartForRestore: Bool { restoreState == .stagedRestartRequired }
     public var destinationPath: String? { configuration?.destinationPath }
     public var destinationIsICloudDrive: Bool { configuration?.isICloudDrive == true }
@@ -367,7 +369,7 @@ public final class BackupController: ObservableObject {
     /// reset because the new folder has not received any backup yet.
     @discardableResult
     public func configureDestination(bookmarkData: Data, url: URL) -> Bool {
-        guard activeOperation == nil else { return false }
+        guard !isAnyBackupOperationBusy else { return false }
         let candidate = BackupConfiguration(
             bookmarkData: bookmarkData,
             destinationPath: url.path,
@@ -402,7 +404,7 @@ public final class BackupController: ObservableObject {
             statusMessage = "Choose a backup folder to get started."
             return false
         }
-        guard activeOperation == nil else { return false }
+        guard !isAnyBackupOperationBusy else { return false }
         activeOperation = .backup
         defer { activeOperation = nil }
 
@@ -478,6 +480,7 @@ public final class BackupController: ObservableObject {
             setRestoreStatus(.idle, "Choose a backup folder before inspecting snapshots.")
             return false
         }
+        guard !requiresRestartForRestore else { return false }
         guard activeOperation == nil else {
             setRestoreStatus(.failed, "Wait for the current backup or restore operation to finish.")
             return false
@@ -514,7 +517,8 @@ public final class BackupController: ObservableObject {
     /// Invalid rows fail closed even if invoked outside SwiftUI's disabled state.
     @discardableResult
     public func selectRestoreSnapshot(id: String) -> Bool {
-        guard activeOperation == nil,
+        guard !requiresRestartForRestore,
+              activeOperation == nil,
               let candidate = restoreCandidates[id],
               candidate.isRestorable,
               candidate.summary != nil
@@ -530,7 +534,8 @@ public final class BackupController: ObservableObject {
     /// identity. Staging independently re-inspects before trusting this choice.
     @discardableResult
     public func prepareRestoreConfirmation() -> Bool {
-        guard activeOperation == nil,
+        guard !requiresRestartForRestore,
+              activeOperation == nil,
               let id = selectedRestoreSnapshotID,
               let candidate = restoreCandidates[id],
               candidate.isRestorable,
@@ -557,6 +562,7 @@ public final class BackupController: ObservableObject {
     /// It never closes, replaces, or reopens the live writer.
     @discardableResult
     public func stageConfirmedRestore() async -> Bool {
+        guard !requiresRestartForRestore else { return false }
         guard activeOperation == nil else {
             setRestoreStatus(.failed, "Wait for the current backup or restore operation to finish.")
             return false
