@@ -702,6 +702,47 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(audit.timestamp, outcome.completedAt)
     }
 
+    func testOutcomeAcknowledgementFailureBlocksAnotherRestoreUntilRelaunch() async throws {
+        let fixture = try makeFixture()
+        let snapshotID = "SupraAI-20260731-090950-000"
+        let outcome = try activationOutcome(
+            status: .activated,
+            snapshotIdentifier: snapshotID
+        )
+        var inspectionCount = 0
+        let controller = makeController(
+            fixture: fixture,
+            inspector: { _ in
+                inspectionCount += 1
+                return []
+            },
+            launchRestoreOutcome: outcome,
+            acknowledgeRestoreOutcome: {
+                throw ControllerTestError.acknowledgementFailed
+            }
+        )
+
+        XCTAssertEqual(controller.restoreState, .succeeded)
+        XCTAssertTrue(controller.restoreEvidenceRequiresAcknowledgement)
+        XCTAssertTrue(controller.restoreStatusMessage?.localizedCaseInsensitiveContains("reopen") == true)
+        XCTAssertTrue(controller.isAnyBackupOperationBusy)
+        XCTAssertFalse(controller.configureDestination(
+            bookmarkData: Data([0x01]),
+            url: fixture.destinationURL
+        ))
+        let didInspect = await controller.inspectRestoreSnapshots()
+        XCTAssertFalse(didInspect)
+        XCTAssertEqual(inspectionCount, 0)
+        let durable = try XCTUnwrap(
+            fixture.store.appSettings.getSetting(
+                BackupController.restoreStatusStorageKey,
+                as: RestoreStatusRecord.self
+            )
+        )
+        XCTAssertEqual(durable.state, .succeeded)
+        XCTAssertEqual(durable.updatedAt, outcome.completedAt)
+    }
+
     func testRecoveryRequiredOutcomeIsNotAcknowledged() throws {
         let fixture = try makeFixture()
         let outcome = try activationOutcome(
@@ -912,6 +953,7 @@ private final class AsyncGate {
 private enum ControllerTestError: Error {
     case stageShouldNotRun
     case stagingFailedAfterClose
+    case acknowledgementFailed
 }
 
 private extension Array {
