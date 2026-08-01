@@ -353,6 +353,35 @@ final class RestoreActivationServiceTests: XCTestCase {
         )
     }
 
+    func testTerminalOutcomeMarkerRetryFailureRetainsAuthenticatedRecoveryContext() throws {
+        let staged = try stage()
+        let terminal = RestoreActivationResult.failedAndRolledBack(
+            .databaseReplacementFailed,
+            intent: staged.intent
+        )
+        _ = try RestoreSidecarStore.recordActivationOutcome(
+            terminal,
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            completedAt: Date(timeIntervalSince1970: 1_788_969_600),
+            fileManager: .default,
+            operations: SystemRestoreActivationFileOperations()
+        )
+        let operations = RecordingRestoreActivationOperations(failures: [.removeMarker])
+
+        let result = activate(operations: operations)
+
+        XCTAssertEqual(result.status, .recoveryRequired)
+        XCTAssertEqual(result.activationFailure, .databaseReplacementFailed)
+        XCTAssertEqual(result.rollbackFailure, .markerRemovalFailed)
+        XCTAssertEqual(result.operationID, staged.intent.operationID)
+        XCTAssertEqual(result.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertEqual(result.recoveryDatabaseURL, staged.safetyDatabaseURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertFalse(operations.events.contains(.replaceSelectedDatabase))
+        XCTAssertFalse(operations.events.contains(.replaceSafetyDatabase))
+    }
+
     // A sidecar write fault must remain visible and must leave the authenticated
     // request in place; otherwise a crash can silently lose status and cleanup.
     func testOutcomeWriteFailureKeepsPendingMarkerAndBlocksLaunch() throws {
