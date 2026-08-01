@@ -458,6 +458,27 @@ final class RestoreControllerTests: XCTestCase {
     func testStrandedStagingStatusBecomesInterruptedFailureOnNextLaunch() throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090700-000"
+        let operationsDirectory = fixture.liveLayout.stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+        let orphanDirectory = operationsDirectory.appendingPathComponent(
+            operationID.uuidString.lowercased(),
+            isDirectory: true
+        )
+        let unrelatedDirectory = operationsDirectory.appendingPathComponent(
+            "22222222-2222-2222-2222-222222222222",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: orphanDirectory.appendingPathComponent("safety.tmp", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try Data("synthetic interrupted staging".utf8).write(
+            to: orphanDirectory.appendingPathComponent("safety.tmp/partial.bin")
+        )
+        try FileManager.default.createDirectory(
+            at: unrelatedDirectory,
+            withIntermediateDirectories: true
+        )
         try fixture.store.appSettings.setSetting(
             BackupController.restoreStatusStorageKey,
             value: RestoreStatusRecord(
@@ -482,6 +503,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(durable.state, .failed)
         XCTAssertEqual(durable.operationID, operationID.uuidString)
         XCTAssertEqual(durable.snapshotIdentifier, snapshotID)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphanDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedDirectory.path))
     }
 
     func testMatchingStagingFailureReplaysOnceAfterDurableStatusAndAudit() throws {
