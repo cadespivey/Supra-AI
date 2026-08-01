@@ -422,8 +422,7 @@ public final class BackupController: ObservableObject {
                     snapshotIdentifier: stranded.snapshotIdentifier
                 )
             } else {
-                setRestorePresentation(
-                    .failed,
+                markInterruptedRestoreCleanupPending(
                     "Interrupted restore cleanup could not finish and will retry on the next launch."
                 )
             }
@@ -865,15 +864,13 @@ public final class BackupController: ObservableObject {
         }
         do {
             guard try cleanupInterruptedStagingOperation(operationID: failure.operationID) else {
-                setRestorePresentation(
-                    .failed,
+                markInterruptedRestoreCleanupPending(
                     "Interrupted restore cleanup could not finish and will retry on the next launch."
                 )
                 return false
             }
         } catch {
-            setRestorePresentation(
-                .failed,
+            markInterruptedRestoreCleanupPending(
                 "Interrupted restore cleanup could not finish and will retry on the next launch."
             )
             return false
@@ -983,6 +980,11 @@ public final class BackupController: ObservableObject {
     private func markRestoreEvidenceAcknowledgementPending() {
         restoreEvidenceRequiresAcknowledgement = true
         restoreStatusMessage = "Restore finished, but its recovery evidence could not be finalized. Quit and reopen Supra AI to retry before starting another backup or restore."
+    }
+
+    private func markInterruptedRestoreCleanupPending(_ message: String) {
+        restoreEvidenceRequiresAcknowledgement = true
+        setRestorePresentation(.failed, message)
     }
 
     private func resetRestoreSelection() {
