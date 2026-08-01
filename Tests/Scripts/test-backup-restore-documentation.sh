@@ -28,20 +28,36 @@ require_literal() {
 require_file "$restore_doc"
 require_literal "$restore_doc" '## Restore from Backup' \
   'restore documentation must describe the user restore workflow'
-require_literal "$restore_doc" 'does not replace the open database' \
-  'restore documentation must state that staging never swaps the open database'
+require_literal "$restore_doc" 'Schedule Restore and Quit' \
+  'restore documentation must name the terminal restore action'
+require_literal "$restore_doc" 'blocks the entire workspace' \
+  'restore documentation must state that staging blocks all further work'
+require_literal "$restore_doc" 'closes the exact live database writer' \
+  'restore documentation must state that staging quiesces the exact live writer'
+require_literal "$restore_doc" 'quits automatically' \
+  'restore documentation must state that the staging process exits automatically'
 require_literal "$restore_doc" 'safety copy' \
   'restore documentation must explain the rollback safety copy'
 require_literal "$restore_doc" 'cold start' \
   'restore documentation must explain the cold-start activation boundary'
 require_literal "$restore_doc" 'Recovery Required' \
   'restore documentation must explain the recovery-required path'
+require_literal "$restore_doc" 'Recovery-required operation trees are deliberately' \
+  'restore documentation must preserve recovery-required operation trees'
+require_literal "$restore_doc" "removes only that authenticated operation's private staging tree" \
+  'restore documentation must clean only terminal authenticated operation trees'
 require_literal "$restore_doc" 'does not modify the backup source' \
   'restore documentation must promise source immutability narrowly'
 require_literal "$readme" '[Backup and restore](Docs/Backup-and-Restore.md)' \
   'README must link the backup and restore guide'
-require_literal "$settings_view" 'Quit and Restore on Next Launch' \
-  'Settings must expose the staged-restart restore action'
+require_literal "$settings_view" 'Schedule Restore and Quit' \
+  'Settings must expose the terminal staged-restore action'
+require_literal "$settings_view" 'blocks further work' \
+  'Settings must disclose that restore staging blocks further work'
+require_literal "$settings_view" 'closes the live database' \
+  'Settings must disclose that restore staging closes the live database'
+require_literal "$settings_view" 'quits automatically' \
+  'Settings must disclose the automatic process exit'
 require_literal "$settings_view" 'How restore works' \
   'Settings must expose concise restore help'
 
