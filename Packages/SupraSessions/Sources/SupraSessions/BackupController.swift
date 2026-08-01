@@ -538,6 +538,7 @@ public final class BackupController: ObservableObject {
     /// scope is held. Invalid candidates remain visible with a typed reason.
     @discardableResult
     public func inspectRestoreSnapshots() async -> Bool {
+        guard !restoreProcessIsTerminal else { return false }
         guard let current = configuration else {
             setRestoreStatus(.idle, "Choose a backup folder before inspecting snapshots.")
             return false
@@ -579,7 +580,8 @@ public final class BackupController: ObservableObject {
     /// Invalid rows fail closed even if invoked outside SwiftUI's disabled state.
     @discardableResult
     public func selectRestoreSnapshot(id: String) -> Bool {
-        guard !requiresRestartForRestore,
+        guard !restoreProcessIsTerminal,
+              !requiresRestartForRestore,
               activeOperation == nil,
               let candidate = restoreCandidates[id],
               candidate.isRestorable,
@@ -596,7 +598,8 @@ public final class BackupController: ObservableObject {
     /// identity. Staging independently re-inspects before trusting this choice.
     @discardableResult
     public func prepareRestoreConfirmation() -> Bool {
-        guard !requiresRestartForRestore,
+        guard !restoreProcessIsTerminal,
+              !requiresRestartForRestore,
               activeOperation == nil,
               let id = selectedRestoreSnapshotID,
               let candidate = restoreCandidates[id],
@@ -616,6 +619,7 @@ public final class BackupController: ObservableObject {
     }
 
     public func cancelRestoreConfirmation() {
+        guard !restoreProcessIsTerminal else { return }
         restoreConfirmation = nil
         confirmedRestoreIdentity = nil
     }
@@ -625,7 +629,7 @@ public final class BackupController: ObservableObject {
     /// after that boundary is invoked, whether staging succeeds or fails.
     @discardableResult
     public func stageConfirmedRestore() async -> Bool {
-        guard !requiresRestartForRestore else { return false }
+        guard !restoreProcessIsTerminal, !requiresRestartForRestore else { return false }
         guard activeOperation == nil else {
             setRestoreStatus(.failed, "Wait for the current backup or restore operation to finish.")
             return false
