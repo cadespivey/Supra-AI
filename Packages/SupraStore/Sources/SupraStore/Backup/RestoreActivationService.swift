@@ -538,8 +538,9 @@ public enum RestoreActivationService {
             )
         }
         if itemExists(at: markerURL) {
+            let context: ActivationContext
             do {
-                let context = try loadContext(
+                context = try loadContext(
                     markerURL: markerURL,
                     liveLayout: liveLayout,
                     fileManager: fileManager
@@ -547,6 +548,28 @@ public enum RestoreActivationService {
                 guard outcomeMatchesContext(outcome, context: context) else {
                     throw RestoreActivationFailure.invalidIntent
                 }
+            } catch {
+                return .recoveryRequired(
+                    activation: .invalidIntent,
+                    rollback: nil,
+                    safetyDatabaseURL: nil
+                )
+            }
+            let safetyDatabaseURL: URL?
+            if (try? validateStagedState(
+                databaseURL: context.safetyDatabaseURL,
+                blobsDirectory: context.safetyBlobsDirectory,
+                containmentRoot: liveLayout.stagingRootDirectory,
+                expectedDatabaseSHA256: context.intent.safetyDatabaseSHA256,
+                expectedBlobCount: context.intent.safetyBlobCount,
+                knownMigrationIdentifiers: knownMigrationIdentifiers,
+                fileManager: fileManager
+            )) != nil {
+                safetyDatabaseURL = context.safetyDatabaseURL
+            } else {
+                safetyDatabaseURL = nil
+            }
+            do {
                 try consumePendingMarker(
                     context: context,
                     stagingRootDirectory: liveLayout.stagingRootDirectory,
@@ -554,9 +577,10 @@ public enum RestoreActivationService {
                 )
             } catch {
                 let recovery = RestoreActivationResult.recoveryRequired(
-                    activation: .markerRemovalFailed,
+                    activation: outcome.activationFailure ?? .markerRemovalFailed,
                     rollback: outcome.status == .failedAndRolledBack ? .markerRemovalFailed : nil,
-                    safetyDatabaseURL: nil
+                    intent: context.intent,
+                    safetyDatabaseURL: safetyDatabaseURL
                 )
                 _ = try? recordOutcome(
                     recovery,
