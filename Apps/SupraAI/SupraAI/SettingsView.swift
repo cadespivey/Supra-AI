@@ -334,17 +334,8 @@ private struct BackupSection: View {
                     }
                 }
 
-                if backup.requiresRestartForRestore {
-                    Button("Quit and Restore on Next Launch") {
-                        NSApplication.shared.terminate(nil)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("restore.restart")
-                    .accessibilityHint("Quits Supra AI. The verified staged backup activates before the database opens on the next launch.")
-                }
-
                 DisclosureGroup("How restore works") {
-                    Text("Supra AI verifies the snapshot and managed documents, creates a safety copy of the current data, and writes a restart marker. It never replaces an open database. On the next launch, it activates the staged copy before any writer opens; if activation fails, it verifies and restores the safety copy. A double failure blocks normal work and offers the verified recovery database for preservation.")
+                    Text("Supra AI verifies the snapshot and managed documents, records the restore schedule, blocks further work, closes the live database, creates a safety copy, stages the selected backup, and quits automatically. On the next launch, it activates the staged copy before any writer opens; if activation fails, it verifies and restores the safety copy. A double failure blocks normal work and offers the verified recovery database for preservation.")
                         .font(.supraCaption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -359,12 +350,12 @@ private struct BackupSection: View {
         .sheet(isPresented: $showingRestoreConfirmation) {
             if let confirmation = backup.restoreConfirmation {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Stage Restore?")
+                    Text("Schedule Restore and Quit?")
                         .font(.title2.weight(.semibold))
-                    Text("Backup \(confirmation.snapshotIdentifier) from \(confirmation.createdAt.formatted(date: .abbreviated, time: .shortened)) will replace the current database and add its managed documents. Supra AI first creates a verified safety copy. You must quit and relaunch to activate it; this window will not swap the live database.")
+                    Text("Backup \(confirmation.snapshotIdentifier) from \(confirmation.createdAt.formatted(date: .abbreviated, time: .shortened)) will replace the current database and add its managed documents. Supra AI will block further work, close the live database, create a verified safety copy, stage the backup, and quit automatically. Reopen Supra AI to activate it on the next launch.")
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("restore.confirmation.message")
-                        .accessibilityLabel("Backup \(confirmation.snapshotIdentifier) will replace the current database. Quit and relaunch to activate it.")
+                        .accessibilityLabel("Backup \(confirmation.snapshotIdentifier) will replace the current database. Supra AI will quit automatically and activate it on the next launch.")
                     HStack {
                         Spacer()
                         Button("Cancel") {
@@ -373,7 +364,7 @@ private struct BackupSection: View {
                         }
                         .keyboardShortcut(.cancelAction)
                         .accessibilityIdentifier("restore.cancel")
-                        Button("Stage Restore", role: .destructive) {
+                        Button("Schedule Restore and Quit", role: .destructive) {
                             showingRestoreConfirmation = false
                             Task { await backup.stageConfirmedRestore() }
                         }
@@ -571,7 +562,12 @@ private struct BackupSection: View {
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
-            _ = backup.configureDestination(bookmarkData: bookmark, url: url)
+            guard backup.configureDestination(bookmarkData: bookmark, url: url) else {
+                backup.reportDestinationSelectionFailure(
+                    "The backup folder could not be changed because another backup or restore operation is finishing."
+                )
+                return
+            }
         } catch {
             backup.reportDestinationSelectionFailure(
                 "The folder permission could not be saved. Choose a different folder."

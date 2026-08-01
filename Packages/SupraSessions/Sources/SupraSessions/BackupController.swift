@@ -414,6 +414,10 @@ public final class BackupController: ObservableObject {
     }
 
     public func reportDestinationSelectionFailure(_ message: String) {
+        guard !isAnyBackupOperationBusy else {
+            statusMessage = message
+            return
+        }
         state = configuration == nil ? .unconfigured : .failed
         statusMessage = message
     }

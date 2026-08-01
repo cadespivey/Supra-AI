@@ -22,6 +22,12 @@ struct RootView: View {
     }
 
     private var applicationRoot: some View {
+        RestoreTerminalGate(backup: environment.backupController) {
+            standardApplicationRoot
+        }
+    }
+
+    private var standardApplicationRoot: some View {
         ZStack {
             // The main shell is a NavigationSplitView whose sidebar is backed by an
             // AppKit NSVisualEffectView (vibrancy). That material renders straight to
@@ -96,6 +102,51 @@ struct RootView: View {
         let drafts = summary.pendingByKind[.legacyDraftArtifact, default: 0]
         let billing = summary.pendingByKind[.multiMatterBillingDraft, default: 0]
         return "A security update changed how generated work is verified. \(outputs) saved output(s), \(drafts) draft artifact(s), and \(billing) multi-matter billing draft(s) need review. Nothing was deleted. Affected screens identify the item and provide reverify, regenerate, or confirmation actions."
+    }
+}
+
+private struct RestoreTerminalGate<Content: View>: View {
+    @ObservedObject var backup: BackupController
+    let content: Content
+
+    init(
+        backup: BackupController,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.backup = backup
+        self.content = content()
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if backup.restoreProcessIsTerminal {
+            RestoreFinishingView()
+        } else {
+            content
+        }
+    }
+}
+
+private struct RestoreFinishingView: View {
+    var body: some View {
+        VStack(spacing: 18) {
+            ProgressView()
+                .controlSize(.large)
+                .accessibilityLabel("Restore finishing")
+            Text("Finishing restore")
+                .font(.title2.weight(.semibold))
+            Text("Supra AI is closing its database, creating a verified safety copy, and staging the selected backup. It will quit automatically. Reopen Supra AI to activate the restore on its next launch.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 620)
+                .accessibilityIdentifier("restore.terminal.status")
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Restore finishing. Supra AI will quit automatically.")
+        .accessibilityIdentifier("restore.terminal.shell")
     }
 }
 

@@ -185,6 +185,7 @@ final class AppEnvironment: ObservableObject {
             restoreLiveLayout: restoreLiveLayout,
             restoreInspector: restoreUITestFixture?.inspector,
             restoreRunner: restoreUITestFixture?.runner,
+            requestProcessExit: { NSApplication.shared.terminate(nil) },
             launchRestoreResult: restoreActivation
         )
         if let restoreUITestFixture {
@@ -2004,10 +2005,12 @@ final class AppEnvironment: ObservableObject {
             liveLayout: layout,
             destinationFactory: { _ in RestoreUITestDestination(url: destination) },
             inspector: { _ in candidates },
-            runner: { selected, _ in
-                try await Task.sleep(for: .milliseconds(250))
+            runner: { selected, _, operationID in
+                // Keep the terminal surface observable across XCUITest's
+                // accessibility polling interval before simulating completion.
+                try await Task.sleep(for: .seconds(5))
                 return RestoreStageSummary(
-                    operationID: "22222222-2222-2222-2222-222222222222",
+                    operationID: operationID.uuidString,
                     snapshotIdentifier: selected.identifier,
                     stagedAt: Date(timeIntervalSince1970: 1_786_000_800)
                 )

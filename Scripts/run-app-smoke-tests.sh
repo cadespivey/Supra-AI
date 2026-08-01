@@ -13,7 +13,7 @@ fi
 if [[ ! -f "$restore_test" ]] \
     || ! grep -Fq 'testInvalidSnapshotShowsFactsAndCannotBeSelected' "$restore_test" \
     || ! grep -Fq 'testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel' "$restore_test" \
-    || ! grep -Fq 'testSuccessfulStageOffersColdRestartWithoutLiveSwap' "$restore_test" \
+    || ! grep -Fq 'testSuccessfulStageShowsTerminalSurfaceAndQuits' "$restore_test" \
     || ! grep -Fq 'testRecoveryRequiredShellProvidesPreservationAndQuitInstructions' "$restore_test"; then
   printf '%s\n' 'ERROR: restore Settings/recovery accessibility smoke tests are missing' >&2
   exit 1

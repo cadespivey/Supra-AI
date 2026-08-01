@@ -356,7 +356,7 @@ restore_hook="${temporary_dir}/RestoreSettingsUITests.swift"
 printf '%s\n' \
   'func testInvalidSnapshotShowsFactsAndCannotBeSelected() {}' \
   'func testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel() {}' \
-  'func testSuccessfulStageOffersColdRestartWithoutLiveSwap() {}' \
+  'func testSuccessfulStageShowsTerminalSurfaceAndQuits() {}' \
   'func testRecoveryRequiredShellProvidesPreservationAndQuitInstructions() {}' \
   >"$restore_hook"
 run_case \
