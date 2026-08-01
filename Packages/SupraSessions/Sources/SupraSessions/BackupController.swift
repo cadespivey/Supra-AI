@@ -220,8 +220,11 @@ public final class BackupController: ObservableObject {
     public typealias RestoreInspector = @MainActor (URL) async throws -> [RestoreSnapshotCandidate]
     public typealias RestoreRunner = @MainActor (
         RestoreSnapshotCandidate,
-        RestoreLiveLayout
+        RestoreLiveLayout,
+        UUID
     ) async throws -> RestoreStageSummary
+    public typealias RestoreOperationIDProvider = @MainActor () -> UUID
+    public typealias ProcessExitRequester = @MainActor () -> Void
 
     public static let storageKey = "backup.configuration.v1"
     public static let restoreStatusStorageKey = "restore.status.v1"
@@ -237,6 +240,9 @@ public final class BackupController: ObservableObject {
     @Published public private(set) var restoreConfirmation: RestoreConfirmation?
     @Published public private(set) var restoreState: RestoreControllerState = .idle
     @Published public private(set) var restoreStatusMessage: String?
+    /// Once true, the live controller/store graph must never be used for work
+    /// again. The application replaces its shell and exits after staging returns.
+    @Published public private(set) var restoreProcessIsTerminal = false
 
     private let store: SupraStore
     private let destinationFactory: DestinationFactory
@@ -245,6 +251,8 @@ public final class BackupController: ObservableObject {
     private let restoreLiveLayout: RestoreLiveLayout?
     private let restoreInspector: RestoreInspector
     private let restoreRunner: RestoreRunner
+    private let restoreOperationIDProvider: RestoreOperationIDProvider
+    private let requestProcessExit: ProcessExitRequester
     private let now: @MainActor () -> Date
     private var restoreCandidates: [String: RestoreSnapshotCandidate] = [:]
     private var confirmedRestoreIdentity: RestoreSnapshotIdentity?
@@ -261,6 +269,8 @@ public final class BackupController: ObservableObject {
         restoreLiveLayout: RestoreLiveLayout? = nil,
         restoreInspector: RestoreInspector? = nil,
         restoreRunner: RestoreRunner? = nil,
+        restoreOperationIDProvider: @escaping RestoreOperationIDProvider = { UUID() },
+        requestProcessExit: @escaping ProcessExitRequester = {},
         launchRestoreResult: RestoreActivationResult? = nil,
         now: @escaping @MainActor () -> Date = { Date() }
     ) {
@@ -296,7 +306,7 @@ public final class BackupController: ObservableObject {
                 try RestoreSnapshotInspector.discover(in: destination)
             }.value
         }
-        self.restoreRunner = restoreRunner ?? { candidate, layout in
+        self.restoreRunner = restoreRunner ?? { candidate, layout, _ in
             try await Task.detached(priority: .utility) {
                 let staged = try RestoreService.stageRestore(
                     candidate: candidate,
@@ -309,6 +319,8 @@ public final class BackupController: ObservableObject {
                 )
             }.value
         }
+        self.restoreOperationIDProvider = restoreOperationIDProvider
+        self.requestProcessExit = requestProcessExit
         self.now = now
 
         let stored = try? store.appSettings.getSetting(Self.storageKey, as: BackupConfiguration.self)
@@ -327,10 +339,11 @@ public final class BackupController: ObservableObject {
             self.statusMessage = "Choose a backup folder to get started."
         }
 
-        if let storedStatus = try? store.appSettings.getSetting(
+        let storedStatus = try? store.appSettings.getSetting(
             Self.restoreStatusStorageKey,
             as: RestoreStatusRecord.self
-        ) {
+        )
+        if let storedStatus {
             self.restoreState = storedStatus.state
             self.restoreStatusMessage = storedStatus.message
             self.selectedRestoreSnapshotID = storedStatus.snapshotIdentifier
@@ -339,13 +352,23 @@ public final class BackupController: ObservableObject {
             self.restoreStatusMessage = stored?.lastErrorDescription
         }
         applyLaunchRestoreResult(launchRestoreResult)
+        if restoreState == .staging,
+           let stranded = storedStatus
+        {
+            setRestoreStatus(
+                .failed,
+                "Restore staging was interrupted before activation. Inspect and schedule the backup again.",
+                operationID: stranded.operationID,
+                snapshotIdentifier: stranded.snapshotIdentifier
+            )
+        }
     }
 
     public var hasDestination: Bool { configuration != nil }
     public var isBackingUp: Bool { state == .backingUp }
     public var isRestoreBusy: Bool { restoreState == .inspecting || restoreState == .staging }
     public var isAnyBackupOperationBusy: Bool {
-        activeOperation != nil || requiresRestartForRestore
+        activeOperation != nil || requiresRestartForRestore || restoreProcessIsTerminal
     }
     public var requiresRestartForRestore: Bool { restoreState == .stagedRestartRequired }
     public var destinationPath: String? { configuration?.destinationPath }
@@ -558,8 +581,9 @@ public final class BackupController: ObservableObject {
         confirmedRestoreIdentity = nil
     }
 
-    /// Creates verified safety/selected staging copies and the pending marker.
-    /// It never closes, replaces, or reopens the live writer.
+    /// Persists a content-free schedule, then crosses the terminal staging
+    /// boundary. The runner owns writer quiescence and this process always exits
+    /// after that boundary is invoked, whether staging succeeds or fails.
     @discardableResult
     public func stageConfirmedRestore() async -> Bool {
         guard !requiresRestartForRestore else { return false }
@@ -576,7 +600,12 @@ public final class BackupController: ObservableObject {
             return false
         }
         activeOperation = .restoreStaging
-        defer { activeOperation = nil }
+        var runnerWasInvoked = false
+        var scheduledOperationID: UUID?
+        defer {
+            activeOperation = nil
+            if runnerWasInvoked { requestProcessExit() }
+        }
         restoreState = .staging
         restoreStatusMessage = "Creating a safety copy and staging the selected backup…"
 
@@ -589,32 +618,50 @@ public final class BackupController: ObservableObject {
                 }), candidate.isRestorable,
                     RestoreSnapshotIdentity(candidate) == confirmedIdentity
                 else { throw RestoreControllerError.snapshotChanged }
-                return try await restoreRunner(candidate, layout)
+
+                let operationID = restoreOperationIDProvider()
+                scheduledOperationID = operationID
+                let operationIDString = operationID.uuidString
+                let scheduleMessage = "Restore scheduled. Supra AI is finishing safely and will quit automatically."
+                try persistRestoreStatus(
+                    .staging,
+                    scheduleMessage,
+                    operationID: operationIDString,
+                    snapshotIdentifier: candidate.identifier
+                )
+                try recordRestoreAuditOrThrow(
+                    eventType: "restore_scheduled",
+                    summary: "Restore scheduled for quiesced cold-start activation.",
+                    operationID: operationIDString,
+                    snapshotIdentifier: candidate.identifier,
+                    state: .staging
+                )
+                restoreConfirmation = nil
+                confirmedRestoreIdentity = nil
+                restoreProcessIsTerminal = true
+                runnerWasInvoked = true
+                return try await restoreRunner(candidate, layout, operationID)
             }
             guard summary.snapshotIdentifier == confirmation.snapshotIdentifier,
-                  UUID(uuidString: summary.operationID) != nil
+                  UUID(uuidString: summary.operationID) == scheduledOperationID
             else { throw RestoreControllerError.invalidStageResult }
 
-            cancelRestoreConfirmation()
-            let message = "Restore staged. Quit and relaunch Supra AI to replace the current database safely."
-            setRestoreStatus(
+            setRestorePresentation(
                 .stagedRestartRequired,
-                message,
-                operationID: summary.operationID,
-                snapshotIdentifier: summary.snapshotIdentifier,
-                updatedAt: summary.stagedAt
-            )
-            recordRestoreAudit(
-                eventType: "restore_staged",
-                summary: "Restore staged for cold-start activation.",
-                operationID: summary.operationID,
-                snapshotIdentifier: summary.snapshotIdentifier,
-                state: .stagedRestartRequired
+                "Restore staged. Supra AI is quitting now and will activate it on the next launch."
             )
             return true
         } catch {
-            cancelRestoreConfirmation()
-            handleRestoreFailure(error, phase: .staging)
+            restoreConfirmation = nil
+            confirmedRestoreIdentity = nil
+            if runnerWasInvoked {
+                setRestorePresentation(
+                    .failed,
+                    "Restore staging did not finish. Supra AI will quit; the live data was not replaced."
+                )
+            } else {
+                handleRestoreFailure(error, phase: .staging)
+            }
             return false
         }
     }
@@ -706,8 +753,26 @@ public final class BackupController: ObservableObject {
         snapshotIdentifier: String? = nil,
         updatedAt: Date? = nil
     ) {
-        restoreState = newState
-        restoreStatusMessage = message
+        do {
+            try persistRestoreStatus(
+                newState,
+                message,
+                operationID: operationID,
+                snapshotIdentifier: snapshotIdentifier,
+                updatedAt: updatedAt
+            )
+        } catch {
+            setRestorePresentation(newState, message)
+        }
+    }
+
+    private func persistRestoreStatus(
+        _ newState: RestoreControllerState,
+        _ message: String,
+        operationID: String? = nil,
+        snapshotIdentifier: String? = nil,
+        updatedAt: Date? = nil
+    ) throws {
         let record = RestoreStatusRecord(
             state: newState,
             message: message,
@@ -715,7 +780,16 @@ public final class BackupController: ObservableObject {
             snapshotIdentifier: snapshotIdentifier,
             updatedAt: updatedAt ?? now()
         )
-        try? store.appSettings.setSetting(Self.restoreStatusStorageKey, value: record)
+        try store.appSettings.setSetting(Self.restoreStatusStorageKey, value: record)
+        setRestorePresentation(newState, message)
+    }
+
+    private func setRestorePresentation(
+        _ newState: RestoreControllerState,
+        _ message: String
+    ) {
+        restoreState = newState
+        restoreStatusMessage = message
     }
 
     private func resetRestoreSelection() {
@@ -735,6 +809,26 @@ public final class BackupController: ObservableObject {
         activationFailure: RestoreActivationFailure? = nil,
         rollbackFailure: RestoreActivationFailure? = nil
     ) {
+        try? recordRestoreAuditOrThrow(
+            eventType: eventType,
+            summary: summary,
+            operationID: operationID,
+            snapshotIdentifier: snapshotIdentifier,
+            state: state,
+            activationFailure: activationFailure,
+            rollbackFailure: rollbackFailure
+        )
+    }
+
+    private func recordRestoreAuditOrThrow(
+        eventType: String,
+        summary: String,
+        operationID: String?,
+        snapshotIdentifier: String?,
+        state: RestoreControllerState,
+        activationFailure: RestoreActivationFailure? = nil,
+        rollbackFailure: RestoreActivationFailure? = nil
+    ) throws {
         let metadata = RestoreAuditMetadata(
             schemaVersion: 1,
             operationID: operationID,
@@ -748,7 +842,7 @@ public final class BackupController: ObservableObject {
         let metadataJSON = (try? encoder.encode(metadata)).map {
             String(decoding: $0, as: UTF8.self)
         }
-        _ = try? store.auditEvents.recordEvent(
+        _ = try store.auditEvents.recordEvent(
             eventType: eventType,
             actor: "user",
             summary: summary,
