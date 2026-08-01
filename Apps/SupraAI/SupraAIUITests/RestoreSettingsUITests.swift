@@ -28,7 +28,8 @@ final class RestoreSettingsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["restore.review"].isEnabled)
     }
 
-    // T-UI-RST-02/T-RST-34...35: confirmation identifies replacement/restart and Escape cancels it.
+    // T-UI-RST-02/T-RST-34...35: confirmation identifies replacement,
+    // automatic quit, and cold-launch activation; Escape still cancels it.
     func testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel() {
         let app = launchSettingsScenario("mixed")
         reveal("restore.inspect", in: app).click()
@@ -46,15 +47,17 @@ final class RestoreSettingsUITests: XCTestCase {
         let dialogText = renderedText(of: message)
         XCTAssertTrue(dialogText.contains("supra-20260731-090000-000"))
         XCTAssertTrue(dialogText.localizedCaseInsensitiveContains("replace"))
-        XCTAssertTrue(dialogText.localizedCaseInsensitiveContains("relaunch"))
+        XCTAssertTrue(dialogText.localizedCaseInsensitiveContains("quit"))
+        XCTAssertTrue(dialogText.localizedCaseInsensitiveContains("next launch"))
 
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(dialog.waitForNonExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["restore.restart"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["restore.terminal.shell"].exists)
     }
 
-    // T-UI-RST-03/T-RST-36: staging returns to Settings with restart as the only activation action.
-    func testSuccessfulStageOffersColdRestartWithoutLiveSwap() {
+    // T-UI-RST-03/T-RST-36/R-06: staging replaces the work surface, quiesces
+    // the live writer, and exits without offering another writable interaction.
+    func testSuccessfulStageShowsTerminalSurfaceAndQuits() {
         let app = launchSettingsScenario("mixed")
         reveal("restore.inspect", in: app).click()
         reveal("restore.select.supra-20260731-090000-000", in: app).click()
@@ -62,15 +65,18 @@ final class RestoreSettingsUITests: XCTestCase {
 
         let confirm = app.buttons["restore.confirm"].exists
             ? app.buttons["restore.confirm"]
-            : app.buttons["Stage Restore"]
+            : app.buttons["Schedule Restore and Quit"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        XCTAssertEqual(confirm.label, "Schedule Restore and Quit")
         confirm.click()
 
-        let restart = reveal("restore.restart", in: app)
-        XCTAssertTrue(restart.waitForExistence(timeout: 10))
-        XCTAssertEqual(restart.label, "Quit and Restore on Next Launch")
+        let terminal = app.descendants(matching: .any)["restore.terminal.shell"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+        let status = app.staticTexts["restore.terminal.status"]
+        XCTAssertTrue(status.exists)
+        XCTAssertTrue(renderedText(of: status).localizedCaseInsensitiveContains("quit automatically"))
         XCTAssertFalse(app.buttons["restore.confirm"].exists)
-        XCTAssertTrue(app.staticTexts["Settings"].exists, "staging must not swap the live writer or shell")
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
     }
 
     // T-UI-RST-04: double-failure replaces the work surface with an accessible recovery shell.
