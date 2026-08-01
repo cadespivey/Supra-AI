@@ -216,6 +216,39 @@ public enum RestoreSidecarStore {
         )
     }
 
+    /// Removes only the exact operation tree named by a persisted staging
+    /// schedule when no pending marker or activation outcome can still claim
+    /// any staging tree. This is the bounded cold-start cleanup for a process
+    /// that exited midway through staging, before it could publish a marker.
+    @discardableResult
+    public static func cleanupInterruptedStagingOperation(
+        operationID: UUID,
+        stagingRootDirectory: URL,
+        fileManager: FileManager = .default
+    ) throws -> Bool {
+        let markerURL = stagingRootDirectory
+            .appendingPathComponent(RestoreIntent.pendingFileName)
+        let outcomeURL = stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        guard !itemExists(at: markerURL), !itemExists(at: outcomeURL) else {
+            return false
+        }
+
+        let identifier = operationID.uuidString.lowercased()
+        let operationDirectory = stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+            .appendingPathComponent(identifier, isDirectory: true)
+        guard itemExists(at: operationDirectory) else { return true }
+        let operations = SystemRestoreActivationFileOperations(fileManager: fileManager)
+        try removeTerminalOperationTree(
+            operationID: identifier,
+            stagingRootDirectory: stagingRootDirectory,
+            fileManager: fileManager,
+            operations: operations
+        )
+        return true
+    }
+
     static func cleanupTerminalOperation(
         _ record: RestoreOutcomeRecord,
         stagingRootDirectory: URL,

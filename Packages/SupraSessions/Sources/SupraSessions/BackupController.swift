@@ -396,12 +396,21 @@ public final class BackupController: ObservableObject {
         } else if restoreState == .staging,
                   let stranded = storedStatus
         {
-            setRestoreStatus(
-                .failed,
-                "Restore staging was interrupted before activation. Inspect and schedule the backup again.",
-                operationID: stranded.operationID,
-                snapshotIdentifier: stranded.snapshotIdentifier
-            )
+            if (try? cleanupInterruptedStagingOperation(
+                operationID: stranded.operationID
+            )) == true {
+                setRestoreStatus(
+                    .failed,
+                    "Restore staging was interrupted before activation. Inspect and schedule the backup again.",
+                    operationID: stranded.operationID,
+                    snapshotIdentifier: stranded.snapshotIdentifier
+                )
+            } else {
+                setRestorePresentation(
+                    .failed,
+                    "Interrupted restore cleanup could not finish and will retry on the next launch."
+                )
+            }
         }
     }
 
@@ -827,6 +836,21 @@ public final class BackupController: ObservableObject {
             message = "Restore staging did not finish safely. The live data was not replaced."
         }
         do {
+            guard try cleanupInterruptedStagingOperation(operationID: failure.operationID) else {
+                setRestorePresentation(
+                    .failed,
+                    "Interrupted restore cleanup could not finish and will retry on the next launch."
+                )
+                return false
+            }
+        } catch {
+            setRestorePresentation(
+                .failed,
+                "Interrupted restore cleanup could not finish and will retry on the next launch."
+            )
+            return false
+        }
+        do {
             try persistRestoreStatus(
                 .failed,
                 message,
@@ -934,6 +958,18 @@ public final class BackupController: ObservableObject {
         selectedRestoreSnapshotID = nil
         restoreConfirmation = nil
         confirmedRestoreIdentity = nil
+    }
+
+    @discardableResult
+    private func cleanupInterruptedStagingOperation(operationID: String?) throws -> Bool {
+        guard let restoreLiveLayout,
+              let operationID,
+              let identifier = UUID(uuidString: operationID)
+        else { return false }
+        return try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: identifier,
+            stagingRootDirectory: restoreLiveLayout.stagingRootDirectory
+        )
     }
 
     private func recordRestoreAudit(
