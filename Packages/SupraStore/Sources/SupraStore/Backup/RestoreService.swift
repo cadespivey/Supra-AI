@@ -58,6 +58,8 @@ public struct RestoreStagingResult: Equatable, Sendable {
 }
 
 public enum RestoreStageError: Error, Equatable, LocalizedError {
+    case liveDatabasePathMismatch
+    case liveDatabaseCloseFailed
     case restoreAlreadyPending
     case sourceSnapshotUnavailable
     case sourceSnapshotChanged
@@ -70,6 +72,10 @@ public enum RestoreStageError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
+        case .liveDatabasePathMismatch:
+            return "The active database does not match the live restore location. Restart Supra AI before trying again."
+        case .liveDatabaseCloseFailed:
+            return "The active database could not be closed safely. Restart Supra AI before trying again."
         case .restoreAlreadyPending:
             return "A restore is already staged and waiting for restart."
         case .sourceSnapshotUnavailable:
@@ -158,7 +164,65 @@ public enum RestoreService {
     static let safetyDatabaseFileName = "restore-safety.sqlite"
     static let stagedDatabaseFileName = "restore-selected.sqlite"
 
-    public static func stageRestore(
+    /// The only public live-process staging boundary. It proves that the
+    /// supplied database owns the canonical live path and closes that exact
+    /// writer before core staging can validate or snapshot live state.
+    public static func stageQuiescedRestore(
+        candidate: RestoreSnapshotCandidate,
+        liveDatabase: SupraDatabase,
+        liveLayout: RestoreLiveLayout,
+        operationID: UUID,
+        knownMigrationIdentifiers: [String] = SupraMigrator.makeMigrator().migrations,
+        fileManager: FileManager = .default,
+        now: () -> Date = { Date() }
+    ) throws -> RestoreStagingResult {
+        try stageQuiescedRestore(
+            candidate: candidate,
+            liveDatabase: liveDatabase,
+            liveLayout: liveLayout,
+            operationID: operationID,
+            knownMigrationIdentifiers: knownMigrationIdentifiers,
+            fileManager: fileManager,
+            now: now,
+            operations: SystemRestoreFileOperations(fileManager: fileManager)
+        )
+    }
+
+    static func stageQuiescedRestore(
+        candidate: RestoreSnapshotCandidate,
+        liveDatabase: SupraDatabase,
+        liveLayout: RestoreLiveLayout,
+        operationID: UUID,
+        knownMigrationIdentifiers: [String],
+        fileManager: FileManager = .default,
+        now: () -> Date = { Date() },
+        operations: any RestoreFileOperations
+    ) throws -> RestoreStagingResult {
+        let expectedURL = liveLayout.databaseURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        guard liveDatabase.canonicalDatabaseURL == expectedURL else {
+            throw RestoreStageError.liveDatabasePathMismatch
+        }
+        do {
+            try liveDatabase.writer.close()
+        } catch {
+            throw RestoreStageError.liveDatabaseCloseFailed
+        }
+        return try stageRestore(
+            candidate: candidate,
+            liveLayout: liveLayout,
+            knownMigrationIdentifiers: knownMigrationIdentifiers,
+            fileManager: fileManager,
+            now: now,
+            operationID: { operationID },
+            operations: operations
+        )
+    }
+
+    /// Internal raw seam retained for staging fault injection and cold fixture
+    /// tests. App-facing packages cannot bypass the quiesced writer boundary.
+    static func stageRestore(
         candidate: RestoreSnapshotCandidate,
         liveLayout: RestoreLiveLayout,
         knownMigrationIdentifiers: [String] = SupraMigrator.makeMigrator().migrations,
