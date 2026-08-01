@@ -6,6 +6,7 @@ import XCTest
 @MainActor
 final class RestoreControllerTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_788_969_600)
+    private let operationID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
 
     // T-RST-29: a blocked candidate is visible but cannot enter confirmation or staging.
     func testInvalidCandidateCannotBeSelectedConfirmedOrStaged() async throws {
@@ -18,7 +19,7 @@ final class RestoreControllerTests: XCTestCase {
         let controller = makeController(
             fixture: fixture,
             inspector: { _ in [invalid] },
-            stager: { _, _ in
+            stager: { _, _, _ in
                 stageCount += 1
                 return self.stageSummary(for: invalid)
             }
@@ -187,7 +188,7 @@ final class RestoreControllerTests: XCTestCase {
                 discoveryCount += 1
                 return discoveryCount == 1 ? [original] : [replacement]
             },
-            stager: { _, _ in
+            stager: { _, _, _ in
                 stageCount += 1
                 return self.stageSummary(for: original)
             }
@@ -208,19 +209,45 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(controller.restoreStatusMessage?.contains("changed") == true)
     }
 
-    // T-RST-34...36: success only schedules cold-start activation and emits content-free evidence.
-    func testSuccessfulStageOffersRestartOnlyAndWritesContentFreeAuditAndStatus() async throws {
+    // T-RST-34...36/R-06: scheduling is durable before the live writer is
+    // quiesced, and invoking that boundary always requests process exit.
+    func testSuccessfulStagePersistsScheduleBeforeRunnerAndRequestsExitExactlyOnce() async throws {
         let fixture = try makeFixture()
         let valid = candidate(identifier: "supra-20260731-090300-000")
-        let summary = stageSummary(for: valid)
+        let summary = stageSummary(for: valid, operationID: operationID)
+        var events: [String] = []
+        var discoveryCount = 0
         let controller = makeController(
             fixture: fixture,
-            inspector: { _ in [valid] },
-            stager: { refreshed, layout in
+            inspector: { _ in
+                discoveryCount += 1
+                if discoveryCount == 2 { events.append("fresh-identity") }
+                return [valid]
+            },
+            stager: { refreshed, layout, receivedOperationID in
+                events.append("runner")
                 XCTAssertEqual(refreshed.identifier, valid.identifier)
                 XCTAssertEqual(layout, fixture.liveLayout)
+                XCTAssertEqual(receivedOperationID, self.operationID)
+                let scheduled = try XCTUnwrap(
+                    fixture.store.appSettings.getSetting(
+                        BackupController.restoreStatusStorageKey,
+                        as: RestoreStatusRecord.self
+                    )
+                )
+                XCTAssertEqual(scheduled.state, .staging)
+                XCTAssertEqual(scheduled.operationID, self.operationID.uuidString)
+                XCTAssertEqual(scheduled.snapshotIdentifier, valid.identifier)
+                XCTAssertNotNil(
+                    try fixture.store.auditEvents.fetchEvents(
+                        relatedTable: "backup_snapshots",
+                        relatedID: valid.identifier,
+                        eventType: "restore_scheduled"
+                    ).single
+                )
                 return summary
-            }
+            },
+            requestProcessExit: { events.append("exit") }
         )
         configure(controller, destination: fixture.destinationURL)
 
@@ -231,8 +258,8 @@ final class RestoreControllerTests: XCTestCase {
         let didStage = await controller.stageConfirmedRestore()
         XCTAssertTrue(didStage)
 
-        XCTAssertEqual(controller.restoreState, .stagedRestartRequired)
-        XCTAssertTrue(controller.requiresRestartForRestore)
+        XCTAssertEqual(events, ["fresh-identity", "runner", "exit"])
+        XCTAssertTrue(controller.restoreProcessIsTerminal)
         XCTAssertNil(controller.restoreConfirmation)
         let persisted = try XCTUnwrap(
             fixture.store.appSettings.getSetting(
@@ -240,7 +267,7 @@ final class RestoreControllerTests: XCTestCase {
                 as: RestoreStatusRecord.self
             )
         )
-        XCTAssertEqual(persisted.state, .stagedRestartRequired)
+        XCTAssertEqual(persisted.state, .staging)
         XCTAssertEqual(persisted.operationID, summary.operationID)
         XCTAssertEqual(persisted.snapshotIdentifier, valid.identifier)
 
@@ -248,7 +275,7 @@ final class RestoreControllerTests: XCTestCase {
             fixture.store.auditEvents.fetchEvents(
                 relatedTable: "backup_snapshots",
                 relatedID: valid.identifier,
-                eventType: "restore_staged"
+                eventType: "restore_scheduled"
             ).single
         )
         let auditText = [audit.summary, audit.relatedID, audit.metadataJSON]
@@ -258,11 +285,13 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(auditText.contains(summary.operationID))
     }
 
-    func testStagedRestoreFreezesBackupAndRestoreControlsUntilColdStart() async throws {
+    func testRestoreProcessIsTerminalWhileQuiescedRunnerIsInFlight() async throws {
         let fixture = try makeFixture()
         let valid = candidate(identifier: "supra-20260731-090400-000")
+        let stageGate = AsyncGate()
         var backupCount = 0
         var inspectionCount = 0
+        var exitCount = 0
         let controller = makeController(
             fixture: fixture,
             backupRunner: { _ in
@@ -277,7 +306,11 @@ final class RestoreControllerTests: XCTestCase {
                 inspectionCount += 1
                 return [valid]
             },
-            stager: { selected, _ in self.stageSummary(for: selected) }
+            stager: { selected, _, operationID in
+                await stageGate.wait()
+                return self.stageSummary(for: selected, operationID: operationID)
+            },
+            requestProcessExit: { exitCount += 1 }
         )
         configure(controller, destination: fixture.destinationURL)
 
@@ -285,8 +318,14 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(didInspect)
         XCTAssertTrue(controller.selectRestoreSnapshot(id: valid.identifier))
         XCTAssertTrue(controller.prepareRestoreConfirmation())
-        let didStage = await controller.stageConfirmedRestore()
+        let staging = Task { await controller.stageConfirmedRestore() }
+        await waitUntil { controller.restoreProcessIsTerminal }
+        XCTAssertEqual(controller.restoreState, .staging)
+        XCTAssertTrue(controller.isAnyBackupOperationBusy)
+        stageGate.open()
+        let didStage = await staging.value
         XCTAssertTrue(didStage)
+        XCTAssertEqual(exitCount, 1)
         XCTAssertEqual(inspectionCount, 2, "staging must re-inspect the frozen selection")
 
         let stagedMessage = controller.restoreStatusMessage
@@ -307,7 +346,7 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(backupCount, 0)
         XCTAssertEqual(inspectionCount, 2)
         XCTAssertEqual(controller.destinationPath, stagedDestination)
-        XCTAssertEqual(controller.restoreState, .stagedRestartRequired)
+        XCTAssertTrue(controller.restoreProcessIsTerminal)
         XCTAssertEqual(controller.restoreStatusMessage, stagedMessage)
         XCTAssertTrue(controller.isAnyBackupOperationBusy)
 
@@ -317,7 +356,112 @@ final class RestoreControllerTests: XCTestCase {
                 as: RestoreStatusRecord.self
             )
         )
-        XCTAssertEqual(persisted.state, .stagedRestartRequired)
+        XCTAssertEqual(persisted.state, .staging)
+    }
+
+    func testChangedCandidateNeverEntersTerminalModeOrRequestsExit() async throws {
+        let fixture = try makeFixture()
+        let original = candidate(
+            identifier: "supra-20260731-090500-000",
+            databaseSHA256: String(repeating: "a", count: 64)
+        )
+        let replacement = candidate(
+            identifier: original.identifier,
+            databaseSHA256: String(repeating: "b", count: 64)
+        )
+        var discoveryCount = 0
+        var runnerCount = 0
+        var exitCount = 0
+        let controller = makeController(
+            fixture: fixture,
+            inspector: { _ in
+                discoveryCount += 1
+                return discoveryCount == 1 ? [original] : [replacement]
+            },
+            stager: { _, _, _ in
+                runnerCount += 1
+                throw ControllerTestError.stageShouldNotRun
+            },
+            requestProcessExit: { exitCount += 1 }
+        )
+        configure(controller, destination: fixture.destinationURL)
+        let didInspect = await controller.inspectRestoreSnapshots()
+        XCTAssertTrue(didInspect)
+        XCTAssertTrue(controller.selectRestoreSnapshot(id: original.identifier))
+        XCTAssertTrue(controller.prepareRestoreConfirmation())
+
+        let didStage = await controller.stageConfirmedRestore()
+        XCTAssertFalse(didStage)
+        XCTAssertEqual(runnerCount, 0)
+        XCTAssertEqual(exitCount, 0)
+        XCTAssertFalse(controller.restoreProcessIsTerminal)
+        XCTAssertEqual(controller.restoreState, .failed)
+    }
+
+    func testRunnerFailureAfterWriterCloseStillExitsWithoutPostCloseStoreWrites() async throws {
+        let fixture = try makeFixture()
+        let valid = candidate(identifier: "supra-20260731-090600-000")
+        var exitCount = 0
+        let controller = makeController(
+            fixture: fixture,
+            inspector: { _ in [valid] },
+            stager: { _, _, _ in
+                try fixture.store.database.writer.close()
+                throw ControllerTestError.stagingFailedAfterClose
+            },
+            requestProcessExit: { exitCount += 1 }
+        )
+        configure(controller, destination: fixture.destinationURL)
+        let didInspect = await controller.inspectRestoreSnapshots()
+        XCTAssertTrue(didInspect)
+        XCTAssertTrue(controller.selectRestoreSnapshot(id: valid.identifier))
+        XCTAssertTrue(controller.prepareRestoreConfirmation())
+
+        let didStage = await controller.stageConfirmedRestore()
+        XCTAssertFalse(didStage)
+        XCTAssertEqual(exitCount, 1)
+        XCTAssertTrue(controller.restoreProcessIsTerminal)
+        XCTAssertEqual(controller.restoreState, .failed)
+
+        let reopened = try SupraStore(url: fixture.liveLayout.databaseURL)
+        let durable = try XCTUnwrap(
+            reopened.appSettings.getSetting(
+                BackupController.restoreStatusStorageKey,
+                as: RestoreStatusRecord.self
+            )
+        )
+        XCTAssertEqual(durable.state, .staging)
+        XCTAssertEqual(durable.operationID, operationID.uuidString)
+        XCTAssertEqual(durable.snapshotIdentifier, valid.identifier)
+    }
+
+    func testStrandedStagingStatusBecomesInterruptedFailureOnNextLaunch() throws {
+        let fixture = try makeFixture()
+        let snapshotID = "supra-20260731-090700-000"
+        try fixture.store.appSettings.setSetting(
+            BackupController.restoreStatusStorageKey,
+            value: RestoreStatusRecord(
+                state: .staging,
+                message: "Restore scheduled.",
+                operationID: operationID.uuidString,
+                snapshotIdentifier: snapshotID,
+                updatedAt: now
+            )
+        )
+
+        let controller = makeController(fixture: fixture, inspector: { _ in [] })
+
+        XCTAssertEqual(controller.restoreState, .failed)
+        XCTAssertTrue(controller.restoreStatusMessage?.localizedCaseInsensitiveContains("interrupted") == true)
+        let durable = try XCTUnwrap(
+            fixture.store.appSettings.getSetting(
+                BackupController.restoreStatusStorageKey,
+                as: RestoreStatusRecord.self
+            )
+        )
+        XCTAssertEqual(durable.state, .failed)
+        XCTAssertEqual(durable.operationID, operationID.uuidString)
+        XCTAssertEqual(durable.snapshotIdentifier, snapshotID)
     }
 
     private func makeFixture(
@@ -349,9 +493,10 @@ final class RestoreControllerTests: XCTestCase {
             BackupRunSummary(snapshotBytes: 1, copiedBlobCount: 0, referencedBlobCount: 0)
         },
         inspector: @escaping BackupController.RestoreInspector,
-        stager: @escaping BackupController.RestoreRunner = { _, _ in
+        stager: @escaping BackupController.RestoreRunner = { _, _, _ in
             throw ControllerTestError.stageShouldNotRun
-        }
+        },
+        requestProcessExit: @escaping @MainActor () -> Void = {}
     ) -> BackupController {
         BackupController(
             store: fixture.store,
@@ -367,6 +512,8 @@ final class RestoreControllerTests: XCTestCase {
             restoreLiveLayout: fixture.liveLayout,
             restoreInspector: inspector,
             restoreRunner: stager,
+            restoreOperationIDProvider: { self.operationID },
+            requestProcessExit: requestProcessExit,
             now: { self.now }
         )
     }
@@ -408,9 +555,12 @@ final class RestoreControllerTests: XCTestCase {
         )
     }
 
-    private func stageSummary(for candidate: RestoreSnapshotCandidate) -> RestoreStageSummary {
+    private func stageSummary(
+        for candidate: RestoreSnapshotCandidate,
+        operationID: UUID? = nil
+    ) -> RestoreStageSummary {
         RestoreStageSummary(
-            operationID: "11111111-1111-1111-1111-111111111111",
+            operationID: (operationID ?? self.operationID).uuidString,
             snapshotIdentifier: candidate.identifier,
             stagedAt: now
         )
@@ -475,6 +625,7 @@ private final class AsyncGate {
 
 private enum ControllerTestError: Error {
     case stageShouldNotRun
+    case stagingFailedAfterClose
 }
 
 private extension Array {
