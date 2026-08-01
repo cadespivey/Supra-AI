@@ -244,6 +244,10 @@ public final class BackupController: ObservableObject {
     /// Once true, the live controller/store graph must never be used for work
     /// again. The application replaces its shell and exits after staging returns.
     @Published public private(set) var restoreProcessIsTerminal = false
+    /// A terminal sidecar that could not be acknowledged remains a launch-time
+    /// reconciliation key. New backup/restore work stays closed until relaunch
+    /// retries that acknowledgement.
+    @Published public private(set) var restoreEvidenceRequiresAcknowledgement = false
 
     private let store: SupraStore
     private let destinationFactory: DestinationFactory
@@ -377,13 +381,21 @@ public final class BackupController: ObservableObject {
         if appliedActivation,
            launchRestoreResult?.status != .recoveryRequired
         {
-            try? acknowledgeRestoreOutcome()
+            do {
+                try acknowledgeRestoreOutcome()
+            } catch {
+                markRestoreEvidenceAcknowledgementPending()
+            }
         } else if !appliedActivation,
                   let launchRestoreOutcome,
                   applyLaunchRestoreOutcome(launchRestoreOutcome)
         {
             if launchRestoreOutcome.status != .recoveryRequired {
-                try? acknowledgeRestoreOutcome()
+                do {
+                    try acknowledgeRestoreOutcome()
+                } catch {
+                    markRestoreEvidenceAcknowledgementPending()
+                }
             }
         } else if !appliedActivation,
                   let launchStagingFailure,
@@ -392,7 +404,11 @@ public final class BackupController: ObservableObject {
                   storedStatus.operationID?.lowercased() == launchStagingFailure.operationID,
                   applyLaunchStagingFailure(launchStagingFailure, storedStatus: storedStatus)
         {
-            try? acknowledgeStagingFailure()
+            do {
+                try acknowledgeStagingFailure()
+            } catch {
+                markRestoreEvidenceAcknowledgementPending()
+            }
         } else if restoreState == .staging,
                   let stranded = storedStatus
         {
@@ -418,7 +434,10 @@ public final class BackupController: ObservableObject {
     public var isBackingUp: Bool { state == .backingUp }
     public var isRestoreBusy: Bool { restoreState == .inspecting || restoreState == .staging }
     public var isAnyBackupOperationBusy: Bool {
-        activeOperation != nil || requiresRestartForRestore || restoreProcessIsTerminal
+        activeOperation != nil
+            || requiresRestartForRestore
+            || restoreProcessIsTerminal
+            || restoreEvidenceRequiresAcknowledgement
     }
     public var requiresRestartForRestore: Bool { restoreState == .stagedRestartRequired }
     public var destinationPath: String? { configuration?.destinationPath }
@@ -553,7 +572,9 @@ public final class BackupController: ObservableObject {
     /// scope is held. Invalid candidates remain visible with a typed reason.
     @discardableResult
     public func inspectRestoreSnapshots() async -> Bool {
-        guard !restoreProcessIsTerminal else { return false }
+        guard !restoreProcessIsTerminal,
+              !restoreEvidenceRequiresAcknowledgement
+        else { return false }
         guard let current = configuration else {
             setRestoreStatus(.idle, "Choose a backup folder before inspecting snapshots.")
             return false
@@ -596,6 +617,7 @@ public final class BackupController: ObservableObject {
     @discardableResult
     public func selectRestoreSnapshot(id: String) -> Bool {
         guard !restoreProcessIsTerminal,
+              !restoreEvidenceRequiresAcknowledgement,
               !requiresRestartForRestore,
               activeOperation == nil,
               let candidate = restoreCandidates[id],
@@ -614,6 +636,7 @@ public final class BackupController: ObservableObject {
     @discardableResult
     public func prepareRestoreConfirmation() -> Bool {
         guard !restoreProcessIsTerminal,
+              !restoreEvidenceRequiresAcknowledgement,
               !requiresRestartForRestore,
               activeOperation == nil,
               let id = selectedRestoreSnapshotID,
@@ -634,7 +657,9 @@ public final class BackupController: ObservableObject {
     }
 
     public func cancelRestoreConfirmation() {
-        guard !restoreProcessIsTerminal else { return }
+        guard !restoreProcessIsTerminal,
+              !restoreEvidenceRequiresAcknowledgement
+        else { return }
         restoreConfirmation = nil
         confirmedRestoreIdentity = nil
     }
@@ -644,7 +669,10 @@ public final class BackupController: ObservableObject {
     /// after that boundary is invoked, whether staging succeeds or fails.
     @discardableResult
     public func stageConfirmedRestore() async -> Bool {
-        guard !restoreProcessIsTerminal, !requiresRestartForRestore else { return false }
+        guard !restoreProcessIsTerminal,
+              !restoreEvidenceRequiresAcknowledgement,
+              !requiresRestartForRestore
+        else { return false }
         guard activeOperation == nil else {
             setRestoreStatus(.failed, "Wait for the current backup or restore operation to finish.")
             return false
@@ -950,6 +978,11 @@ public final class BackupController: ObservableObject {
     ) {
         restoreState = newState
         restoreStatusMessage = message
+    }
+
+    private func markRestoreEvidenceAcknowledgementPending() {
+        restoreEvidenceRequiresAcknowledgement = true
+        restoreStatusMessage = "Restore finished, but its recovery evidence could not be finalized. Quit and reopen Supra AI to retry before starting another backup or restore."
     }
 
     private func resetRestoreSelection() {
