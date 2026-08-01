@@ -360,6 +360,23 @@ printf '%s\n' \
   'func testRecoveryRequiredShellProvidesPreservationAndQuitInstructions() {}' \
   >"$restore_hook"
 run_case \
+  "classless restore methods fail the shipping class selector" \
+  1 \
+  "restore Settings/recovery accessibility smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    SUPRA_RESTORE_UI_TEST_FILE="$restore_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+printf '%s\n' \
+  'final class RestoreSettingsUITests: XCTestCase {' \
+  '  func testInvalidSnapshotShowsFactsAndCannotBeSelected() {}' \
+  '  func testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel() {}' \
+  '  func testSuccessfulStageShowsTerminalSurfaceAndQuits() {}' \
+  '  func testRecoveryRequiredShellProvidesPreservationAndQuitInstructions() {}' \
+  '}' \
+  >"$restore_hook"
+run_case \
   "the exact hosted XPC and accessibility selectors satisfy the hook" \
   0 \
   "Hosted XPC integration hook passed." \
