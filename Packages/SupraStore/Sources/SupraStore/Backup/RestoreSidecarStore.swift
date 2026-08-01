@@ -161,6 +161,7 @@ public enum RestoreSidecarStore {
             stagingRootDirectory: stagingRootDirectory,
             fileManager: fileManager
         ) else { return }
+        guard record.status != .recoveryRequired else { return }
         let operations = SystemRestoreActivationFileOperations(fileManager: fileManager)
         try cleanupTerminalOperation(
             record,
