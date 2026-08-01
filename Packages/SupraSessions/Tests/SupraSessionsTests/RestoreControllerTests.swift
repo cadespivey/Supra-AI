@@ -544,6 +544,11 @@ final class RestoreControllerTests: XCTestCase {
 
         XCTAssertEqual(controller.restoreState, .failed)
         XCTAssertTrue(controller.restoreStatusMessage?.localizedCaseInsensitiveContains("retry") == true)
+        XCTAssertTrue(controller.isAnyBackupOperationBusy)
+        XCTAssertFalse(controller.configureDestination(
+            bookmarkData: Data([0x02]),
+            url: fixture.destinationURL
+        ))
         let durable = try XCTUnwrap(
             fixture.store.appSettings.getSetting(
                 BackupController.restoreStatusStorageKey,
@@ -653,6 +658,11 @@ final class RestoreControllerTests: XCTestCase {
 
         XCTAssertEqual(controller.restoreState, .failed)
         XCTAssertTrue(controller.restoreStatusMessage?.localizedCaseInsensitiveContains("retry") == true)
+        XCTAssertTrue(controller.isAnyBackupOperationBusy)
+        XCTAssertFalse(controller.configureDestination(
+            bookmarkData: Data([0x03]),
+            url: fixture.destinationURL
+        ))
         XCTAssertEqual(acknowledgeCount, 0)
         let durable = try XCTUnwrap(
             fixture.store.appSettings.getSetting(
