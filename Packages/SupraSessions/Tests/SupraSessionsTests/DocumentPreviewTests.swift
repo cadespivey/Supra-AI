@@ -171,6 +171,95 @@ final class DocumentPreviewTests: XCTestCase {
         XCTAssertEqual(legacy.revisionNotice, "revision unknown (pre-lineage)")
     }
 
+    func testHistoricalImageCitationUsesSavedRevisionAndSavedOCRLocatorOverlay() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic historical OCR preview")
+        let storageRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HistoricalOCRPreview-\(UUID().uuidString)", isDirectory: true)
+        let storage = DocumentStorage(root: storageRoot)
+        try storage.initializeStorage()
+        let managedPath = "blobs/historical-scan.png"
+        let managedURL = storage.url(forManagedRelativePath: managedPath)
+        try FileManager.default.createDirectory(
+            at: managedURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: managedURL)
+
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "historical-ocr-preview-sha",
+            byteSize: 4,
+            originalExtension: "png",
+            managedRelativePath: managedPath
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "historical-scan.png"
+        ))
+        let revisionA = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "historical-ocr-a",
+            origin: "vision_ocr",
+            method: "synthetic",
+            text: "REVISION A payment due",
+            charCount: 22
+        ))
+        let revisionB = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "historical-ocr-b",
+            origin: "user_edit",
+            method: "manual",
+            text: "REVISION B different text",
+            charCount: 25,
+            supersedesRevisionID: revisionA.id
+        ))
+        try store.documentIndex.replaceParts(documentID: document.id, parts: [
+            DocumentPagePartRecord(
+                documentID: document.id,
+                partIndex: 0,
+                sourceKind: DocumentSourceKind.image.rawValue,
+                normalizedText: revisionB.text,
+                charCount: revisionB.charCount,
+                boundingBoxesJSON: #"{"schemaVersion":1,"regions":[{"x":0.7,"y":0.7,"w":0.1,"h":0.1,"confidence":0.5,"text":"different"}]}"#,
+                currentRevisionID: revisionB.id
+            ),
+        ])
+        let savedBoxes = #"{"schemaVersion":1,"regions":[{"x":0.1,"y":0.2,"w":0.3,"h":0.04,"confidence":0.91,"text":"payment due"}]}"#
+        let source = DocumentOutputSourceRecord(
+            sourceSetID: "historical-ocr-source-set",
+            documentID: document.id,
+            revisionID: revisionA.id,
+            citationLabel: "S1",
+            locatorJSON: DocumentSourceLocator(
+                sourceKind: .image,
+                charStart: 11,
+                charEnd: 22,
+                boundingBoxesJSON: savedBoxes
+            ).encodedJSON(),
+            excerpt: "payment due",
+            rank: 0
+        )
+
+        let model = DocumentPreviewLoader(store: store, storage: storage).load(outputSource: source)
+
+        XCTAssertEqual(model.revisionID, revisionA.id)
+        XCTAssertEqual(model.revisionOrigin, "vision_ocr")
+        XCTAssertTrue(model.revisionNotice?.contains("vision_ocr") == true)
+        if case let .image(path, overlay) = model.kind {
+            XCTAssertEqual(path, managedURL.path)
+            XCTAssertEqual(overlay.schemaVersion, 1)
+            XCTAssertEqual(overlay.regions.count, 1)
+            XCTAssertEqual(overlay.regions.first?.x, 0.1)
+            XCTAssertEqual(overlay.regions.first?.text, "payment due")
+            XCTAssertEqual(overlay.regions.first?.isHighlighted, true)
+        } else {
+            XCTFail("expected saved historical image overlay, got \(model.kind)")
+        }
+    }
+
     func testTUX09PreviewCarriesInspectableHierarchyPayloadAndRelationships() throws {
         // T-UX-09 expected RED: DocumentPreviewModel has no structure node or
         // relationship projection, so the app cannot inspect persisted adapter output.

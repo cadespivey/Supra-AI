@@ -321,11 +321,29 @@ run_case \
     SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$missing_hook" \
     bash "${scripts}/run-app-smoke-tests.sh" --check
 
+guided_class_only_hook="${temporary_dir}/GuidedClassOnlyUITests.swift"
+printf '%s\n' \
+  'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
+  'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
+  'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class GuidedDocumentQAUITests: XCTestCase {}' \
+  >"$guided_class_only_hook"
+run_case \
+  "a guided Q&A class without the shipping method fails closed" \
+  1 \
+  "remediation accessibility smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$guided_class_only_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
 accessibility_hook="${temporary_dir}/ResearchAuthoritiesUITests.swift"
 printf '%s\n' \
   'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
   'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
   'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class GuidedDocumentQAUITests: XCTestCase {' \
+  '  func testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult() {}' \
+  '}' \
   >"$accessibility_hook"
 run_case \
   "the exact hosted XPC and accessibility selectors satisfy the hook" \
@@ -362,6 +380,43 @@ if grep -Fq -- '-only-testing:SupraAIUITests/DocumentChunkerRolloutUITests/testD
   printf '%s\n' 'PASS: app smoke executes the prompt-routing Diagnostics guard'
 else
   record_failure 'app smoke does not execute the prompt-routing Diagnostics guard'
+fi
+
+# Guided document Q&A is a production hosted-runtime workflow, so the protected
+# smoke selector must execute its deterministic generate/preview/cancel contract.
+if grep -Fq -- '-only-testing:SupraAIUITests/GuidedDocumentQAUITests/testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult' "$app_smoke_script"; then
+  printf '%s\n' 'PASS: app smoke executes the guided document Q&A hosted guard'
+else
+  record_failure 'app smoke does not execute the guided document Q&A hosted guard'
+fi
+
+# The deterministic guided-Q&A runtime and model fixture are test authority, not
+# ordinary launch flags. They must require the hermetic XCUITest launch and keep
+# their artifacts out of the user's managed model directory.
+app_environment="${repo_root}/Apps/SupraAI/SupraAI/AppEnvironment.swift"
+if grep -Eq 'guidedQAUITestAuthorized[[:space:]]*=[[:space:]]*Self\.isUITestMode[[:space:]]*&&' "$app_environment" \
+    && grep -Fq 'guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient' "$app_environment"; then
+  printf '%s\n' 'PASS: guided Q&A synthetic runtime requires hermetic UI-test authority'
+else
+  record_failure 'guided Q&A synthetic runtime is not gated by hermetic UI-test authority'
+fi
+
+if grep -Fq 'guidedQAUITestModelRoot = guidedQAUITestAuthorized' "$app_environment" \
+    && grep -Fq 'FileManager.default.temporaryDirectory' "$app_environment" \
+    && grep -Fq 'managedModelRoots: guidedQAUITestManagedRoots' "$app_environment" \
+    && ! grep -Fq 'ManagedModelStorage.modelsDirectory()' < <(
+      sed -n '/private func seedUITestGuidedQAModel/,/^    }/p' "$app_environment"
+    ); then
+  printf '%s\n' 'PASS: guided Q&A model fixture stays in its authorized temporary root'
+else
+  record_failure 'guided Q&A model fixture can escape its authorized temporary root'
+fi
+
+if grep -Fq 'classificationService: Self.isUITestMode ? nil : DocumentClassificationService(' "$app_environment" \
+    && grep -Fq '.filter { $0 && !Self.isUITestMode }' "$app_environment"; then
+  printf '%s\n' 'PASS: UI-test launches cannot consume the guided Q&A runtime through background classification'
+else
+  record_failure 'UI-test launch can consume the guided Q&A runtime through background classification'
 fi
 
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \

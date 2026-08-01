@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CryptoKit
 import Foundation
 import SupraCore
 import SupraDocuments
@@ -110,6 +111,9 @@ final class AppEnvironment: ObservableObject {
 
     private let runtimeStatusController: RuntimeStatusController
     private let runtimeClient: RuntimeClient
+    /// Non-nil only for the explicitly authorized guided-Q&A XCUITest launch.
+    /// The synthetic model fixture is confined to this throwaway root.
+    private let guidedQAUITestModelRoot: URL?
     /// Fires a classification-only pass for the selected matter whenever a model
     /// finishes loading, so documents imported while no model was available get
     /// classified once one is ready (the queue de-dupes and no-ops when nothing is
@@ -119,17 +123,32 @@ final class AppEnvironment: ObservableObject {
     init() {
         let restoreActivation = AppEnvironment.prepareColdStartRestore()
         let runtimeClient = RuntimeClient()
+        let guidedQAUITestAuthorized = Self.isUITestMode && ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA")
+        let guidedQAUITestModelRoot = guidedQAUITestAuthorized
+            ? Optional(FileManager.default.temporaryDirectory.appendingPathComponent(
+                "SupraAI-UITest-GuidedQA-\(UUID().uuidString)",
+                isDirectory: true
+            ))
+            : nil
+        let guidedQAUITestManagedRoots = guidedQAUITestModelRoot.map { [$0] }
+            ?? [ManagedModelStorage.modelsDirectory()]
+        let taskRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient
         let storeResult = AppEnvironment.makeStore(after: restoreActivation)
         let store = storeResult.store
         let systemPrompt = DefaultSystemPrompt.milestone1()
         let appVersion = AppEnvironment.currentAppVersion()
-        let modelLibrary = ModelLibrary(store: store, runtimeClient: runtimeClient)
+        let modelLibrary = ModelLibrary(
+            store: store,
+            runtimeClient: taskRuntimeClient,
+            managedModelRoots: guidedQAUITestManagedRoots
+        )
         let tokenStore = APIKeyStoreComposition.live()
         self.store = store
         self.usingFallbackStore = storeResult.isFallback
         self.databaseRecoveryState = storeResult.recoveryState
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
         self.runtimeClient = runtimeClient
+        self.guidedQAUITestModelRoot = guidedQAUITestModelRoot
         self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
             store: store,
@@ -222,9 +241,13 @@ final class AppEnvironment: ObservableObject {
                 return DocumentIndexingService(store: store, embedder: embedder)
             },
             // Suggests a taxonomy category for each imported document using the
-            // assigned task model. Self-skips when no model is loadable.
-            classificationService: DocumentClassificationService(
-                store: store, modelLibrary: modelLibrary, runtimeClient: runtimeClient
+            // assigned task model. Hermetic UI-test launches disable the service:
+            // a Documents-tab appearance must not start unrelated generation or
+            // consume a scenario's deterministic runtime stream.
+            classificationService: Self.isUITestMode ? nil : DocumentClassificationService(
+                store: store,
+                modelLibrary: modelLibrary,
+                runtimeClient: taskRuntimeClient
             )
         )
         documentSetup.setReindexEnqueuer { [weak queue] matterID in
@@ -236,7 +259,7 @@ final class AppEnvironment: ObservableObject {
         self.documentQueue = queue
         self.mattersController = MattersController(
             store: store,
-            runtimeClient: runtimeClient,
+            runtimeClient: taskRuntimeClient,
             defaultSystemPrompt: systemPrompt,
             documentQueue: queue,
             isImportReady: { documentSetup.isReadyForImport }
@@ -262,7 +285,7 @@ final class AppEnvironment: ObservableObject {
                 if case .loaded = state { return true } else { return false }
             }
             .removeDuplicates()
-            .filter { $0 }
+            .filter { $0 && !Self.isUITestMode }
             .sink { [weak self] _ in
                 guard let self, let matterID = self.mattersController.selectedMatterID else { return }
                 self.documentQueue.enqueueClassify(matterID: matterID)
@@ -832,6 +855,164 @@ final class AppEnvironment: ObservableObject {
         seedUITestInterruptedImportIfNeeded()
         seedUITestDocumentCorrectionIfNeeded()
         seedUITestDocumentRelationsIfNeeded()
+        seedUITestGuidedQAIfNeeded()
+    }
+
+    /// Seeds one ready and one review-required revision-bound passage plus a
+    /// throwaway model for the guided Q&A hosted test. Both synthetic runtime and
+    /// model authority require the hermetic XCUITest launch contract.
+    private func seedUITestGuidedQAIfNeeded() {
+        guard let guidedQAUITestModelRoot,
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            try seedUITestGuidedQAModel(in: guidedQAUITestModelRoot)
+            guard !(try store.documentLibrary.fetchDocuments(matterID: matterID)).contains(where: {
+                $0.id == "ready-guided-document"
+            }) else { return }
+
+            func insertFixture(
+                documentID: String,
+                chunkID: String,
+                name: String,
+                text: String,
+                status: MatterDocumentStatus
+            ) throws {
+                let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                    id: "\(documentID)-blob",
+                    sha256: "\(documentID)-synthetic-sha",
+                    byteSize: text.utf8.count,
+                    originalExtension: "txt",
+                    managedRelativePath: "uitest/\(name)"
+                )).blob
+                let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+                    id: documentID,
+                    matterID: matterID,
+                    blobID: blob.id,
+                    displayName: name,
+                    status: status.rawValue,
+                    extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                    indexStatus: DocumentIndexStatus.textIndexed.rawValue,
+                    extractionMethod: "synthetic@toolchain:guided-qa-uitest"
+                ))
+                let part = DocumentPagePartRecord(
+                    id: "\(documentID)-part",
+                    documentID: document.id,
+                    partIndex: 0,
+                    sourceKind: DocumentSourceKind.text.rawValue,
+                    normalizedText: text,
+                    charCount: text.count
+                )
+                let revision = DocumentPartRevisionRecord(
+                    id: "\(documentID)-revision",
+                    documentID: document.id,
+                    partIndex: 0,
+                    derivationKey: "guided-qa-uitest:\(documentID)",
+                    origin: "parser",
+                    method: "synthetic",
+                    text: text,
+                    charCount: text.count
+                )
+                let selection = DocumentPartSelectionRecord(
+                    id: "\(documentID)-selection",
+                    documentID: document.id,
+                    partIndex: 0,
+                    selectedRevisionID: revision.id,
+                    selectionKey: "guided-qa-uitest:\(documentID)",
+                    selectedBy: "policy",
+                    policyVersion: 1,
+                    decisionJSON: #"{"rule":"synthetic_guided_qa_ui_fixture"}"#
+                )
+                _ = try store.documentRevisions.replacePartsAndPersistLineage(
+                    documentID: document.id,
+                    parts: [part],
+                    revisions: [revision],
+                    selections: [selection]
+                )
+                try store.documentIndex.replaceChunks(documentID: document.id, chunks: [
+                    DocumentChunkRecord(
+                        id: chunkID,
+                        documentID: document.id,
+                        pagePartID: part.id,
+                        revisionID: revision.id,
+                        chunkerVersion: 2,
+                        chunkIndex: 0,
+                        sourceKind: DocumentSourceKind.text.rawValue,
+                        charStart: 0,
+                        charEnd: text.count,
+                        normalizedText: text,
+                        displayExcerpt: text
+                    ),
+                ])
+            }
+
+            try insertFixture(
+                documentID: "ready-guided-document",
+                chunkID: "ready-guided-chunk",
+                name: "Atlas Ready Agreement.txt",
+                text: "ATLAS_READY_UI_CANARY. Rent is due on the first business day.",
+                status: .ready
+            )
+            try insertFixture(
+                documentID: "review-guided-document",
+                chunkID: "review-guided-chunk",
+                name: "Beacon Review Draft.txt",
+                text: "BEACON_REVIEW_UI_CANARY. This draft needs attorney review.",
+                status: .needsReview
+            )
+        } catch {
+            assertionFailure("Could not seed guided Q&A accessibility fixture: \(error)")
+        }
+    }
+
+    /// Installs a tiny integrity-valid model fixture and routes legal reasoning to
+    /// it. The app still exercises ModelLibrary's production load + stable-lineage
+    /// checks; only the runtime implementation is deterministic under the explicit
+    /// guided-Q&A UI-test launch flag.
+    private func seedUITestGuidedQAModel(in authorizedRoot: URL) throws {
+        let modelID = "77777777-7777-4777-8777-777777777777"
+        let modelDirectory = authorizedRoot
+            .appendingPathComponent("guided-qa-ui-model", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: modelDirectory,
+            withIntermediateDirectories: true
+        )
+        let artifacts: [(String, Data)] = [
+            ("config.json", Data(#"{"model_type":"guided_qa_ui_test"}"#.utf8)),
+            ("model.safetensors", Data("guided-qa-ui-test-weights".utf8)),
+        ]
+        for (name, data) in artifacts {
+            try data.write(
+                to: modelDirectory.appendingPathComponent(name, isDirectory: false),
+                options: .atomic
+            )
+        }
+        let manifest = ModelArtifactManifest(
+            repositoryID: "supra-test/guided-qa",
+            revision: String(repeating: "7", count: 40),
+            files: artifacts.map { name, data in
+                ModelArtifactManifest.File(
+                    relativePath: name,
+                    size: Int64(data.count),
+                    digestAlgorithm: .sha256,
+                    digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                )
+            }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(manifest).write(
+            to: ManagedModelStorage.manifestURL(in: modelDirectory),
+            options: .atomic
+        )
+        try store.models.upsertModel(ModelRecord(
+            id: modelID,
+            displayName: "Guided Q&A UI Test Model",
+            path: modelDirectory.path,
+            isActive: true,
+            validationStatus: "verified"
+        ))
+        modelLibrary.refresh()
+        modelLibrary.assignModel(modelID, to: .legalReasoning)
     }
 
     /// Seeds one completed encrypted-source rejection for the T-OPS-07 warning
@@ -1748,4 +1929,112 @@ final class AppEnvironment: ObservableObject {
             buildNumber: info?["CFBundleVersion"] as? String ?? "0"
         )
     }
+}
+
+/// Deterministic app-side runtime used only by the explicit guided-Q&A UI-test
+/// launch. The first answer completes through the production streaming path; a
+/// second answer remains in flight until the production cancellation RPC closes
+/// it, giving the hosted test a stable no-partial-write boundary without XPC/model
+/// timing variance.
+private final class GuidedQAUITestRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var loadedModelID: ModelID?
+    private var generationCount = 0
+    private var heldGenerationID: GenerationID?
+    private var heldContinuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation?
+
+    func connect() async throws {}
+
+    func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
+        lock.withLock { loadedModelID = request.modelID }
+        return LoadModelResponse(status: .loaded, modelID: request.modelID)
+    }
+
+    func generate(_ request: GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error> {
+        let call = lock.withLock { () -> Int in
+            generationCount += 1
+            return generationCount
+        }
+        if call == 1 {
+            return AsyncThrowingStream { continuation in
+                continuation.yield(GenerationEvent(
+                    generationID: request.generationID,
+                    sequenceNumber: 0,
+                    timestamp: Date(),
+                    type: .token,
+                    tokenText: "Rent is due on the first business day [S1]."
+                ))
+                continuation.yield(GenerationEvent(
+                    generationID: request.generationID,
+                    sequenceNumber: 1,
+                    timestamp: Date(),
+                    type: .generationCompleted
+                ))
+                continuation.finish()
+            }
+        }
+        return AsyncThrowingStream { continuation in
+            lock.withLock {
+                heldGenerationID = request.generationID
+                heldContinuation = continuation
+            }
+        }
+    }
+
+    func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
+        CountTokensResponse(
+            modelID: request.modelID,
+            counts: request.texts.map { max(1, ($0.utf8.count + 3) / 4) }
+        )
+    }
+
+    func cancelGeneration(_ generationID: GenerationID) async throws -> CancelGenerationResponse {
+        let continuation = lock.withLock { () -> AsyncThrowingStream<GenerationEvent, Error>.Continuation? in
+            guard heldGenerationID == generationID else { return nil }
+            defer {
+                heldGenerationID = nil
+                heldContinuation = nil
+            }
+            return heldContinuation
+        }
+        continuation?.finish()
+        return CancelGenerationResponse(
+            status: continuation == nil ? .notFound : .cancelled,
+            generationID: generationID
+        )
+    }
+
+    func recentEvents(
+        for generationID: GenerationID,
+        after sequenceNumber: Int
+    ) async throws -> [GenerationEvent] { [] }
+
+    func unloadModel() async throws -> UnloadModelResponse {
+        lock.withLock { loadedModelID = nil }
+        return UnloadModelResponse(status: .unloaded)
+    }
+
+    func reloadCurrentModel() async throws -> LoadModelResponse {
+        let modelID = lock.withLock { loadedModelID }
+        return LoadModelResponse(
+            status: modelID == nil ? .failed : .loaded,
+            modelID: modelID,
+            error: modelID == nil
+                ? RuntimeError(category: "ui_test", message: "No UI-test model is loaded.")
+                : nil
+        )
+    }
+
+    func runtimeStatus() async throws -> RuntimeStatus {
+        let state = lock.withLock { (loadedModelID, heldGenerationID) }
+        return RuntimeStatus(
+            state: state.1 == nil ? (state.0 == nil ? .modelUnloaded : .modelLoaded) : .generating,
+            loadedModelID: state.0,
+            activeGenerationID: state.1,
+            message: nil,
+            metrics: nil
+        )
+    }
+
+    func restartRuntimeService() async throws {}
 }

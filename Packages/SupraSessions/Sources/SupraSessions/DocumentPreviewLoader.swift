@@ -260,20 +260,54 @@ public final class DocumentPreviewLoader: @unchecked Sendable {
                 )
             )
         }
+        var warnings = Self.warnings(for: document)
+        let blobURL = (try? store.documentLibrary.fetchBlob(id: document.blobID))
+            .map { storage.url(forManagedRelativePath: $0.managedRelativePath) }
+        let blobExists = blobURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        let kind: DocumentPreviewModel.Kind
+        switch locator.sourceKind {
+        case .pdfPage:
+            if blobExists, let blobURL {
+                kind = .pdf(
+                    path: blobURL.path,
+                    pageIndex: locator.pageIndex,
+                    highlightText: outputSource.excerpt
+                )
+            } else {
+                kind = .unavailable(reason: "Original PDF unavailable.", fallbackText: revision.text)
+            }
+        case .image:
+            if blobExists, let blobURL {
+                // Historical output rows own their locator payload. Never replace
+                // its OCR boxes with the current selected part's overlay.
+                let overlay = OCRPreviewOverlayParser.parse(
+                    locator.boundingBoxesJSON,
+                    highlightedText: outputSource.excerpt
+                )
+                if let warning = overlay.warning { warnings.append(warning) }
+                kind = .image(path: blobURL.path, overlay: overlay)
+            } else {
+                kind = .unavailable(reason: "Original image unavailable.", fallbackText: revision.text)
+            }
+        case .spreadsheetCellRange, .text, .markdown, .html, .xml, .emailBody, .emailAttachment, .convertedDocument:
+            // The immutable extracted revision is the authoritative historical
+            // content. QuickLook/current parts can drift after a correction.
+            kind = .text(
+                content: revision.text,
+                highlightStart: locator.charStart,
+                highlightEnd: locator.charEnd
+            )
+        }
         let structure = structurePreview(documentID: documentID, revisionIDs: [revisionID])
         return DocumentPreviewModel(
             documentName: document.displayName,
             locatorDisplay: locator.displayString,
-            warnings: Self.warnings(for: document),
+            warnings: warnings,
             revisionID: revision.id,
             revisionOrigin: revision.origin,
             revisionCreatedAt: revision.createdAt,
             revisionNotice: "Recorded revision — \(revision.origin) — \(revision.createdAt.ISO8601Format())",
-            kind: .text(
-                content: revision.text,
-                highlightStart: locator.charStart,
-                highlightEnd: locator.charEnd
-            ),
+            kind: kind,
             structureNodes: structure.nodes,
             structureEdges: structure.edges
         )

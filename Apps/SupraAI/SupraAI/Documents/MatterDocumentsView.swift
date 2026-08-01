@@ -14,6 +14,7 @@ struct MatterDocumentsView: View {
     @ObservedObject var controller: MatterDocumentsController
     @ObservedObject var queue: DocumentProcessingQueue
     @ObservedObject var library: ModelLibrary
+    var qaController: DocumentQAController?
     var chronologyController: DocumentChronologyController?
 
     @State private var showImporter = false
@@ -23,6 +24,7 @@ struct MatterDocumentsView: View {
     /// folder row's "New Subfolder") or nil to follow the sidebar selection.
     @State private var newFolderParentID: String?
     @State private var showTrash = false
+    @State private var showQA = false
     @State private var showChronology = false
     @State private var showRelationReview = false
     @State private var dropTargeted = false
@@ -89,6 +91,15 @@ struct MatterDocumentsView: View {
             }
         }
         .sheet(isPresented: $showTrash) { trashSheet }
+        .sheet(isPresented: $showQA) {
+            if let qaController {
+                DocumentQASheet(
+                    qa: qaController,
+                    scopeFolderID: controller.selectedFolderID,
+                    library: library
+                ) { showQA = false }
+            }
+        }
         .sheet(isPresented: $showChronology) {
             if let chronologyController {
                 DocumentChronologySheet(
@@ -139,6 +150,12 @@ struct MatterDocumentsView: View {
             .accessibilityHint(controller.setupReady ? "Opens the document picker" : "Complete setup in Settings before importing documents")
 
             Divider().frame(height: 20)
+
+            SupraToolbarIconButton("Ask Documents", systemImage: "bubble.left.and.text.bubble.right") {
+                showQA = true
+            }
+            .disabled(qaController == nil)
+            .accessibilityIdentifier("documents.ask")
 
             SupraToolbarIconButton("Fact Chronology", systemImage: "calendar.badge.clock") {
                 showChronology = true
@@ -839,6 +856,552 @@ private final class DroppedURLCollector: @unchecked Sendable {
 struct PreviewItem: Identifiable {
     let id = UUID()
     let model: DocumentPreviewModel
+}
+
+private enum DocumentQASourceMode: Hashable {
+    case auto
+    case choose
+}
+
+/// AppKit-backed so assistive technology and hosted UI tests receive the native
+/// search-field role instead of a generic text-field role.
+private struct DocumentQASearchField: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = "Search documents and passages"
+        field.stringValue = text
+        field.delegate = context.coordinator
+        field.setAccessibilityIdentifier("documentQA.sourceSearch")
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        if field.stringValue != text { field.stringValue = text }
+        field.setAccessibilityIdentifier("documentQA.sourceSearch")
+    }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        private let text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSSearchField else { return }
+            text.wrappedValue = field.stringValue
+        }
+    }
+}
+
+/// Source-grounded Q&A over the matter's documents. Auto preserves the existing
+/// retrieval path; Choose Sources passes an exact current-revision chunk set and
+/// blocks if any selected passage becomes stale or unavailable.
+struct DocumentQASheet: View {
+    @ObservedObject var qa: DocumentQAController
+    let scopeFolderID: String?
+    @ObservedObject var library: ModelLibrary
+    let onClose: () -> Void
+
+    @State private var question = ""
+    @State private var mode: DocumentAnswerMode = .short
+    @State private var sourceMode: DocumentQASourceMode = .auto
+    @State private var scopeThisFolder = false
+    @State private var sourceSearch = ""
+    @State private var availableSources: [GuidedDocumentSource] = []
+    @State private var selectedChunkIDs: Set<String> = []
+    @State private var routingMessage: String?
+    @State private var generationTask: Task<Void, Never>?
+    @State private var sourcePreview: PreviewItem?
+
+    private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
+    private var route: ModelRoute? { router.route(forStructuredOutput: mode.outputType) }
+    private var routeModel: ModelSummary? {
+        guard let route else { return nil }
+        return library.resolvedModel(for: route.role, configuration: router.configuration)
+    }
+    private var scope: RetrievalScope {
+        guard scopeThisFolder, let scopeFolderID else { return .wholeMatter }
+        return RetrievalScope(folderIDs: [scopeFolderID])
+    }
+    private var autoReadiness: ScopeReadiness? {
+        qa.scopeReadiness(scope: scope)
+    }
+    private var orderedSelectedChunkIDs: [String] {
+        availableSources.filter { selectedChunkIDs.contains($0.chunkID) }.map(\.chunkID)
+    }
+    private var selectionReadiness: GuidedDocumentSelectionReadiness {
+        qa.guidedSelectionReadiness(chunkIDs: orderedSelectedChunkIDs, scope: scope)
+    }
+    private var filteredSources: [GuidedDocumentSource] {
+        let query = sourceSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return availableSources }
+        return availableSources.filter {
+            $0.documentName.localizedCaseInsensitiveContains(query)
+                || $0.locatorDisplay.localizedCaseInsensitiveContains(query)
+                || $0.excerpt.localizedCaseInsensitiveContains(query)
+        }
+    }
+    private var sourceGroups: [(id: String, name: String, sources: [GuidedDocumentSource])] {
+        var order: [String] = []
+        var groups: [String: [GuidedDocumentSource]] = [:]
+        var names: [String: String] = [:]
+        for source in filteredSources {
+            if groups[source.documentID] == nil { order.append(source.documentID) }
+            names[source.documentID] = source.documentName
+            groups[source.documentID, default: []].append(source)
+        }
+        return order.map { ($0, names[$0] ?? "Document", groups[$0] ?? []) }
+    }
+    private var questionIsEmpty: Bool {
+        question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    private var isWorking: Bool { generationTask != nil || qa.isGenerating }
+    private var canGenerate: Bool {
+        !isWorking
+            && routeModel != nil
+            && !questionIsEmpty
+            && (sourceMode == .auto
+                ? autoReadiness?.isFullyReady == true
+                : selectionReadiness.canGenerate)
+    }
+
+    var body: some View {
+        SupraSheetScaffold(
+            "Ask the Documents",
+            titleAccessibilityIdentifier: "documentQA.sheet",
+            onClose: close
+        ) {
+            qaContent
+        } footer: {
+            if let result = qa.lastResult {
+                Button(
+                    result.sourceMode == .guided
+                        ? "Regenerate Selected Sources"
+                        : (result.depth == .fast ? "Search All Documents" : "Regenerate")
+                ) {
+                    startRegenerate(outputID: result.outputID)
+                }
+                .buttonStyle(.ghost)
+                .disabled(isWorking || routeModel == nil)
+                .accessibilityIdentifier("documentQA.regenerate")
+            }
+            Spacer()
+            if isWorking {
+                ProgressView().controlSize(.small)
+                    .accessibilityLabel("Answering question")
+                Button("Cancel") { cancelGeneration() }
+                    .buttonStyle(.ghost)
+                    .accessibilityIdentifier("documentQA.cancel")
+            }
+            Button("Generate") { startAsk() }
+                .buttonStyle(.ghost)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canGenerate)
+                .accessibilityIdentifier("documentQA.generate")
+                .accessibilityHint(generateAccessibilityHint)
+        }
+        .frame(
+            minWidth: 620,
+            idealWidth: 720,
+            maxWidth: .infinity,
+            minHeight: 560,
+            idealHeight: 720,
+            maxHeight: .infinity
+        )
+        .onAppear {
+            library.refresh()
+            reloadSources()
+            if !AppEnvironment.isUITestMode, let role = route?.role { library.prewarm(role: role) }
+        }
+        .onChange(of: scopeThisFolder) { _, _ in
+            selectedChunkIDs.removeAll()
+            reloadSources()
+        }
+        .onChange(of: sourceMode) { _, newMode in
+            if newMode == .choose { reloadSources() }
+        }
+        .onDisappear {
+            if isWorking { cancelGeneration() }
+        }
+        .interactiveDismissDisabled(isWorking)
+        .sheet(item: $sourcePreview) { item in
+            DocumentPreviewView(model: item.model) { sourcePreview = nil }
+                .frame(minWidth: 720, minHeight: 600)
+        }
+    }
+
+    private var qaContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Form {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Your question").font(.subheadline).foregroundStyle(.secondary)
+                    MultilineField(
+                        placeholder: "e.g. What are the termination provisions in the lease?",
+                        text: $question,
+                        minLines: 3,
+                        accessibilityID: "documentQA.question"
+                    )
+                }
+                LabeledContent("Answer style") {
+                    GhostSegmentedControl(
+                        selection: $mode,
+                        segments: [
+                            (DocumentAnswerMode.short, "Short", "documentQA.answerMode.short"),
+                            (DocumentAnswerMode.memo, "Memo", "documentQA.answerMode.memo"),
+                        ]
+                    )
+                }
+                LabeledContent("Sources") {
+                    GhostSegmentedControl(
+                        selection: $sourceMode,
+                        segments: [
+                            (DocumentQASourceMode.auto, "Auto", "documentQA.sourceMode.auto"),
+                            (DocumentQASourceMode.choose, "Choose Sources", "documentQA.sourceMode.choose"),
+                        ]
+                    )
+                }
+                if scopeFolderID != nil {
+                    Toggle("Limit to the selected folder", isOn: $scopeThisFolder)
+                        .accessibilityIdentifier("documentQA.scopeFolder")
+                }
+                readinessSummary
+                routeStatus
+                if let routingMessage {
+                    Text(routingMessage).font(.supraCaption).foregroundStyle(.orange)
+                        .accessibilityIdentifier("documentQA.routingMessage")
+                }
+                if let message = qa.message {
+                    Text(message).font(.supraCaption).foregroundStyle(.orange)
+                        .accessibilityIdentifier("documentQA.message")
+                }
+            }
+            .formStyle(.grouped)
+
+            if sourceMode == .choose {
+                Divider()
+                sourceChooser
+            }
+
+            if let result = qa.lastResult {
+                Divider()
+                resultView(result)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var readinessSummary: some View {
+        if sourceMode == .auto {
+            if let readiness = autoReadiness {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(readiness.summaryText)
+                    ForEach(readiness.blockingReasons, id: \.self) { reason in
+                        Text(reason).foregroundStyle(.orange)
+                    }
+                }
+                .font(.supraCaption)
+                .foregroundStyle(readiness.isFullyReady ? Color.secondary : Color.orange)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("documentQA.readiness")
+                .accessibilityValue(readiness.isFullyReady ? "Ready" : "Blocked")
+            } else {
+                Text("Document readiness is unavailable. Close this sheet and try again.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("documentQA.readiness")
+                    .accessibilityValue("Blocked")
+            }
+        } else {
+            let readiness = selectionReadiness
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(readiness.readyCount) of \(readiness.selectedCount) selected sources ready")
+                ForEach(readiness.blockingReasons, id: \.self) { reason in
+                    Text(reason).foregroundStyle(.orange)
+                }
+            }
+            .font(.supraCaption)
+            .foregroundStyle(readiness.canGenerate ? Color.secondary : Color.orange)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("documentQA.readiness")
+            .accessibilityValue("\(readiness.readyCount) of \(readiness.selectedCount) selected sources ready")
+        }
+    }
+
+    private var sourceChooser: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DocumentQASearchField(text: $sourceSearch)
+                .accessibilityIdentifier("documentQA.sourceSearch")
+                .padding(.horizontal)
+                .padding(.top, 10)
+            if sourceGroups.isEmpty {
+                ContentUnavailableView(
+                    sourceSearch.isEmpty ? "No Sources Available" : "No Matching Sources",
+                    systemImage: "doc.text.magnifyingglass",
+                    description: Text(sourceSearch.isEmpty
+                        ? "Import and finish processing documents before choosing passages."
+                        : "Try a different source search.")
+                )
+                .frame(minHeight: 160)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(sourceGroups, id: \.id) { group in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(group.name).font(.supraHeadline)
+                                ForEach(group.sources) { source in
+                                    sourceRow(source)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 10)
+                }
+                .frame(minHeight: 180, maxHeight: 280)
+            }
+        }
+    }
+
+    private func sourceRow(_ source: GuidedDocumentSource) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Button {
+                if selectedChunkIDs.contains(source.chunkID) {
+                    selectedChunkIDs.remove(source.chunkID)
+                } else {
+                    selectedChunkIDs.insert(source.chunkID)
+                }
+            } label: {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: selectedChunkIDs.contains(source.chunkID)
+                        ? "checkmark.square.fill"
+                        : "square")
+                        .foregroundStyle(source.isReady ? Color.accentColor : Color.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(source.locatorDisplay).font(.supraSubheadline)
+                        Text(source.excerpt)
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        if let reason = source.blockingReason {
+                            Text(reason).font(.supraCaption).foregroundStyle(.orange)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!source.isReady)
+            .accessibilityIdentifier("documentQA.source.\(source.chunkID)")
+            .accessibilityLabel("\(source.documentName), \(source.locatorDisplay)")
+            .accessibilityValue(source.blockingReason
+                ?? (selectedChunkIDs.contains(source.chunkID) ? "Selected" : "Ready"))
+
+            if !source.chunkID.hasPrefix("unavailable-document:") {
+                Button {
+                    if let model = qa.preview(chunkID: source.chunkID) {
+                        sourcePreview = PreviewItem(model: model)
+                    }
+                } label: {
+                    Image(systemName: "eye")
+                }
+                .buttonStyle(.plain)
+                .help("Preview source")
+                .accessibilityLabel("Preview \(source.documentName), \(source.locatorDisplay)")
+                .accessibilityIdentifier("documentQA.preview.\(source.chunkID)")
+            }
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func resultView(_ result: DocumentQAController.QAResult) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                if let assurance = result.assuranceState {
+                    AssuranceBadge(state: assurance)
+                }
+                if result.depth == .fast {
+                    Label(
+                        result.sourceMode == .guided
+                            ? "Preliminary — answered from your selected passages. Regenerate Selected Sources runs a full pass over that saved selection."
+                            : "Preliminary — searched the most relevant passages. Search All Documents runs the full pass.",
+                        systemImage: "hare"
+                    )
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+                }
+                if result.status == StructuredOutputStatus.needsReview.rawValue {
+                    Label(
+                        "Needs review — \(result.warnings.joined(separator: " "))",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.supraCaption)
+                    .foregroundStyle(.orange)
+                }
+                Text(Self.markdown(result.markdown))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("documentQA.result")
+                let references = qa.sourceReferences(versionID: result.versionID)
+                if !references.isEmpty {
+                    Divider()
+                    Text("Sources used").font(.supraHeadline)
+                    ForEach(references) { source in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("[\(source.citationLabel)] \(source.documentName)")
+                                Text(source.locatorDisplay)
+                                    .font(.supraCaption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Preview") {
+                                if let model = qa.preview(sourceID: source.id) {
+                                    sourcePreview = PreviewItem(model: model)
+                                }
+                            }
+                            .buttonStyle(.ghost)
+                            .disabled(!source.canPreview)
+                            .help(source.canPreview ? "Preview saved source" : "Saved source preview is unavailable")
+                            .accessibilityLabel(
+                                "Preview \(source.citationLabel), \(source.documentName), \(source.locatorDisplay)"
+                            )
+                            .accessibilityIdentifier("documentQA.resultPreview.\(source.id)")
+                        }
+                    }
+                }
+            }
+            .padding()
+        }
+        .frame(minHeight: 220)
+    }
+
+    @ViewBuilder
+    private var routeStatus: some View {
+        if let route {
+            if let routeModel {
+                Text("Uses \(route.role.displayName): \(routeModel.displayName)")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("documentQA.routeStatus")
+            } else {
+                Text("Assign a \(route.role.displayName) model in Models to ask documents.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("documentQA.routeStatus")
+            }
+        }
+    }
+
+    private var generateAccessibilityHint: String {
+        if routeModel == nil { return "Assign the routed model in Models first" }
+        if questionIsEmpty { return "Enter a question first" }
+        if sourceMode == .auto {
+            guard let readiness = autoReadiness else {
+                return "Document readiness is unavailable"
+            }
+            if !readiness.isFullyReady {
+                return readiness.blockingReasons.first ?? readiness.summaryText
+            }
+        }
+        if sourceMode == .choose, !selectionReadiness.canGenerate {
+            return selectionReadiness.blockingReasons.first ?? "Choose at least one ready source"
+        }
+        return "Creates a saved source-grounded answer"
+    }
+
+    private func reloadSources() {
+        availableSources = qa.guidedSources(scope: scope)
+        let currentIDs = Set(availableSources.map(\.chunkID))
+        selectedChunkIDs.formIntersection(currentIDs)
+    }
+
+    private func startAsk() {
+        guard generationTask == nil else { return }
+        generationTask = Task {
+            await ask()
+            generationTask = nil
+            reloadSources()
+        }
+    }
+
+    private func startRegenerate(outputID: String) {
+        guard generationTask == nil else { return }
+        generationTask = Task {
+            await regenerate(outputID: outputID)
+            generationTask = nil
+            reloadSources()
+        }
+    }
+
+    private func cancelGeneration() {
+        generationTask?.cancel()
+        qa.cancel()
+    }
+
+    private func close() {
+        if isWorking { cancelGeneration() }
+        onClose()
+    }
+
+    private func ask() async {
+        guard let resolved = await resolveRouteModel() else { return }
+        _ = await qa.generate(
+            question: question,
+            scope: scope,
+            mode: mode,
+            guidedChunkIDs: sourceMode == .choose ? orderedSelectedChunkIDs : nil,
+            modelID: resolved.modelID,
+            modelLineage: resolved.modelLineage,
+            route: resolved.route
+        )
+    }
+
+    private func regenerate(outputID: String) async {
+        guard let resolved = await resolveRouteModel() else { return }
+        _ = await qa.regenerate(
+            outputID: outputID,
+            modelID: resolved.modelID,
+            modelLineage: resolved.modelLineage,
+            route: resolved.route
+        )
+    }
+
+    private func resolveRouteModel() async -> (
+        modelID: ModelID,
+        modelLineage: DocumentGenerationModelLineage,
+        route: ModelRoute
+    )? {
+        routingMessage = nil
+        guard let route else {
+            routingMessage = "No route is available for this document output."
+            return nil
+        }
+        switch await library.ensureLoadedRoutedModelID(for: route.role, configuration: router.configuration) {
+        case let .success(modelID):
+            guard let modelLineage = library.generationLineage(for: modelID) else {
+                routingMessage = DocumentGenerationLineageError.stableModelIdentityUnavailable.localizedDescription
+                return nil
+            }
+            return (modelID, modelLineage, route)
+        case let .failure(issue):
+            routingMessage = issue.message
+            return nil
+        }
+    }
+
+    private static func markdown(_ text: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(text)
+    }
 }
 
 /// Fact chronology over the matter's documents (WO 42), in a table or narrative
