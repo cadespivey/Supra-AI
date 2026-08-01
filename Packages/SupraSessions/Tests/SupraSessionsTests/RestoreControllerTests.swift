@@ -551,13 +551,21 @@ final class RestoreControllerTests: XCTestCase {
 
         XCTAssertEqual(controller.restoreState, .succeeded)
         XCTAssertEqual(acknowledgeCount, 1)
-        XCTAssertNotNil(
+        let durable = try XCTUnwrap(
+            fixture.store.appSettings.getSetting(
+                BackupController.restoreStatusStorageKey,
+                as: RestoreStatusRecord.self
+            )
+        )
+        XCTAssertEqual(durable.updatedAt, outcome.completedAt)
+        let audit = try XCTUnwrap(
             try fixture.store.auditEvents.fetchEvents(
                 relatedTable: "backup_snapshots",
                 relatedID: snapshotID,
                 eventType: "restore_activated"
             ).single
         )
+        XCTAssertEqual(audit.timestamp, outcome.completedAt)
     }
 
     func testRecoveryRequiredOutcomeIsNotAcknowledged() throws {
