@@ -677,6 +677,71 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: outsideDirectory.path))
     }
 
+    func testStagingFailureAcknowledgementRetriesFromMatchingFailedStatusOnNextLaunch() throws {
+        let fixture = try makeFixture()
+        let snapshotID = "SupraAI-20260731-090875-000"
+        try fixture.store.appSettings.setSetting(
+            BackupController.restoreStatusStorageKey,
+            value: RestoreStatusRecord(
+                state: .staging,
+                message: "Restore scheduled.",
+                operationID: operationID.uuidString,
+                snapshotIdentifier: snapshotID,
+                updatedAt: now
+            )
+        )
+        let failure = try RestoreSidecarStore.recordStagingFailure(
+            operationID: operationID,
+            reason: .liveDatabaseCloseFailed,
+            stagingRootDirectory: fixture.liveLayout.stagingRootDirectory,
+            failedAt: now
+        )
+
+        let first = makeController(
+            fixture: fixture,
+            inspector: { _ in [] },
+            launchStagingFailure: failure,
+            acknowledgeStagingFailure: {
+                throw ControllerTestError.acknowledgementFailed
+            }
+        )
+
+        XCTAssertEqual(first.restoreState, .failed)
+        XCTAssertTrue(first.restoreEvidenceRequiresAcknowledgement)
+        XCTAssertNotNil(try RestoreSidecarStore.readStagingFailure(
+            stagingRootDirectory: fixture.liveLayout.stagingRootDirectory
+        ))
+        var acknowledgementCount = 0
+
+        let second = makeController(
+            fixture: fixture,
+            inspector: { _ in [] },
+            launchStagingFailure: failure,
+            acknowledgeStagingFailure: {
+                acknowledgementCount += 1
+                try RestoreSidecarStore.acknowledgeStagingFailure(
+                    stagingRootDirectory: fixture.liveLayout.stagingRootDirectory
+                )
+            }
+        )
+
+        XCTAssertEqual(second.restoreState, .failed)
+        XCTAssertFalse(second.restoreEvidenceRequiresAcknowledgement)
+        XCTAssertFalse(second.isAnyBackupOperationBusy)
+        XCTAssertEqual(acknowledgementCount, 1)
+        XCTAssertNil(try RestoreSidecarStore.readStagingFailure(
+            stagingRootDirectory: fixture.liveLayout.stagingRootDirectory
+        ))
+        XCTAssertEqual(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: "backup_snapshots",
+                relatedID: snapshotID,
+                eventType: "restore_staging_failed"
+            ).count,
+            1
+        )
+    }
+
     func testDurableActivationOutcomeReplaysAndAcknowledgesAfterAudit() throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090900-000"
