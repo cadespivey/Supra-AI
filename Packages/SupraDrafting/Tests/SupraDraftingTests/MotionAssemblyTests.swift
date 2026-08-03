@@ -78,7 +78,9 @@ final class MotionAssemblyTests: XCTestCase {
                     body: [.paragraph(motionEvidence.authorities[0].canonicalParagraph)],
                     subPoints: [MotionToDismiss.ArgumentPoint(
                         heading: "McKernon Fails to Allege the Essential Terms of a Valid Contract.",
-                        body: [.paragraph(motionEvidence.authorities[1].canonicalParagraph)]
+                        body: ([motionEvidence.authorities[1].canonicalParagraph]
+                            + motionEvidence.canonicalApplicationParagraphs)
+                            .map(BodyBlock.paragraph)
                     )]
                 ),
                 MotionToDismiss.ArgumentPoint(
