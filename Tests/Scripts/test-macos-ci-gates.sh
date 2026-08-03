@@ -369,6 +369,22 @@ run_case \
     bash "${scripts}/run-app-smoke-tests.sh" --check
 
 printf '%s\n' \
+  'final class RestoreSettingsUITests: XCTestCase {}' \
+  'func testInvalidSnapshotShowsFactsAndCannotBeSelected() {}' \
+  'func testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel() {}' \
+  'func testSuccessfulStageShowsTerminalSurfaceAndQuits() {}' \
+  'func testRecoveryRequiredShellProvidesPreservationAndQuitInstructions() {}' \
+  >"$restore_hook"
+run_case \
+  "restore methods after an empty shipping class fail the selector" \
+  1 \
+  "restore Settings/recovery accessibility smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    SUPRA_RESTORE_UI_TEST_FILE="$restore_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+printf '%s\n' \
   'final class RestoreSettingsUITests: XCTestCase {' \
   '  func testInvalidSnapshotShowsFactsAndCannotBeSelected() {}' \
   '  func testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel() {}' \
