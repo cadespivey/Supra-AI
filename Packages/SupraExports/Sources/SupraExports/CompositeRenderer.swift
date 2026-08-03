@@ -5,6 +5,11 @@ import SupraDraftingCore
 /// to `CourtFLRenderer`, letters to `LetterheadRenderer`. Lets a caller hold one
 /// renderer for all drafting kinds (the pipeline picks the shell via RenderInput).
 public struct CompositeRenderer: Renderer {
+    public let identity = DraftComponentIdentity(
+        id: "supra.exports.composite-renderer",
+        version: "1"
+    )
+
     private let court = CourtFLRenderer()
     private let letter = LetterheadRenderer()
 

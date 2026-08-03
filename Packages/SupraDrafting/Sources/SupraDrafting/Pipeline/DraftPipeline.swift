@@ -29,7 +29,8 @@ public struct DraftPipeline: Sendable {
         return DraftResult(
             docx: docx,
             followUps: vr.followUps + gateResult.followUps,
-            propositionSupport: vr.propositionSupport
+            propositionSupport: vr.propositionSupport,
+            verificationReceipt: receipt(for: vr)
         )
     }
 
@@ -50,21 +51,35 @@ public struct DraftPipeline: Sendable {
         return DraftResult(
             docx: docx,
             followUps: vr.followUps + gateResult.followUps,
-            propositionSupport: vr.propositionSupport
+            propositionSupport: vr.propositionSupport,
+            verificationReceipt: receipt(for: vr)
         )
     }
 
     // MARK: - motionToDismiss (deterministic spine; sections pre-generated + firewall-sanitized)
 
-    public func runMotion(model: DocumentModel, style: HouseStyleSheet) async throws -> DraftResult {
-        let vr = await verifier.verify(.wholeDocument(model), kind: .motionToDismiss, style: style)
+    public func runMotion(
+        model: DocumentModel,
+        evidence: MotionVerificationEvidence,
+        style: HouseStyleSheet
+    ) async throws -> DraftResult {
+        let vr = await verifier.verify(
+            .motion(model: model, evidence: evidence),
+            kind: .motionToDismiss,
+            style: style
+        )
         let gateResult = gate.check(court: model, kind: .motionToDismiss, style: style)
-        try Self.requireRenderable(verification: vr, gate: gateResult)
+        try Self.requireRenderable(
+            verification: vr,
+            gate: gateResult,
+            requiredPropositionIDs: evidence.requiredPropositionIDs
+        )
         let docx = try renderer.render(.court(model), style: style)
         return DraftResult(
             docx: docx,
             followUps: vr.followUps + gateResult.followUps,
-            propositionSupport: vr.propositionSupport
+            propositionSupport: vr.propositionSupport,
+            verificationReceipt: receipt(for: vr)
         )
     }
 
@@ -72,17 +87,38 @@ public struct DraftPipeline: Sendable {
     /// deterministic failure or blocking follow-up stops before renderer/file side effects.
     private static func requireRenderable(
         verification: VerificationResult,
-        gate: GateResult
+        gate: GateResult,
+        requiredPropositionIDs: [String]? = nil
     ) throws {
         let blockingFollowUps = (verification.followUps + gate.followUps)
             .filter { $0.severity == .blocking }
-        guard verification.failures.isEmpty, gate.failures.isEmpty, blockingFollowUps.isEmpty else {
+        let exactSupportCoverage = requiredPropositionIDs.map { requiredIDs in
+            !requiredIDs.isEmpty
+                && verification.propositionSupport.map(\.propositionID) == requiredIDs
+                && verification.propositionSupport.allSatisfy { $0.status == .supported }
+        } ?? true
+        guard verification.failures.isEmpty,
+              gate.failures.isEmpty,
+              blockingFollowUps.isEmpty,
+              exactSupportCoverage
+        else {
             let raw = verification.failures.map(\.detail)
                 + gate.failures.map(\.detail)
                 + blockingFollowUps.map(\.message)
+                + (exactSupportCoverage ? [] : ["Motion verification did not support every selected fact and authority exactly once in order."])
             let summaries = Array(Set(raw.map(sanitizedSummary))).sorted().prefix(8)
             throw DraftError.verificationBlocked(Array(summaries))
         }
+    }
+
+    private func receipt(for verification: VerificationResult) -> DraftVerificationReceipt {
+        DraftVerificationReceipt(
+            status: .passed,
+            supportedPropositionIDs: verification.propositionSupport.map(\.propositionID),
+            verifierIdentity: verifier.identity,
+            gateIdentity: PreFileGate.identity,
+            rendererIdentity: renderer.identity
+        )
     }
 
     private static func sanitizedSummary(_ value: String) -> String {

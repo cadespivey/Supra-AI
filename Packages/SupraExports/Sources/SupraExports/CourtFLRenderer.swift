@@ -5,6 +5,11 @@ import SupraDraftingCore
 // Emits canonical WML matching the round-tripped Word goldens (Notice §4.3 / Exports §4–§5).
 
 public struct CourtFLRenderer: Renderer {
+    public let identity = DraftComponentIdentity(
+        id: "supra.exports.court-fl-renderer",
+        version: "1"
+    )
+
     public init() {}
 
     public func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {

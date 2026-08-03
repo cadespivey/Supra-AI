@@ -798,7 +798,20 @@ public enum RenderInput: Sendable, Equatable {
     case letter(LetterModel)
 }
 
+/// Stable identity for a drafting component whose behavior affects a persisted artifact.
+/// The owning component increments `version` when that behavior changes.
+public struct DraftComponentIdentity: Codable, Sendable, Equatable, Hashable {
+    public let id: String
+    public let version: String
+
+    public init(id: String, version: String) {
+        self.id = id
+        self.version = version
+    }
+}
+
 public protocol Renderer: Sendable {
+    var identity: DraftComponentIdentity { get }
     func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data
 }
 
@@ -846,6 +859,59 @@ public struct VerifiedAuthority: Sendable, Equatable {
         self.cite = cite
         self.snippet = snippet
         self.source = source
+    }
+}
+
+/// One immutable fact excerpt selected for a motion. Array order is the required order of
+/// the motion's numbered allegations.
+public struct MotionFactEvidence: Sendable, Equatable {
+    public let factID: String
+    public let text: String
+    public let sourceID: String
+    public let locator: String
+
+    public init(factID: String, text: String, sourceID: String, locator: String) {
+        self.factID = factID
+        self.text = text
+        self.sourceID = sourceID
+        self.locator = locator
+    }
+
+    public var propositionID: String { "motion.fact.\(factID)" }
+}
+
+/// One exact proposition excerpt whose reviewed state was validated by the caller's atomic
+/// source snapshot. The canonical paragraph is the only authority paragraph accepted in a
+/// motion for this evidence item.
+public struct MotionAuthorityEvidence: Sendable, Equatable {
+    public let authorityID: String
+    public let citation: String
+    public let reviewedExcerpt: String
+    public let groundKey: String
+
+    public init(authorityID: String, citation: String, reviewedExcerpt: String, groundKey: String) {
+        self.authorityID = authorityID
+        self.citation = citation
+        self.reviewedExcerpt = reviewedExcerpt
+        self.groundKey = groundKey
+    }
+
+    public var canonicalParagraph: String { "\(citation): \(reviewedExcerpt)" }
+    public var propositionID: String { "motion.authority.\(authorityID)" }
+}
+
+/// Complete ordered evidence contract for one deterministic motion assembly.
+public struct MotionVerificationEvidence: Sendable, Equatable {
+    public let facts: [MotionFactEvidence]
+    public let authorities: [MotionAuthorityEvidence]
+
+    public init(facts: [MotionFactEvidence], authorities: [MotionAuthorityEvidence]) {
+        self.facts = facts
+        self.authorities = authorities
+    }
+
+    public var requiredPropositionIDs: [String] {
+        facts.map(\.propositionID) + authorities.map(\.propositionID)
     }
 }
 
@@ -901,9 +967,11 @@ public enum VerifyUnit: Sendable, Equatable {
     case wholeDocument(DocumentModel)
     case section(GeneratedSection, requirement: SectionRequirement, facts: [GroundedFact], authorities: [VerifiedAuthority])
     case letter(GeneratedLetter, model: LetterModel, facts: [GroundedFact])
+    case motion(model: DocumentModel, evidence: MotionVerificationEvidence)
 }
 
 public protocol Verifier: Sendable {
+    var identity: DraftComponentIdentity { get }
     func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult
 }
 
@@ -990,14 +1058,44 @@ public struct DraftResult: Sendable, Equatable {
     public var docx: Data
     public var followUps: [FollowUp]
     public var propositionSupport: [PropositionSupportResult]
+    public var verificationReceipt: DraftVerificationReceipt
 
     public init(
         docx: Data,
         followUps: [FollowUp],
-        propositionSupport: [PropositionSupportResult] = []
+        propositionSupport: [PropositionSupportResult] = [],
+        verificationReceipt: DraftVerificationReceipt
     ) {
         self.docx = docx
         self.followUps = followUps
         self.propositionSupport = propositionSupport
+        self.verificationReceipt = verificationReceipt
+    }
+}
+
+public enum DraftVerificationStatus: String, Codable, Sendable, Equatable {
+    case passed
+}
+
+/// Receipt created only after verification and the pre-file gate pass and rendering succeeds.
+public struct DraftVerificationReceipt: Codable, Sendable, Equatable {
+    public let status: DraftVerificationStatus
+    public let supportedPropositionIDs: [String]
+    public let verifierIdentity: DraftComponentIdentity
+    public let gateIdentity: DraftComponentIdentity
+    public let rendererIdentity: DraftComponentIdentity
+
+    public init(
+        status: DraftVerificationStatus,
+        supportedPropositionIDs: [String],
+        verifierIdentity: DraftComponentIdentity,
+        gateIdentity: DraftComponentIdentity,
+        rendererIdentity: DraftComponentIdentity
+    ) {
+        self.status = status
+        self.supportedPropositionIDs = supportedPropositionIDs
+        self.verifierIdentity = verifierIdentity
+        self.gateIdentity = gateIdentity
+        self.rendererIdentity = rendererIdentity
     }
 }

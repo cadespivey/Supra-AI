@@ -6,6 +6,11 @@ import SupraDraftingCore
 // letterhead + recipient (NEVER an auto-appended certificate — design §12 guardrail).
 
 public struct PreFileGate: Sendable {
+    public static let identity = DraftComponentIdentity(
+        id: "supra.drafting.pre-file-gate",
+        version: "1"
+    )
+
     public init() {}
 
     public func check(court model: DocumentModel, kind: DraftKindID, style: HouseStyleSheet) -> GateResult {
