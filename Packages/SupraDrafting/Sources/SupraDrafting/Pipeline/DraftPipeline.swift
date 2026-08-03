@@ -68,6 +68,7 @@ public struct DraftPipeline: Sendable {
             kind: .motionToDismiss,
             style: style
         )
+        try Task.checkCancellation()
         let gateResult = gate.check(court: model, kind: .motionToDismiss, style: style)
         try Self.requireRenderable(
             verification: vr,

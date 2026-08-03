@@ -1,4 +1,5 @@
 import Combine
+import Darwin
 import Foundation
 import SupraCore
 import SupraDocuments
@@ -28,6 +29,7 @@ public final class MatterDraftingController: ObservableObject {
         MotionDraftStoreSnapshot
     ) throws -> Void
     public typealias AsyncDraftCheckpoint = @Sendable () async throws -> Void
+    public typealias MotionCompensationCheckpoint = (_ publicURL: URL, _ quarantineURL: URL) throws -> Void
 
     public struct DraftArtifact: Sendable, Equatable {
         /// What produced this artifact — a wired catalog kind, or a free-form custom
@@ -104,6 +106,7 @@ public final class MatterDraftingController: ObservableObject {
     private let motionAuditCommitter: MotionDraftAuditCommitter
     private let pipelineFactory: @Sendable () -> DraftPipeline
     private let beforeMotionPersistence: AsyncDraftCheckpoint
+    private let motionCompensationCheckpoint: MotionCompensationCheckpoint
     /// Present when the app can call the on-device model — required for the LLM-backed
     /// kinds (`letterDemand`). The deterministic notice and supported-motion
     /// paths work without it.
@@ -123,6 +126,7 @@ public final class MatterDraftingController: ObservableObject {
         firmStyleProfile: FirmStyleProfile? = nil,
         pipelineFactory: (@Sendable () -> DraftPipeline)? = nil,
         beforeMotionPersistence: AsyncDraftCheckpoint? = nil,
+        motionCompensationCheckpoint: MotionCompensationCheckpoint? = nil,
         motionAuditCommitter: MotionDraftAuditCommitter? = nil
     ) {
         self.store = store
@@ -142,6 +146,7 @@ public final class MatterDraftingController: ObservableObject {
         // Default: deterministic verifier + the court/letter renderers. Injectable for tests.
         self.pipelineFactory = pipelineFactory ?? { DraftPipeline.makeDefault() }
         self.beforeMotionPersistence = beforeMotionPersistence ?? {}
+        self.motionCompensationCheckpoint = motionCompensationCheckpoint ?? { _, _ in }
     }
 
     public func refreshLegacyDraftReviewState(matterID: String) {
@@ -595,52 +600,6 @@ public final class MatterDraftingController: ObservableObject {
         )
     }
 
-    /// Exact selected-only packet used by the deterministic assembler and exposed
-    /// internally for adversarial source-containment tests.
-    func motionPacket(input: MotionToDismissDraftInput, matterID: String) throws -> MotionDraftPacket {
-        let readiness = motionReadiness(input: input, matterID: matterID)
-        guard readiness.canGenerate else { throw DraftError.motionBlocked(readiness.blockingReasons) }
-
-        let factByID = Dictionary(
-            uniqueKeysWithValues: try loadMotionFactSources(matterID: matterID).map { ($0.chunkID, $0) }
-        )
-        let authorityByID = Dictionary(
-            uniqueKeysWithValues: try loadMotionAuthoritySources(matterID: matterID).map { ($0.authorityID, $0) }
-        )
-        let facts = try input.selectedFactChunkIDs.map { id -> MotionDraftPacket.Fact in
-            guard let source = factByID[id], source.isReady else {
-                throw DraftError.motionBlocked(["Selected fact source \(id) changed before generation."])
-            }
-            return MotionDraftPacket.Fact(
-                chunkID: source.chunkID,
-                documentID: source.documentID,
-                revisionID: source.documentRevisionID,
-                documentName: source.documentName,
-                locator: source.locator,
-                text: source.text
-            )
-        }
-        let authorities = try input.selectedAuthorityIDs.map { id -> MotionDraftPacket.Authority in
-            guard let source = authorityByID[id], source.isReady else {
-                throw DraftError.motionBlocked(["Selected authority \(id) changed before generation."])
-            }
-            return MotionDraftPacket.Authority(
-                authorityID: source.authorityID,
-                caseName: source.caseName,
-                citation: source.citation,
-                snippet: source.snippet
-            )
-        }
-        let groundSpecs = try input.grounds.map { ground -> MotionGroundSpec in
-            do {
-                return try MotionGroundSpec.knownGround(for: ground)
-            } catch {
-                throw DraftError.motionBlocked(["Unsupported ground “\(ground)”."])
-            }
-        }
-        return MotionDraftPacket(facts: facts, authorities: authorities, groundSpecs: groundSpecs)
-    }
-
     public func draftMotionToDismiss(
         matterID: String,
         input: MotionToDismissDraftInput
@@ -905,7 +864,9 @@ public final class MatterDraftingController: ObservableObject {
         return (firmStyleProfile ?? stored).resolved(over: .defaultFL).clampedToFloor()
     }
 
-    nonisolated private static func motionPacket(
+    /// Exact selected-only packet derived from the single Store snapshot used for
+    /// generation and audit. There is intentionally no independent-read variant.
+    nonisolated static func motionPacket(
         snapshot: MotionDraftStoreSnapshot,
         groundSpecs: [MotionGroundSpec]
     ) -> MotionDraftPacket {
@@ -1479,20 +1440,117 @@ public final class MatterDraftingController: ObservableObject {
     }
 
     private enum MotionCompensationError: Error, LocalizedError {
+        case quarantineFailed(Int32)
+        case quarantineNameExhausted
         case destinationChanged
+        case destinationChangedAndQuarantined(String, Int32)
+        case inspectionFailed(String)
+        case inspectionFailedAndQuarantined(String, Int32)
+        case checkpointFailed(String)
+        case checkpointFailedAndQuarantined(String, Int32)
+        case deletionFailed(String, String)
 
         var errorDescription: String? {
-            "The newly installed motion path changed before rollback."
+            switch self {
+            case let .quarantineFailed(code):
+                return "The new motion could not be quarantined for rollback (errno \(code))."
+            case .quarantineNameExhausted:
+                return "A unique same-directory motion rollback quarantine could not be allocated."
+            case .destinationChanged:
+                return "The new motion path changed before rollback; the changed file was restored and left untouched."
+            case let .destinationChangedAndQuarantined(name, code):
+                return "The new motion path changed before rollback; the concurrent destination was left untouched and the changed file remains preserved as \(name) (restore errno \(code))."
+            case let .inspectionFailed(detail):
+                return "The quarantined motion could not be inspected and was restored: \(detail)."
+            case let .inspectionFailedAndQuarantined(name, code):
+                return "The quarantined motion could not be inspected; the destination was left untouched and the file remains preserved as \(name) (restore errno \(code))."
+            case let .checkpointFailed(detail):
+                return "Motion rollback stopped before deletion and the file was restored: \(detail)."
+            case let .checkpointFailedAndQuarantined(name, code):
+                return "Motion rollback stopped before deletion; the destination was left untouched and the file remains preserved as \(name) (restore errno \(code))."
+            case let .deletionFailed(name, detail):
+                return "The verified rollback quarantine \(name) could not be removed: \(detail)."
+            }
         }
     }
 
     private func removeNewMotionFile(at url: URL, expectedSHA256: String) throws {
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        let installed = try Data(contentsOf: url, options: .mappedIfSafe)
-        guard DocumentStorage.sha256Hex(of: installed) == expectedSHA256 else {
+        guard let quarantine = try quarantineMotionFile(at: url) else { return }
+        let installed: Data
+        do {
+            installed = try Data(contentsOf: quarantine, options: .mappedIfSafe)
+        } catch {
+            if let code = restoreQuarantinedMotionFile(quarantine, to: url) {
+                throw MotionCompensationError.inspectionFailedAndQuarantined(
+                    quarantine.lastPathComponent,
+                    code
+                )
+            }
+            throw MotionCompensationError.inspectionFailed(error.localizedDescription)
+        }
+        let matchesExpected = DocumentStorage.sha256Hex(of: installed) == expectedSHA256
+        do {
+            try motionCompensationCheckpoint(url, quarantine)
+        } catch {
+            if let code = restoreQuarantinedMotionFile(quarantine, to: url) {
+                throw MotionCompensationError.checkpointFailedAndQuarantined(
+                    quarantine.lastPathComponent,
+                    code
+                )
+            }
+            throw MotionCompensationError.checkpointFailed(error.localizedDescription)
+        }
+        guard matchesExpected else {
+            if let code = restoreQuarantinedMotionFile(quarantine, to: url) {
+                throw MotionCompensationError.destinationChangedAndQuarantined(
+                    quarantine.lastPathComponent,
+                    code
+                )
+            }
             throw MotionCompensationError.destinationChanged
         }
-        try FileManager.default.removeItem(at: url)
+        do {
+            try FileManager.default.removeItem(at: quarantine)
+        } catch {
+            throw MotionCompensationError.deletionFailed(
+                quarantine.lastPathComponent,
+                error.localizedDescription
+            )
+        }
+    }
+
+    /// `RENAME_EXCL` performs one same-directory namespace operation: either the
+    /// exact public path is moved out of circulation, or neither path changes.
+    private func quarantineMotionFile(at url: URL) throws -> URL? {
+        let directory = url.deletingLastPathComponent()
+        for _ in 0..<32 {
+            let quarantine = directory.appendingPathComponent(
+                ".supra-motion-rollback-\(UUID().uuidString.lowercased())-\(url.lastPathComponent)"
+            )
+            let result = url.path.withCString { source in
+                quarantine.path.withCString { destination in
+                    Darwin.renamex_np(source, destination, UInt32(RENAME_EXCL))
+                }
+            }
+            if result == 0 { return quarantine }
+            let code = errno
+            if code == ENOENT { return nil }
+            if code == EEXIST { continue }
+            throw MotionCompensationError.quarantineFailed(code)
+        }
+        throw MotionCompensationError.quarantineNameExhausted
+    }
+
+    /// Returns nil only when the quarantine was restored. `RENAME_EXCL` ensures
+    /// a concurrent destination is never overwritten; on failure the quarantine
+    /// remains at its unique path for recovery.
+    private func restoreQuarantinedMotionFile(_ quarantine: URL, to url: URL) -> Int32? {
+        let result = quarantine.path.withCString { source in
+            url.path.withCString { destination in
+                Darwin.renamex_np(source, destination, UInt32(RENAME_EXCL))
+            }
+        }
+        return result == 0 ? nil : errno
     }
 
     private func compensateFile(at url: URL, previousData: Data?) throws {
