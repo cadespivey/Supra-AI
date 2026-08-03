@@ -818,6 +818,30 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(durable.updatedAt, outcome.completedAt)
     }
 
+    func testOutcomeApplicationFailureKeepsEvidenceLockBeforeAcknowledgement() throws {
+        let fixture = try makeFixture()
+        let snapshotID = "SupraAI-20260731-090975-000"
+        let outcome = try activationOutcome(
+            status: .activated,
+            snapshotIdentifier: snapshotID
+        )
+        try fixture.store.database.writer.close()
+        var acknowledgementCount = 0
+
+        let controller = makeController(
+            fixture: fixture,
+            inspector: { _ in [] },
+            launchRestoreOutcome: outcome,
+            acknowledgeRestoreOutcome: { acknowledgementCount += 1 }
+        )
+
+        XCTAssertEqual(controller.restoreState, .succeeded)
+        XCTAssertTrue(controller.restoreEvidenceRequiresAcknowledgement)
+        XCTAssertTrue(controller.isAnyBackupOperationBusy)
+        XCTAssertTrue(controller.restoreStatusMessage?.localizedCaseInsensitiveContains("reopen") == true)
+        XCTAssertEqual(acknowledgementCount, 0)
+    }
+
     func testRecoveryRequiredOutcomeIsNotAcknowledged() throws {
         let fixture = try makeFixture()
         let outcome = try activationOutcome(
