@@ -671,7 +671,7 @@ public final class DraftingSourceRepository: @unchecked Sendable {
               isSHA256(envelope.sourceSnapshotSHA256),
               envelope.assistantProfileSHA256 == snapshot.assistantProfile.valueSHA256,
               envelope.verificationStatus == "passed",
-              envelope.outputByteSize >= 0,
+              envelope.outputByteSize > 0,
               !envelope.outputFileName.isEmpty,
               !envelope.outputFileName.contains("/"),
               !envelope.outputFileName.contains("\\"),
