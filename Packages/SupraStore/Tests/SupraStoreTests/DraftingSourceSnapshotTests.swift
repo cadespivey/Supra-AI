@@ -624,6 +624,8 @@ final class DraftingSourceSnapshotTests: XCTestCase {
             method: "plain-text",
             text: text,
             charCount: text.count,
+            ocrConfidence: part.ocrConfidence,
+            boundingBoxesJSON: part.boundingBoxesJSON,
             toolchainVersion: "synthetic-v1"
         ))
         let selection = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
@@ -794,12 +796,22 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         let relatedRange = try XCTUnwrap(fixture.revision.text.range(of: relatedText))
         let primaryNodeID = "v2-drift-primary"
         let relatedNodeID = "v2-drift-related"
+        let rootNodeID = "v2-drift-root"
         let nodes = [
+            DocumentStructureNodeRecord(
+                id: rootNodeID,
+                documentID: fixture.chunks[0].documentID,
+                revisionID: fixture.revision.id,
+                nodeKey: "document",
+                ordinal: 0,
+                kind: "document"
+            ),
             DocumentStructureNodeRecord(
                 id: primaryNodeID,
                 documentID: fixture.chunks[0].documentID,
                 revisionID: fixture.revision.id,
                 nodeKey: "primary",
+                parentNodeID: rootNodeID,
                 ordinal: 0,
                 kind: "discovery_request",
                 charStart: fixture.revision.text.distance(from: fixture.revision.text.startIndex, to: primaryRange.lowerBound),
@@ -810,6 +822,7 @@ final class DraftingSourceSnapshotTests: XCTestCase {
                 documentID: fixture.chunks[0].documentID,
                 revisionID: fixture.revision.id,
                 nodeKey: "related",
+                parentNodeID: rootNodeID,
                 ordinal: 1,
                 kind: "discovery_response",
                 charStart: fixture.revision.text.distance(from: fixture.revision.text.startIndex, to: relatedRange.lowerBound),
