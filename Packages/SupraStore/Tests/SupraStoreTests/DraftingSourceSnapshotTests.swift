@@ -527,6 +527,11 @@ final class DraftingSourceSnapshotTests: XCTestCase {
             snapshot: snapshot,
             additionalTopLevel: ["rawSourceText": fixture.revision.text]
         )
+        // Expected RED: a passed DOCX audit cannot describe an empty artifact.
+        let zeroByteOutput = try auditMetadata(
+            snapshot: snapshot,
+            additionalTopLevel: ["outputByteSize": 0]
+        )
         let invalidEvents = [
             motionAuditEvent(id: "wrong-event-type", fixture: fixture, eventType: "draft_failed", metadataJSON: valid),
             motionAuditEvent(id: "wrong-related-table", fixture: fixture, relatedTable: "structured_outputs", metadataJSON: valid),
@@ -537,6 +542,7 @@ final class DraftingSourceSnapshotTests: XCTestCase {
             motionAuditEvent(id: "wrong-source-hash", fixture: fixture, metadataJSON: wrongHash),
             motionAuditEvent(id: "missing-source-hash", fixture: fixture, metadataJSON: missingHash),
             motionAuditEvent(id: "raw-content-key", fixture: fixture, metadataJSON: rawContent),
+            motionAuditEvent(id: "zero-byte-output", fixture: fixture, metadataJSON: zeroByteOutput),
         ]
 
         for event in invalidEvents {
