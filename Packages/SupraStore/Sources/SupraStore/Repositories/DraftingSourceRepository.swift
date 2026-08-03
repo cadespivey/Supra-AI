@@ -301,11 +301,12 @@ public final class DraftingSourceRepository: @unchecked Sendable {
         do {
             if let nodeID = nonblank(chunk.nodeID) {
                 guard let node = try DocumentStructureNodeRecord.fetchOne(db, key: nodeID),
+                      chunk.chunkerVersion == 2,
                       node.documentID == document.id,
                       node.revisionID == revision.id,
                       chunk.unitKind == node.kind,
-                      node.charStart == start,
-                      node.charEnd == end else {
+                      (node.charStart ?? 0) == start,
+                      (node.charEnd ?? node.textContent?.count ?? 0) == end else {
                     throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
                 }
                 let nodes = try DocumentStructureNodeRecord.fetchAll(
@@ -313,22 +314,29 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                     sql: "SELECT * FROM document_structure_nodes WHERE document_id = ? AND revision_id = ?",
                     arguments: [document.id, revision.id]
                 )
-                var resolved: [(id: String, text: String)] = []
+                var resolvedByID: [String: String] = [:]
                 for candidate in nodes {
                     if let text = try StructureRepository.resolvedText(
                         node: candidate,
                         revisionText: revision.text
                     ), !text.isEmpty {
-                        resolved.append((candidate.id, text))
+                        resolvedByID[candidate.id] = text
                     }
                 }
-                guard let primary = resolved.first(where: { $0.id == nodeID }),
-                      chunk.normalizedText.contains(primary.text),
-                      isComposition(
-                        chunk.normalizedText,
-                        of: resolved,
-                        requiringNodeID: nodeID
-                      ) else {
+                let nodeIDs = Set(nodes.map(\.id))
+                let edges = try DocumentStructureEdgeRecord.fetchAll(
+                    db,
+                    sql: "SELECT * FROM document_structure_edges WHERE matter_id = ?",
+                    arguments: [matterID]
+                ).filter {
+                    nodeIDs.contains($0.fromNodeID) && nodeIDs.contains($0.toNodeID)
+                }
+                let allowedTexts = try allowedStructuredChunkTexts(
+                    primary: node,
+                    resolvedByID: resolvedByID,
+                    edges: edges
+                )
+                guard allowedTexts.contains(chunk.normalizedText) else {
                     throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
                 }
             } else {
@@ -568,38 +576,44 @@ public final class DraftingSourceRepository: @unchecked Sendable {
         return String(text[lower..<upper])
     }
 
-    private static func isComposition(
-        _ value: String,
-        of components: [(id: String, text: String)],
-        requiringNodeID: String
-    ) -> Bool {
-        func matches(
-            _ remainder: String,
-            used: Set<String>,
-            includesRequired: Bool
-        ) -> Bool {
-            guard used.count < 32 else { return false }
-            for component in components where !used.contains(component.id) {
-                let included = includesRequired || component.id == requiringNodeID
-                if remainder == component.text {
-                    if included { return true }
-                    continue
-                }
-                let prefix = component.text + "\n"
-                guard remainder.hasPrefix(prefix) else { continue }
-                var nextUsed = used
-                nextUsed.insert(component.id)
-                if matches(
-                    String(remainder.dropFirst(prefix.count)),
-                    used: nextUsed,
-                    includesRequired: included
-                ) {
-                    return true
-                }
-            }
-            return false
+    /// Mirrors the v2 chunker's edge priority and ordering using only immutable
+    /// revision-bound structure rows. The chunker's configured maximum is not
+    /// persisted, but it is clamped to at least 200 characters: a short
+    /// request/response pair must therefore be combined, while a longer pair may
+    /// legitimately be either split or combined under an injected configuration.
+    private static func allowedStructuredChunkTexts(
+        primary: DocumentStructureNodeRecord,
+        resolvedByID: [String: String],
+        edges: [DocumentStructureEdgeRecord]
+    ) throws -> Set<String> {
+        guard let primaryText = resolvedByID[primary.id] else {
+            throw StructureRepositoryError.invalidTextContract(primary.id)
         }
-        return matches(value, used: [], includesRequired: false)
+        let ordered = edges.sorted {
+            if $0.fromNodeID != $1.fromNodeID { return $0.fromNodeID < $1.fromNodeID }
+            return $0.toNodeID < $1.toNodeID
+        }
+
+        if let responseEdge = ordered.first(where: {
+            $0.kind == "responds_to" && $0.toNodeID == primary.id
+        }), let responseText = resolvedByID[responseEdge.fromNodeID] {
+            let combined = primaryText + "\n" + responseText
+            return combined.count <= 200 ? [combined] : [primaryText, combined]
+        }
+
+        if let referenceEdge = ordered.first(where: {
+            $0.kind == "references" && $0.toNodeID == primary.id
+        }), let useText = resolvedByID[referenceEdge.fromNodeID] {
+            return [primaryText + "\n" + useText]
+        }
+
+        let headers = ordered.filter {
+            $0.kind == "header_for" && $0.fromNodeID == primary.id
+        }.compactMap { resolvedByID[$0.toNodeID] }
+        if !headers.isEmpty {
+            return [headers.joined(separator: "\n") + "\n" + primaryText]
+        }
+        return [primaryText]
     }
 
     private static func nonblank(_ value: String?) -> String? {
