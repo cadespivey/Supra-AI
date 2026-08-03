@@ -983,6 +983,16 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
             XCTAssertTrue(authority.waitForExistence(timeout: 5), "The reviewed authority was not exposed as a selectable production row")
             XCTAssertTrue(authority.isEnabled)
             XCTAssertTrue(authority.isHittable, authority.debugDescription)
+            let generate = app.buttons["drafting.generate"]
+            XCTAssertTrue(generate.waitForExistence(timeout: 5))
+            // Expected RED before the drafting-sheet layout fix: the last source row
+            // occupies the pinned footer's hit region, so selecting it can press
+            // Generate or dismiss the sheet instead of toggling the authority.
+            XCTAssertLessThanOrEqual(
+                authority.frame.maxY,
+                generate.frame.minY,
+                "The reviewed-authority row must end above the pinned Generate footer: authority=\(authority.frame), generate=\(generate.frame)"
+            )
             authority.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         }
     }
