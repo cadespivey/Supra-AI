@@ -817,6 +817,44 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(scheduledAudit.timestamp, try XCTUnwrap(outcome.scheduledAt))
     }
 
+    // T-RST-H09 expected RED: legacy v1 outcomes have no authenticated schedule
+    // timestamp, but replay currently invents one from the later completion time.
+    func testLegacyActivationOutcomeReplaysOnlyAuthenticatedTerminalAudit() throws {
+        let fixture = try makeFixture()
+        let snapshotID = "SupraAI-20260731-090925-000"
+        let legacyJSON = """
+        {"schemaVersion":1,"operationID":"\(operationID.uuidString.lowercased())","snapshotIdentifier":"\(snapshotID)","status":"activated","completedAt":"2026-07-31T13:00:00Z"}
+        """
+        let outcome = try RestoreOutcomeRecord.decode(Data(legacyJSON.utf8))
+        var acknowledgeCount = 0
+
+        let controller = makeController(
+            fixture: fixture,
+            inspector: { _ in [] },
+            launchRestoreOutcome: outcome,
+            acknowledgeRestoreOutcome: { acknowledgeCount += 1 }
+        )
+
+        XCTAssertEqual(controller.restoreState, .succeeded)
+        XCTAssertEqual(acknowledgeCount, 1)
+        XCTAssertEqual(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: "backup_snapshots",
+                relatedID: snapshotID,
+                eventType: "restore_scheduled"
+            ).count,
+            0
+        )
+        let activatedAudit = try XCTUnwrap(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: "backup_snapshots",
+                relatedID: snapshotID,
+                eventType: "restore_activated"
+            ).single
+        )
+        XCTAssertEqual(activatedAudit.timestamp, outcome.completedAt)
+    }
+
     // expected RED: activation-outcome acknowledgement failure leaves the
     // controller unlocked, allowing another restore before durable evidence is cleared.
     func testOutcomeAcknowledgementFailureBlocksAnotherRestoreUntilRelaunch() async throws {
