@@ -49,9 +49,77 @@ private final class PropositionReviewOpinionClient: CourtListenerClientProtocol,
     }
 }
 
+private final class DelayedPropositionReviewOpinionClient: CourtListenerClientProtocol, @unchecked Sendable {
+    private let detail: CourtListenerOpinionDetailDTO
+    private let lock = NSLock()
+    private var fetchStarted = false
+    private var fetchStartWaiter: CheckedContinuation<Void, Never>?
+    private var fetchReleased = false
+    private var fetchReleaseWaiter: CheckedContinuation<Void, Never>?
+
+    init(detail: CourtListenerOpinionDetailDTO) {
+        self.detail = detail
+    }
+
+    func searchOpinions(
+        _ request: CourtListenerSearchRequest,
+        relatedResearchSessionID: String?
+    ) async throws -> CourtListenerSearchResponse {
+        CourtListenerSearchResponse(count: 0, results: [])
+    }
+
+    func fetchOpinion(id: Int) async throws -> CourtListenerOpinionDetailDTO {
+        signalFetchStarted()
+        await waitForFetchRelease()
+        return detail
+    }
+
+    func waitUntilFetchStarts() async {
+        await withCheckedContinuation { continuation in
+            let shouldResume = lock.withLock {
+                if fetchStarted { return true }
+                fetchStartWaiter = continuation
+                return false
+            }
+            if shouldResume { continuation.resume() }
+        }
+    }
+
+    func releaseFetch() {
+        let waiter = lock.withLock {
+            fetchReleased = true
+            defer { fetchReleaseWaiter = nil }
+            return fetchReleaseWaiter
+        }
+        waiter?.resume()
+    }
+
+    private func signalFetchStarted() {
+        let waiter = lock.withLock {
+            fetchStarted = true
+            defer { fetchStartWaiter = nil }
+            return fetchStartWaiter
+        }
+        waiter?.resume()
+    }
+
+    private func waitForFetchRelease() async {
+        await withCheckedContinuation { continuation in
+            let shouldResume = lock.withLock {
+                if fetchReleased { return true }
+                fetchReleaseWaiter = continuation
+                return false
+            }
+            if shouldResume { continuation.resume() }
+        }
+    }
+}
+
 @MainActor
 final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
     func testRecordFetchesAndPersistsExactOpinionBytesBeforeReview() async throws {
+        // Expected RED: the original controller had no proposition-review API and
+        // never persisted fetched opinion bytes before recording exact evidence.
         let opinion = "  Opening line.\nThe court’s exact holding survives byte-for-byte.\nClosing line.  "
         let excerpt = "The court’s exact holding survives byte-for-byte."
         let fixture = try makeFixture(opinionID: "42")
@@ -79,6 +147,8 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
     }
 
     func testPreparationUsesStoredOpinionWithoutFetching() async throws {
+        // Expected RED: no preparation API exposed byte-authoritative stored text
+        // or proved that an existing opinion bypassed the remote client.
         let opinion = "Persisted opinion text."
         let fixture = try makeFixture(opinionID: "42", opinionText: opinion)
         let client = PropositionReviewOpinionClient(.failure(.invalidResponse))
@@ -91,6 +161,8 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
     }
 
     func testBlankProfileUsesLiteralLocalUserActor() async throws {
+        // Expected RED: no controller review path derived the audit actor from the
+        // trimmed assistant profile or supplied the literal local fallback.
         let opinion = "The unique proposition appears here."
         let fixture = try makeFixture(opinionText: opinion)
         try fixture.store.appSettings.setSetting(AssistantProfile.profileKey, value: AssistantProfile.empty)
@@ -110,6 +182,8 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
     }
 
     func testRecordReturnsLiteralExcerptAndEligibilityErrors() async throws {
+        // Expected RED: repository failures were not mapped through a deterministic,
+        // user-visible controller contract for the proposition editor.
         let fixture = try makeFixture(opinionText: "Repeat passage. Repeat passage.")
         let controller = makeController(fixture: fixture)
 
@@ -153,6 +227,8 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
     }
 
     func testLoadExposesBlockedStateAndRevokeClearsIt() throws {
+        // Expected RED: authority items did not expose recomputed typed evidence,
+        // and the controller had no audited revocation action for blocked evidence.
         let opinion = "The unique proposition appears here."
         let fixture = try makeFixture(opinionText: opinion)
         _ = try fixture.store.authorities.reviewProposition(
@@ -182,6 +258,8 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
     }
 
     func testPreparationReturnsLiteralUnavailableMessages() async throws {
+        // Expected RED: unavailable opinion sources had no explicit preparation
+        // state or stable literal failure messages for the UI.
         let noOpinion = try makeFixture()
         let noOpinionController = makeController(fixture: noOpinion)
         let noOpinionPreparation = await noOpinionController.prepareOpinionForPropositionReview(
@@ -219,6 +297,87 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
         )
     }
 
+    func testControllerCannotRevokeAnotherMattersReviewOrAuditIt() throws {
+        // Expected RED: revocation forwards any authority ID to the repository,
+        // whose transaction does not verify the controller's expected matter.
+        let fixture = try makeFixture(opinionText: "Matter A opinion text.")
+        let foreign = try makeAuthority(
+            store: fixture.store,
+            matterName: "Matter B",
+            opinionText: "Matter B exact proposition."
+        )
+        _ = try fixture.store.authorities.reviewProposition(
+            authorityID: foreign.authority.id,
+            groundKey: .failureToStateClaim,
+            excerpt: "Matter B exact proposition.",
+            reviewedBy: "Matter B Reviewer"
+        )
+        let controller = makeController(fixture: fixture)
+
+        let message = controller.revokeFailureToStateClaimReview(authorityID: foreign.authority.id)
+
+        XCTAssertEqual(message, "Authority not found.")
+        guard case .ready(let reviewed) = try fixture.store.authorities.reviewedPropositionState(
+            authorityID: foreign.authority.id,
+            groundKey: .failureToStateClaim
+        ) else {
+            return XCTFail("Cross-matter revocation removed Matter B's review")
+        }
+        XCTAssertEqual(reviewed.reviewedBy, "Matter B Reviewer")
+        XCTAssertTrue(
+            try fixture.store.auditEvents.fetchEvents(matterID: foreign.matterID)
+                .filter { $0.eventType == "authority_proposition_review_revoked" }
+                .isEmpty
+        )
+    }
+
+    func testDelayedFetchNeverOverwritesOrInvalidatesConcurrentlyReviewedOpinion() async throws {
+        // Expected RED: after awaiting CourtListener, preparation unconditionally
+        // writes the stale response and invalidates review evidence created meanwhile.
+        let remoteOpinion = "Stale remote opinion bytes."
+        let concurrentOpinion = "Concurrent exact proposition remains authoritative."
+        let fixture = try makeFixture(opinionID: "42")
+        let client = DelayedPropositionReviewOpinionClient(
+            detail: .init(id: 42, plainText: remoteOpinion)
+        )
+        let controller = makeController(fixture: fixture, client: client)
+        let preparationTask = Task { @MainActor in
+            await controller.prepareOpinionForPropositionReview(authorityID: fixture.authority.id)
+        }
+
+        await client.waitUntilFetchStarts()
+        try fixture.store.authorities.updateOpinionText(
+            authorityID: fixture.authority.id,
+            text: concurrentOpinion
+        )
+        let concurrentReview = try fixture.store.authorities.reviewProposition(
+            authorityID: fixture.authority.id,
+            groundKey: .failureToStateClaim,
+            excerpt: concurrentOpinion,
+            reviewedBy: "Concurrent Reviewer"
+        )
+        client.releaseFetch()
+
+        let preparation = await preparationTask.value
+        XCTAssertEqual(preparation, .ready(text: concurrentOpinion, fetchedDetail: nil))
+        let persisted = try XCTUnwrap(
+            fixture.store.authorities.fetchAuthority(id: fixture.authority.id)?.opinionText
+        )
+        XCTAssertEqual(Data(persisted.utf8), Data(concurrentOpinion.utf8))
+        XCTAssertEqual(
+            try fixture.store.authorities.reviewedPropositionState(
+                authorityID: fixture.authority.id,
+                groundKey: .failureToStateClaim
+            ),
+            .ready(concurrentReview)
+        )
+        XCTAssertTrue(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                .filter { $0.eventType == "authority_proposition_review_invalidated" }
+                .isEmpty
+        )
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matterID: String
@@ -233,7 +392,22 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
             .appendingPathComponent("AuthorityReviewController-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let store = try SupraStore(url: directory.appendingPathComponent("test.sqlite"))
-        let matter = try store.matters.createMatter(name: "Synthetic matter")
+        let inserted = try makeAuthority(
+            store: store,
+            matterName: "Synthetic matter",
+            opinionID: opinionID,
+            opinionText: opinionText
+        )
+        return Fixture(store: store, matterID: inserted.matterID, authority: inserted.authority)
+    }
+
+    private func makeAuthority(
+        store: SupraStore,
+        matterName: String,
+        opinionID: String? = nil,
+        opinionText: String? = nil
+    ) throws -> (matterID: String, authority: AuthorityRecord) {
+        let matter = try store.matters.createMatter(name: matterName)
         let session = try store.research.createSession(
             matterID: matter.id,
             title: "Synthetic authority review",
@@ -265,12 +439,12 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
             useStatus: AuthorityUseStatus.userMarkedVerified.rawValue,
             opinionText: opinionText
         ))
-        return Fixture(store: store, matterID: matter.id, authority: authority)
+        return (matter.id, authority)
     }
 
     private func makeController(
         fixture: Fixture,
-        client: PropositionReviewOpinionClient = PropositionReviewOpinionClient(.failure(.invalidResponse))
+        client: any CourtListenerClientProtocol = PropositionReviewOpinionClient(.failure(.invalidResponse))
     ) -> AuthoritiesController {
         AuthoritiesController(
             store: fixture.store,
