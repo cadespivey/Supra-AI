@@ -444,59 +444,69 @@ public final class AuthorityRepository: @unchecked Sendable {
             guard let authority = try AuthorityRecord.fetchOne(db, key: authorityID) else {
                 return .blocked(.authorityNotFound)
             }
-            guard authority.deletedAt == nil else {
-                return .blocked(.authorityNotLive)
-            }
-            guard let rawEvidence = authority.reviewedPropositionJSON else {
-                return .notReviewed
-            }
-
-            let reviewed: AuthorityReviewedProposition
-            do {
-                reviewed = try Self.decodeEvidence(rawEvidence)
-            } catch EvidenceDecodeError.unsupported {
-                return .blocked(.unsupportedEvidence)
-            } catch {
-                return .blocked(.malformedEvidence)
-            }
-            guard Self.isSHA256(reviewed.bindingSHA256),
-                  reviewed.bindingSHA256 == (try? Self.bindingSHA256(reviewed)) else {
-                return .blocked(.forgedEvidence)
-            }
-            guard reviewed.authorityID == authority.id,
-                  reviewed.groundKey == groundKey,
-                  reviewed.sourceKind == .storedOpinionText else {
-                return .blocked(.forgedEvidence)
-            }
-            guard authority.reviewState == ResearchResultReviewState.notAdverse.rawValue,
-                  authority.useStatus == AuthorityUseStatus.userMarkedVerified.rawValue else {
-                return .blocked(.authorityEligibilityChanged)
-            }
-            guard let opinion = authority.opinionText,
-                  let effectiveCitation = Self.effectiveCitation(authority) else {
-                return .blocked(.staleEvidence)
-            }
-            let opinionBytes = Data(opinion.utf8)
-            let excerptBytes = Data(reviewed.excerpt.utf8)
-            guard !excerptBytes.isEmpty,
-                  excerptBytes.count <= AuthorityReviewedProposition.maximumExcerptUTF8Bytes,
-                  reviewed.excerptByteStart >= 0,
-                  reviewed.excerptByteLength == excerptBytes.count,
-                  reviewed.excerptByteStart <= opinionBytes.count - min(opinionBytes.count, excerptBytes.count),
-                  reviewed.excerptByteStart + excerptBytes.count <= opinionBytes.count,
-                  opinionBytes.subdata(
-                    in: reviewed.excerptByteStart..<(reviewed.excerptByteStart + excerptBytes.count)
-                  ) == excerptBytes,
-                  Self.excerptByteStarts(opinionBytes: opinionBytes, excerptBytes: excerptBytes)
-                    == [reviewed.excerptByteStart],
-                  reviewed.opinionSHA256 == Self.sha256(opinionBytes),
-                  reviewed.excerptSHA256 == Self.sha256(excerptBytes),
-                  reviewed.effectiveCitationSHA256 == Self.sha256(Data(effectiveCitation.utf8)),
-                  reviewed.courtSHA256 == Self.sha256(Data(Self.courtBinding(authority).utf8)) else {
-                return .blocked(.staleEvidence)
-            }
-            return .ready(reviewed)
+            return Self.reviewedPropositionState(authority: authority, groundKey: groundKey)
         }
+    }
+
+    /// Pure validation shared by repository consumers that already own a GRDB
+    /// read/write transaction. Keeping the evidence contract here prevents an
+    /// atomic drafting snapshot from opening a second, inconsistent read.
+    static func reviewedPropositionState(
+        authority: AuthorityRecord,
+        groundKey: AuthorityReviewedPropositionGround
+    ) -> AuthorityReviewedPropositionState {
+        guard authority.deletedAt == nil else {
+            return .blocked(.authorityNotLive)
+        }
+        guard let rawEvidence = authority.reviewedPropositionJSON else {
+            return .notReviewed
+        }
+
+        let reviewed: AuthorityReviewedProposition
+        do {
+            reviewed = try Self.decodeEvidence(rawEvidence)
+        } catch EvidenceDecodeError.unsupported {
+            return .blocked(.unsupportedEvidence)
+        } catch {
+            return .blocked(.malformedEvidence)
+        }
+        guard Self.isSHA256(reviewed.bindingSHA256),
+              reviewed.bindingSHA256 == (try? Self.bindingSHA256(reviewed)) else {
+            return .blocked(.forgedEvidence)
+        }
+        guard reviewed.authorityID == authority.id,
+              reviewed.groundKey == groundKey,
+              reviewed.sourceKind == .storedOpinionText else {
+            return .blocked(.forgedEvidence)
+        }
+        guard authority.reviewState == ResearchResultReviewState.notAdverse.rawValue,
+              authority.useStatus == AuthorityUseStatus.userMarkedVerified.rawValue else {
+            return .blocked(.authorityEligibilityChanged)
+        }
+        guard let opinion = authority.opinionText,
+              let effectiveCitation = Self.effectiveCitation(authority) else {
+            return .blocked(.staleEvidence)
+        }
+        let opinionBytes = Data(opinion.utf8)
+        let excerptBytes = Data(reviewed.excerpt.utf8)
+        guard !excerptBytes.isEmpty,
+              excerptBytes.count <= AuthorityReviewedProposition.maximumExcerptUTF8Bytes,
+              reviewed.excerptByteStart >= 0,
+              reviewed.excerptByteLength == excerptBytes.count,
+              reviewed.excerptByteStart <= opinionBytes.count - min(opinionBytes.count, excerptBytes.count),
+              reviewed.excerptByteStart + excerptBytes.count <= opinionBytes.count,
+              opinionBytes.subdata(
+                in: reviewed.excerptByteStart..<(reviewed.excerptByteStart + excerptBytes.count)
+              ) == excerptBytes,
+              Self.excerptByteStarts(opinionBytes: opinionBytes, excerptBytes: excerptBytes)
+                == [reviewed.excerptByteStart],
+              reviewed.opinionSHA256 == Self.sha256(opinionBytes),
+              reviewed.excerptSHA256 == Self.sha256(excerptBytes),
+              reviewed.effectiveCitationSHA256 == Self.sha256(Data(effectiveCitation.utf8)),
+              reviewed.courtSHA256 == Self.sha256(Data(Self.courtBinding(authority).utf8)) else {
+            return .blocked(.staleEvidence)
+        }
+        return .ready(reviewed)
     }
 
     private static func trimOptional(_ value: String?) -> String? {
@@ -506,7 +516,7 @@ public final class AuthorityRepository: @unchecked Sendable {
         return trimmed
     }
 
-    private static func effectiveCitation(_ authority: AuthorityRecord) -> String? {
+    static func effectiveCitation(_ authority: AuthorityRecord) -> String? {
         if let preferred = trimOptional(authority.preferredCitation) {
             return preferred
         }

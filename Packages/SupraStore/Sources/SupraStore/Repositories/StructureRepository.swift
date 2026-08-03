@@ -244,7 +244,7 @@ public final class StructureRepository: @unchecked Sendable {
                   let revision = try DocumentPartRevisionRecord.fetchOne(db, key: node.revisionID) else {
                 return nil
             }
-            return try resolvedText(node: node, revisionText: revision.text)
+            return try Self.resolvedText(node: node, revisionText: revision.text)
         }
     }
 
@@ -268,7 +268,7 @@ public final class StructureRepository: @unchecked Sendable {
                       parent.revisionID == node.revisionID else { break }
                 hiddenDerived = hiddenDerived || Self.payloadIsHidden(parent.payloadJSON)
                 if parentContext == nil,
-                   let text = try resolvedText(node: parent, revisionText: revision.text) {
+                   let text = try Self.resolvedText(node: parent, revisionText: revision.text) {
                     parentContext = DocumentStructureTextContext(
                         nodeID: parent.id,
                         kind: parent.kind,
@@ -351,7 +351,7 @@ public final class StructureRepository: @unchecked Sendable {
             guard !node.nodeKey.isEmpty, !node.kind.isEmpty else {
                 throw StructureRepositoryError.invalidTextContract(node.id)
             }
-            _ = try resolvedText(
+            _ = try Self.resolvedText(
                 node: node,
                 revisionText: revisionTextByID[node.revisionID] ?? ""
             )
@@ -432,7 +432,9 @@ public final class StructureRepository: @unchecked Sendable {
         return false
     }
 
-    private func resolvedText(
+    /// Pure resolver shared with transaction-owning consumers such as drafting
+    /// snapshots. It preserves the structure repository's exact range/text rules.
+    static func resolvedText(
         node: DocumentStructureNodeRecord,
         revisionText: String
     ) throws -> String? {
