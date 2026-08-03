@@ -236,6 +236,30 @@ final class RestoreServiceTests: XCTestCase {
         XCTAssertFalse(markerText.contains(fixture.backupDirectory.path))
     }
 
+    func testStagePersistsMatchingOperationIntentBeforePendingMarker() throws {
+        try fixture.writeLiveState(sentinel: "current row")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
+        let operations = RecordingRestoreFileOperations()
+
+        let result = try RestoreService.stageRestore(
+            candidate: compatibleCandidate(),
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: operations
+        )
+
+        let operationIntentURL = result.operationDirectoryURL
+            .appendingPathComponent(RestoreIntent.operationFileName)
+        XCTAssertEqual(
+            try Data(contentsOf: operationIntentURL),
+            try Data(contentsOf: result.markerURL)
+        )
+        XCTAssertLessThan(
+            try XCTUnwrap(operations.events.firstIndex(of: .writeOperationIntent)),
+            try XCTUnwrap(operations.events.firstIndex(of: .writeMarker))
+        )
+    }
+
     // T-RST-13 expected RED: a failed safety database capture has no bounded
     // cleanup contract and no marker-last guarantee.
     func testSafetyDatabaseFailureRetainsLiveStateAndWritesNoMarker() throws {
@@ -296,6 +320,36 @@ final class RestoreServiceTests: XCTestCase {
             Array(operations.events.suffix(from: operations.events.index(after: markerFailure))),
             [.synchronizeStagingRoot, .synchronizeOperationsRoot]
         )
+    }
+
+    func testMarkerCleanupFailurePreservesOperationUntilUnlinkIsDurable() throws {
+        try fixture.writeLiveState(sentinel: "current row")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
+        let operations = RecordingRestoreFileOperations(
+            failurePoint: .markerWriteAndCompensatingDirectorySynchronization
+        )
+
+        XCTAssertThrowsError(try RestoreService.stageRestore(
+            candidate: compatibleCandidate(),
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: operations
+        ))
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.stagingRootDirectory
+                .appendingPathComponent(RestoreIntent.pendingFileName).path
+        ))
+        let operationsDirectory = fixture.stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+        let leftovers = try FileManager.default.contentsOfDirectory(
+            at: operationsDirectory,
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(leftovers.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: leftovers[0].appendingPathComponent(RestoreIntent.operationFileName).path
+        ))
     }
 
     private func assertInjectedFailure(_ point: RecordingRestoreFileOperations.FailurePoint) throws {
@@ -372,6 +426,7 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
         case selectedBlob
         case selectedDatabaseSynchronization
         case markerWrite
+        case markerWriteAndCompensatingDirectorySynchronization
     }
 
     enum Event: Equatable {
@@ -390,6 +445,7 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
         case synchronizeOperationDirectory
         case synchronizeOperationsRoot
         case synchronizeStagingRoot
+        case writeOperationIntent
         case writeMarker
     }
 
@@ -462,6 +518,13 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
             event = .synchronizeOperationDirectory
         }
         events.append(event)
+        if failurePoint == .markerWriteAndCompensatingDirectorySynchronization,
+           event == .synchronizeStagingRoot,
+           events.contains(.writeMarker) {
+            throw InjectedRestoreFailure.requested(
+                .markerWriteAndCompensatingDirectorySynchronization
+            )
+        }
         if failurePoint == .selectedDatabaseSynchronization,
            event == .synchronizeSelectedDatabase {
             throw InjectedRestoreFailure.requested(.selectedDatabaseSynchronization)
@@ -470,7 +533,12 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
     }
 
     func writeIntentAtomically(_ data: Data, to url: URL) throws {
-        events.append(.writeMarker)
+        let isOperationIntent = url.lastPathComponent == RestoreIntent.operationFileName
+        events.append(isOperationIntent ? .writeOperationIntent : .writeMarker)
+        if isOperationIntent {
+            try system.writeIntentAtomically(data, to: url)
+            return
+        }
         let operationDirectory = url.deletingLastPathComponent()
             .appendingPathComponent("operations", isDirectory: true)
         let entries = (try? FileManager.default.contentsOfDirectory(
@@ -484,9 +552,10 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
                 atPath: entries[0].appendingPathComponent("selected", isDirectory: true).path
             )
             && !FileManager.default.fileExists(atPath: url.path)
-        if failurePoint == .markerWrite {
+        if failurePoint == .markerWrite
+            || failurePoint == .markerWriteAndCompensatingDirectorySynchronization {
             try system.writeIntentAtomically(data, to: url)
-            throw InjectedRestoreFailure.requested(.markerWrite)
+            throw InjectedRestoreFailure.requested(failurePoint!)
         }
         try system.writeIntentAtomically(data, to: url)
     }

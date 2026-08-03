@@ -480,6 +480,42 @@ final class RestoreActivationServiceTests: XCTestCase {
             failingOperations.events.filter { $0 == .synchronizeMarkerDirectory }.count,
             2
         )
+
+        let replayOperations = RecordingRestoreActivationOperations()
+        let replay = activate(operations: replayOperations)
+
+        XCTAssertEqual(replay.status, .recoveryRequired)
+        XCTAssertEqual(replay.activationFailure, failed.activationFailure)
+        XCTAssertEqual(replay.rollbackFailure, failed.rollbackFailure)
+        XCTAssertEqual(replay.operationID, staged.intent.operationID)
+        XCTAssertEqual(replay.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertEqual(replay.recoveryDatabaseURL, staged.safetyDatabaseURL)
+        XCTAssertTrue(replayOperations.events.isEmpty)
+    }
+
+    func testMarkerlessRecoveryRejectsTamperedOperationIntentWithoutLiveMutation() throws {
+        let staged = try stage()
+        let failed = activate(operations: RecordingRestoreActivationOperations(
+            failures: [.synchronizeMarkerDirectory]
+        ))
+        XCTAssertEqual(failed.status, .recoveryRequired)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        try Data("{}".utf8).write(
+            to: staged.operationDirectoryURL
+                .appendingPathComponent(RestoreIntent.operationFileName),
+            options: .atomic
+        )
+        let liveFingerprint = try fixture.fingerprint(fixture.liveDatabaseURL)
+        let replayOperations = RecordingRestoreActivationOperations()
+
+        let replay = activate(operations: replayOperations)
+
+        XCTAssertEqual(replay.status, .recoveryRequired)
+        XCTAssertEqual(replay.activationFailure, .safetyStateInvalid)
+        XCTAssertEqual(replay.rollbackFailure, .safetyStateInvalid)
+        XCTAssertNil(replay.recoveryDatabaseURL)
+        XCTAssertEqual(try fixture.fingerprint(fixture.liveDatabaseURL), liveFingerprint)
+        XCTAssertTrue(replayOperations.events.isEmpty)
     }
 
     // T-RST-40...42 expected RED: the launch service has no durable,
@@ -559,6 +595,57 @@ final class RestoreActivationServiceTests: XCTestCase {
         ))
     }
 
+    func testActivationOutcomeAcknowledgementRetriesAfterUnlinkSyncFailure() throws {
+        _ = try stage()
+        XCTAssertEqual(
+            activate(operations: RecordingRestoreActivationOperations()).status,
+            .activated
+        )
+        let failingOperations = RecordingRestoreActivationOperations(
+            failureCounts: [.synchronizeMarkerDirectory: 1]
+        )
+
+        XCTAssertThrowsError(try RestoreSidecarStore.acknowledgeActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: failingOperations
+        ))
+
+        let replayOperations = RecordingRestoreActivationOperations()
+        XCTAssertNil(try RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: replayOperations
+        ))
+        XCTAssertTrue(replayOperations.events.contains(.synchronizeMarkerDirectory))
+    }
+
+    func testStagingFailureAcknowledgementRetriesAfterUnlinkSyncFailure() throws {
+        let operationID = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
+        _ = try RestoreSidecarStore.recordStagingFailure(
+            operationID: operationID,
+            reason: .stagingIOFailed,
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+        let failingOperations = RecordingRestoreActivationOperations(
+            failureCounts: [.synchronizeMarkerDirectory: 1]
+        )
+
+        XCTAssertThrowsError(try RestoreSidecarStore.acknowledgeStagingFailure(
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: failingOperations
+        ))
+
+        let replayOperations = RecordingRestoreActivationOperations()
+        XCTAssertNil(try RestoreSidecarStore.readStagingFailure(
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: replayOperations
+        ))
+        XCTAssertTrue(replayOperations.events.contains(.synchronizeMarkerDirectory))
+    }
+
     func testRecoveryOutcomeAcknowledgementPreservesDurableFreezeAndOperationTree() throws {
         let staged = try stage()
         let result = activate(operations: RecordingRestoreActivationOperations(
@@ -614,6 +701,40 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(removed)
         XCTAssertFalse(FileManager.default.fileExists(atPath: interruptedDirectory.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedDirectory.path))
+    }
+
+    func testInterruptedStagingCleanupRetriesOperationsSyncWhenTreeAlreadyAbsent() throws {
+        let interruptedID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let operationDirectory = fixture.stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+            .appendingPathComponent(interruptedID.uuidString.lowercased(), isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: operationDirectory,
+            withIntermediateDirectories: true
+        )
+        let firstOperations = RecordingRestoreActivationOperations(
+            failureCounts: [.synchronizeOperationsDirectory: 1]
+        )
+
+        XCTAssertThrowsError(try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: interruptedID,
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: firstOperations
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: operationDirectory.path))
+
+        let retryOperations = RecordingRestoreActivationOperations()
+        XCTAssertTrue(try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: interruptedID,
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: retryOperations
+        ))
+        XCTAssertEqual(
+            retryOperations.events.filter { $0 == .synchronizeOperationsDirectory }.count,
+            1
+        )
     }
 
     func testInterruptedStagingCleanupPreservesMarkerAndRecoveryClaimedTrees() throws {
@@ -734,10 +855,19 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
 
     private let system = SystemRestoreActivationFileOperations()
     private let failures: Set<Event>
+    private var remainingFailureCounts: [Event: Int]
     private(set) var events: [Event] = []
 
-    init(failures: Set<Event> = []) {
+    init(failures: Set<Event> = [], failureCounts: [Event: Int] = [:]) {
         self.failures = failures
+        self.remainingFailureCounts = failureCounts
+    }
+
+    private func shouldFail(_ event: Event) -> Bool {
+        if failures.contains(event) { return true }
+        guard let remaining = remainingFailureCounts[event], remaining > 0 else { return false }
+        remainingFailureCounts[event] = remaining - 1
+        return true
     }
 
     func record(_ event: Event) {
@@ -756,19 +886,19 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
             event = .copySafetyDatabase
         }
         events.append(event)
-        if failures.contains(event) { throw ActivationTestError.selectedOpen }
+        if shouldFail(event) { throw ActivationTestError.selectedOpen }
         try system.copyItem(from: source, to: target)
     }
 
     func synchronizeItem(at url: URL) throws {
         if url.lastPathComponent == "RestoreStaging" {
             events.append(.synchronizeMarkerDirectory)
-            if failures.contains(.synchronizeMarkerDirectory) {
+            if shouldFail(.synchronizeMarkerDirectory) {
                 throw ActivationTestError.markerSync
             }
         } else if url.lastPathComponent == "operations" {
             events.append(.synchronizeOperationsDirectory)
-            if failures.contains(.synchronizeOperationsDirectory) {
+            if shouldFail(.synchronizeOperationsDirectory) {
                 throw ActivationTestError.markerSync
             }
         }
@@ -780,24 +910,24 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
             ? .replaceSafetyDatabase
             : .replaceSelectedDatabase
         events.append(event)
-        if failures.contains(event) { throw ActivationTestError.selectedOpen }
+        if shouldFail(event) { throw ActivationTestError.selectedOpen }
         try system.atomicallyReplaceItem(at: destination, withItemAt: prepared)
     }
 
     func removeItem(at url: URL) throws {
         if url.lastPathComponent == RestoreIntent.pendingFileName {
             events.append(.removeMarker)
-            if failures.contains(.removeMarker) { throw ActivationTestError.selectedOpen }
+            if shouldFail(.removeMarker) { throw ActivationTestError.selectedOpen }
         } else if url.deletingLastPathComponent().lastPathComponent == "operations" {
             events.append(.removeOperationTree)
-            if failures.contains(.removeOperationTree) { throw ActivationTestError.selectedOpen }
+            if shouldFail(.removeOperationTree) { throw ActivationTestError.selectedOpen }
         }
         try system.removeItem(at: url)
     }
 
     func writeOutcomeAtomically(_ data: Data, to url: URL) throws {
         events.append(.writeOutcome)
-        if failures.contains(.writeOutcome) { throw ActivationTestError.markerSync }
+        if shouldFail(.writeOutcome) { throw ActivationTestError.markerSync }
         try SystemRestoreFileOperations().writeIntentAtomically(data, to: url)
     }
 }
