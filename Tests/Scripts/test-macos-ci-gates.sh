@@ -406,6 +406,9 @@ printf '%s\n' \
   'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
   'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
   'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class GuidedDocumentQAUITests: XCTestCase {' \
+  '  func testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult() {}' \
+  '}' \
   'func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
   'func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
   'func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() {}' \
@@ -424,6 +427,9 @@ printf '%s\n' \
   'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
   'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
   'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class GuidedDocumentQAUITests: XCTestCase {' \
+  '  func testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult() {}' \
+  '}' \
   'final class MotionToDismissWorkspaceUITests: XCTestCase {}' \
   'func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
   'func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
@@ -443,6 +449,9 @@ printf '%s\n' \
   'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
   'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
   'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class GuidedDocumentQAUITests: XCTestCase {' \
+  '  func testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult() {}' \
+  '}' \
   'final class MotionToDismissWorkspaceUITests: XCTestCase {' \
   '  func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
   '  func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
