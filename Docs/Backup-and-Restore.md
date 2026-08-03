@@ -22,16 +22,20 @@ documents, and completion record have been written and verified.
 
 Restore does not modify the backup source. It reads the selected snapshot and shared document pool,
 then works from private staged copies. A completed restore consumes its restart marker, so later
-launches do not repeat the operation. After a verified activation or verified rollback, Supra AI
-durably records the outcome and removes only that authenticated operation's private staging tree.
-Cleanup is retried from the durable outcome if interruption occurs.
+launches do not repeat the operation. Supra AI durably records a verified activation or rollback
+outcome before it consumes the restart marker. A launch interrupted between those writes reconciles
+the authenticated marker without repeating database or blob mutation. Supra AI removes only that authenticated operation's private staging tree after marker consumption. Cleanup is retried from the
+durable outcome if interruption occurs.
 
 ## If activation fails
 
 If staging fails after the live writer closes, Supra AI writes a coarse, content-free failure sidecar
 and quits. The next launch replays that failure into the restore status and audit ledger, then
 acknowledges the sidecar. If the sidecar itself could not be written, the pre-close scheduled status
-is reported as an interrupted staging attempt. Neither path replaces the live data.
+is reported as an interrupted staging attempt. Any exact operation tree left by interrupted staging
+is removed only when no marker or activation outcome claims it. If that bounded cleanup or evidence
+acknowledgement cannot finish, its durable retry key is retained and new backup or restore work stays
+blocked until a later launch succeeds. Neither path replaces the live data.
 
 If the staged database cannot be installed, opened, migrated, or validated, Supra AI restores and
 validates the safety copy before normal work resumes. A verified rollback is terminal and its private
@@ -41,7 +45,10 @@ If both activation and automatic rollback fail, Supra AI opens a **Recovery Requ
 of the normal workspace. Use **Show Recovery Snapshot** to reveal the verified recovery database in
 Finder, preserve that file, and quit without creating new work. Do not move or edit restore-staging
 files while Supra AI is attempting recovery. Recovery-required operation trees are deliberately
-preserved; terminal cleanup never removes them.
+preserved; terminal cleanup never removes them. A durable recovery-required outcome freezes later
+activation attempts. Each later launch revalidates the retained safety database for the preservation
+action without repeating live database or blob mutation, and recovery evidence is never acknowledged
+away by the normal terminal-outcome API.
 
 Restore status records contain only the operation identifier, snapshot identifier, outcome category,
 failure category, and completion time. They do not contain database content or absolute filesystem
