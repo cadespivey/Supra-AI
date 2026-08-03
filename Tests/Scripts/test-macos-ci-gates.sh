@@ -406,11 +406,51 @@ printf '%s\n' \
   'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
   'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
   'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
+  'func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
+  'func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() {}' \
+  >"$accessibility_hook"
+# Standing guard: the existing class-name check already rejects classless
+# functions; this fixture ensures the class-scope hardening keeps doing so.
+run_case \
+  "classless motion methods fail the shipping class selector" \
+  1 \
+  "supported motion hosted smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+printf '%s\n' \
+  'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
+  'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
+  'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
   'final class MotionToDismissWorkspaceUITests: XCTestCase {}' \
   'func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
   'func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
   'func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() {}' \
   >"$accessibility_hook"
+# Expected RED: independent class and method greps accept methods placed after
+# an empty shipping class, but the selected XCTest class still runs none of them.
+run_case \
+  "motion methods after an empty shipping class fail the selector" \
+  1 \
+  "supported motion hosted smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+printf '%s\n' \
+  'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
+  'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
+  'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class MotionToDismissWorkspaceUITests: XCTestCase {' \
+  '  func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
+  '  func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
+  '  func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() {}' \
+  '}' \
+  >"$accessibility_hook"
+# Standing guard: the exact methods nested in the shipping XCTest class must
+# continue to satisfy check-only discovery after the fail-closed hardening.
 run_case \
   "the exact hosted XPC and accessibility selectors satisfy the hook" \
   0 \
