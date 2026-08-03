@@ -393,6 +393,27 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertFalse(operations.events.contains(.removeOperationTree))
     }
 
+    // T-RST-H08 expected RED: recovery exposes only the safety database, so the
+    // sibling managed-blob tree can be omitted from the item offered for preservation.
+    func testRecoveryRequiredExposesCompleteSafetyDirectoryForManualPreservation() throws {
+        let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
+        let staged = try stage(currentBlobs: [currentBlob])
+        let operations = RecordingRestoreActivationOperations(
+            failures: [.replaceSelectedDatabase, .replaceSafetyDatabase]
+        )
+
+        let result = activate(operations: operations)
+
+        let recoveryDirectory = try XCTUnwrap(result.recoveryDirectoryURL)
+        XCTAssertEqual(recoveryDirectory, staged.safetyDatabaseURL.deletingLastPathComponent())
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryDirectory
+                .appendingPathComponent("blobs", isDirectory: true)
+                .appendingPathComponent(currentBlob.relativePath)
+                .path
+        ))
+    }
+
     // expected RED: a durable recovery-required outcome is ignored on the next
     // launch, which retries selected-state mutation instead of freezing replay.
     func testDurableRecoveryOutcomeFreezesSecondLaunchBeforeMutation() throws {

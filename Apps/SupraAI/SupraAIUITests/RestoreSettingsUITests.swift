@@ -82,6 +82,8 @@ final class RestoreSettingsUITests: XCTestCase {
 
     // T-UI-RST-04 expected RED: the hosted double-failure launch exposes no
     // accessible recovery shell, preservation instructions, or safe quit action.
+    // T-RST-H08 expected RED: recovery offers only the database snapshot instead
+    // of the complete safety folder that also contains managed-document blobs.
     func testRecoveryRequiredShellProvidesPreservationAndQuitInstructions() {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -99,7 +101,8 @@ final class RestoreSettingsUITests: XCTestCase {
         let instructions = app.staticTexts["restore.recovery.instructions"]
         XCTAssertTrue(instructions.exists)
         XCTAssertTrue(renderedText(of: instructions).localizedCaseInsensitiveContains("preserve"))
-        XCTAssertTrue(app.buttons["Show Recovery Snapshot"].exists)
+        XCTAssertTrue(renderedText(of: instructions).localizedCaseInsensitiveContains("entire safety folder"))
+        XCTAssertTrue(app.buttons["Show Recovery Folder"].exists)
         XCTAssertTrue(app.buttons["Quit Without Changes"].exists)
     }
 

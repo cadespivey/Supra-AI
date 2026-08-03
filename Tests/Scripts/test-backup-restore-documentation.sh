@@ -44,6 +44,10 @@ require_literal "$restore_doc" 'cold start' \
   'restore documentation must explain the cold-start activation boundary'
 require_literal "$restore_doc" 'Recovery Required' \
   'restore documentation must explain the recovery-required path'
+# T-RST-H08 expected RED: the guide tells the user to preserve only the database
+# instead of the complete safety folder containing its managed-document blobs.
+require_literal "$restore_doc" 'preserve the entire safety folder' \
+  'restore documentation must preserve the complete safety directory and blob tree'
 require_literal "$restore_doc" 'Recovery-required operation trees are deliberately' \
   'restore documentation must preserve recovery-required operation trees'
 require_literal "$restore_doc" "removes only that authenticated operation's private staging tree" \
