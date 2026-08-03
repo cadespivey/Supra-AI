@@ -57,6 +57,121 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: staged.markerURL.path))
     }
 
+    // Review follow-up expected RED if post-open validation is removed: a
+    // successful database open is not sufficient. If the selected blob state
+    // changes inside the open seam, RestoreValidation must reject activation and
+    // verify the safety rollback.
+    func testSelectedStateValidationAfterOpenTriggersVerifiedRollback() throws {
+        let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        _ = try stage(
+            currentBlobs: [currentBlob],
+            selectedBlobs: [selectedBlob]
+        )
+        let operations = RecordingRestoreActivationOperations()
+        var openCount = 0
+
+        let result = activate(operations: operations) { _ in
+            openCount += 1
+            let database = try SupraDatabase.inMemory()
+            if openCount == 1 {
+                operations.record(.openSelectedDatabase)
+                let selectedURL = self.fixture.liveBlobsDirectory.appendingPathComponent(
+                    selectedBlob.relativePath
+                )
+                let installedBytes = try? Data(contentsOf: selectedURL)
+                XCTAssertEqual(installedBytes, selectedBlob.bytes)
+                guard installedBytes == selectedBlob.bytes else {
+                    XCTFail("Selected blob must be installed before the open seam mutates it")
+                    throw ActivationTestError.selectedOpen
+                }
+                try FileManager.default.removeItem(
+                    at: selectedURL
+                )
+                XCTAssertFalse(FileManager.default.fileExists(atPath: selectedURL.path))
+            } else {
+                operations.record(.openSafetyDatabase)
+            }
+            return database
+        }
+
+        XCTAssertEqual(openCount, 2)
+        XCTAssertEqual(result.status, .failedAndRolledBack)
+        XCTAssertEqual(result.activationFailure, .databaseOpenFailed)
+        XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
+        XCTAssertEqual(
+            try Data(contentsOf: fixture.liveBlobsDirectory.appendingPathComponent(
+                currentBlob.relativePath
+            )),
+            currentBlob.bytes
+        )
+    }
+
+    // Review follow-up expected RED if rollback post-open validation is removed:
+    // a safety blob changed inside that open seam must require recovery rather
+    // than reporting a verified rollback.
+    func testRollbackStateValidationAfterOpenRequiresRecovery() throws {
+        let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        let staged = try stage(
+            currentBlobs: [currentBlob],
+            selectedBlobs: [selectedBlob]
+        )
+        let operations = RecordingRestoreActivationOperations()
+        var openCount = 0
+
+        let result = activate(operations: operations) { _ in
+            openCount += 1
+            let database = try SupraDatabase.inMemory()
+            if openCount == 1 {
+                operations.record(.openSelectedDatabase)
+                let selectedURL = self.fixture.liveBlobsDirectory.appendingPathComponent(
+                    selectedBlob.relativePath
+                )
+                let installedBytes = try? Data(contentsOf: selectedURL)
+                XCTAssertEqual(installedBytes, selectedBlob.bytes)
+                guard installedBytes == selectedBlob.bytes else {
+                    XCTFail("Selected blob must be installed before the open seam mutates it")
+                    throw ActivationTestError.selectedOpen
+                }
+                try FileManager.default.removeItem(
+                    at: selectedURL
+                )
+                XCTAssertFalse(FileManager.default.fileExists(atPath: selectedURL.path))
+            } else {
+                operations.record(.openSafetyDatabase)
+                let safetyURL = self.fixture.liveBlobsDirectory.appendingPathComponent(
+                    currentBlob.relativePath
+                )
+                let installedBytes = try? Data(contentsOf: safetyURL)
+                XCTAssertEqual(installedBytes, currentBlob.bytes)
+                guard installedBytes == currentBlob.bytes else {
+                    XCTFail("Safety blob must be reinstalled before the open seam mutates it")
+                    throw ActivationTestError.safetyOpen
+                }
+                try FileManager.default.removeItem(
+                    at: safetyURL
+                )
+                XCTAssertFalse(FileManager.default.fileExists(atPath: safetyURL.path))
+            }
+            return database
+        }
+
+        XCTAssertEqual(openCount, 2)
+        XCTAssertEqual(result.status, .recoveryRequired)
+        XCTAssertEqual(result.activationFailure, .databaseOpenFailed)
+        XCTAssertEqual(result.rollbackFailure, .databaseOpenFailed)
+        XCTAssertEqual(
+            result.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: staged.safetyBlobsDirectory.appendingPathComponent(
+                currentBlob.relativePath
+            ).path
+        ))
+    }
+
     // T-RST-20/T-RST-38 expected RED: selected blobs are not installed at cold
     // start, so the selected managed blob is absent from the live tree.
     func testActivationInstallsSelectedBlobsAndPreservesUnrelatedLiveObjects() throws {

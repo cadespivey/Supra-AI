@@ -75,6 +75,50 @@ final class RestoreServiceTests: XCTestCase {
         try liveDatabase.writer.close()
     }
 
+    // Review follow-up expected RED if the same-volume guard is removed: the
+    // controlled staging claim promises that selected state is staged on the live
+    // volume, before any operation tree or pending marker can be created.
+    func testStageRejectsStagingRootOnDifferentVolume() throws {
+        try fixture.writeLiveState(sentinel: "current canary")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected canary")
+        let candidate = try compatibleCandidate()
+        let stagingParent = fixture.root.appendingPathComponent(
+            "synthetic-other-volume",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: stagingParent,
+            withIntermediateDirectories: true
+        )
+        let stagingRoot = stagingParent.appendingPathComponent(
+            RestoreService.stagingDirectoryName,
+            isDirectory: true
+        )
+        let fileManager = MismatchedRestoreVolumeFileManager(
+            liveParentPath: fixture.liveDatabaseURL.deletingLastPathComponent().path,
+            stagingParentPath: stagingParent.path
+        )
+
+        XCTAssertThrowsError(try RestoreService.stageRestore(
+            candidate: candidate,
+            liveLayout: RestoreLiveLayout(
+                databaseURL: fixture.liveDatabaseURL,
+                blobsDirectory: fixture.liveBlobsDirectory,
+                stagingRootDirectory: stagingRoot
+            ),
+            knownMigrationIdentifiers: migrations,
+            fileManager: fileManager
+        )) { error in
+            XCTAssertEqual(error as? RestoreStageError, .stagingVolumeMismatch)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: stagingRoot.appendingPathComponent(RestoreIntent.pendingFileName).path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: stagingRoot.appendingPathComponent("operations", isDirectory: true).path
+        ))
+    }
+
     // T-RST-H03 expected RED: once the live writer is closed, staging failures
     // have no durable database-independent handoff or acknowledgement API.
     func testStagingFailureSidecarIsContentFreeReadableAndAcknowledgedDurably() throws {
@@ -505,6 +549,29 @@ final class RestoreServiceTests: XCTestCase {
 
 private enum InjectedRestoreFailure: Error, Equatable {
     case requested(RecordingRestoreFileOperations.FailurePoint)
+}
+
+private final class MismatchedRestoreVolumeFileManager: FileManager {
+    private let liveParentPath: String
+    private let stagingParentPath: String
+
+    init(liveParentPath: String, stagingParentPath: String) {
+        self.liveParentPath = liveParentPath
+        self.stagingParentPath = stagingParentPath
+        super.init()
+    }
+
+    override func attributesOfFileSystem(
+        forPath path: String
+    ) throws -> [FileAttributeKey: Any] {
+        var attributes = try super.attributesOfFileSystem(forPath: path)
+        if path == liveParentPath {
+            attributes[.systemNumber] = NSNumber(value: 101)
+        } else if path == stagingParentPath {
+            attributes[.systemNumber] = NSNumber(value: 202)
+        }
+        return attributes
+    }
 }
 
 private final class RecordingRestoreFileOperations: RestoreFileOperations {
