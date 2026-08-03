@@ -82,6 +82,42 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(operations.events.contains(.copySelectedBlob))
     }
 
+    func testActivationPublishesNewLiveBlobRootBeforeOutcomeAndMarkerConsumption() throws {
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        _ = try stage(selectedBlobs: [selectedBlob])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.liveBlobsDirectory.path))
+        let operations = RecordingRestoreActivationOperations()
+
+        XCTAssertEqual(activate(operations: operations).status, .activated)
+
+        let parentSync = try XCTUnwrap(
+            operations.events.firstIndex(of: .synchronizeLiveBlobParent)
+        )
+        XCTAssertLessThan(
+            parentSync,
+            try XCTUnwrap(operations.events.firstIndex(of: .writeOutcome))
+        )
+        XCTAssertLessThan(
+            parentSync,
+            try XCTUnwrap(operations.events.firstIndex(of: .removeMarker))
+        )
+    }
+
+    func testActivationFailsClosedWhenNewLiveBlobRootParentSyncFails() throws {
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        _ = try stage(selectedBlobs: [selectedBlob])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.liveBlobsDirectory.path))
+        let operations = RecordingRestoreActivationOperations(
+            failures: [.synchronizeLiveBlobParent]
+        )
+
+        let result = activate(operations: operations)
+
+        XCTAssertEqual(result.status, .failedAndRolledBack)
+        XCTAssertEqual(result.activationFailure, .blobInstallationFailed)
+        XCTAssertTrue(operations.events.contains(.synchronizeLiveBlobParent))
+    }
+
     // T-RST-21 expected RED: blob installation has no idempotent reuse rule.
     func testActivationReusesAlreadyCorrectSelectedBlobWithoutOverwritingIt() throws {
         let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
@@ -851,6 +887,7 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
         case writeOutcome
         case removeOperationTree
         case synchronizeOperationsDirectory
+        case synchronizeLiveBlobParent
     }
 
     private let system = SystemRestoreActivationFileOperations()
@@ -899,6 +936,11 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
         } else if url.lastPathComponent == "operations" {
             events.append(.synchronizeOperationsDirectory)
             if shouldFail(.synchronizeOperationsDirectory) {
+                throw ActivationTestError.markerSync
+            }
+        } else if url.lastPathComponent == "Live" {
+            events.append(.synchronizeLiveBlobParent)
+            if shouldFail(.synchronizeLiveBlobParent) {
                 throw ActivationTestError.markerSync
             }
         }

@@ -352,6 +352,49 @@ final class RestoreServiceTests: XCTestCase {
         ))
     }
 
+    func testFirstUseStagingRootPublishesParentBeforeMarker() throws {
+        try fixture.writeLiveState(sentinel: "current row")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
+        let operations = RecordingRestoreFileOperations()
+
+        _ = try RestoreService.stageRestore(
+            candidate: compatibleCandidate(),
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: operations
+        )
+
+        XCTAssertLessThan(
+            try XCTUnwrap(operations.events.firstIndex(of: .synchronizeStagingParent)),
+            try XCTUnwrap(operations.events.firstIndex(of: .writeMarker))
+        )
+    }
+
+    func testFirstUseStagingParentSyncFailurePublishesNoMarker() throws {
+        try fixture.writeLiveState(sentinel: "current row")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
+        let operations = RecordingRestoreFileOperations(
+            failurePoint: .stagingRootParentSynchronization
+        )
+
+        XCTAssertThrowsError(try RestoreService.stageRestore(
+            candidate: compatibleCandidate(),
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: operations
+        )) { error in
+            XCTAssertEqual(
+                error as? InjectedRestoreFailure,
+                .requested(.stagingRootParentSynchronization)
+            )
+        }
+        XCTAssertFalse(operations.events.contains(.writeMarker))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.stagingRootDirectory
+                .appendingPathComponent(RestoreIntent.pendingFileName).path
+        ))
+    }
+
     private func assertInjectedFailure(_ point: RecordingRestoreFileOperations.FailurePoint) throws {
         let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
         try fixture.writeLiveState(blobs: [currentBlob], sentinel: "current row")
@@ -427,6 +470,7 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
         case selectedDatabaseSynchronization
         case markerWrite
         case markerWriteAndCompensatingDirectorySynchronization
+        case stagingRootParentSynchronization
     }
 
     enum Event: Equatable {
@@ -445,6 +489,7 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
         case synchronizeOperationDirectory
         case synchronizeOperationsRoot
         case synchronizeStagingRoot
+        case synchronizeStagingParent
         case writeOperationIntent
         case writeMarker
     }
@@ -510,6 +555,13 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
             event = .synchronizeOperationsRoot
         } else if url.lastPathComponent == "RestoreStaging" {
             event = .synchronizeStagingRoot
+        } else if FileManager.default.fileExists(
+            atPath: url.appendingPathComponent(
+                RestoreService.stagingDirectoryName,
+                isDirectory: true
+            ).path
+        ) {
+            event = .synchronizeStagingParent
         } else if url.path.contains("/safety.tmp/") {
             event = .synchronizeSafetyBlob
         } else if url.path.contains("/selected.tmp/") {
@@ -524,6 +576,10 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
             throw InjectedRestoreFailure.requested(
                 .markerWriteAndCompensatingDirectorySynchronization
             )
+        }
+        if failurePoint == .stagingRootParentSynchronization,
+           event == .synchronizeStagingParent {
+            throw InjectedRestoreFailure.requested(.stagingRootParentSynchronization)
         }
         if failurePoint == .selectedDatabaseSynchronization,
            event == .synchronizeSelectedDatabase {
