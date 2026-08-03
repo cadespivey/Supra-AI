@@ -153,7 +153,11 @@ final class DraftPipelineTests: XCTestCase {
                     _ = try await pipeline.runNotice(noticeInputs, profile: profile, style: .defaultFL)
                 } else {
                     let model = NoticeAppearance.assemble(noticeInputs, profile: profile)
-                    _ = try await pipeline.runMotion(model: model, style: .defaultFL)
+                    _ = try await pipeline.runMotion(
+                        model: model,
+                        evidence: MotionVerificationEvidence(facts: [], authorities: []),
+                        style: .defaultFL
+                    )
                 }
                 XCTFail("a verifier failure must throw before rendering \(operation)")
             } catch {
@@ -353,6 +357,8 @@ final class DraftPipelineTests: XCTestCase {
 }
 
 private struct AlwaysBlockingVerifier: Verifier {
+    let identity = DraftComponentIdentity(id: "test.always-blocking-verifier", version: "1")
+
     func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
         VerificationResult(
             failures: [GateFailure(gate: .factProvenance, detail: "unsupported proposition", repair: .stripToPlaceholderAndFlag)],
@@ -362,6 +368,8 @@ private struct AlwaysBlockingVerifier: Verifier {
 }
 
 private struct BlockingFollowUpVerifier: Verifier {
+    let identity = DraftComponentIdentity(id: "test.blocking-follow-up-verifier", version: "1")
+
     func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
         VerificationResult(
             failures: [],
@@ -371,6 +379,7 @@ private struct BlockingFollowUpVerifier: Verifier {
 }
 
 private final class CountingRenderer: Renderer, @unchecked Sendable {
+    let identity = DraftComponentIdentity(id: "test.counting-renderer", version: "1")
     private(set) var renderCount = 0
 
     func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {

@@ -6,6 +6,16 @@ import XCTest
 /// Construct-level fidelity tests: assert the exact WML the renderer emits for each §4 construct,
 /// and check it against the substrings the round-tripped Word goldens locked in.
 final class CourtFLRendererTests: XCTestCase {
+    // MVS-07. Expected RED: renderer components do not expose stable identities.
+    func testProductionRenderersExposeStableComponentIdentities() {
+        XCTAssertEqual(CourtFLRenderer().identity,
+                       DraftComponentIdentity(id: "supra.exports.court-fl-renderer", version: "1"))
+        XCTAssertEqual(LetterheadRenderer().identity,
+                       DraftComponentIdentity(id: "supra.exports.letterhead-renderer", version: "1"))
+        XCTAssertEqual(CompositeRenderer().identity,
+                       DraftComponentIdentity(id: "supra.exports.composite-renderer", version: "1"))
+    }
+
 
     private func loadGolden(_ name: String) throws -> String {
         let url = URL(fileURLWithPath: #filePath)
