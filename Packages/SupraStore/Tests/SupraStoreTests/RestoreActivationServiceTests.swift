@@ -996,6 +996,27 @@ final class RestoreActivationServiceTests: XCTestCase {
         ))
     }
 
+    // T-RST-H09 expected RED: the versioned outcome API cannot yet expose a
+    // legacy v1 terminal record while distinguishing its absent schedule timestamp.
+    func testActivationOutcomeReadAcceptsLegacyV1WithoutScheduleTimestamp() throws {
+        try FileManager.default.createDirectory(
+            at: fixture.stagingRootDirectory,
+            withIntermediateDirectories: true
+        )
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let legacyOutcome = """
+        {"schemaVersion":1,"operationID":"11111111-2222-3333-4444-555555555555","snapshotIdentifier":"SupraAI-20260731-090000-000","status":"activated","completedAt":"2024-09-23T00:00:00Z"}
+        """
+        try Data(legacyOutcome.utf8).write(to: outcomeURL, options: .atomic)
+
+        let record = try XCTUnwrap(RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+        XCTAssertEqual(record.schemaVersion, 1)
+        XCTAssertNil(record.scheduledAt)
+    }
+
     private func stage(
         currentBlobs: [RestoreTestBlob] = [],
         selectedBlobs: [RestoreTestBlob] = [],
