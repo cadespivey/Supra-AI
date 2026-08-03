@@ -24,6 +24,10 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.facts.map(\.revisionID), [fixture.revision.id, fixture.revision.id])
         XCTAssertTrue(snapshot.facts.allSatisfy { $0.revisionSHA256 == sha256(fixture.revision.text) })
         XCTAssertEqual(snapshot.facts.map(\.excerptSHA256), fixture.chunks.reversed().map { sha256($0.normalizedText) })
+        XCTAssertTrue(snapshot.facts.allSatisfy { $0.ocrConfidence == 0.97 })
+        XCTAssertTrue(snapshot.facts.allSatisfy {
+            $0.boundingBoxesSHA256 == sha256(#"[{"x":0.1,"y":0.2,"width":0.3,"height":0.4}]"#)
+        })
         XCTAssertEqual(snapshot.authorities.map(\.authorityID), [fixture.authority.id])
         XCTAssertEqual(snapshot.authorities.first?.groundKey, .failureToStateClaim)
         XCTAssertEqual(snapshot.authorities.first?.excerpt, authorityExcerpt)
@@ -78,6 +82,18 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? MotionDraftSnapshotError, .factBindingInvalid(chunkID))
         }
+    }
+
+    // Expected RED: snapshot capture trusts denormalized chunk locator/provenance
+    // columns even when they disagree with the selected page-part row.
+    func testTMDSS03BRejectsChunkLocatorOrProvenanceThatDiffersFromSelectedPart() throws {
+        try assertChunkMutationRejected(column: "page_index", value: 99)
+        try assertChunkMutationRejected(column: "page_label", value: "forged-page")
+        try assertChunkMutationRejected(column: "sheet_name", value: "forged-sheet")
+        try assertChunkMutationRejected(column: "cell_range", value: "Z99:Z100")
+        try assertChunkMutationRejected(column: "email_part_path", value: "forged/part")
+        try assertChunkMutationRejected(column: "ocr_confidence", value: 0.01)
+        try assertChunkMutationRejected(column: "bounding_boxes_json", value: #"[{"forged":true}]"#)
     }
 
     // Expected RED: v2 validation currently accepts a deterministic chunk whose text is
@@ -293,6 +309,55 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         }
     }
 
+    // Expected RED: the source fingerprint omits the exact v2 relation projection.
+    // Changing references to responds_to preserves the composed chunk text today, so
+    // commit incorrectly accepts a graph different from the one that was verified.
+    func testTMDSS04ACommitRejectsExactV2EdgeKindDriftWithSameComposedText() throws {
+        let fixture = try makeFixture()
+        let v2 = try installRelatedV2Fact(fixture: fixture, edgeKind: "references")
+        let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(
+            request(for: fixture, factChunkIDs: [v2.chunk.id])
+        )
+        let factJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot.facts[0])) as? [String: Any]
+        )
+        let projection = try XCTUnwrap(factJSON["relatedStructureEdges"] as? [[String: Any]])
+        XCTAssertEqual(projection.count, 1)
+        XCTAssertEqual(projection[0]["edgeID"] as? String, v2.edgeID)
+        XCTAssertEqual(projection[0]["kind"] as? String, "references")
+        XCTAssertEqual(projection[0]["projectionOrder"] as? Int, 0)
+
+        try fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE document_structure_edges SET kind = ? WHERE id = ?",
+                arguments: ["responds_to", v2.edgeID]
+            )
+        }
+        let event = motionAuditEvent(
+            id: "edge-drift-motion-audit",
+            fixture: fixture,
+            metadataJSON: try auditMetadata(snapshot: snapshot, relatedEdges: [
+                [
+                    "edgeID": v2.edgeID,
+                    "fromNodeID": v2.relatedNodeID,
+                    "kind": "references",
+                    "projectionOrder": 0,
+                    "toNodeID": v2.primaryNodeID,
+                ],
+            ])
+        )
+
+        XCTAssertThrowsError(
+            try fixture.store.draftingSources.recordMotionAudit(event, requiring: snapshot)
+        ) { error in
+            XCTAssertEqual(error as? MotionDraftSnapshotError, .sourceSnapshotStale)
+        }
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id)
+                .contains { $0.id == event.id }
+        )
+    }
+
     // Expected RED: sources can change during async verification and the later audit
     // insert does not compare them with the values actually rendered.
     func testTMDSS05CommitRejectsDependencyDriftAndWritesNoAudit() throws {
@@ -302,15 +367,10 @@ final class DraftingSourceSnapshotTests: XCTestCase {
             assistantKey,
             value: ["firm": "Changed Firm"]
         )
-        let event = AuditEventRecord(
+        let event = motionAuditEvent(
             id: "stale-motion-audit",
-            matterID: fixture.matter.id,
-            eventType: "draft_generated",
-            actor: "user",
-            summary: "Generated synthetic motion",
-            relatedTable: MatterRecord.databaseTableName,
-            relatedID: fixture.matter.id,
-            metadataJSON: #"{"source_snapshot_sha256":"content-free"}"#
+            fixture: fixture,
+            metadataJSON: try auditMetadata(snapshot: snapshot)
         )
 
         XCTAssertThrowsError(
@@ -329,15 +389,10 @@ final class DraftingSourceSnapshotTests: XCTestCase {
     func testTMDSS06CommitRevalidatesAndInsertsAuditAtomically() throws {
         let fixture = try makeFixture()
         let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(request(for: fixture))
-        let event = AuditEventRecord(
+        let event = motionAuditEvent(
             id: "current-motion-audit",
-            matterID: fixture.matter.id,
-            eventType: "draft_generated",
-            actor: "user",
-            summary: "Generated synthetic motion",
-            relatedTable: MatterRecord.databaseTableName,
-            relatedID: fixture.matter.id,
-            metadataJSON: #"{"source_snapshot_sha256":"content-free"}"#
+            fixture: fixture,
+            metadataJSON: try auditMetadata(snapshot: snapshot)
         )
 
         try fixture.store.draftingSources.recordMotionAudit(event, requiring: snapshot)
@@ -349,6 +404,45 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         XCTAssertEqual(stored.metadataJSON, event.metadataJSON)
         XCTAssertFalse(try XCTUnwrap(stored.metadataJSON).contains(fixture.revision.text))
         XCTAssertFalse(try XCTUnwrap(stored.metadataJSON).contains(authorityExcerpt))
+    }
+
+    // Expected RED: commit validates only matter_id, so unrelated event shapes,
+    // malformed lineage, a wrong/missing source hash, and an extra raw-content
+    // field can all be inserted as if Store had blessed a current motion artifact.
+    func testTMDSS07CommitRequiresStoreOwnedContentFreeAuditEnvelope() throws {
+        let fixture = try makeFixture()
+        let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(request(for: fixture))
+        let valid = try auditMetadata(snapshot: snapshot)
+        let wrongHash = try auditMetadata(
+            snapshot: snapshot,
+            sourceSnapshotSHA256: String(repeating: "f", count: 64)
+        )
+        let missingHash = try auditMetadata(snapshot: snapshot, includeSourceSnapshotSHA256: false)
+        let wrongSchema = try auditMetadata(snapshot: snapshot, schemaVersion: 1)
+        let rawContent = try auditMetadata(
+            snapshot: snapshot,
+            additionalTopLevel: ["rawSourceText": fixture.revision.text]
+        )
+        let invalidEvents = [
+            motionAuditEvent(id: "wrong-event-type", fixture: fixture, eventType: "draft_failed", metadataJSON: valid),
+            motionAuditEvent(id: "wrong-related-table", fixture: fixture, relatedTable: "structured_outputs", metadataJSON: valid),
+            motionAuditEvent(id: "wrong-related-id", fixture: fixture, relatedID: "another-matter", metadataJSON: valid),
+            motionAuditEvent(id: "missing-metadata", fixture: fixture, metadataJSON: nil),
+            motionAuditEvent(id: "malformed-metadata", fixture: fixture, metadataJSON: "not-json"),
+            motionAuditEvent(id: "wrong-schema", fixture: fixture, metadataJSON: wrongSchema),
+            motionAuditEvent(id: "wrong-source-hash", fixture: fixture, metadataJSON: wrongHash),
+            motionAuditEvent(id: "missing-source-hash", fixture: fixture, metadataJSON: missingHash),
+            motionAuditEvent(id: "raw-content-key", fixture: fixture, metadataJSON: rawContent),
+        ]
+
+        for event in invalidEvents {
+            XCTAssertThrowsError(
+                try fixture.store.draftingSources.recordMotionAudit(event, requiring: snapshot),
+                "invalid audit envelope \(event.id) was accepted"
+            )
+        }
+        let storedIDs = Set(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).map(\.id))
+        XCTAssertTrue(storedIDs.isDisjoint(with: invalidEvents.map(\.id)))
     }
 
     private struct Fixture {
@@ -510,8 +604,15 @@ final class DraftingSourceSnapshotTests: XCTestCase {
             documentID: document.id,
             partIndex: 0,
             sourceKind: DocumentSourceKind.text.rawValue,
+            pageIndex: 3,
+            pageLabel: "iv",
+            sheetName: "Pleadings",
+            cellRange: "B2:D8",
+            emailPartPath: "message/body/1",
             normalizedText: text,
-            charCount: text.count
+            charCount: text.count,
+            ocrConfidence: 0.97,
+            boundingBoxesJSON: #"[{"x":0.1,"y":0.2,"width":0.3,"height":0.4}]"#
         )
         try store.documentIndex.replaceParts(documentID: document.id, parts: [part])
         let revision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
@@ -546,9 +647,16 @@ final class DraftingSourceSnapshotTests: XCTestCase {
                 chunkerVersion: 1,
                 chunkIndex: index,
                 sourceKind: DocumentSourceKind.text.rawValue,
+                pageIndex: part.pageIndex,
+                pageLabel: part.pageLabel,
+                sheetName: part.sheetName,
+                cellRange: part.cellRange,
+                emailPartPath: part.emailPartPath,
                 charStart: text.distance(from: text.startIndex, to: range.lowerBound),
                 charEnd: text.distance(from: text.startIndex, to: range.upperBound),
-                normalizedText: excerpt
+                normalizedText: excerpt,
+                boundingBoxesJSON: part.boundingBoxesJSON,
+                ocrConfidence: part.ocrConfidence
             )
         }
         try store.documentIndex.replaceChunks(documentID: document.id, chunks: chunks)
@@ -636,9 +744,206 @@ final class DraftingSourceSnapshotTests: XCTestCase {
             chunkerVersion: 2,
             chunkIndex: base.chunkIndex,
             sourceKind: base.sourceKind,
+            pageIndex: base.pageIndex,
+            pageLabel: base.pageLabel,
+            sheetName: base.sheetName,
+            cellRange: base.cellRange,
+            emailPartPath: base.emailPartPath,
             charStart: start,
             charEnd: end,
-            normalizedText: text
+            normalizedText: text,
+            boundingBoxesJSON: base.boundingBoxesJSON,
+            ocrConfidence: base.ocrConfidence
+        )
+    }
+
+    private func assertChunkMutationRejected<Value: DatabaseValueConvertible>(
+        column: String,
+        value: Value
+    ) throws {
+        let fixture = try makeFixture()
+        let chunkID = fixture.chunks[0].id
+        try fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE document_chunks SET \(column) = ? WHERE id = ?",
+                arguments: [value, chunkID]
+            )
+        }
+        XCTAssertThrowsError(
+            try fixture.store.draftingSources.captureMotionSnapshot(
+                request(for: fixture, factChunkIDs: [chunkID])
+            ),
+            "forged chunk column \(column) was accepted"
+        ) { error in
+            XCTAssertEqual(error as? MotionDraftSnapshotError, .factBindingInvalid(chunkID))
+        }
+    }
+
+    private func installRelatedV2Fact(
+        fixture: Fixture,
+        edgeKind: String
+    ) throws -> (
+        chunk: DocumentChunkRecord,
+        edgeID: String,
+        primaryNodeID: String,
+        relatedNodeID: String
+    ) {
+        let primaryText = fixture.chunks[0].normalizedText
+        let relatedText = fixture.chunks[1].normalizedText
+        let primaryRange = try XCTUnwrap(fixture.revision.text.range(of: primaryText))
+        let relatedRange = try XCTUnwrap(fixture.revision.text.range(of: relatedText))
+        let primaryNodeID = "v2-drift-primary"
+        let relatedNodeID = "v2-drift-related"
+        let nodes = [
+            DocumentStructureNodeRecord(
+                id: primaryNodeID,
+                documentID: fixture.chunks[0].documentID,
+                revisionID: fixture.revision.id,
+                nodeKey: "primary",
+                ordinal: 0,
+                kind: "discovery_request",
+                charStart: fixture.revision.text.distance(from: fixture.revision.text.startIndex, to: primaryRange.lowerBound),
+                charEnd: fixture.revision.text.distance(from: fixture.revision.text.startIndex, to: primaryRange.upperBound)
+            ),
+            DocumentStructureNodeRecord(
+                id: relatedNodeID,
+                documentID: fixture.chunks[0].documentID,
+                revisionID: fixture.revision.id,
+                nodeKey: "related",
+                ordinal: 1,
+                kind: "discovery_response",
+                charStart: fixture.revision.text.distance(from: fixture.revision.text.startIndex, to: relatedRange.lowerBound),
+                charEnd: fixture.revision.text.distance(from: fixture.revision.text.startIndex, to: relatedRange.upperBound)
+            ),
+        ]
+        let edgeID = "v2-drift-edge"
+        try fixture.store.documentStructure.replaceStructure(
+            documentID: fixture.chunks[0].documentID,
+            revisionID: fixture.revision.id,
+            nodes: nodes,
+            edges: [
+                DocumentStructureEdgeRecord(
+                    id: edgeID,
+                    matterID: fixture.matter.id,
+                    fromNodeID: relatedNodeID,
+                    toNodeID: primaryNodeID,
+                    kind: edgeKind
+                ),
+            ]
+        )
+        let start = fixture.revision.text.distance(
+            from: fixture.revision.text.startIndex,
+            to: primaryRange.lowerBound
+        )
+        let end = fixture.revision.text.distance(
+            from: fixture.revision.text.startIndex,
+            to: primaryRange.upperBound
+        )
+        let chunk = v2Chunk(
+            base: fixture.chunks[0],
+            nodeID: primaryNodeID,
+            unitKind: "discovery_request",
+            text: primaryText + "\n" + relatedText,
+            start: start,
+            end: end
+        )
+        try fixture.store.documentIndex.replaceChunks(
+            documentID: chunk.documentID,
+            chunks: [chunk]
+        )
+        return (chunk, edgeID, primaryNodeID, relatedNodeID)
+    }
+
+    private func motionAuditEvent(
+        id: String,
+        fixture: Fixture,
+        eventType: String = "draft_generated",
+        relatedTable: String = MatterRecord.databaseTableName,
+        relatedID: String? = nil,
+        metadataJSON: String?
+    ) -> AuditEventRecord {
+        AuditEventRecord(
+            id: id,
+            matterID: fixture.matter.id,
+            eventType: eventType,
+            actor: "user",
+            summary: "Generated synthetic motion",
+            relatedTable: relatedTable,
+            relatedID: relatedID ?? fixture.matter.id,
+            metadataJSON: metadataJSON
+        )
+    }
+
+    private func auditMetadata(
+        snapshot: MotionDraftStoreSnapshot,
+        schemaVersion: Int = 2,
+        sourceSnapshotSHA256: String? = nil,
+        includeSourceSnapshotSHA256: Bool = true,
+        relatedEdges: [[String: Any]] = [],
+        additionalTopLevel: [String: Any] = [:]
+    ) throws -> String {
+        let digest = String(repeating: "a", count: 64)
+        var object: [String: Any] = [
+            "schemaVersion": schemaVersion,
+            "kindID": "motionToDismiss",
+            "facts": snapshot.facts.map { fact in
+                var value: [String: Any] = [
+                    "chunkID": fact.chunkID,
+                    "documentID": fact.documentID,
+                    "partID": fact.partID,
+                    "revisionID": fact.revisionID,
+                    "chunkerVersion": fact.chunkerVersion,
+                    "charStart": fact.charStart,
+                    "charEnd": fact.charEnd,
+                    "revisionSHA256": fact.revisionSHA256,
+                    "excerptSHA256": fact.excerptSHA256,
+                    "relatedStructureEdges": relatedEdges,
+                ]
+                if let nodeID = fact.nodeID { value["nodeID"] = nodeID }
+                if let unitKind = fact.unitKind { value["unitKind"] = unitKind }
+                if let ocrConfidence = fact.ocrConfidence { value["ocrConfidence"] = ocrConfidence }
+                if let boundingBoxesSHA256 = fact.boundingBoxesSHA256 {
+                    value["boundingBoxesSHA256"] = boundingBoxesSHA256
+                }
+                return value
+            },
+            "authorities": snapshot.authorities.map { authority in
+                [
+                    "authorityID": authority.authorityID,
+                    "groundKey": authority.groundKey.rawValue,
+                    "evidenceSchemaVersion": authority.evidenceSchemaVersion,
+                    "excerptByteStart": authority.excerptByteStart,
+                    "excerptByteLength": authority.excerptByteLength,
+                    "opinionSHA256": authority.opinionSHA256,
+                    "excerptSHA256": authority.excerptSHA256,
+                    "effectiveCitationSHA256": authority.effectiveCitationSHA256,
+                    "courtSHA256": authority.courtSHA256,
+                    "bindingSHA256": authority.bindingSHA256,
+                ] as [String: Any]
+            },
+            "groundKeys": [AuthorityReviewedPropositionGround.failureToStateClaim.rawValue],
+            "requestSHA256": digest,
+            "captionSHA256": digest,
+            "assistantProfileSHA256": snapshot.assistantProfile.valueSHA256,
+            "effectiveStyleSHA256": digest,
+            "groundContractIdentity": ["id": "motion-ground", "version": "1"],
+            "assemblerIdentity": ["id": "motion-assembler", "version": "1"],
+            "verifierIdentity": ["id": "motion-verifier", "version": "1"],
+            "gateIdentity": ["id": "motion-gate", "version": "1"],
+            "rendererIdentity": ["id": "motion-renderer", "version": "1"],
+            "verificationReceiptSHA256": digest,
+            "verificationStatus": "passed",
+            "outputFileName": "Motion-to-Dismiss-synthetic.docx",
+            "outputSHA256": digest,
+            "outputByteSize": 123,
+        ]
+        if includeSourceSnapshotSHA256 {
+            object["sourceSnapshotSHA256"] = sourceSnapshotSHA256 ?? snapshot.fingerprintSHA256
+        }
+        object.merge(additionalTopLevel) { _, new in new }
+        return String(
+            decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+            as: UTF8.self
         )
     }
 
