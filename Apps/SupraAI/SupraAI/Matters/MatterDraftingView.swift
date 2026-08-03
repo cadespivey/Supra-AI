@@ -807,6 +807,7 @@ struct MatterDraftingView: View {
             routingMessage = issue.message
             return
         }
+        guard generationIsCurrent(token, selection: requestedSelection), !Task.isCancelled else { return }
         let input = LetterDraftInput(
             recipientName: trimmed(letterRecipientName),
             recipientFirm: trimmed(letterRecipientFirm),

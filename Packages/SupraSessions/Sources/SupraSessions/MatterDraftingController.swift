@@ -210,6 +210,7 @@ public final class MatterDraftingController: ObservableObject {
             message = "A draft is already generating. Wait for it to finish."
             return .failure(.renderFailed("already generating"))
         }
+        guard !Task.isCancelled else { return .failure(.cancelled) }
         isGenerating = true
         message = nil
         defer { isGenerating = false }
@@ -254,13 +255,17 @@ public final class MatterDraftingController: ObservableObject {
         let result: DraftResult
         do {
             result = try await pipeline.runNotice(inputs, profile: firm, style: effectiveStyle())
+            try Task.checkCancellation()
+        } catch is CancellationError {
+            return .failure(.cancelled)
         } catch let error as SupraDraftingCore.DraftError {
-            return .failure(Self.mapCoreDraftError(error))
+            return .failure(Task.isCancelled ? .cancelled : Self.mapCoreDraftError(error))
         } catch {
-            return .failure(.renderFailed(error.localizedDescription))
+            return .failure(Task.isCancelled ? .cancelled : .renderFailed(error.localizedDescription))
         }
 
         do {
+            try Task.checkCancellation()
             let url = try persist(
                 data: result.docx,
                 matterID: matterID,
@@ -270,8 +275,10 @@ public final class MatterDraftingController: ObservableObject {
             )
             let followUps = result.followUps.map { DraftFollowUp(isBlocking: $0.severity == .blocking, message: $0.message) }
             return .success(DraftArtifact(source: .kind(.noticeAppearance), format: .docx, title: NoticeAppearance.title, fileURL: url, followUps: followUps))
+        } catch is CancellationError {
+            return .failure(.cancelled)
         } catch {
-            return .failure(.renderFailed(error.localizedDescription))
+            return .failure(Task.isCancelled ? .cancelled : .renderFailed(error.localizedDescription))
         }
     }
 
@@ -374,6 +381,7 @@ public final class MatterDraftingController: ObservableObject {
             message = "A draft is already generating. Wait for it to finish."
             return .failure(.renderFailed("already generating"))
         }
+        guard !Task.isCancelled else { return .failure(.cancelled) }
         guard let runtimeClient else {
             return .failure(.unsupportedKind(.letterDemand))
         }
@@ -402,11 +410,17 @@ public final class MatterDraftingController: ObservableObject {
         let generator = RuntimeLetterGenerator(runtimeClient: runtimeClient, modelID: modelID, route: route)
         let generated: GeneratedLetter
         do {
+            try Task.checkCancellation()
             generated = try await generator.generateLetter(parts)
+            try Task.checkCancellation()
+        } catch is CancellationError {
+            return .failure(.cancelled)
+        } catch let error as GenerationStreamError where error == .cancelled {
+            return .failure(.cancelled)
         } catch let error as SupraDraftingCore.DraftError {
-            return .failure(Self.mapCoreDraftError(error))
+            return .failure(Task.isCancelled ? .cancelled : Self.mapCoreDraftError(error))
         } catch {
-            return .failure(.renderFailed(error.localizedDescription))
+            return .failure(Task.isCancelled ? .cancelled : .renderFailed(error.localizedDescription))
         }
         guard !generated.paragraphs.isEmpty else {
             return .failure(.verificationBlocked(["The drafting model returned no verified letter body."]))
@@ -414,6 +428,7 @@ public final class MatterDraftingController: ObservableObject {
 
         let result: DraftResult
         do {
+            try Task.checkCancellation()
             result = try await pipelineFactory().runLetter(
                 inputs,
                 generated: generated,
@@ -421,13 +436,17 @@ public final class MatterDraftingController: ObservableObject {
                 profile: firm,
                 style: effectiveStyle()
             )
+            try Task.checkCancellation()
+        } catch is CancellationError {
+            return .failure(.cancelled)
         } catch let error as SupraDraftingCore.DraftError {
-            return .failure(Self.mapCoreDraftError(error))
+            return .failure(Task.isCancelled ? .cancelled : Self.mapCoreDraftError(error))
         } catch {
-            return .failure(.renderFailed(error.localizedDescription))
+            return .failure(Task.isCancelled ? .cancelled : .renderFailed(error.localizedDescription))
         }
 
         do {
+            try Task.checkCancellation()
             let title = "Demand Letter"
             let url = try persist(
                 data: result.docx,
@@ -438,8 +457,10 @@ public final class MatterDraftingController: ObservableObject {
             )
             let followUps = result.followUps.map { DraftFollowUp(isBlocking: $0.severity == .blocking, message: $0.message) }
             return .success(DraftArtifact(source: .kind(.letterDemand), format: .docx, title: title, fileURL: url, followUps: followUps))
+        } catch is CancellationError {
+            return .failure(.cancelled)
         } catch {
-            return .failure(.renderFailed(error.localizedDescription))
+            return .failure(Task.isCancelled ? .cancelled : .renderFailed(error.localizedDescription))
         }
     }
 

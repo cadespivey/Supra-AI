@@ -21,10 +21,13 @@ public struct DraftPipeline: Sendable {
 
     public func runNotice(_ inputs: NoticeAppearance.Inputs, profile: FirmProfile,
                           style: HouseStyleSheet) async throws -> DraftResult {
+        try Task.checkCancellation()
         let model = NoticeAppearance.assemble(inputs, profile: profile)
         let vr = await verifier.verify(.wholeDocument(model), kind: .noticeAppearance, style: style)
+        try Task.checkCancellation()
         let gateResult = gate.check(court: model, kind: .noticeAppearance, style: style)
         try Self.requireRenderable(verification: vr, gate: gateResult)
+        try Task.checkCancellation()
         let docx = try renderer.render(.court(model), style: style)
         return DraftResult(
             docx: docx,
@@ -39,14 +42,17 @@ public struct DraftPipeline: Sendable {
     public func runLetter(_ inputs: LetterDemand.Inputs, generated: GeneratedLetter,
                           facts: [GroundedFact],
                           profile: FirmProfile, style: HouseStyleSheet) async throws -> DraftResult {
+        try Task.checkCancellation()
         let model = LetterDemand.assemble(inputs, generated: generated, profile: profile, style: style)
         let vr = await verifier.verify(
             .letter(generated, model: model, facts: facts),
             kind: .letterDemand,
             style: style
         )
+        try Task.checkCancellation()
         let gateResult = gate.check(letter: model, style: style)
         try Self.requireRenderable(verification: vr, gate: gateResult)
+        try Task.checkCancellation()
         let docx = try renderer.render(.letter(model), style: style)
         return DraftResult(
             docx: docx,
