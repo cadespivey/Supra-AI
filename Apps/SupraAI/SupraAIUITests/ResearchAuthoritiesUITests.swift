@@ -982,18 +982,24 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
             let authority = app.buttons["drafting.motion.authority.ui-motion-authority-success"]
             XCTAssertTrue(authority.waitForExistence(timeout: 5), "The reviewed authority was not exposed as a selectable production row")
             XCTAssertTrue(authority.isEnabled)
-            XCTAssertTrue(authority.isHittable, authority.debugDescription)
             let generate = app.buttons["drafting.generate"]
             XCTAssertTrue(generate.waitForExistence(timeout: 5))
-            // Expected RED before the drafting-sheet layout fix: the last source row
-            // occupies the pinned footer's hit region, so selecting it can press
-            // Generate or dismiss the sheet instead of toggling the authority.
+            // Expected RED before geometry-based scroll targeting: XCTest reports
+            // the clipped last source row as hittable even while its activation
+            // point is under the pinned footer.
+            let draftingScroll = app.sheets.firstMatch.scrollViews.firstMatch
+            XCTAssertTrue(draftingScroll.exists, "The drafting form must remain independently scrollable")
+            for _ in 0..<4 where authority.frame.maxY > generate.frame.minY {
+                draftingScroll.scroll(byDeltaX: 0, deltaY: -180)
+            }
             XCTAssertLessThanOrEqual(
                 authority.frame.maxY,
                 generate.frame.minY,
                 "The reviewed-authority row must end above the pinned Generate footer: authority=\(authority.frame), generate=\(generate.frame)"
             )
-            authority.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+            XCTAssertTrue(authority.isHittable, authority.debugDescription)
+            authority.click()
+            XCTAssertTrue(generate.isEnabled, "Selecting both exact source rows must make the supported motion ready")
         }
     }
 
