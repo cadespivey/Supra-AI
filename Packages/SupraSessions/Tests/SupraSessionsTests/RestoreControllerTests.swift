@@ -767,6 +767,8 @@ final class RestoreControllerTests: XCTestCase {
 
     // expected RED: BackupController does not replay a durable activation
     // outcome into status and audit before acknowledging the sidecar.
+    // T-RST-H09 expected RED: the restored database receives restore_activated
+    // but permanently loses the authenticated restore_scheduled audit.
     func testDurableActivationOutcomeReplaysAndAcknowledgesAfterAudit() throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090900-000"
@@ -800,6 +802,14 @@ final class RestoreControllerTests: XCTestCase {
             ).single
         )
         XCTAssertEqual(audit.timestamp, outcome.completedAt)
+        let scheduledAudit = try XCTUnwrap(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: "backup_snapshots",
+                relatedID: snapshotID,
+                eventType: "restore_scheduled"
+            ).single
+        )
+        XCTAssertEqual(scheduledAudit.timestamp, try XCTUnwrap(outcome.scheduledAt))
     }
 
     // expected RED: activation-outcome acknowledgement failure leaves the
@@ -1009,6 +1019,7 @@ final class RestoreControllerTests: XCTestCase {
         var object: [String: Any] = [
             "schemaVersion": RestoreOutcomeRecord.currentSchemaVersion,
             "status": status.rawValue,
+            "scheduledAt": "2026-07-31T12:55:00Z",
             "completedAt": "2026-07-31T13:00:00Z",
         ]
         if status != .recoveryRequired {

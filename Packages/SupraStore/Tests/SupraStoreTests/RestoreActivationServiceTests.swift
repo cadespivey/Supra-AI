@@ -671,6 +671,8 @@ final class RestoreActivationServiceTests: XCTestCase {
 
     // T-RST-40...42 expected RED: the launch service has no durable,
     // content-free outcome record whose bytes remain stable on a second launch.
+    // T-RST-H09 expected RED: the authenticated scheduling timestamp is lost
+    // when activation replaces the database that contains restore_scheduled.
     func testTRST40Through42OutcomeIsContentFreeIdempotentAndLeavesBackupUntouched() throws {
         try fixture.writeShippingLiveState(sentinel: "current private canary")
         let source = try fixture.writeCompleteShippingSnapshot(
@@ -688,6 +690,7 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(first.status, .activated)
         XCTAssertEqual(first.operationID, staged.intent.operationID)
         XCTAssertEqual(first.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertEqual(first.scheduledAt, staged.intent.createdAt)
         let outcomeURL = fixture.stagingRootDirectory
             .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
         let firstOutcomeData = try Data(contentsOf: outcomeURL)
@@ -696,6 +699,7 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(outcome.status, .activated)
         XCTAssertEqual(outcome.operationID, staged.intent.operationID)
         XCTAssertEqual(outcome.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertEqual(outcome.scheduledAt, staged.intent.createdAt)
         XCTAssertNil(outcome.activationFailure)
         XCTAssertNil(outcome.rollbackFailure)
 
