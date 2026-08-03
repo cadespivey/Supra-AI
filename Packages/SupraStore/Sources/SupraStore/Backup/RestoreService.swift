@@ -21,6 +21,7 @@ public struct RestoreLiveLayout: Equatable, Sendable {
 /// selected restore copy have passed database, blob-size, and blob-digest checks.
 public struct RestoreIntent: Codable, Equatable, Sendable {
     public static let pendingFileName = "pending-restore.json"
+    public static let operationFileName = "restore-operation-intent.json"
     public static let currentSchemaVersion = 1
 
     public let schemaVersion: Int
@@ -310,6 +311,13 @@ public enum RestoreService {
             throw RestoreStageError.liveStateIncompatible(reason)
         }
 
+        let stagingRootExisted = fileManager.fileExists(
+            atPath: liveLayout.stagingRootDirectory.path
+        )
+        let stagingExistingAncestor = nearestExistingAncestor(
+            of: liveLayout.stagingRootDirectory,
+            fileManager: fileManager
+        )
         let operationsRoot = liveLayout.stagingRootDirectory
             .appendingPathComponent("operations", isDirectory: true)
         try fileManager.createDirectory(at: operationsRoot, withIntermediateDirectories: true)
@@ -328,16 +336,21 @@ public enum RestoreService {
                 // atomic writer has made the marker visible. Remove the marker
                 // before its operation tree; if marker removal itself fails,
                 // preserve the complete tree rather than leave a dangling marker.
-                if fileManager.fileExists(atPath: pendingMarker.path) {
-                    if (try? fileManager.removeItem(at: pendingMarker)) != nil {
+                var markerRemovalIsDurable = !fileManager.fileExists(atPath: pendingMarker.path)
+                if !markerRemovalIsDurable {
+                    do {
+                        try fileManager.removeItem(at: pendingMarker)
                         // The atomic marker rename may already have become visible
                         // before its writer reported a durability error. Publish
                         // this compensating unlink before removing the tree it
                         // names, so a crash cannot resurrect a ready marker.
-                        try? operations.synchronizeItem(at: liveLayout.stagingRootDirectory)
+                        try operations.synchronizeItem(at: liveLayout.stagingRootDirectory)
+                        markerRemovalIsDurable = true
+                    } catch {
+                        markerRemovalIsDurable = false
                     }
                 }
-                if !fileManager.fileExists(atPath: pendingMarker.path) {
+                if markerRemovalIsDurable {
                     if (try? fileManager.removeItem(at: operationDirectory)) != nil {
                         // Likewise make the bounded operation cleanup durable.
                         // A resurrected orphan tree is not activatable, but it is
@@ -438,9 +451,23 @@ public enum RestoreService {
             selectedBlobCount: refreshed.referencedBlobs.count,
             safetyBlobCount: liveValidation.blobs.count
         )
+        let intentData = try RestoreIntent.encode(intent)
+        let operationIntentURL = operationDirectory
+            .appendingPathComponent(RestoreIntent.operationFileName)
+        // Keep an authenticated, content-free validation context inside the
+        // retained operation tree. Recovery can revalidate the safety state
+        // even if marker unlink became visible before its directory sync.
+        try operations.writeIntentAtomically(intentData, to: operationIntentURL)
         try operations.synchronizeItem(at: operationsRoot)
         try operations.synchronizeItem(at: liveLayout.stagingRootDirectory)
-        try operations.writeIntentAtomically(RestoreIntent.encode(intent), to: pendingMarker)
+        try synchronizeCreatedDirectoryParents(
+            of: liveLayout.stagingRootDirectory,
+            through: stagingRootExisted
+                ? liveLayout.stagingRootDirectory.deletingLastPathComponent()
+                : stagingExistingAncestor,
+            operations: operations
+        )
+        try operations.writeIntentAtomically(intentData, to: pendingMarker)
         markerPublished = true
 
         return RestoreStagingResult(
@@ -527,6 +554,29 @@ public enum RestoreService {
               let stagingSystem = stagingAttributes[.systemNumber] as? NSNumber
         else { return false }
         return liveSystem == stagingSystem
+    }
+
+    /// Publishes every directory entry created by an intermediate-directory
+    /// operation, from the new root's parent back through the ancestor that was
+    /// known to exist before creation.
+    private static func synchronizeCreatedDirectoryParents(
+        of createdRoot: URL,
+        through existingAncestor: URL,
+        operations: any RestoreFileOperations
+    ) throws {
+        let ancestor = existingAncestor.standardizedFileURL
+        let root = createdRoot.standardizedFileURL
+        guard root.path.hasPrefix(ancestor.path + "/") else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        var directory = root.deletingLastPathComponent().standardizedFileURL
+        while true {
+            try operations.synchronizeItem(at: directory)
+            guard directory != ancestor else { return }
+            let parent = directory.deletingLastPathComponent().standardizedFileURL
+            guard parent != directory else { throw CocoaError(.fileWriteUnknown) }
+            directory = parent
+        }
     }
 
     private static func nearestExistingAncestor(

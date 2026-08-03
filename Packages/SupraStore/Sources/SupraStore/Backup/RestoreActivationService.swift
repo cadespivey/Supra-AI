@@ -496,15 +496,21 @@ public enum RestoreActivationService {
         let markerURL = liveLayout.stagingRootDirectory
             .appendingPathComponent(RestoreIntent.pendingFileName)
         if outcome.status == .recoveryRequired {
-            guard itemExists(at: markerURL) else {
-                return .replayingRecovery(outcome, safetyDatabaseURL: nil)
-            }
             do {
-                let context = try loadContext(
-                    markerURL: markerURL,
-                    liveLayout: liveLayout,
-                    fileManager: fileManager
-                )
+                let context = if itemExists(at: markerURL) {
+                    try loadContext(
+                        markerURL: markerURL,
+                        liveLayout: liveLayout,
+                        fileManager: fileManager
+                    )
+                } else {
+                    try loadRecoveryContext(
+                        outcome: outcome,
+                        markerURL: markerURL,
+                        liveLayout: liveLayout,
+                        fileManager: fileManager
+                    )
+                }
                 guard outcomeMatchesContext(outcome, context: context) else {
                     throw RestoreActivationFailure.invalidIntent
                 }
@@ -697,6 +703,7 @@ public enum RestoreActivationService {
                 selectedValidation.blobs,
                 from: context.selectedBlobsDirectory,
                 into: liveLayout.blobsDirectory,
+                through: liveLayout.databaseURL.deletingLastPathComponent(),
                 operationID: context.intent.operationID,
                 phase: .activate,
                 fileManager: fileManager,
@@ -780,6 +787,7 @@ public enum RestoreActivationService {
                 safetyValidation.blobs,
                 from: context.safetyBlobsDirectory,
                 into: liveLayout.blobsDirectory,
+                through: liveLayout.databaseURL.deletingLastPathComponent(),
                 operationID: context.intent.operationID,
                 phase: .rollback,
                 fileManager: fileManager,
@@ -867,10 +875,71 @@ public enum RestoreActivationService {
             throw RestoreActivationFailure.invalidIntent
         }
         let markerData = try Data(contentsOf: markerURL)
-        let intent = try RestoreIntent.decode(markerData)
+        let context = try makeContext(
+            intentData: markerData,
+            markerURL: markerURL,
+            expectedOperationID: nil,
+            liveLayout: liveLayout,
+            fileManager: fileManager
+        )
+        let operationIntentURL = context.markerURL.deletingLastPathComponent()
+            .appendingPathComponent("operations", isDirectory: true)
+            .appendingPathComponent(context.intent.operationID, isDirectory: true)
+            .appendingPathComponent(RestoreIntent.operationFileName)
+        guard RestoreValidation.isContainedRegularFile(
+            operationIntentURL,
+            in: liveLayout.stagingRootDirectory,
+            fileManager: fileManager
+        ), try Data(contentsOf: operationIntentURL) == markerData else {
+            throw RestoreActivationFailure.invalidIntent
+        }
+        return context
+    }
+
+    private static func loadRecoveryContext(
+        outcome: RestoreOutcomeRecord,
+        markerURL: URL,
+        liveLayout: RestoreLiveLayout,
+        fileManager: FileManager
+    ) throws -> ActivationContext {
+        guard let operationID = outcome.operationID,
+              let uuid = UUID(uuidString: operationID),
+              uuid.uuidString.lowercased() == operationID
+        else {
+            throw RestoreActivationFailure.invalidIntent
+        }
+        let operationIntentURL = liveLayout.stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+            .appendingPathComponent(operationID, isDirectory: true)
+            .appendingPathComponent(RestoreIntent.operationFileName)
+        guard RestoreValidation.isContainedRegularFile(
+            operationIntentURL,
+            in: liveLayout.stagingRootDirectory,
+            fileManager: fileManager
+        ) else {
+            throw RestoreActivationFailure.invalidIntent
+        }
+        return try makeContext(
+            intentData: Data(contentsOf: operationIntentURL),
+            markerURL: markerURL,
+            expectedOperationID: operationID,
+            liveLayout: liveLayout,
+            fileManager: fileManager
+        )
+    }
+
+    private static func makeContext(
+        intentData: Data,
+        markerURL: URL,
+        expectedOperationID: String?,
+        liveLayout: RestoreLiveLayout,
+        fileManager: FileManager
+    ) throws -> ActivationContext {
+        let intent = try RestoreIntent.decode(intentData)
         guard intent.schemaVersion == RestoreIntent.currentSchemaVersion,
               let uuid = UUID(uuidString: intent.operationID),
               uuid.uuidString.lowercased() == intent.operationID,
+              expectedOperationID == nil || expectedOperationID == intent.operationID,
               RestoreSidecarStore.isValidSnapshotIdentifier(
                   intent.selectedSnapshotIdentifier,
                   required: true
@@ -891,7 +960,7 @@ public enum RestoreActivationService {
         return ActivationContext(
             intent: intent,
             markerURL: markerURL,
-            markerData: markerData,
+            markerData: intentData,
             selectedDatabaseURL: selectedDirectory
                 .appendingPathComponent(RestoreService.stagedDatabaseFileName),
             selectedBlobsDirectory: selectedDirectory.appendingPathComponent("blobs", isDirectory: true),
@@ -936,12 +1005,23 @@ public enum RestoreActivationService {
         _ blobs: [RestoreBlobReference],
         from sourceRoot: URL,
         into liveRoot: URL,
+        through durableAncestor: URL,
         operationID: String,
         phase: ReplacementPhase,
         fileManager: FileManager,
         operations: any RestoreActivationFileOperations
     ) throws {
+        let resolvedAncestor = durableAncestor.resolvingSymlinksInPath().standardizedFileURL
+        let prospectiveRoot = liveRoot.resolvingSymlinksInPath().standardizedFileURL
+        guard prospectiveRoot.path.hasPrefix(resolvedAncestor.path + "/") else {
+            throw RestoreActivationFailure.blobInstallationFailed
+        }
         try fileManager.createDirectory(at: liveRoot, withIntermediateDirectories: true)
+        try publishCreatedDirectory(
+            liveRoot,
+            through: resolvedAncestor,
+            operations: operations
+        )
         let resolvedLiveRoot = liveRoot.resolvingSymlinksInPath().standardizedFileURL
 
         for blob in blobs {
@@ -1079,6 +1159,32 @@ public enum RestoreActivationService {
             directory.deleteLastPathComponent()
         }
         throw RestoreActivationFailure.blobInstallationFailed
+    }
+
+    private static func publishCreatedDirectory(
+        _ createdRoot: URL,
+        through existingAncestor: URL,
+        operations: any RestoreActivationFileOperations
+    ) throws {
+        let root = createdRoot.resolvingSymlinksInPath().standardizedFileURL
+        let ancestor = existingAncestor.resolvingSymlinksInPath().standardizedFileURL
+        guard root.path.hasPrefix(ancestor.path + "/") else {
+            throw RestoreActivationFailure.blobInstallationFailed
+        }
+        try operations.synchronizeItem(at: root)
+        var directory = root.deletingLastPathComponent().standardizedFileURL
+        while true {
+            try operations.synchronizeItem(at: directory)
+            guard directory == ancestor else {
+                let parent = directory.deletingLastPathComponent().standardizedFileURL
+                guard parent != directory else {
+                    throw RestoreActivationFailure.blobInstallationFailed
+                }
+                directory = parent
+                continue
+            }
+            return
+        }
     }
 
     private static func isSHA256(_ value: String) -> Bool {

@@ -51,6 +51,11 @@ public struct RestoreStagingFailureRecord: Codable, Equatable, Sendable {
 /// the live SQLite store. Every mutating call synchronizes its containing
 /// directory before returning.
 public enum RestoreSidecarStore {
+    private static let stagingFailureAcknowledgementFileName =
+        ".last-restore-staging-failure.acknowledging"
+    private static let activationOutcomeAcknowledgementFileName =
+        ".last-restore-outcome.acknowledging"
+
     @discardableResult
     public static func recordStagingFailure(
         operationID: UUID,
@@ -59,6 +64,30 @@ public enum RestoreSidecarStore {
         failedAt: Date = Date(),
         fileManager: FileManager = .default
     ) throws -> RestoreStagingFailureRecord {
+        try recordStagingFailure(
+            operationID: operationID,
+            reason: reason,
+            stagingRootDirectory: stagingRootDirectory,
+            failedAt: failedAt,
+            fileManager: fileManager,
+            operations: SystemRestoreActivationFileOperations(fileManager: fileManager)
+        )
+    }
+
+    @discardableResult
+    static func recordStagingFailure(
+        operationID: UUID,
+        reason: RestoreStagingFailureReason,
+        stagingRootDirectory: URL,
+        failedAt: Date = Date(),
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations
+    ) throws -> RestoreStagingFailureRecord {
+        let rootExisted = itemExists(at: stagingRootDirectory)
+        let existingAncestor = nearestExistingAncestor(
+            of: stagingRootDirectory,
+            fileManager: fileManager
+        )
         try fileManager.createDirectory(
             at: stagingRootDirectory,
             withIntermediateDirectories: true
@@ -70,8 +99,17 @@ public enum RestoreSidecarStore {
         )
         let destination = stagingRootDirectory
             .appendingPathComponent(RestoreStagingFailureRecord.lastFailureFileName)
-        try SystemRestoreFileOperations(fileManager: fileManager)
-            .writeIntentAtomically(RestoreStagingFailureRecord.encode(record), to: destination)
+        try operations.writeOutcomeAtomically(
+            RestoreStagingFailureRecord.encode(record),
+            to: destination
+        )
+        try synchronizeDirectoryParents(
+            of: stagingRootDirectory,
+            through: rootExisted
+                ? stagingRootDirectory.deletingLastPathComponent()
+                : existingAncestor,
+            operations: operations
+        )
         return record
     }
 
@@ -79,6 +117,23 @@ public enum RestoreSidecarStore {
         stagingRootDirectory: URL,
         fileManager: FileManager = .default
     ) throws -> RestoreStagingFailureRecord? {
+        try readStagingFailure(
+            stagingRootDirectory: stagingRootDirectory,
+            fileManager: fileManager,
+            operations: SystemRestoreActivationFileOperations(fileManager: fileManager)
+        )
+    }
+
+    static func readStagingFailure(
+        stagingRootDirectory: URL,
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations
+    ) throws -> RestoreStagingFailureRecord? {
+        try reconcileAcknowledgementTombstones(
+            stagingRootDirectory: stagingRootDirectory,
+            fileManager: fileManager,
+            operations: operations
+        )
         let source = stagingRootDirectory
             .appendingPathComponent(RestoreStagingFailureRecord.lastFailureFileName)
         guard itemExists(at: source) else { return nil }
@@ -103,19 +158,29 @@ public enum RestoreSidecarStore {
         stagingRootDirectory: URL,
         fileManager: FileManager = .default
     ) throws {
-        let destination = stagingRootDirectory
-            .appendingPathComponent(RestoreStagingFailureRecord.lastFailureFileName)
-        guard itemExists(at: destination) else { return }
-        guard RestoreValidation.isContainedRegularFile(
-            destination,
-            in: stagingRootDirectory,
+        try acknowledgeStagingFailure(
+            stagingRootDirectory: stagingRootDirectory,
+            fileManager: fileManager,
+            operations: SystemRestoreActivationFileOperations(fileManager: fileManager)
+        )
+    }
+
+    static func acknowledgeStagingFailure(
+        stagingRootDirectory: URL,
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations
+    ) throws {
+        guard try readStagingFailure(
+            stagingRootDirectory: stagingRootDirectory,
             fileManager: fileManager
-        ) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        try fileManager.removeItem(at: destination)
-        try SystemRestoreFileOperations(fileManager: fileManager)
-            .synchronizeItem(at: stagingRootDirectory)
+        ) != nil else { return }
+        try acknowledgeSidecar(
+            named: RestoreStagingFailureRecord.lastFailureFileName,
+            tombstoneName: stagingFailureAcknowledgementFileName,
+            stagingRootDirectory: stagingRootDirectory,
+            fileManager: fileManager,
+            operations: operations
+        )
     }
 
     /// Reads the most recent display-safe activation outcome without requiring
@@ -125,6 +190,23 @@ public enum RestoreSidecarStore {
         stagingRootDirectory: URL,
         fileManager: FileManager = .default
     ) throws -> RestoreOutcomeRecord? {
+        try readActivationOutcome(
+            stagingRootDirectory: stagingRootDirectory,
+            fileManager: fileManager,
+            operations: SystemRestoreActivationFileOperations(fileManager: fileManager)
+        )
+    }
+
+    static func readActivationOutcome(
+        stagingRootDirectory: URL,
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations
+    ) throws -> RestoreOutcomeRecord? {
+        try reconcileAcknowledgementTombstones(
+            stagingRootDirectory: stagingRootDirectory,
+            fileManager: fileManager,
+            operations: operations
+        )
         let source = stagingRootDirectory
             .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
         guard itemExists(at: source) else { return nil }
@@ -157,22 +239,36 @@ public enum RestoreSidecarStore {
         stagingRootDirectory: URL,
         fileManager: FileManager = .default
     ) throws {
+        try acknowledgeActivationOutcome(
+            stagingRootDirectory: stagingRootDirectory,
+            fileManager: fileManager,
+            operations: SystemRestoreActivationFileOperations(fileManager: fileManager)
+        )
+    }
+
+    static func acknowledgeActivationOutcome(
+        stagingRootDirectory: URL,
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations
+    ) throws {
         guard let record = try readActivationOutcome(
             stagingRootDirectory: stagingRootDirectory,
             fileManager: fileManager
         ) else { return }
         guard record.status != .recoveryRequired else { return }
-        let operations = SystemRestoreActivationFileOperations(fileManager: fileManager)
         try cleanupTerminalOperation(
             record,
             stagingRootDirectory: stagingRootDirectory,
             fileManager: fileManager,
             operations: operations
         )
-        let destination = stagingRootDirectory
-            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
-        try operations.removeItem(at: destination)
-        try operations.synchronizeItem(at: stagingRootDirectory)
+        try acknowledgeSidecar(
+            named: RestoreOutcomeRecord.lastOutcomeFileName,
+            tombstoneName: activationOutcomeAcknowledgementFileName,
+            stagingRootDirectory: stagingRootDirectory,
+            fileManager: fileManager,
+            operations: operations
+        )
     }
 
     @discardableResult
@@ -226,6 +322,21 @@ public enum RestoreSidecarStore {
         stagingRootDirectory: URL,
         fileManager: FileManager = .default
     ) throws -> Bool {
+        try cleanupInterruptedStagingOperation(
+            operationID: operationID,
+            stagingRootDirectory: stagingRootDirectory,
+            fileManager: fileManager,
+            operations: SystemRestoreActivationFileOperations(fileManager: fileManager)
+        )
+    }
+
+    @discardableResult
+    static func cleanupInterruptedStagingOperation(
+        operationID: UUID,
+        stagingRootDirectory: URL,
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations
+    ) throws -> Bool {
         let markerURL = stagingRootDirectory
             .appendingPathComponent(RestoreIntent.pendingFileName)
         let outcomeURL = stagingRootDirectory
@@ -235,11 +346,6 @@ public enum RestoreSidecarStore {
         }
 
         let identifier = operationID.uuidString.lowercased()
-        let operationDirectory = stagingRootDirectory
-            .appendingPathComponent("operations", isDirectory: true)
-            .appendingPathComponent(identifier, isDirectory: true)
-        guard itemExists(at: operationDirectory) else { return true }
-        let operations = SystemRestoreActivationFileOperations(fileManager: fileManager)
         try removeTerminalOperationTree(
             operationID: identifier,
             stagingRootDirectory: stagingRootDirectory,
@@ -247,6 +353,106 @@ public enum RestoreSidecarStore {
             operations: operations
         )
         return true
+    }
+
+    private static func acknowledgeSidecar(
+        named fileName: String,
+        tombstoneName: String,
+        stagingRootDirectory: URL,
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations
+    ) throws {
+        let source = stagingRootDirectory.appendingPathComponent(fileName)
+        let tombstone = stagingRootDirectory.appendingPathComponent(tombstoneName)
+        guard itemExists(at: source), !itemExists(at: tombstone),
+              RestoreValidation.isContainedRegularFile(
+                  source,
+                  in: stagingRootDirectory,
+                  fileManager: fileManager
+              )
+        else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        guard Darwin.rename(source.path, tombstone.path) == 0 else {
+            throw posixError(path: source.path)
+        }
+        // The first sync makes the rename durable, so a crash can reveal only
+        // the source or its acknowledgement tombstone. The second publishes
+        // tombstone removal. Cold reads reconcile either incomplete phase.
+        try operations.synchronizeItem(at: stagingRootDirectory)
+        try operations.removeItem(at: tombstone)
+        try operations.synchronizeItem(at: stagingRootDirectory)
+    }
+
+    private static func reconcileAcknowledgementTombstones(
+        stagingRootDirectory: URL,
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations
+    ) throws {
+        guard itemExists(at: stagingRootDirectory) else { return }
+        guard isContainedDirectory(
+            stagingRootDirectory,
+            in: stagingRootDirectory,
+            fileManager: fileManager
+        ) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        for (sourceName, tombstoneName) in [
+            (RestoreStagingFailureRecord.lastFailureFileName,
+             stagingFailureAcknowledgementFileName),
+            (RestoreOutcomeRecord.lastOutcomeFileName,
+             activationOutcomeAcknowledgementFileName),
+        ] {
+            let source = stagingRootDirectory.appendingPathComponent(sourceName)
+            let tombstone = stagingRootDirectory.appendingPathComponent(tombstoneName)
+            guard itemExists(at: tombstone) else { continue }
+            guard !itemExists(at: source),
+                  RestoreValidation.isContainedRegularFile(
+                      tombstone,
+                      in: stagingRootDirectory,
+                      fileManager: fileManager
+                  )
+            else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            try operations.removeItem(at: tombstone)
+        }
+        // Even with no visible tombstone, this publishes an acknowledgement
+        // unlink that failed its final sync in the preceding process.
+        try operations.synchronizeItem(at: stagingRootDirectory)
+        try operations.synchronizeItem(at: stagingRootDirectory.deletingLastPathComponent())
+    }
+
+    private static func synchronizeDirectoryParents(
+        of createdRoot: URL,
+        through existingAncestor: URL,
+        operations: any RestoreActivationFileOperations
+    ) throws {
+        let root = createdRoot.standardizedFileURL
+        let ancestor = existingAncestor.standardizedFileURL
+        guard root.path.hasPrefix(ancestor.path + "/") else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        var directory = root.deletingLastPathComponent().standardizedFileURL
+        while true {
+            try operations.synchronizeItem(at: directory)
+            guard directory != ancestor else { return }
+            let parent = directory.deletingLastPathComponent().standardizedFileURL
+            guard parent != directory else { throw CocoaError(.fileWriteUnknown) }
+            directory = parent
+        }
+    }
+
+    private static func nearestExistingAncestor(
+        of url: URL,
+        fileManager: FileManager
+    ) -> URL {
+        var candidate = url.standardizedFileURL
+        while !fileManager.fileExists(atPath: candidate.path),
+              candidate != candidate.deletingLastPathComponent().standardizedFileURL {
+            candidate.deleteLastPathComponent()
+        }
+        return candidate.standardizedFileURL
     }
 
     static func cleanupTerminalOperation(
@@ -353,7 +559,16 @@ public enum RestoreSidecarStore {
         }
         let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL.path
         let resolvedDirectory = directory.resolvingSymlinksInPath().standardizedFileURL.path
-        return resolvedDirectory.hasPrefix(resolvedRoot + "/")
+        return resolvedDirectory == resolvedRoot
+            || resolvedDirectory.hasPrefix(resolvedRoot + "/")
+    }
+
+    private static func posixError(path: String) -> NSError {
+        NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(errno),
+            userInfo: [NSFilePathErrorKey: path]
+        )
     }
 
     private static func itemExists(at url: URL) -> Bool {
