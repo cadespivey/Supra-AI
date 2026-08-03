@@ -734,6 +734,37 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(replayOperations.events.contains(.synchronizeMarkerDirectory))
     }
 
+    func testFirstUseStagingFailureSidecarPublishesParentAndRetriesProof() throws {
+        let operationID = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
+        let stagingParent = fixture.stagingRootDirectory.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: stagingParent,
+            withIntermediateDirectories: true
+        )
+        let failingOperations = RecordingRestoreActivationOperations(
+            failureCounts: [.synchronizeStagingParent: 1],
+            stagingParentURL: stagingParent
+        )
+
+        XCTAssertThrowsError(try RestoreSidecarStore.recordStagingFailure(
+            operationID: operationID,
+            reason: .stagingIOFailed,
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: failingOperations
+        ))
+
+        let retryOperations = RecordingRestoreActivationOperations(
+            stagingParentURL: stagingParent
+        )
+        XCTAssertEqual(try RestoreSidecarStore.readStagingFailure(
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: retryOperations
+        )?.operationID, operationID.uuidString.lowercased())
+        XCTAssertTrue(retryOperations.events.contains(.synchronizeStagingParent))
+    }
+
     func testRecoveryOutcomeAcknowledgementPreservesDurableFreezeAndOperationTree() throws {
         let staged = try stage()
         let result = activate(operations: RecordingRestoreActivationOperations(
@@ -941,16 +972,23 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
         case removeOperationTree
         case synchronizeOperationsDirectory
         case synchronizeLiveBlobParent
+        case synchronizeStagingParent
     }
 
     private let system = SystemRestoreActivationFileOperations()
     private let failures: Set<Event>
     private var remainingFailureCounts: [Event: Int]
+    private let stagingParentURL: URL?
     private(set) var events: [Event] = []
 
-    init(failures: Set<Event> = [], failureCounts: [Event: Int] = [:]) {
+    init(
+        failures: Set<Event> = [],
+        failureCounts: [Event: Int] = [:],
+        stagingParentURL: URL? = nil
+    ) {
         self.failures = failures
         self.remainingFailureCounts = failureCounts
+        self.stagingParentURL = stagingParentURL?.standardizedFileURL
     }
 
     private func shouldFail(_ event: Event) -> Bool {
@@ -981,7 +1019,12 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
     }
 
     func synchronizeItem(at url: URL) throws {
-        if url.lastPathComponent == "RestoreStaging" {
+        if let stagingParentURL, url.standardizedFileURL == stagingParentURL {
+            events.append(.synchronizeStagingParent)
+            if shouldFail(.synchronizeStagingParent) {
+                throw ActivationTestError.markerSync
+            }
+        } else if url.lastPathComponent == "RestoreStaging" {
             events.append(.synchronizeMarkerDirectory)
             if shouldFail(.synchronizeMarkerDirectory) {
                 throw ActivationTestError.markerSync
