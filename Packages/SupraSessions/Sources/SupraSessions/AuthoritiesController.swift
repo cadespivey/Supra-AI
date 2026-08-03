@@ -138,13 +138,16 @@ public final class AuthoritiesController: ObservableObject {
         }
 
         do {
-            try store.authorities.updateOpinionText(authorityID: authorityID, text: fetchedText)
-            guard let persisted = try store.authorities.fetchAuthority(id: authorityID)?.opinionText,
-                  Data(persisted.utf8) == Data(fetchedText.utf8) else {
-                return .unavailable(message: "Couldn't store the opinion text. Try again.")
-            }
+            let persisted = try store.authorities.storeFetchedOpinionTextIfAbsent(
+                authorityID: authorityID,
+                matterID: matterID,
+                fetchedText: fetchedText
+            )
             load()
-            return .ready(text: persisted, fetchedDetail: detail)
+            let fetchedDetail = Data(persisted.utf8) == Data(fetchedText.utf8) ? detail : nil
+            return .ready(text: persisted, fetchedDetail: fetchedDetail)
+        } catch let error as AuthorityRepositoryError {
+            return .unavailable(message: Self.reviewMessage(for: error))
         } catch {
             return .unavailable(message: "Couldn't store the opinion text. Try again.")
         }
@@ -186,6 +189,7 @@ public final class AuthoritiesController: ObservableObject {
         do {
             try store.authorities.revokePropositionReview(
                 authorityID: authorityID,
+                matterID: matterID,
                 revokedBy: propositionReviewActor()
             )
             return nil

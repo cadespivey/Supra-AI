@@ -202,6 +202,49 @@ public final class AuthorityRepository: @unchecked Sendable {
         }
     }
 
+    /// Persists an asynchronously fetched opinion only while the authority is
+    /// still a live member of the expected matter and has no opinion bytes. The
+    /// write/check/re-read share one transaction, so a concurrent local opinion
+    /// always wins and its proposition evidence is never invalidated.
+    public func storeFetchedOpinionTextIfAbsent(
+        authorityID: String,
+        matterID: String,
+        fetchedText: String
+    ) throws -> String {
+        try writer.write { db in
+            guard let authority = try AuthorityRecord.fetchOne(db, key: authorityID),
+                  authority.matterID == matterID else {
+                throw AuthorityRepositoryError.authorityNotFound
+            }
+            guard authority.deletedAt == nil else {
+                throw AuthorityRepositoryError.reviewRequiresLiveAuthority
+            }
+            if let currentText = authority.opinionText, !currentText.isEmpty {
+                return currentText
+            }
+            guard !fetchedText.isEmpty else {
+                throw AuthorityRepositoryError.opinionTextUnavailable
+            }
+
+            try db.execute(
+                sql: """
+                UPDATE authorities
+                SET opinion_text = ?, updated_at = ?
+                WHERE id = ?
+                  AND matter_id = ?
+                  AND deleted_at IS NULL
+                  AND (opinion_text IS NULL OR opinion_text = '')
+                """,
+                arguments: [fetchedText, Date(), authorityID, matterID]
+            )
+            guard db.changesCount == 1,
+                  let persistedText = try AuthorityRecord.fetchOne(db, key: authorityID)?.opinionText else {
+                throw AuthorityRepositoryError.opinionTextUnavailable
+            }
+            return persistedText
+        }
+    }
+
     public func updateCaseSummary(authorityID: String, summary: String) throws {
         try writer.write { db in
             try db.execute(
@@ -347,11 +390,13 @@ public final class AuthorityRepository: @unchecked Sendable {
     /// opinion, excerpt, citation, or court content into the audit ledger.
     public func revokePropositionReview(
         authorityID: String,
+        matterID: String,
         revokedBy: String,
         revokedAt: Date = Date()
     ) throws {
         try writer.write { db in
-            guard let authority = try AuthorityRecord.fetchOne(db, key: authorityID) else {
+            guard let authority = try AuthorityRecord.fetchOne(db, key: authorityID),
+                  authority.matterID == matterID else {
                 throw AuthorityRepositoryError.authorityNotFound
             }
             guard authority.deletedAt == nil else {
@@ -368,9 +413,9 @@ public final class AuthorityRepository: @unchecked Sendable {
                 sql: """
                 UPDATE authorities
                 SET reviewed_proposition_json = NULL, updated_at = ?
-                WHERE id = ? AND deleted_at IS NULL
+                WHERE id = ? AND matter_id = ? AND deleted_at IS NULL
                 """,
-                arguments: [revokedAt, authorityID]
+                arguments: [revokedAt, authorityID, matterID]
             )
             guard db.changesCount == 1 else {
                 throw AuthorityRepositoryError.reviewRequiresLiveAuthority

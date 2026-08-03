@@ -432,6 +432,7 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         )
         XCTAssertThrowsError(try revocationFixture.store.authorities.revokePropositionReview(
             authorityID: revocationFixture.authority.id,
+            matterID: revocationFixture.authority.matterID,
             revokedBy: "synthetic-revoker",
             revokedAt: fixedReviewDate.addingTimeInterval(2)
         ))
@@ -517,6 +518,7 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         let reviewed = try tryReview(fixture)
         try fixture.store.authorities.revokePropositionReview(
             authorityID: fixture.authority.id,
+            matterID: fixture.authority.matterID,
             revokedBy: "synthetic-revoker",
             revokedAt: fixedReviewDate.addingTimeInterval(10)
         )
@@ -544,6 +546,7 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         XCTAssertFalse(auditMetadataJSON.contains(excerpt))
         XCTAssertThrowsError(try fixture.store.authorities.revokePropositionReview(
             authorityID: fixture.authority.id,
+            matterID: fixture.authority.matterID,
             revokedBy: "synthetic-revoker",
             revokedAt: fixedReviewDate.addingTimeInterval(11)
         )) { error in
@@ -681,6 +684,7 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         )
         try contentFixture.store.authorities.revokePropositionReview(
             authorityID: contentFixture.authority.id,
+            matterID: contentFixture.authority.matterID,
             revokedBy: "synthetic-revoker",
             revokedAt: fixedReviewDate.addingTimeInterval(20)
         )
