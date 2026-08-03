@@ -18,7 +18,12 @@ documents, and completion record have been written and verified.
 component passes verification, then quits automatically. Once staging begins, the process quits
 whether staging succeeds or fails; the closed controller graph is never reused.
 5. Reopen Supra AI. On that cold start, Supra AI installs the staged database and managed documents
-   before opening a database writer, migrates the database if necessary, and validates the result.
+   before constructing the normal app store, then opens, migrates, and validates the database through
+   the normal database boundary.
+
+Restore staging blocks further workspace work, closes the exact live database writer, and always exits the process after the quiesced runner begins.
+Restore staging verifies the current database and managed blobs into a safety copy, verifies the selected snapshot on the live volume, and publishes the cold-start marker only after every staged component passes.
+Cold-start restore activation installs the selected database before the app constructs its normal store, then opens, migrates, and validates it through SupraDatabase; failure reinstalls and validates the safety database before normal work resumes.
 
 Restore does not modify the backup source. It reads the selected snapshot and shared document pool,
 then works from private staged copies. A completed restore consumes its restart marker, so later
