@@ -585,6 +585,20 @@ else
   record_failure 'in-flight motion UI can hide cancellation or lacks disk-level absence proof'
 fi
 
+authority_detail_view="${repo_root}/Apps/SupraAI/SupraAI/Authorities/AuthorityDetailView.swift"
+motion_ui_class="$(sed -n '/final class MotionToDismissWorkspaceUITests:/,/^}/p' "$motion_ui_tests")"
+if grep -Fq 'authority.reviewedProposition.status' "$authority_detail_view" \
+    && grep -Fq 'authority.reviewedProposition.excerpt' "$authority_detail_view" \
+    && grep -Fq 'authority.reviewedProposition.save' "$authority_detail_view" \
+    && grep -Fq 'authority.reviewedProposition.remove' "$authority_detail_view" \
+    && grep -Fq 'testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly' <<<"$motion_ui_class" \
+    && grep -Fq 'authorities.row.ui-motion-authority-success' <<<"$motion_ui_class" \
+    && grep -Fq 'expectedExcerpt' <<<"$motion_ui_class"; then
+  printf '%s\n' 'PASS: hosted authority editor proves exact reviewed evidence lifecycle'
+else
+  record_failure 'hosted authority editor does not prove the exact reviewed evidence lifecycle'
+fi
+
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_ALLOWED=YES' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_REQUIRED=YES' "$app_smoke_script" \

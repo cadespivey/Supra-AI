@@ -874,6 +874,70 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         XCTAssertEqual(docxArtifacts(beneath: storageRoot), [], "Cancellation left a DOCX in the injected production storage root")
     }
 
+    func testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly() throws {
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "AuthorityReviewUITest")
+        let app = launchMotionApp(flag: "-uiTestMotionDraftSuccess", storageRoot: storageRoot)
+        let expectedExcerpt = "A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
+
+        openReviewedAuthorityThroughProductionNavigation(in: app)
+
+        let status = app.descendants(matching: .any)["authority.reviewedProposition.status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10), "Reviewed-proposition status was not exposed")
+        waitForStatus(status, containing: "Ready")
+
+        let excerpt = app.descendants(matching: .any)["authority.reviewedProposition.excerpt"]
+        XCTAssertTrue(excerpt.waitForExistence(timeout: 5), "Exact-excerpt editor was not exposed")
+        let excerptValue = (excerpt.value as? String) ?? excerpt.label
+        XCTAssertEqual(excerptValue, expectedExcerpt)
+
+        let remove = app.buttons["authority.reviewedProposition.remove"]
+        scrollToHittable(remove, in: app)
+        XCTAssertTrue(remove.isHittable, remove.debugDescription)
+        remove.click()
+        waitForStatus(status, containing: "Not reviewed")
+        XCTAssertEqual((excerpt.value as? String) ?? excerpt.label, expectedExcerpt)
+
+        let save = app.buttons["authority.reviewedProposition.save"]
+        scrollToHittable(save, in: app)
+        XCTAssertTrue(save.isEnabled)
+        XCTAssertTrue(save.isHittable, save.debugDescription)
+        save.click()
+        waitForStatus(status, containing: "Ready")
+        XCTAssertEqual((excerpt.value as? String) ?? excerpt.label, expectedExcerpt)
+    }
+
+    private func openReviewedAuthorityThroughProductionNavigation(in app: XCUIApplication) {
+        let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
+        XCTAssertTrue(matter.waitForExistence(timeout: 20))
+        XCTAssertTrue(matter.isHittable)
+        matter.click()
+
+        let authorities = app.buttons["matterTab.Authorities"]
+        XCTAssertTrue(authorities.waitForExistence(timeout: 10), "Matter workspace did not expose Authorities")
+        XCTAssertTrue(authorities.isHittable)
+        authorities.click()
+
+        let row = app.buttons["authorities.row.ui-motion-authority-success"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded reviewed authority was not listed")
+        scrollToHittable(row, in: app)
+        XCTAssertTrue(row.isHittable, row.debugDescription)
+        row.click()
+    }
+
+    private func scrollToHittable(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<8 where !element.isHittable {
+            let scrollView = app.scrollViews.firstMatch
+            guard scrollView.exists else { break }
+            scrollView.scroll(byDeltaX: 0, deltaY: -360)
+        }
+    }
+
+    private func waitForStatus(_ element: XCUIElement, containing expected: String) {
+        let predicate = NSPredicate(format: "label CONTAINS[c] %@", expected)
+        let statusExpectation = expectation(for: predicate, evaluatedWith: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [statusExpectation], timeout: 5), .completed)
+    }
+
     private func openMotionDraftThroughProductionNavigation(in app: XCUIApplication) {
         let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
         XCTAssertTrue(matter.waitForExistence(timeout: 20))
