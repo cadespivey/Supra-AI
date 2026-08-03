@@ -18,14 +18,26 @@ public struct DurableFileWriter: Sendable {
         case temporaryFileCreationFailed(Int32)
         case destinationExists
         case atomicInstallFailed(Int32)
+        case parentDirectorySynchronizationFailed(Int32)
     }
 
     public typealias FaultInjector = @Sendable (FaultStage) throws -> Void
+    typealias ParentDirectorySynchronizer = @Sendable (URL) throws -> Void
 
     private let faultInjector: FaultInjector
+    private let parentDirectorySynchronizer: ParentDirectorySynchronizer
 
     public init(faultInjector: @escaping FaultInjector = { _ in }) {
         self.faultInjector = faultInjector
+        self.parentDirectorySynchronizer = Self.synchronizeParentDirectory
+    }
+
+    init(
+        faultInjector: @escaping FaultInjector,
+        parentDirectorySynchronizer: @escaping ParentDirectorySynchronizer
+    ) {
+        self.faultInjector = faultInjector
+        self.parentDirectorySynchronizer = parentDirectorySynchronizer
     }
 
     /// Convenience for a complete in-memory payload.
@@ -136,6 +148,7 @@ public struct DurableFileWriter: Sendable {
         try faultInjector(.beforeInstall)
         try Self.atomicInstall(temporary, at: standardizedDestination, policy: installPolicy)
         installed = true
+        try parentDirectorySynchronizer(parent)
     }
 
     private static func createExclusiveTemporaryFile(at url: URL) throws -> FileHandle {
@@ -169,6 +182,20 @@ public struct DurableFileWriter: Sendable {
                 throw WriterError.destinationExists
             }
             throw WriterError.atomicInstallFailed(code)
+        }
+    }
+
+    private static func synchronizeParentDirectory(_ directory: URL) throws {
+        let descriptor = directory.path.withCString {
+            Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else {
+            throw WriterError.parentDirectorySynchronizationFailed(errno)
+        }
+        defer { Darwin.close(descriptor) }
+
+        guard Darwin.fsync(descriptor) == 0 else {
+            throw WriterError.parentDirectorySynchronizationFailed(errno)
         }
     }
 }
