@@ -1108,7 +1108,7 @@ final class AppEnvironment: ObservableObject {
                 draft.jurisdiction = "Florida"
                 draft.partyPerspective = .defendant
                 draft.court = "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA"
-                draft.judge = "CV-G"
+                draft.judge = "Hon. Jane Smith"
                 draft.docketNumber = "2026-CA-001847"
                 try mattersController.updateMatter(id: matterID, draft: draft)
             }
@@ -1147,6 +1147,7 @@ final class AppEnvironment: ObservableObject {
                     extractionMethod: "synthetic@toolchain:motion-uitest"
                 ))
                 let part = DocumentPagePartRecord(
+                    id: "ui-motion-fact-part",
                     documentID: document.id,
                     partIndex: 0,
                     sourceKind: DocumentSourceKind.text.rawValue,
@@ -1154,6 +1155,7 @@ final class AppEnvironment: ObservableObject {
                     charCount: text.count
                 )
                 let revision = DocumentPartRevisionRecord(
+                    id: "ui-motion-fact-revision",
                     documentID: document.id,
                     partIndex: 0,
                     derivationKey: "motion-uitest:\(document.id)",
@@ -1163,6 +1165,7 @@ final class AppEnvironment: ObservableObject {
                     charCount: text.count
                 )
                 let selection = DocumentPartSelectionRecord(
+                    id: "ui-motion-fact-selection",
                     documentID: document.id,
                     partIndex: 0,
                     selectedRevisionID: revision.id,
@@ -1179,9 +1182,11 @@ final class AppEnvironment: ObservableObject {
                 )
                 try store.documentIndex.replaceChunks(documentID: document.id, chunks: [
                     DocumentChunkRecord(
+                        id: "ui-motion-fact-chunk",
                         documentID: document.id,
                         pagePartID: part.id,
                         revisionID: revision.id,
+                        chunkerVersion: 2,
                         chunkIndex: 0,
                         sourceKind: DocumentSourceKind.text.rawValue,
                         charStart: 0,
@@ -1196,7 +1201,12 @@ final class AppEnvironment: ObservableObject {
             let authorityName = blocked
                 ? "Fictional Motion Authority — Review Required"
                 : "Fictional Marine, LLC v. Harbor Works, Inc."
-            if !(try store.authorities.fetchAuthorities(matterID: matterID)).contains(where: { $0.caseName == authorityName }) {
+            let authority: AuthorityRecord
+            if let existing = (try store.authorities.fetchAuthorities(matterID: matterID)).first(where: {
+                $0.caseName == authorityName
+            }) {
+                authority = existing
+            } else {
                 let session = try store.research.createSession(
                     matterID: matterID,
                     title: "Fictional motion authority fixture",
@@ -1216,7 +1226,8 @@ final class AppEnvironment: ObservableObject {
                 ))
                 let citation = "Fictional Marine, LLC v. Harbor Works, Inc., 345 So. 3d 100, 104 (Fla. 1st DCA 2025)"
                 let support = "A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
-                _ = try store.authorities.insertAuthority(AuthorityRecord(
+                authority = try store.authorities.insertAuthority(AuthorityRecord(
+                    id: blocked ? "ui-motion-authority-blocked" : "ui-motion-authority-success",
                     matterID: matterID,
                     researchSessionID: session.id,
                     researchResultID: result.id,
@@ -1232,6 +1243,23 @@ final class AppEnvironment: ObservableObject {
                     opinionText: support,
                     caseSummary: support
                 ))
+            }
+            if success {
+                let support = "A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
+                switch try store.authorities.reviewedPropositionState(
+                    authorityID: authority.id,
+                    groundKey: .failureToStateClaim
+                ) {
+                case .ready:
+                    break
+                case .notReviewed, .blocked(_):
+                    _ = try store.authorities.reviewProposition(
+                        authorityID: authority.id,
+                        groundKey: .failureToStateClaim,
+                        excerpt: support,
+                        reviewedBy: profile.fullName
+                    )
+                }
             }
             mattersController.loadMatters()
         } catch {

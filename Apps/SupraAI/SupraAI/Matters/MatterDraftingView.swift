@@ -121,11 +121,6 @@ struct MatterDraftingView: View {
             recipient.emails = "dhardman@example.test"
             recipient.role = "Counsel for Plaintiff"
             _recipients = State(initialValue: [recipient])
-            if ProcessInfo.processInfo.arguments.contains("-uiTestMotionDraftSuccess")
-                || ProcessInfo.processInfo.arguments.contains("-uiTestMotionDraftBlocked") {
-                _motionRespondingTo = State(initialValue: "Plaintiff's First Amended Complaint")
-                _motionRelief = State(initialValue: "dismissal without prejudice and leave to amend")
-            }
         }
     }
 
@@ -138,7 +133,9 @@ struct MatterDraftingView: View {
                     legacyDraftReviewSection
                 }
                 workProductSection
+                    .disabled(controller.isGenerating)
                 selectedForm
+                    .disabled(controller.isGenerating)
                 if let result {
                     resultSection(result)
                 }
@@ -171,6 +168,7 @@ struct MatterDraftingView: View {
         // user switches to a different kind so a stale notice result doesn't linger
         // over the custom form (and vice versa).
         .onChange(of: selection) { _, _ in
+            if controller.isGenerating { generationTask?.cancel() }
             result = nil
             errorText = nil
             routingMessage = nil
@@ -320,6 +318,7 @@ struct MatterDraftingView: View {
                         sourceChoice(
                             selected: selectedMotionFactIDs.contains(source.chunkID),
                             enabled: source.isReady,
+                            accessibilityID: "drafting.motion.fact.\(source.chunkID)",
                             title: "\(source.documentName) — \(source.locator)",
                             detail: source.blockingReason ?? source.displayExcerpt
                         ) {
@@ -341,6 +340,7 @@ struct MatterDraftingView: View {
                         sourceChoice(
                             selected: selectedMotionAuthorityIDs.contains(source.authorityID),
                             enabled: source.isReady,
+                            accessibilityID: "drafting.motion.authority.\(source.authorityID)",
                             title: source.caseName,
                             detail: source.blockingReason ?? source.citation
                         ) {
@@ -379,6 +379,7 @@ struct MatterDraftingView: View {
     private func sourceChoice(
         selected: Bool,
         enabled: Bool,
+        accessibilityID: String,
         title: String,
         detail: String,
         action: @escaping () -> Void
@@ -399,6 +400,7 @@ struct MatterDraftingView: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityIdentifier(accessibilityID)
     }
 
     @ViewBuilder
@@ -594,7 +596,7 @@ struct MatterDraftingView: View {
             }
             Spacer()
             Button("Close") { dismiss() }
-            if controller.isGenerating, selection == .kind(.motionToDismiss) {
+            if controller.isGenerating {
                 Button("Cancel") { generationTask?.cancel() }
                     .accessibilityIdentifier("drafting.cancel")
             }
@@ -801,20 +803,6 @@ struct MatterDraftingView: View {
         let currentAuthorityIDs = Set(motionAuthoritySources.map(\.authorityID))
         selectedMotionFactIDs.formIntersection(currentFactIDs)
         selectedMotionAuthorityIDs.formIntersection(currentAuthorityIDs)
-
-        let arguments = ProcessInfo.processInfo.arguments
-        if arguments.contains("-uiTestMotionDraftSuccess") || arguments.contains("-uiTestMotionDraftBlocked") {
-            if selectedMotionFactIDs.isEmpty,
-               let fact = motionFactSources.first(where: { $0.isReady && $0.documentName.contains("Motion Draft") })
-                    ?? motionFactSources.first(where: \.isReady) {
-                selectedMotionFactIDs.insert(fact.chunkID)
-            }
-            if arguments.contains("-uiTestMotionDraftSuccess"),
-               selectedMotionAuthorityIDs.isEmpty,
-               let authority = motionAuthoritySources.first(where: \.isReady) {
-                selectedMotionAuthorityIDs.insert(authority.authorityID)
-            }
-        }
     }
 
     private func toggle(_ id: String, in selection: inout Set<String>) {
