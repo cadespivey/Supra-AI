@@ -130,13 +130,18 @@ final class MotionToDismissControllerTests: XCTestCase {
         try assertNoSuccessfulMotionSideEffects(fixture)
     }
 
-    // T-MTD-14 — malformed citations and authorities without reviewed proposition
-    // evidence both fail before runMotion/render/persistence.
+    // T-MTD-14 — expected RED for the federal false-positive fixture: malformed
+    // citations, federal citations with Florida in the party name, and authorities
+    // without reviewed proposition evidence must fail before render/persistence.
     func testTMTD14UnsupportedCitationAndPropositionCreateNoFileOrSuccessAudit() async throws {
         let fixture = try makeFixture()
         let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
 
-        for authorityID in [fixture.invalidCitationAuthorityID, fixture.unreviewedAuthorityID] {
+        for authorityID in [
+            fixture.invalidCitationAuthorityID,
+            fixture.unreviewedAuthorityID,
+            fixture.federalFalsePositiveAuthorityID,
+        ] {
             var input = fixture.selectedInput
             input.selectedAuthorityIDs = [authorityID]
             let readiness = controller.motionReadiness(input: input, matterID: fixture.matterID)
@@ -455,6 +460,79 @@ final class MotionToDismissControllerTests: XCTestCase {
             .contains { $0.eventType == "draft_generated" })
     }
 
+    // T-MTD-25. Expected RED: motion gating currently accepts any explicit court when
+    // the broad matter jurisdiction says Florida, and accepts federal/appellate courts
+    // whose own names contain Florida. Rule 1.140 motion generation is limited to an
+    // explicit Florida state circuit or county trial court.
+    func testTMTD25CourtContractAllowsStateTrialCourtsAndBlocksEveryOtherCourt() async throws {
+        let fixture = try makeFixture()
+        let verifier = InvocationCountingBlockingMotionVerifier()
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            pipelineFactory: {
+                DraftPipeline(verifier: verifier, renderer: CapturingMotionRenderer())
+            }
+        )
+
+        for supportedCourt in [
+            "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT, IN AND FOR DUVAL COUNTY, FLORIDA",
+            "IN THE COUNTY COURT IN AND FOR DUVAL COUNTY, FLORIDA",
+        ] {
+            try await setCourt(supportedCourt, fixture: fixture)
+            XCTAssertTrue(
+                controller.motionReadiness(input: fixture.selectedInput, matterID: fixture.matterID).canGenerate,
+                "expected supported Florida state trial court: \(supportedCourt)"
+            )
+        }
+
+        for unsupportedCourt in [
+            "UNITED STATES DISTRICT COURT FOR THE MIDDLE DISTRICT OF FLORIDA",
+            "FLORIDA FIRST DISTRICT COURT OF APPEAL",
+            "IN THE CIRCUIT COURT OF FULTON COUNTY, GEORGIA",
+        ] {
+            try await setCourt(unsupportedCourt, fixture: fixture)
+            let readiness = controller.motionReadiness(
+                input: fixture.selectedInput,
+                matterID: fixture.matterID
+            )
+            XCTAssertFalse(readiness.canGenerate, "unsupported filing court passed: \(unsupportedCourt)")
+            XCTAssertTrue(
+                readiness.blockingReasons.contains {
+                    $0.localizedCaseInsensitiveContains("Florida state circuit or county")
+                },
+                "missing state-trial-court reason for: \(unsupportedCourt)"
+            )
+            assertFailure(
+                await controller.draft(.motionToDismiss(fixture.selectedInput), matterID: fixture.matterID)
+            )
+        }
+
+        XCTAssertEqual(verifier.verifyCount, 0, "unsupported filing courts reached motion verification")
+        try assertNoSuccessfulMotionSideEffects(fixture)
+    }
+
+    // T-MTD-26. Expected RED: controller verification evidence currently uses the
+    // mutable document aggregate ID instead of the exact selected revision ID.
+    func testTMTD26VerifierFactEvidenceUsesExactRevisionIdentity() async throws {
+        let fixture = try makeFixture()
+        let verifier = CapturingDelegatingMotionVerifier()
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            pipelineFactory: {
+                DraftPipeline(verifier: verifier, renderer: CapturingMotionRenderer())
+            }
+        )
+
+        _ = try successArtifact(
+            await controller.draft(.motionToDismiss(fixture.selectedInput), matterID: fixture.matterID)
+        )
+
+        XCTAssertEqual(verifier.factSourceIDs, [fixture.selectedFact.revisionID])
+        XCTAssertFalse(verifier.factSourceIDs.contains(fixture.selectedFact.documentID))
+    }
+
     // T-UI-MTD-06 companion — cancellation after the async verifier boundary cannot persist.
     func testTUIMTD06CancellationLeavesNoArtifactOrSuccessAudit() async throws {
         let fixture = try makeFixture()
@@ -503,6 +581,7 @@ final class MotionToDismissControllerTests: XCTestCase {
         let unselectedAuthorityID: String
         let invalidCitationAuthorityID: String
         let unreviewedAuthorityID: String
+        let federalFalsePositiveAuthorityID: String
         let selectedAuthorityCitation: String
         let selectedInput: MotionToDismissDraftInput
     }
@@ -582,6 +661,15 @@ final class MotionToDismissControllerTests: XCTestCase {
             supportText: "A discovery order may require production of nonprivileged accounting records.",
             reviewGround: false
         )
+        let federalFalsePositiveAuthorityID = try insertAuthority(
+            store: store,
+            matterID: matter.id,
+            sessionID: session.id,
+            queryID: query.id,
+            caseName: "Florida Supply Corp. v. Example Holdings",
+            citation: "Florida Supply Corp. v. Example Holdings, 123 F. Supp. 3d 456 (S.D.N.Y. 2020)",
+            supportText: "A federal court discussed the sufficiency of fictional allegations."
+        )
         let storage = DocumentStorage(
             root: FileManager.default.temporaryDirectory
                 .appendingPathComponent("MotionFiles-\(UUID().uuidString)", isDirectory: true)
@@ -608,6 +696,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             unselectedAuthorityID: unselectedAuthorityID,
             invalidCitationAuthorityID: invalidCitationAuthorityID,
             unreviewedAuthorityID: unreviewedAuthorityID,
+            federalFalsePositiveAuthorityID: federalFalsePositiveAuthorityID,
             selectedAuthorityCitation: selectedCitation,
             selectedInput: input
         )
@@ -789,6 +878,15 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
     }
 
+    private func setCourt(_ court: String, fixture: Fixture) async throws {
+        try await fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE matters SET court = ? WHERE id = ?",
+                arguments: [court, fixture.matterID]
+            )
+        }
+    }
+
     private func isSHA256(_ value: String) -> Bool {
         value.utf8.count == 64 && value.utf8.allSatisfy {
             (48...57).contains($0) || (97...102).contains($0)
@@ -857,6 +955,36 @@ private struct BlockingMotionVerifier: Verifier {
             )],
             followUps: []
         )
+    }
+}
+
+private final class InvocationCountingBlockingMotionVerifier: Verifier, @unchecked Sendable {
+    let identity = DraftComponentIdentity(id: "test.invocation-counting-motion-verifier", version: "1")
+    private(set) var verifyCount = 0
+
+    func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
+        verifyCount += 1
+        return VerificationResult(
+            failures: [GateFailure(
+                gate: .contract,
+                detail: "Unsupported court reached motion verification.",
+                repair: .deterministicFix
+            )],
+            followUps: []
+        )
+    }
+}
+
+private final class CapturingDelegatingMotionVerifier: Verifier, @unchecked Sendable {
+    private let delegate = DraftVerifier()
+    private(set) var factSourceIDs: [String] = []
+    var identity: DraftComponentIdentity { delegate.identity }
+
+    func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
+        if case let .motion(_, evidence) = unit {
+            factSourceIDs = evidence.facts.map(\.sourceID)
+        }
+        return await delegate.verify(unit, kind: kind, style: style)
     }
 }
 

@@ -158,7 +158,7 @@ final class MotionVerificationTests: XCTestCase {
         XCTAssertEqual(result.verificationReceipt.gateIdentity, PreFileGate.identity)
         XCTAssertEqual(result.verificationReceipt.rendererIdentity, renderer.identity)
         XCTAssertEqual(MotionGroundSpec.contractIdentity,
-                       DraftComponentIdentity(id: "supra.drafting.motion-ground-contract", version: "2"))
+                       DraftComponentIdentity(id: "supra.drafting.motion-ground-contract", version: "3"))
         XCTAssertEqual(MotionToDismiss.assemblerIdentity,
                        DraftComponentIdentity(id: "supra.drafting.motion-to-dismiss-assembler", version: "1"))
     }
@@ -218,6 +218,70 @@ final class MotionVerificationTests: XCTestCase {
             XCTFail("expected CancellationError, got \(error)")
         }
         XCTAssertEqual(renderer.renderCount, 0)
+    }
+
+    // MVS-10. Expected RED: the current substring heuristic treats a Florida party name
+    // or a federal Florida parenthetical as proof of Florida state authority, so these
+    // federal and wrong-state citations reach the renderer.
+    func testFederalAndPartyNameCitationFalsePositivesNeverReachRenderer() async {
+        let unsupportedCitations = [
+            "Florida Supply Corp. v. Example Holdings, 123 F. Supp. 3d 456 (S.D.N.Y. 2020)",
+            "Example Holdings v. Fictional Supply, 456 F. Supp. 3d 789 (M.D. Fla. 2021)",
+            "Florida Supply Corp. v. Example Holdings, 321 So. 3d 654 (Ga. Ct. App. 2022)",
+        ]
+
+        for (index, citation) in unsupportedCitations.enumerated() {
+            let authority = MotionAuthorityEvidence(
+                authorityID: "authority-false-positive-\(index)",
+                citation: citation,
+                reviewedExcerpt: authorityOne.reviewedExcerpt,
+                groundKey: MotionGroundSpec.failureToStateClaim.key
+            )
+            let scopedEvidence = MotionVerificationEvidence(
+                facts: [factOne],
+                authorities: [authority]
+            )
+            await assertBlocked(
+                model: validModel(
+                    numberedFacts: [factOne.text],
+                    authorityParagraphs: [authority.canonicalParagraph]
+                ),
+                evidence: scopedEvidence
+            )
+        }
+    }
+
+    // Standing guard: tightening the citation parser must preserve the two supported
+    // Florida state forms used by this first vertical: Southern Reporter and Weekly.
+    func testFloridaStateReporterCitationFormsRemainSupported() async throws {
+        let supportedCitations = [
+            "Example v. Fictional, 123 So. 3d 456 (Fla. 2020)",
+            "Sample v. Placeholder, 49 Fla. L. Weekly D1234 (Fla. 4th DCA 2024)",
+        ]
+
+        for (index, citation) in supportedCitations.enumerated() {
+            let authority = MotionAuthorityEvidence(
+                authorityID: "authority-state-supported-\(index)",
+                citation: citation,
+                reviewedExcerpt: authorityOne.reviewedExcerpt,
+                groundKey: MotionGroundSpec.failureToStateClaim.key
+            )
+            let scopedEvidence = MotionVerificationEvidence(facts: [factOne], authorities: [authority])
+            let renderer = MotionCountingRenderer(
+                identity: .init(id: "test.state-citation-renderer-\(index)", version: "1")
+            )
+
+            _ = try await DraftPipeline(verifier: DraftVerifier(), renderer: renderer).runMotion(
+                model: validModel(
+                    numberedFacts: [factOne.text],
+                    authorityParagraphs: [authority.canonicalParagraph]
+                ),
+                evidence: scopedEvidence,
+                style: .defaultFL
+            )
+
+            XCTAssertEqual(renderer.renderCount, 1)
+        }
     }
 
     private func validModel(
