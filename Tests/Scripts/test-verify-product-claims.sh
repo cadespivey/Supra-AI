@@ -59,6 +59,16 @@ run_case \
   ' "$claims"
 
 run_case \
+  "verified restore staging claim is registered" \
+  0 \
+  'Packages/SupraStore/Tests/SupraStoreTests/RestoreServiceTests.swift' \
+  awk '
+    /^  - id: "RESTORE-VERIFIED-STAGING"/ { in_claim = 1 }
+    in_claim { print }
+    in_claim && /^    publication_anchor:/ { exit }
+  ' "$claims"
+
+run_case \
   "cold-start restore recovery claim is registered" \
   0 \
   'Packages/SupraStore/Tests/SupraStoreTests/RestoreActivationServiceTests.swift' \
