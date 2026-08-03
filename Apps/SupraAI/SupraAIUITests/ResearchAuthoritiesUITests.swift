@@ -985,7 +985,8 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
             let authority = app.buttons["drafting.motion.authority.ui-motion-authority-success"]
             XCTAssertTrue(authority.waitForExistence(timeout: 5), "The reviewed authority was not exposed as a selectable production row")
             XCTAssertTrue(authority.isEnabled)
-            authority.click()
+            XCTAssertTrue(authority.isHittable, authority.debugDescription)
+            authority.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         }
     }
 
