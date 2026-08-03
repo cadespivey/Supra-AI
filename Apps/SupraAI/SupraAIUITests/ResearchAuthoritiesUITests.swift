@@ -930,8 +930,10 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
 
     private func scrollToHittable(_ element: XCUIElement, in app: XCUIApplication) {
         for _ in 0..<8 where !element.isHittable {
-            let scrollView = app.scrollViews.firstMatch
-            guard scrollView.exists else { break }
+            let windowWidth = app.windows.firstMatch.frame.width
+            guard let scrollView = app.scrollViews.allElementsBoundByIndex.first(where: {
+                $0.frame.width > windowWidth * 0.5
+            }) else { break }
             scrollView.scroll(byDeltaX: 0, deltaY: -360)
         }
     }
