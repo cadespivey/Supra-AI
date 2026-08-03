@@ -583,12 +583,13 @@ if grep -Fq 'private var isWorking: Bool { generationTask != nil || controller.i
     && grep -Fq 'guard !isWorking else { return }' "$motion_view" \
     && grep -Fq '.interactiveDismissDisabled(isWorking)' "$motion_view" \
     && grep -Fq 'generationToken' "$motion_view" \
+    && grep -Fq 'guard generationIsCurrent(token, selection: requestedSelection), !Task.isCancelled else { return }' "$motion_view" \
     && grep -Fq 'drafting.close.header' "$motion_ui_tests" \
     && grep -Fq 'drafting.close.footer' "$motion_ui_tests" \
     && grep -Fq 'docxArtifacts(beneath: storageRoot)' "$motion_ui_tests"; then
-  printf '%s\n' 'PASS: view-owned motion work closes double-start and dismissal races with disk proof'
+  printf '%s\n' 'PASS: view-owned drafting work closes continuation, double-start, and dismissal races with disk proof'
 else
-  record_failure 'motion UI lacks a view-owned task token, dismissal lock, or disk-level absence proof'
+  record_failure 'drafting UI lacks a routed-letter continuation guard, view-owned task token, dismissal lock, or disk-level absence proof'
 fi
 
 if grep -Fq '.accessibilityLabel(sourceAccessibilityLabel' "$motion_view" \

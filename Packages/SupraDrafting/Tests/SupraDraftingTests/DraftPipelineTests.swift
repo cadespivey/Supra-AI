@@ -354,6 +354,67 @@ final class DraftPipelineTests: XCTestCase {
         }
         XCTAssertEqual(renderer.renderCount, 0)
     }
+
+    // ACR-DRAFT-07. Expected RED: runNotice does not inspect task cancellation after
+    // its async verifier returns, so a verifier that leaves cancellation pending still
+    // reaches the synchronous gate and renderer.
+    func testCancellationAfterNoticeVerifierNeverReachesRenderer() async {
+        let renderer = CountingRenderer()
+        let pipeline = DraftPipeline(verifier: CancellingVerifier(), renderer: renderer)
+        let inputs = noticeInputs
+        let firm = profile
+
+        let task = Task {
+            try await pipeline.runNotice(inputs, profile: firm, style: .defaultFL)
+        }
+        do {
+            _ = try await task.value
+            XCTFail("cancelled notice verification unexpectedly reached rendering")
+        } catch is CancellationError {
+            // Expected at the verifier-to-gate boundary.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertEqual(renderer.renderCount, 0)
+    }
+
+    // ACR-DRAFT-08. Expected RED: runLetter has the same missing cancellation
+    // boundary, so a cancelled verification task still renders a demand letter.
+    func testCancellationAfterLetterVerifierNeverReachesRenderer() async {
+        let renderer = CountingRenderer()
+        let pipeline = DraftPipeline(verifier: CancellingVerifier(), renderer: renderer)
+        let text = "The invoice remains unpaid under the supply agreement."
+        let generated = GeneratedLetter(paragraphProvenance: [
+            GeneratedLetterParagraph(text: text, factLabels: ["claim"], citationLabels: [])
+        ])
+        let facts = [GroundedFact(
+            text: text,
+            label: "claim",
+            docId: "user-input",
+            locator: "claim"
+        )]
+        let inputs = letterInputs
+        let firm = profile
+
+        let task = Task {
+            try await pipeline.runLetter(
+                inputs,
+                generated: generated,
+                facts: facts,
+                profile: firm,
+                style: .defaultFL
+            )
+        }
+        do {
+            _ = try await task.value
+            XCTFail("cancelled letter verification unexpectedly reached rendering")
+        } catch is CancellationError {
+            // Expected at the verifier-to-gate boundary.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertEqual(renderer.renderCount, 0)
+    }
 }
 
 private struct AlwaysBlockingVerifier: Verifier {
@@ -375,6 +436,18 @@ private struct BlockingFollowUpVerifier: Verifier {
             failures: [],
             followUps: [FollowUp(severity: .blocking, kind: .verify, message: "repair failed")]
         )
+    }
+}
+
+private struct CancellingVerifier: Verifier {
+    let identity = DraftComponentIdentity(id: "test.cancelling-verifier", version: "1")
+
+    func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
+        let result = await DraftVerifier().verify(unit, kind: kind, style: style)
+        withUnsafeCurrentTask { task in
+            task?.cancel()
+        }
+        return result
     }
 }
 

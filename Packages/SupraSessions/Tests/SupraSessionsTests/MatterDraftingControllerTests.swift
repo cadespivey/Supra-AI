@@ -464,6 +464,101 @@ final class MatterDraftingControllerTests: XCTestCase {
         }
     }
 
+    // T-DRAFT-CANCEL-01. Expected RED: if cancellation arrives after the notice
+    // renderer returns, the controller does not inspect it before persistence and
+    // creates both a file and success audit.
+    @MainActor
+    func testCancelledNoticeLeavesNoArtifactOrSuccessAudit() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(
+            name: "McKernon Motors v. Liberty Rail",
+            court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+            docketNumber: "2026-CA-001847"
+        )
+        let storage = makeStorage()
+        let renderer = CancellingDraftRenderer()
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            pipelineFactory: {
+                DraftPipeline(verifier: DraftVerifier(), renderer: renderer)
+            }
+        )
+
+        let task = Task {
+            await controller.draftNoticeOfAppearance(
+                matterID: matter.id,
+                parties: sampleParties(),
+                partyRepresented: "Defendant",
+                representedPartyName: "Liberty Rail, LLC",
+                recipients: sampleRecipients()
+            )
+        }
+        let result = await task.value
+
+        guard case .failure(.cancelled) = result else {
+            return XCTFail("cancelled notice must return the typed cancellation result, got \(result)")
+        }
+        XCTAssertEqual(renderer.renderCount, 1, "fixture must cancel only after producing valid render bytes")
+        let exports = storage.exportsDirectory(forMatterID: matter.id)
+        XCTAssertTrue((try? FileManager.default.contentsOfDirectory(atPath: exports.path).isEmpty) ?? true)
+        XCTAssertFalse(try store.auditEvents.fetchEvents(matterID: matter.id)
+            .contains { $0.eventType == "draft_generated" })
+    }
+
+    // T-DRAFT-CANCEL-02. Expected RED: the letter controller has the same unchecked
+    // renderer-to-persistence boundary and can create a file and success audit after
+    // cancellation.
+    @MainActor
+    func testCancelledLetterGenerationLeavesNoArtifactOrSuccessAudit() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let body = #"{"paragraphs":[{"text":"The invoice remains unpaid under the supply agreement.","factLabels":["claim"],"citationLabels":[]}] }"#
+        let runtime = StubRuntimeClient(outcome: { request in
+            return .events([
+                .event(request, 0, .token, token: body),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+        let storage = makeStorage()
+        let renderer = CancellingDraftRenderer()
+        let controller = MatterDraftingController(
+            store: store,
+            runtimeClient: runtime,
+            storage: storage,
+            pipelineFactory: { DraftPipeline(verifier: DraftVerifier(), renderer: renderer) }
+        )
+        let input = LetterDraftInput(
+            recipientName: "Daniel Hardman, Esq.",
+            recipientStreet: "1 Independent Drive",
+            recipientCity: "Jacksonville",
+            recipientState: "Florida",
+            recipientZip: "32202",
+            claimSummary: "The invoice remains unpaid under the supply agreement."
+        )
+
+        let task = Task {
+            await controller.draftLetterDemand(
+                matterID: matter.id,
+                input: input,
+                modelID: ModelID(),
+                route: ModelRouter().route(for: .drafting)
+            )
+        }
+        let result = await task.value
+
+        guard case .failure(.cancelled) = result else {
+            return XCTFail("cancelled letter must return the typed cancellation result, got \(result)")
+        }
+        XCTAssertEqual(renderer.renderCount, 1, "fixture must cancel only after producing valid render bytes")
+        let exports = storage.exportsDirectory(forMatterID: matter.id)
+        XCTAssertTrue((try? FileManager.default.contentsOfDirectory(atPath: exports.path).isEmpty) ?? true)
+        XCTAssertFalse(try store.auditEvents.fetchEvents(matterID: matter.id)
+            .contains { $0.eventType == "draft_generated" })
+    }
+
     // MARK: - Firewall: never invents identity
 
     @MainActor
@@ -818,5 +913,19 @@ final class StyleSpyRenderer: Renderer, @unchecked Sendable {
         renderCount += 1
         captured = style
         return try CompositeRenderer().render(input, style: style)
+    }
+}
+
+private final class CancellingDraftRenderer: Renderer, @unchecked Sendable {
+    let identity = DraftComponentIdentity(id: "test.cancelling-draft-renderer", version: "1")
+    private(set) var renderCount = 0
+
+    func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {
+        renderCount += 1
+        let data = try CompositeRenderer().render(input, style: style)
+        withUnsafeCurrentTask { task in
+            task?.cancel()
+        }
+        return data
     }
 }
