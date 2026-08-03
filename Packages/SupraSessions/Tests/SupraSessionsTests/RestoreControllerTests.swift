@@ -1,5 +1,5 @@
 import Foundation
-import SupraStore
+@testable import SupraStore
 @testable import SupraSessions
 import XCTest
 
@@ -817,6 +817,42 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(scheduledAudit.timestamp, try XCTUnwrap(outcome.scheduledAt))
     }
 
+    // T-RST-H09 expected RED: conflicting marker and sidecar schedule timestamps
+    // are still applied and acknowledged instead of retaining evidence for retry.
+    func testConflictingActivationScheduleEvidenceFailsClosedBeforeAcknowledgement() throws {
+        let fixture = try makeFixture()
+        let snapshotID = "SupraAI-20260731-090915-000"
+        let intentJSON = """
+        {"schemaVersion":1,"operationID":"\(operationID.uuidString.lowercased())","createdAt":"2026-07-31T12:54:00Z","selectedSnapshotIdentifier":"\(snapshotID)","selectedSnapshotCreatedAt":"2026-07-31T12:00:00Z","stagedDatabaseSHA256":"\(String(repeating: "a", count: 64))","safetyDatabaseSHA256":"\(String(repeating: "b", count: 64))","selectedBlobCount":0,"safetyBlobCount":0}
+        """
+        let result = RestoreActivationResult.activated(
+            try RestoreIntent.decode(Data(intentJSON.utf8))
+        )
+        let conflictingOutcome = try activationOutcome(
+            status: .activated,
+            snapshotIdentifier: snapshotID
+        )
+        var acknowledgeCount = 0
+
+        let controller = makeController(
+            fixture: fixture,
+            inspector: { _ in [] },
+            launchRestoreResult: result,
+            launchRestoreOutcome: conflictingOutcome,
+            acknowledgeRestoreOutcome: { acknowledgeCount += 1 }
+        )
+
+        XCTAssertTrue(controller.restoreEvidenceRequiresAcknowledgement)
+        XCTAssertEqual(acknowledgeCount, 0)
+        XCTAssertEqual(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: "backup_snapshots",
+                relatedID: snapshotID
+            ).count,
+            0
+        )
+    }
+
     // T-RST-H09 expected RED: legacy v1 outcomes have no authenticated schedule
     // timestamp, but replay currently invents one from the later completion time.
     func testLegacyActivationOutcomeReplaysOnlyAuthenticatedTerminalAudit() throws {
@@ -978,6 +1014,7 @@ final class RestoreControllerTests: XCTestCase {
             throw ControllerTestError.stageShouldNotRun
         },
         requestProcessExit: @escaping @MainActor () -> Void = {},
+        launchRestoreResult: RestoreActivationResult? = nil,
         launchRestoreOutcome: RestoreOutcomeRecord? = nil,
         launchStagingFailure: RestoreStagingFailureRecord? = nil,
         acknowledgeRestoreOutcome: @escaping @MainActor () throws -> Void = {},
@@ -999,6 +1036,7 @@ final class RestoreControllerTests: XCTestCase {
             restoreRunner: stager,
             restoreOperationIDProvider: { self.operationID },
             requestProcessExit: requestProcessExit,
+            launchRestoreResult: launchRestoreResult,
             launchRestoreOutcome: launchRestoreOutcome,
             launchStagingFailure: launchStagingFailure,
             acknowledgeRestoreOutcome: acknowledgeRestoreOutcome,
