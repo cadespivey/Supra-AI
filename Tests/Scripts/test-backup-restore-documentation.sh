@@ -66,6 +66,9 @@ require_literal "$settings_view" 'quits automatically' \
   'Settings must disclose the automatic process exit'
 require_literal "$settings_view" 'How restore works' \
   'Settings must expose concise restore help'
+# T-RST-H08 expected RED: Settings still offers only the recovery database.
+require_literal "$settings_view" 'entire verified safety folder' \
+  'Settings restore help must preserve the database and managed-document blobs together'
 
 if (( failures != 0 )); then
   printf 'Backup and restore documentation checks failed: %d\n' "$failures" >&2
