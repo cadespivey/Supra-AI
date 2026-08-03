@@ -394,6 +394,46 @@ public final class AuthoritiesController: ObservableObject {
         return true
     }
 
+    /// Resolves the review-state prerequisite for proposition evidence without
+    /// forcing the user to rediscover the authority's originating research session.
+    /// The action remains matter-scoped and mirrors the research review state when
+    /// the saved authority still has a linked result.
+    public func markAuthorityNotAdverse(authorityID: String) -> String? {
+        guard let item = authorities.first(where: { $0.id == authorityID }) else {
+            return "Authority not found."
+        }
+        defer { load() }
+        do {
+            guard let authority = try store.authorities.fetchAuthority(id: authorityID),
+                  authority.matterID == matterID,
+                  authority.deletedAt == nil else {
+                return "Authority not found."
+            }
+            guard authority.reviewState != ResearchResultReviewState.notAdverse.rawValue else {
+                return nil
+            }
+            try store.authorities.updateReviewState(
+                authorityID: authorityID,
+                reviewState: .notAdverse
+            )
+            try? store.research.updateResultReviewState(
+                resultID: authority.researchResultID,
+                reviewState: .notAdverse
+            )
+            _ = try? store.auditEvents.recordEvent(
+                matterID: matterID,
+                eventType: "authority_review_state_changed",
+                actor: "user",
+                summary: "Marked authority not adverse: “\(item.caseName)”",
+                relatedTable: "authorities",
+                relatedID: authorityID
+            )
+            return nil
+        } catch {
+            return "Couldn't mark this authority not adverse. Try again."
+        }
+    }
+
     public func updatePreferredCitation(authorityID: String, _ citation: String) {
         try? store.authorities.updatePreferredCitation(authorityID: authorityID, preferredCitation: citation)
         load()

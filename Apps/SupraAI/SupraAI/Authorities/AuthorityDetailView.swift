@@ -183,6 +183,18 @@ struct AuthorityDetailView: View {
 
             Section("Status") {
                 LabeledContent("Review") { ReviewBadge(state: authority.reviewState) }
+                if authority.reviewState != ResearchResultReviewState.notAdverse.rawValue {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Proposition support can be recorded only after counsel marks this authority not adverse.")
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                        Button("Mark Not Adverse") {
+                            markAuthorityNotAdverse(authorityID: authority.id)
+                        }
+                        .disabled(propositionActionInFlight)
+                        .accessibilityIdentifier("authority.reviewState.markNotAdverse")
+                    }
+                }
                 LabeledContent("Use status", value: authority.useStatus.displayName)
                 let allowed = authority.useStatus.allowedTransitions
                 if allowed.isEmpty {
@@ -390,6 +402,13 @@ struct AuthorityDetailView: View {
         guard !propositionActionInFlight else { return }
         propositionActionInFlight = true
         propositionError = controller.revokeFailureToStateClaimReview(authorityID: authorityID)
+        propositionActionInFlight = false
+    }
+
+    private func markAuthorityNotAdverse(authorityID: String) {
+        guard !propositionActionInFlight else { return }
+        propositionActionInFlight = true
+        propositionError = controller.markAuthorityNotAdverse(authorityID: authorityID)
         propositionActionInFlight = false
     }
 

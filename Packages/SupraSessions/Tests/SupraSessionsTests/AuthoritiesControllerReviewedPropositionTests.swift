@@ -231,7 +231,7 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
         // Authorities controller has no in-context action that satisfies it.
         let opinion = "The unique reviewed proposition appears in this fictional opinion."
         let fixture = try makeFixture(opinionText: opinion)
-        let resultID = try XCTUnwrap(fixture.authority.researchResultID)
+        let resultID = fixture.authority.researchResultID
         try fixture.store.authorities.updateReviewState(
             authorityID: fixture.authority.id,
             reviewState: .needsLaterReview

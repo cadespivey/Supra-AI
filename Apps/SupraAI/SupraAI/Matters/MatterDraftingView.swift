@@ -58,9 +58,12 @@ struct MatterDraftingView: View {
     @State private var motionRelief = ""
     @State private var motionFactSources: [MotionDraftFactSource] = []
     @State private var motionAuthoritySources: [MotionDraftAuthoritySource] = []
+    @State private var motionFactLoadError: String?
+    @State private var motionAuthorityLoadError: String?
     @State private var selectedMotionFactIDs: Set<String> = []
     @State private var selectedMotionAuthorityIDs: Set<String> = []
     @State private var generationTask: Task<Void, Never>?
+    @State private var generationToken: UUID?
 
     private enum WorkProductSelection: Hashable {
         case kind(DraftKindID)
@@ -133,9 +136,9 @@ struct MatterDraftingView: View {
                     legacyDraftReviewSection
                 }
                 workProductSection
-                    .disabled(controller.isGenerating)
+                    .disabled(isWorking)
                 selectedForm
-                    .disabled(controller.isGenerating)
+                    .disabled(isWorking)
                 if let result {
                     resultSection(result)
                 }
@@ -168,13 +171,17 @@ struct MatterDraftingView: View {
         // user switches to a different kind so a stale notice result doesn't linger
         // over the custom form (and vice versa).
         .onChange(of: selection) { _, _ in
-            if controller.isGenerating { generationTask?.cancel() }
+            if isWorking { invalidateGeneration() }
             result = nil
             errorText = nil
             routingMessage = nil
+            if selection == .kind(.letterDemand), !AppEnvironment.isUITestMode {
+                library.prewarm(role: .drafting)
+            }
             if selection == .kind(.motionToDismiss) { loadMotionSourcesIfNeeded() }
         }
-        .onDisappear { generationTask?.cancel() }
+        .onDisappear { invalidateGeneration() }
+        .interactiveDismissDisabled(isWorking)
     }
 
     private var legacyDraftReviewSection: some View {
@@ -212,7 +219,11 @@ struct MatterDraftingView: View {
             }
             Spacer()
             Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
-                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(isWorking)
+                .accessibilityIdentifier("drafting.close.header")
+                .accessibilityLabel("Close Draft")
         }
         .padding()
     }
@@ -308,12 +319,28 @@ struct MatterDraftingView: View {
                     .accessibilityLabel("Selected ground: Failure to state a claim")
             }
 
+            if !motionSourceLoadErrors.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Motion sources could not be loaded", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    ForEach(motionSourceLoadErrors, id: \.self) { message in
+                        Text(message)
+                            .font(.supraCaption)
+                            .foregroundStyle(.orange)
+                    }
+                    Button("Retry Sources") { loadMotionSourcesIfNeeded() }
+                        .accessibilityIdentifier("drafting.motion.sources.retry")
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("drafting.motion.sources.error")
+            }
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("Fact excerpts").font(.supraHeadline)
-                if motionFactSources.isEmpty {
+                if motionFactLoadError == nil, motionFactSources.isEmpty {
                     Text("No current, indexed fact excerpts are available in this matter.")
                         .font(.supraCaption).foregroundStyle(.orange)
-                } else {
+                } else if motionFactLoadError == nil {
                     ForEach(motionFactSources) { source in
                         sourceChoice(
                             selected: selectedMotionFactIDs.contains(source.chunkID),
@@ -332,17 +359,18 @@ struct MatterDraftingView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Reviewed authorities").font(.supraHeadline)
-                if motionAuthoritySources.isEmpty {
+                if motionAuthorityLoadError == nil, motionAuthoritySources.isEmpty {
                     Text("No saved authorities are available in this matter.")
                         .font(.supraCaption).foregroundStyle(.orange)
-                } else {
+                } else if motionAuthorityLoadError == nil {
                     ForEach(motionAuthoritySources) { source in
                         sourceChoice(
                             selected: selectedMotionAuthorityIDs.contains(source.authorityID),
                             enabled: source.isReady,
                             accessibilityID: "drafting.motion.authority.\(source.authorityID)",
                             title: source.caseName,
-                            detail: source.blockingReason ?? source.citation
+                            detail: source.blockingReason
+                                ?? "\(source.citation)\nReviewed proposition: \(source.snippet)"
                         ) {
                             toggle(source.authorityID, in: &selectedMotionAuthorityIDs)
                         }
@@ -376,6 +404,10 @@ struct MatterDraftingView: View {
         }
     }
 
+    private var motionSourceLoadErrors: [String] {
+        [motionFactLoadError, motionAuthorityLoadError].compactMap { $0 }
+    }
+
     private func sourceChoice(
         selected: Bool,
         enabled: Bool,
@@ -392,7 +424,7 @@ struct MatterDraftingView: View {
                     Text(title).foregroundStyle(enabled ? .primary : .secondary)
                     Text(detail).font(.supraCaption)
                         .foregroundStyle(enabled ? Color.secondary : Color.orange)
-                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
             }
@@ -401,6 +433,25 @@ struct MatterDraftingView: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .accessibilityIdentifier(accessibilityID)
+        .accessibilityLabel(sourceAccessibilityLabel(title: title, detail: detail))
+        .accessibilityValue(sourceAccessibilityValue(
+            selected: selected,
+            enabled: enabled,
+            blockingDetail: detail
+        ))
+    }
+
+    private func sourceAccessibilityLabel(title: String, detail: String) -> String {
+        "\(title). \(detail)"
+    }
+
+    private func sourceAccessibilityValue(
+        selected: Bool,
+        enabled: Bool,
+        blockingDetail: String
+    ) -> String {
+        if !enabled { return "Blocked. \(blockingDetail)" }
+        return selected ? "Selected" : "Ready"
     }
 
     @ViewBuilder
@@ -501,7 +552,7 @@ struct MatterDraftingView: View {
         } header: {
             Text("Caption parties")
         } footer: {
-            Text("As they appear in the case caption. The court, division, and case number come from the matter.")
+            Text("As they appear in the case caption. The court, judge where applicable, and case number come from the matter.")
         }
     }
 
@@ -587,27 +638,26 @@ struct MatterDraftingView: View {
         .accessibilityIdentifier("drafting.result")
     }
 
+    private var isWorking: Bool { generationTask != nil || controller.isGenerating }
+
     private var footer: some View {
         HStack {
-            if controller.isGenerating { ProgressView().controlSize(.small) }
+            if isWorking { ProgressView().controlSize(.small) }
             if let validationHint {
                 Text(validationHint).font(.supraCaption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             Button("Close") { dismiss() }
-            if controller.isGenerating {
+                .disabled(isWorking)
+                .accessibilityIdentifier("drafting.close.footer")
+            if isWorking {
                 Button("Cancel") { generationTask?.cancel() }
                     .accessibilityIdentifier("drafting.cancel")
             }
-            Button(generateLabel) {
-                generationTask = Task {
-                    await generate()
-                    generationTask = nil
-                }
-            }
+            Button(generateLabel) { startGeneration() }
                 .keyboardShortcut(.defaultAction)
-                .disabled(controller.isGenerating || !isReady)
+                .disabled(isWorking || !isReady)
                 .accessibilityIdentifier("drafting.generate")
         }
         .padding()
@@ -666,19 +716,42 @@ struct MatterDraftingView: View {
             && !trimmed(letterClaim).isEmpty
     }
 
-    private func generate() async {
+    private func startGeneration() {
+        guard !isWorking else { return }
+        let token = UUID()
+        generationToken = token
+        generationTask = Task { @MainActor in
+            await generate(token: token)
+            guard generationToken == token else { return }
+            generationTask = nil
+            generationToken = nil
+        }
+    }
+
+    private func invalidateGeneration() {
+        generationToken = nil
+        generationTask?.cancel()
+        generationTask = nil
+    }
+
+    private func generationIsCurrent(_ token: UUID, selection expected: WorkProductSelection) -> Bool {
+        generationToken == token && selection == expected
+    }
+
+    private func generate(token: UUID) async {
+        let requestedSelection = selection
         errorText = nil
         result = nil
         routingMessage = nil
 
         // The letter is LLM-backed: resolve/load the drafting model, then generate.
-        if case .kind(.letterDemand) = selection {
-            await generateLetter()
+        if case .kind(.letterDemand) = requestedSelection {
+            await generateLetter(token: token, selection: requestedSelection)
             return
         }
 
         let request: MatterDraftRequest
-        switch selection {
+        switch requestedSelection {
         case .kind(.noticeAppearance):
             let partyLines = parties
                 .filter { !trimmed($0.name).isEmpty || !trimmed($0.designation).isEmpty }
@@ -714,7 +787,9 @@ struct MatterDraftingView: View {
             ))
         }
 
-        switch await controller.draft(request, matterID: matterID) {
+        let outcome = await controller.draft(request, matterID: matterID)
+        guard generationIsCurrent(token, selection: requestedSelection) else { return }
+        switch outcome {
         case let .success(artifact):
             result = artifact
         case let .failure(error):
@@ -722,12 +797,13 @@ struct MatterDraftingView: View {
         }
     }
 
-    private func generateLetter() async {
+    private func generateLetter(token: UUID, selection requestedSelection: WorkProductSelection) async {
         let modelID: ModelID
         switch await library.ensureLoadedRoutedModelID(for: draftRoute.role, configuration: router.configuration) {
         case let .success(loaded):
             modelID = loaded
         case let .failure(issue):
+            guard generationIsCurrent(token, selection: requestedSelection) else { return }
             routingMessage = issue.message
             return
         }
@@ -746,7 +822,14 @@ struct MatterDraftingView: View {
             tone: letterTone,
             deliveryNotation: trimmed(letterDelivery)
         )
-        switch await controller.draftLetterDemand(matterID: matterID, input: input, modelID: modelID, route: draftRoute) {
+        let outcome = await controller.draftLetterDemand(
+            matterID: matterID,
+            input: input,
+            modelID: modelID,
+            route: draftRoute
+        )
+        guard generationIsCurrent(token, selection: requestedSelection) else { return }
+        switch outcome {
         case let .success(artifact):
             result = artifact
         case let .failure(error):
@@ -797,8 +880,17 @@ struct MatterDraftingView: View {
     }
 
     private func loadMotionSourcesIfNeeded() {
-        motionFactSources = controller.motionFactSources(matterID: matterID)
-        motionAuthoritySources = controller.motionAuthoritySources(matterID: matterID)
+        controller.message = nil
+        let facts = controller.motionFactSources(matterID: matterID)
+        motionFactLoadError = controller.message
+
+        controller.message = nil
+        let authorities = controller.motionAuthoritySources(matterID: matterID)
+        motionAuthorityLoadError = controller.message
+        controller.message = nil
+
+        motionFactSources = facts
+        motionAuthoritySources = authorities
         let currentFactIDs = Set(motionFactSources.map(\.chunkID))
         let currentAuthorityIDs = Set(motionAuthoritySources.map(\.authorityID))
         selectedMotionFactIDs.formIntersection(currentFactIDs)
