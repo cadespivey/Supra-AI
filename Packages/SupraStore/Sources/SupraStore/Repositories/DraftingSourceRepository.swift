@@ -361,8 +361,8 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                 }
                 relatedStructureEdges = matched.relatedStructureEdges
             } else {
-                guard nonblank(chunk.nodeID) == nil,
-                      nonblank(chunk.unitKind) == nil else {
+                guard chunk.nodeID == nil,
+                      chunk.unitKind == nil else {
                     throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
                 }
                 guard exactCharacterSlice(revision.text, start: start, end: end) == chunk.normalizedText else {
