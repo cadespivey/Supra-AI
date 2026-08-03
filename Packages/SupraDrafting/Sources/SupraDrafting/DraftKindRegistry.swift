@@ -109,11 +109,23 @@ public struct MotionGroundSpec: Sendable, Equatable {
     }
 
     public static func knownGround(for userText: String) throws -> MotionGroundSpec {
-        let normalized = userText.lowercased()
-        if normalized.contains("failure") && normalized.contains("state") && normalized.contains("claim") {
+        if failureToStateClaimAliases.contains(normalizedAlias(userText)) {
             return failureToStateClaim
         }
         throw DraftKindRegistryError.unsupported(.motionToDismiss)
+    }
+
+    private static let failureToStateClaimAliases: Set<String> = [
+        "failure to state a claim",
+        "failure to state a cause of action",
+        "rule 1.140(b)(6)"
+    ]
+
+    private static func normalizedAlias(_ value: String) -> String {
+        value
+            .lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
     }
 
     public static func propositions(for grounds: [String], section: Section) -> [ScrubbedProposition] {
