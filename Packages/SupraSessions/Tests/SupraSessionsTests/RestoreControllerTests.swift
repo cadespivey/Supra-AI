@@ -20,7 +20,7 @@ final class RestoreControllerTests: XCTestCase {
         let controller = makeController(
             fixture: fixture,
             inspector: { _ in [invalid] },
-            stager: { _, _, _ in
+            stager: { _, _, _, _ in
                 stageCount += 1
                 return self.stageSummary(for: invalid)
             }
@@ -195,7 +195,7 @@ final class RestoreControllerTests: XCTestCase {
                 discoveryCount += 1
                 return discoveryCount == 1 ? [original] : [replacement]
             },
-            stager: { _, _, _ in
+            stager: { _, _, _, _ in
                 stageCount += 1
                 return self.stageSummary(for: original)
             }
@@ -218,6 +218,8 @@ final class RestoreControllerTests: XCTestCase {
 
     // T-RST-34...36/R-06 expected RED: staging does not durably schedule before
     // invoking the runner and does not request process exit after quiescence.
+    // T-RST-H09 expected RED: status, audit, and staging intent capture separate
+    // clock reads, so the original scheduling timestamp cannot survive activation exactly.
     func testSuccessfulStagePersistsScheduleBeforeRunnerAndRequestsExitExactlyOnce() async throws {
         let fixture = try makeFixture()
         let valid = candidate(identifier: "SupraAI-20260731-090300-000")
@@ -231,11 +233,12 @@ final class RestoreControllerTests: XCTestCase {
                 if discoveryCount == 2 { events.append("fresh-identity") }
                 return [valid]
             },
-            stager: { refreshed, layout, receivedOperationID in
+            stager: { refreshed, layout, receivedOperationID, receivedScheduledAt in
                 events.append("runner")
                 XCTAssertEqual(refreshed.identifier, valid.identifier)
                 XCTAssertEqual(layout, fixture.liveLayout)
                 XCTAssertEqual(receivedOperationID, self.operationID)
+                XCTAssertEqual(receivedScheduledAt, self.now)
                 let scheduled = try XCTUnwrap(
                     fixture.store.appSettings.getSetting(
                         BackupController.restoreStatusStorageKey,
@@ -245,13 +248,15 @@ final class RestoreControllerTests: XCTestCase {
                 XCTAssertEqual(scheduled.state, .staging)
                 XCTAssertEqual(scheduled.operationID, self.operationID.uuidString)
                 XCTAssertEqual(scheduled.snapshotIdentifier, valid.identifier)
-                XCTAssertNotNil(
+                XCTAssertEqual(scheduled.updatedAt, receivedScheduledAt)
+                let scheduledAudit = try XCTUnwrap(
                     try fixture.store.auditEvents.fetchEvents(
                         relatedTable: "backup_snapshots",
                         relatedID: valid.identifier,
                         eventType: "restore_scheduled"
                     ).single
                 )
+                XCTAssertEqual(scheduledAudit.timestamp, receivedScheduledAt)
                 return summary
             },
             requestProcessExit: { events.append("exit") }
@@ -315,7 +320,7 @@ final class RestoreControllerTests: XCTestCase {
                 inspectionCount += 1
                 return [valid]
             },
-            stager: { selected, _, operationID in
+            stager: { selected, _, operationID, _ in
                 await stageGate.wait()
                 return self.stageSummary(for: selected, operationID: operationID)
             },
@@ -389,7 +394,7 @@ final class RestoreControllerTests: XCTestCase {
                 discoveryCount += 1
                 return discoveryCount == 1 ? [original] : [replacement]
             },
-            stager: { _, _, _ in
+            stager: { _, _, _, _ in
                 runnerCount += 1
                 throw ControllerTestError.stageShouldNotRun
             },
@@ -423,7 +428,7 @@ final class RestoreControllerTests: XCTestCase {
                 inspectionCount += 1
                 return [valid]
             },
-            stager: { _, _, _ in
+            stager: { _, _, _, _ in
                 runnerCount += 1
                 try fixture.store.database.writer.close()
                 throw ControllerTestError.stagingFailedAfterClose
@@ -931,7 +936,7 @@ final class RestoreControllerTests: XCTestCase {
             BackupRunSummary(snapshotBytes: 1, copiedBlobCount: 0, referencedBlobCount: 0)
         },
         inspector: @escaping BackupController.RestoreInspector,
-        stager: @escaping BackupController.RestoreRunner = { _, _, _ in
+        stager: @escaping BackupController.RestoreRunner = { _, _, _, _ in
             throw ControllerTestError.stageShouldNotRun
         },
         requestProcessExit: @escaping @MainActor () -> Void = {},
