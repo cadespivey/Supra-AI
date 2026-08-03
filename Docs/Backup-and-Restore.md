@@ -26,7 +26,9 @@ launches do not repeat the operation. Supra AI durably records a verified activa
 outcome before it consumes the restart marker. A launch interrupted between those writes reconciles
 the authenticated marker without repeating database or blob mutation. The same content-free intent
 is retained inside the private operation tree so a recovery launch can revalidate its safety copy
-even when marker removal became visible before its directory sync completed. Supra AI
+even when marker removal became visible before its directory sync completed. After successful activation,
+Supra AI replays the authenticated scheduling audit into the restored database with its original timestamp
+before recording the terminal activation audit and acknowledging the durable activation outcome. Supra AI
 removes only that authenticated operation's private staging tree after marker consumption. Cleanup is retried
 from the durable outcome if interruption occurs. Newly created staging and managed-document roots
 are published through their parent directories before success is recorded.

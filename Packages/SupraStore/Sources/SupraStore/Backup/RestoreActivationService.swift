@@ -32,6 +32,9 @@ public struct RestoreActivationResult: Equatable, Sendable {
     /// replaced the database that originally recorded the staging event.
     public let operationID: String?
     public let snapshotIdentifier: String?
+    /// Authenticated staging time copied from the durable restore intent so the
+    /// replacement database can reconstruct the user's scheduling audit.
+    public let scheduledAt: Date?
     /// The database-only location stays file-private for internal retry logic;
     /// recovery consumers receive the complete containing safety tree instead.
     fileprivate let recoveryDatabaseURL: URL?
@@ -47,6 +50,7 @@ public struct RestoreActivationResult: Equatable, Sendable {
         rollbackFailure: RestoreActivationFailure? = nil,
         operationID: String? = nil,
         snapshotIdentifier: String? = nil,
+        scheduledAt: Date? = nil,
         recoveryDatabaseURL: URL? = nil
     ) {
         self.status = status
@@ -54,6 +58,7 @@ public struct RestoreActivationResult: Equatable, Sendable {
         self.rollbackFailure = rollbackFailure
         self.operationID = operationID
         self.snapshotIdentifier = snapshotIdentifier
+        self.scheduledAt = scheduledAt
         self.recoveryDatabaseURL = recoveryDatabaseURL
     }
 
@@ -62,7 +67,8 @@ public struct RestoreActivationResult: Equatable, Sendable {
         RestoreActivationResult(
             status: .activated,
             operationID: intent.operationID,
-            snapshotIdentifier: intent.selectedSnapshotIdentifier
+            snapshotIdentifier: intent.selectedSnapshotIdentifier,
+            scheduledAt: intent.createdAt
         )
     }
 
@@ -74,7 +80,8 @@ public struct RestoreActivationResult: Equatable, Sendable {
             status: .failedAndRolledBack,
             activationFailure: failure,
             operationID: intent.operationID,
-            snapshotIdentifier: intent.selectedSnapshotIdentifier
+            snapshotIdentifier: intent.selectedSnapshotIdentifier,
+            scheduledAt: intent.createdAt
         )
     }
 
@@ -90,6 +97,7 @@ public struct RestoreActivationResult: Equatable, Sendable {
             rollbackFailure: rollbackFailure,
             operationID: intent?.operationID,
             snapshotIdentifier: intent?.selectedSnapshotIdentifier,
+            scheduledAt: intent?.createdAt,
             recoveryDatabaseURL: safetyDatabaseURL
         )
     }
@@ -104,6 +112,7 @@ public struct RestoreActivationResult: Equatable, Sendable {
             rollbackFailure: record.rollbackFailure,
             operationID: record.operationID,
             snapshotIdentifier: record.snapshotIdentifier,
+            scheduledAt: record.scheduledAt,
             recoveryDatabaseURL: safetyDatabaseURL
         )
     }
@@ -112,12 +121,13 @@ public struct RestoreActivationResult: Equatable, Sendable {
 /// Durable, display-safe record of the most recent attempted restore activation.
 /// It deliberately excludes filesystem locations and user/database content.
 public struct RestoreOutcomeRecord: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
     public static let lastOutcomeFileName = "last-restore-outcome.json"
 
     public let schemaVersion: Int
     public let operationID: String?
     public let snapshotIdentifier: String?
+    public let scheduledAt: Date?
     public let status: RestoreActivationStatus
     public let activationFailure: RestoreActivationFailure?
     public let rollbackFailure: RestoreActivationFailure?
@@ -131,6 +141,7 @@ public struct RestoreOutcomeRecord: Codable, Equatable, Sendable {
         schemaVersion = Self.currentSchemaVersion
         operationID = result.operationID
         snapshotIdentifier = result.snapshotIdentifier
+        scheduledAt = result.scheduledAt
         status = result.status
         activationFailure = result.activationFailure
         rollbackFailure = result.rollbackFailure
@@ -143,6 +154,7 @@ public struct RestoreOutcomeRecord: Codable, Equatable, Sendable {
         schemaVersion: Int,
         operationID: String?,
         snapshotIdentifier: String?,
+        scheduledAt: Date?,
         status: RestoreActivationStatus,
         activationFailure: RestoreActivationFailure?,
         rollbackFailure: RestoreActivationFailure?,
@@ -152,6 +164,7 @@ public struct RestoreOutcomeRecord: Codable, Equatable, Sendable {
         self.schemaVersion = schemaVersion
         self.operationID = operationID
         self.snapshotIdentifier = snapshotIdentifier
+        self.scheduledAt = scheduledAt
         self.status = status
         self.activationFailure = activationFailure
         self.rollbackFailure = rollbackFailure
@@ -648,6 +661,9 @@ public enum RestoreActivationService {
         (outcome.operationID == nil || outcome.operationID == context.intent.operationID)
             && (outcome.snapshotIdentifier == nil
                 || outcome.snapshotIdentifier == context.intent.selectedSnapshotIdentifier)
+            && (outcome.schemaVersion == 1
+                ? outcome.scheduledAt == nil
+                : outcome.scheduledAt == context.intent.createdAt)
     }
 
     private static func performPendingRestore(

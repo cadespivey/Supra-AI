@@ -2093,14 +2093,14 @@ final class AppEnvironment: ObservableObject {
             liveLayout: layout,
             destinationFactory: { _ in RestoreUITestDestination(url: destination) },
             inspector: { _ in candidates },
-            runner: { selected, _, operationID in
+            runner: { selected, _, operationID, scheduledAt in
                 // Keep the terminal surface observable across XCUITest's
                 // accessibility polling interval before simulating completion.
                 try await Task.sleep(for: .seconds(5))
                 return RestoreStageSummary(
                     operationID: operationID.uuidString,
                     snapshotIdentifier: selected.identifier,
-                    stagedAt: Date(timeIntervalSince1970: 1_786_000_800)
+                    stagedAt: scheduledAt
                 )
             }
         )

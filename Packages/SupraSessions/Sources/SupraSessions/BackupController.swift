@@ -221,7 +221,8 @@ public final class BackupController: ObservableObject {
     public typealias RestoreRunner = @MainActor (
         RestoreSnapshotCandidate,
         RestoreLiveLayout,
-        UUID
+        UUID,
+        Date
     ) async throws -> RestoreStageSummary
     public typealias RestoreOperationIDProvider = @MainActor () -> UUID
     public typealias ProcessExitRequester = @MainActor () -> Void
@@ -315,14 +316,15 @@ public final class BackupController: ObservableObject {
                 try RestoreSnapshotInspector.discover(in: destination)
             }.value
         }
-        self.restoreRunner = restoreRunner ?? { candidate, layout, operationID in
+        self.restoreRunner = restoreRunner ?? { candidate, layout, operationID, scheduledAt in
             try await Task.detached(priority: .utility) {
                 do {
                     let staged = try RestoreService.stageQuiescedRestore(
                         candidate: candidate,
                         liveDatabase: store.database,
                         liveLayout: layout,
-                        operationID: operationID
+                        operationID: operationID,
+                        now: { scheduledAt }
                     )
                     return RestoreStageSummary(
                         operationID: staged.intent.operationID,
@@ -374,7 +376,12 @@ public final class BackupController: ObservableObject {
         let matchingOutcome = launchRestoreOutcome.flatMap { outcome in
             Self.outcome(outcome, matches: launchRestoreResult) ? outcome : nil
         }
-        let appliedActivation = applyLaunchRestoreResult(
+        let launchEvidenceConflicts = launchRestoreResult.map { result in
+            result.status != .noPendingRestore
+                && launchRestoreOutcome != nil
+                && matchingOutcome == nil
+        } ?? false
+        let appliedActivation = launchEvidenceConflicts ? false : applyLaunchRestoreResult(
             launchRestoreResult,
             completedAt: matchingOutcome?.completedAt
         )
@@ -383,7 +390,9 @@ public final class BackupController: ObservableObject {
            launchRestoreResult.status != .noPendingRestore
         {
             handledLaunchEvidence = true
-            if launchRestoreResult.status != .recoveryRequired {
+            if launchEvidenceConflicts {
+                markRestoreEvidenceAcknowledgementPending()
+            } else if launchRestoreResult.status != .recoveryRequired {
                 if appliedActivation {
                     do {
                         try acknowledgeRestoreOutcome()
@@ -700,6 +709,7 @@ public final class BackupController: ObservableObject {
         activeOperation = .restoreStaging
         var runnerWasInvoked = false
         var scheduledOperationID: UUID?
+        var scheduledTimestamp: Date?
         defer {
             activeOperation = nil
             if runnerWasInvoked { requestProcessExit() }
@@ -720,28 +730,35 @@ public final class BackupController: ObservableObject {
                 let operationID = restoreOperationIDProvider()
                 scheduledOperationID = operationID
                 let operationIDString = operationID.uuidString
+                let scheduledAt = Date(
+                    timeIntervalSince1970: floor(now().timeIntervalSince1970)
+                )
+                scheduledTimestamp = scheduledAt
                 let scheduleMessage = "Restore scheduled. Supra AI is finishing safely and will quit automatically."
                 try persistRestoreStatus(
                     .staging,
                     scheduleMessage,
                     operationID: operationIDString,
-                    snapshotIdentifier: candidate.identifier
+                    snapshotIdentifier: candidate.identifier,
+                    updatedAt: scheduledAt
                 )
                 try recordRestoreAuditOrThrow(
                     eventType: "restore_scheduled",
                     summary: "Restore scheduled for quiesced cold-start activation.",
                     operationID: operationIDString,
                     snapshotIdentifier: candidate.identifier,
-                    state: .staging
+                    state: .staging,
+                    occurredAt: scheduledAt
                 )
                 restoreConfirmation = nil
                 confirmedRestoreIdentity = nil
                 restoreProcessIsTerminal = true
                 runnerWasInvoked = true
-                return try await restoreRunner(candidate, layout, operationID)
+                return try await restoreRunner(candidate, layout, operationID, scheduledAt)
             }
             guard summary.snapshotIdentifier == confirmation.snapshotIdentifier,
-                  UUID(uuidString: summary.operationID) == scheduledOperationID
+                  UUID(uuidString: summary.operationID) == scheduledOperationID,
+                  summary.stagedAt == scheduledTimestamp
             else { throw RestoreControllerError.invalidStageResult }
 
             setRestorePresentation(
@@ -782,6 +799,7 @@ public final class BackupController: ObservableObject {
             status: result.status,
             operationID: result.operationID,
             snapshotIdentifier: result.snapshotIdentifier,
+            scheduledAt: result.scheduledAt,
             activationFailure: result.activationFailure,
             rollbackFailure: result.rollbackFailure,
             completedAt: completedAt
@@ -794,6 +812,7 @@ public final class BackupController: ObservableObject {
             status: outcome.status,
             operationID: outcome.operationID,
             snapshotIdentifier: outcome.snapshotIdentifier,
+            scheduledAt: outcome.schemaVersion >= 2 ? outcome.scheduledAt : nil,
             activationFailure: outcome.activationFailure,
             rollbackFailure: outcome.rollbackFailure,
             completedAt: outcome.completedAt
@@ -805,10 +824,12 @@ public final class BackupController: ObservableObject {
         status: RestoreActivationStatus,
         operationID: String?,
         snapshotIdentifier: String?,
+        scheduledAt: Date?,
         activationFailure: RestoreActivationFailure?,
         rollbackFailure: RestoreActivationFailure?,
         completedAt: Date?
     ) -> Bool {
+        let schedulingAuditAt = status == .activated ? scheduledAt : nil
         let state: RestoreControllerState
         let message: String
         let eventType: String
@@ -836,6 +857,16 @@ public final class BackupController: ObservableObject {
                 snapshotIdentifier: snapshotIdentifier,
                 updatedAt: completedAt
             )
+            if status == .activated, let schedulingAuditAt {
+                try recordRestoreAuditOrThrow(
+                    eventType: "restore_scheduled",
+                    summary: "Restore scheduled for quiesced cold-start activation.",
+                    operationID: operationID,
+                    snapshotIdentifier: snapshotIdentifier,
+                    state: .staging,
+                    occurredAt: schedulingAuditAt
+                )
+            }
             if status != .recoveryRequired {
                 try recordRestoreAuditOrThrow(
                     eventType: eventType,
@@ -1104,6 +1135,7 @@ public final class BackupController: ObservableObject {
         return outcome.status == result.status
             && outcome.operationID == result.operationID
             && outcome.snapshotIdentifier == result.snapshotIdentifier
+            && outcome.scheduledAt == result.scheduledAt
             && outcome.activationFailure == result.activationFailure
             && outcome.rollbackFailure == result.rollbackFailure
     }

@@ -218,13 +218,17 @@ public enum RestoreSidecarStore {
             throw CocoaError(.fileReadCorruptFile)
         }
         let record = try RestoreOutcomeRecord.decode(Data(contentsOf: source))
-        guard record.schemaVersion == RestoreOutcomeRecord.currentSchemaVersion,
+        guard record.schemaVersion >= 1,
+              record.schemaVersion <= RestoreOutcomeRecord.currentSchemaVersion,
               record.status != .noPendingRestore,
               isValidOperationID(record.operationID, required: record.status != .recoveryRequired),
               isValidSnapshotIdentifier(
                   record.snapshotIdentifier,
                   required: record.status != .recoveryRequired
               ),
+              record.schemaVersion == 1
+                  ? record.scheduledAt == nil
+                  : record.status == .recoveryRequired || record.scheduledAt != nil,
               record.status != .recoveryRequired
                   || record.operationTreeCleanupPending != true
         else {
@@ -475,6 +479,7 @@ public enum RestoreSidecarStore {
             schemaVersion: record.schemaVersion,
             operationID: record.operationID,
             snapshotIdentifier: record.snapshotIdentifier,
+            scheduledAt: record.scheduledAt,
             status: record.status,
             activationFailure: record.activationFailure,
             rollbackFailure: record.rollbackFailure,
