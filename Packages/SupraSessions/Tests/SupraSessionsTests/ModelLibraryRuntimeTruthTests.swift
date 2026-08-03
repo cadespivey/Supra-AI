@@ -30,24 +30,53 @@ final class ModelLibraryRuntimeTruthTests: XCTestCase {
     /// delay models a multi-second MLX load in flight.
     private final class RestartableRuntimeStub: RuntimeClientProtocol, @unchecked Sendable {
         private let lock = NSLock()
+        private let blockFirstLoad: Bool
         private var _held: ModelID?
         private var _loadRequests: [LoadModelRequest] = []
         private var _statusCalls = 0
+        private var _firstLoadContinuation: CheckedContinuation<Void, Never>?
+        private var _firstLoadReleased = false
         var loadDelayNanoseconds: UInt64 = 0
 
         var loadRequestCount: Int { lock.withLock { _loadRequests.count } }
+        var loadRequestedModelIDs: [ModelID] { lock.withLock { _loadRequests.map(\.modelID) } }
         var statusCallCount: Int { lock.withLock { _statusCalls } }
         var runtimeHeldModelID: ModelID? { lock.withLock { _held } }
+
+        init(blockFirstLoad: Bool = false) {
+            self.blockFirstLoad = blockFirstLoad
+        }
 
         func simulateServiceRestart() {
             lock.withLock { _held = nil }
         }
 
+        func releaseFirstLoad() {
+            let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                _firstLoadReleased = true
+                defer { _firstLoadContinuation = nil }
+                return _firstLoadContinuation
+            }
+            continuation?.resume()
+        }
+
         func connect() async throws {}
 
         func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
-            lock.withLock { _loadRequests.append(request) }
-            if loadDelayNanoseconds > 0 {
+            let requestNumber = lock.withLock { () -> Int in
+                _loadRequests.append(request)
+                return _loadRequests.count
+            }
+            if blockFirstLoad, requestNumber == 1 {
+                await withCheckedContinuation { continuation in
+                    let released = lock.withLock { () -> Bool in
+                        guard !_firstLoadReleased else { return true }
+                        _firstLoadContinuation = continuation
+                        return false
+                    }
+                    if released { continuation.resume() }
+                }
+            } else if loadDelayNanoseconds > 0 {
                 try? await Task.sleep(nanoseconds: loadDelayNanoseconds)
             }
             lock.withLock { _held = request.modelID }
@@ -184,6 +213,92 @@ final class ModelLibraryRuntimeTruthTests: XCTestCase {
         }
         XCTAssertEqual(modelID.rawValue.uuidString, model.id)
         XCTAssertEqual(stub.loadRequestCount, 1, "waiting must not issue a duplicate load")
+    }
+
+    // Expected RED: settleInFlightLoad swallows CancellationError from Task.sleep.
+    // When the first load resolves while ensure is asleep, the cancelled task wakes
+    // and replaces it with the newly assigned model.
+    @MainActor
+    func testCancelledEnsureWaitingOnAnotherLoadDoesNotReplaceIt() async throws {
+        let store = try makeStore()
+        let stub = RestartableRuntimeStub(blockFirstLoad: true)
+        let library = ModelLibrary(store: store, runtimeClient: stub)
+        let first = try library.addModel(
+            displayName: "First Loading Model",
+            path: "/tmp/first-loading",
+            bookmarkData: nil
+        )
+        let second = try library.addModel(
+            displayName: "Second Assigned Model",
+            path: "/tmp/second-assigned",
+            bookmarkData: nil
+        )
+        let firstModelID = ModelID(try XCTUnwrap(UUID(uuidString: first.id)))
+
+        let prewarm = Task { await library.activateAndLoad(modelID: first.id) }
+        var waited = 0
+        while library.loadState != .loading(modelID: first.id), waited < 200 {
+            waited += 1
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard case .loading = library.loadState else {
+            stub.releaseFirstLoad()
+            await prewarm.value
+            return XCTFail("precondition: the model load should be in flight")
+        }
+        library.assignModel(second.id, to: .drafting)
+
+        let ensureStarted = expectation(description: "ensure started")
+        let ensure = Task {
+            ensureStarted.fulfill()
+            return await library.ensureLoadedRoutedModelID(for: .drafting)
+        }
+        await fulfillment(of: [ensureStarted], timeout: 1)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        stub.releaseFirstLoad()
+        await prewarm.value
+        ensure.cancel()
+        let result = await ensure.value
+
+        guard case let .failure(issue) = result else {
+            return XCTFail("cancelled ensure unexpectedly succeeded: \(result)")
+        }
+        XCTAssertTrue(
+            issue.message.localizedCaseInsensitiveContains("cancelled"),
+            "cancelled wait surfaced a stale load result: \(issue.message)"
+        )
+        XCTAssertEqual(stub.loadRequestedModelIDs, [firstModelID])
+        XCTAssertEqual(stub.runtimeHeldModelID?.rawValue.uuidString, first.id)
+        XCTAssertEqual(library.loadedModelID?.rawValue.uuidString, first.id)
+    }
+
+    // Expected RED: an ensure task cancelled before entry still activates the
+    // assigned model because neither ensure nor activateAndLoad checks cancellation.
+    @MainActor
+    func testAlreadyCancelledEnsureDoesNotActivateAssignedModel() async throws {
+        let store = try makeStore()
+        let stub = RestartableRuntimeStub()
+        let library = ModelLibrary(store: store, runtimeClient: stub)
+        let first = try library.addModel(displayName: "Loaded Model", path: "/tmp/loaded", bookmarkData: nil)
+        let second = try library.addModel(displayName: "Assigned Model", path: "/tmp/assigned", bookmarkData: nil)
+        let firstModelID = ModelID(try XCTUnwrap(UUID(uuidString: first.id)))
+        await library.activateAndLoad(modelID: first.id)
+        library.assignModel(second.id, to: .drafting)
+
+        let ensure = Task {
+            withUnsafeCurrentTask { task in
+                task?.cancel()
+            }
+            return await library.ensureLoadedRoutedModelID(for: .drafting)
+        }
+        let result = await ensure.value
+
+        guard case let .failure(issue) = result else {
+            return XCTFail("already-cancelled ensure unexpectedly succeeded: \(result)")
+        }
+        XCTAssertTrue(issue.message.localizedCaseInsensitiveContains("cancelled"))
+        XCTAssertEqual(stub.loadRequestedModelIDs, [firstModelID])
+        XCTAssertEqual(stub.runtimeHeldModelID?.rawValue.uuidString, first.id)
     }
 
     // MARK: - Guards: the fast path stays fast, and truth is actually consulted

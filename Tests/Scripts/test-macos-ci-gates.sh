@@ -551,6 +551,7 @@ fi
 
 motion_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift"
 motion_ui_tests="${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift"
+letter_generation_function="$(sed -n '/private func generateLetter(token:/,/^    }/p' "$motion_view")"
 if grep -Fq 'drafting.motion.fact.\(source.chunkID)' "$motion_view" \
     && grep -Fq 'drafting.motion.authority.\(source.authorityID)' "$motion_view" \
     && grep -Fq 'drafting.motion.fact.ui-motion-fact-chunk' "$motion_ui_tests" \
@@ -583,7 +584,7 @@ if grep -Fq 'private var isWorking: Bool { generationTask != nil || controller.i
     && grep -Fq 'guard !isWorking else { return }' "$motion_view" \
     && grep -Fq '.interactiveDismissDisabled(isWorking)' "$motion_view" \
     && grep -Fq 'generationToken' "$motion_view" \
-    && grep -Fq 'guard generationIsCurrent(token, selection: requestedSelection), !Task.isCancelled else { return }' "$motion_view" \
+    && [[ "$(grep -Fc 'guard generationIsCurrent(token, selection: requestedSelection), !Task.isCancelled else { return }' <<<"$letter_generation_function")" -eq 2 ]] \
     && grep -Fq 'drafting.close.header' "$motion_ui_tests" \
     && grep -Fq 'drafting.close.footer' "$motion_ui_tests" \
     && grep -Fq 'docxArtifacts(beneath: storageRoot)' "$motion_ui_tests"; then

@@ -415,6 +415,67 @@ final class DraftPipelineTests: XCTestCase {
         }
         XCTAssertEqual(renderer.renderCount, 0)
     }
+
+    // ACR-DRAFT-09. Expected RED: cancellation raised synchronously by the notice
+    // renderer remains pending, but runNotice returns a DraftResult instead of
+    // honoring it at the renderer boundary.
+    func testCancellationDuringNoticeRendererNeverReturnsDraftResult() async {
+        let renderer = CountingRenderer(cancelsCurrentTask: true)
+        let pipeline = DraftPipeline(verifier: DraftVerifier(), renderer: renderer)
+        let inputs = noticeInputs
+        let firm = profile
+
+        let task = Task {
+            try await pipeline.runNotice(inputs, profile: firm, style: .defaultFL)
+        }
+        do {
+            _ = try await task.value
+            XCTFail("cancelled notice rendering unexpectedly returned a draft result")
+        } catch is CancellationError {
+            // Expected immediately after rendering.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertEqual(renderer.renderCount, 1)
+    }
+
+    // ACR-DRAFT-10. Expected RED: runLetter likewise returns normally when
+    // cancellation arrives inside its synchronous renderer.
+    func testCancellationDuringLetterRendererNeverReturnsDraftResult() async {
+        let renderer = CountingRenderer(cancelsCurrentTask: true)
+        let pipeline = DraftPipeline(verifier: DraftVerifier(), renderer: renderer)
+        let text = "The invoice remains unpaid under the supply agreement."
+        let generated = GeneratedLetter(paragraphProvenance: [
+            GeneratedLetterParagraph(text: text, factLabels: ["claim"], citationLabels: [])
+        ])
+        let facts = [GroundedFact(
+            text: text,
+            label: "claim",
+            docId: "user-input",
+            locator: "claim"
+        )]
+        let inputs = letterInputs
+        let firm = profile
+
+        let task = Task {
+            try await pipeline.runLetter(
+                inputs,
+                generated: generated,
+                facts: facts,
+                profile: firm,
+                style: .defaultFL
+            )
+        }
+        do {
+            _ = try await task.value
+            XCTFail("cancelled letter rendering unexpectedly returned a draft result")
+        } catch is CancellationError {
+            // Expected immediately after rendering.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertEqual(renderer.renderCount, 1)
+    }
 }
 
 private struct AlwaysBlockingVerifier: Verifier {
@@ -454,9 +515,19 @@ private struct CancellingVerifier: Verifier {
 private final class CountingRenderer: Renderer, @unchecked Sendable {
     let identity = DraftComponentIdentity(id: "test.counting-renderer", version: "1")
     private(set) var renderCount = 0
+    private let cancelsCurrentTask: Bool
+
+    init(cancelsCurrentTask: Bool = false) {
+        self.cancelsCurrentTask = cancelsCurrentTask
+    }
 
     func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {
         renderCount += 1
+        if cancelsCurrentTask {
+            withUnsafeCurrentTask { task in
+                task?.cancel()
+            }
+        }
         return Data("rendered".utf8)
     }
 }
