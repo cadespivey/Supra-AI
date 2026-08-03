@@ -256,7 +256,7 @@ claims:
     verification: "Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift"
     ci_job: "macos-ci/app-smoke"
     applicable_version: "2.2.0 and later"
-    last_reviewed: "2026-07-31"
+    last_reviewed: "2026-08-03"
     publication_anchor: "README.md"
 
   - id: "BILLING-EVIDENCE-BOUNDARY"

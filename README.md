@@ -40,8 +40,11 @@ The current published Supra AI release is identified by the newest appcast entry
   drag your own order — and the matter form suggests known clients and practice areas as you type,
   helping users avoid duplicate client identities.
 - **In-matter drafting.** A **Draft** button in a matter's chat opens a guided input sheet and
-  generates a downloadable `.docx` — a Notice of Appearance (currently Florida-only) or a demand
-  letter. Required slots are validated before rendering, and the signature block prints the bar
+  generates a downloadable `.docx` — a Notice of Appearance (currently Florida-only), a demand
+  letter, or a deterministic Florida state trial-court motion to dismiss for failure to state a
+  claim. The motion uses only the revision-bound fact excerpts and proposition-specific authorities
+  the user selects after review. Required slots are validated before rendering, and the signature
+  block prints the bar
   admission whose jurisdiction matches the filing's court — configured as a multi-jurisdiction
   bar-admissions list in **Settings**. A per-firm **style profile** (also in Settings) applies your
   letterhead, caption, and signature-block conventions to supported drafts, and can be captured by
