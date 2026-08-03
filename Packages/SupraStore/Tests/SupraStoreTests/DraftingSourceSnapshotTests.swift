@@ -195,6 +195,86 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         )
     }
 
+    // Expected RED: the snapshot validator accepts a primary-only v2 chunk whenever
+    // a request/response pair exceeds the chunker's configurable 200-character floor,
+    // even though the shipping 1,200-character producer emits this pair only as one chunk.
+    func testTMDSS03BRejectsPrimaryOnlyV2ChunkForShippingSizeRequestResponsePair() throws {
+        let fixture = try makeFixture()
+        let pair = try installShippingSizeV2RequestResponse(in: fixture)
+        let combined = v2Chunk(
+            base: fixture.chunks[0],
+            nodeID: pair.requestNodeID,
+            unitKind: "discovery_request",
+            text: pair.requestText + "\n" + pair.responseText,
+            start: 0,
+            end: pair.requestText.count
+        )
+        try fixture.store.documentIndex.replaceChunks(
+            documentID: fixture.chunks[0].documentID,
+            chunks: [combined]
+        )
+        XCTAssertEqual(
+            try fixture.store.draftingSources.captureMotionSnapshot(
+                request(for: fixture, factChunkIDs: [combined.id])
+            ).facts.first?.text,
+            pair.requestText + "\n" + pair.responseText
+        )
+
+        let forgedPrimary = v2Chunk(
+            base: fixture.chunks[0],
+            nodeID: pair.requestNodeID,
+            unitKind: "discovery_request",
+            text: pair.requestText,
+            start: 0,
+            end: pair.requestText.count
+        )
+        try fixture.store.documentIndex.replaceChunks(
+            documentID: fixture.chunks[0].documentID,
+            chunks: [forgedPrimary]
+        )
+
+        XCTAssertThrowsError(
+            try fixture.store.draftingSources.captureMotionSnapshot(
+                request(for: fixture, factChunkIDs: [forgedPrimary.id])
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? MotionDraftSnapshotError,
+                .factBindingInvalid(forgedPrimary.id)
+            )
+        }
+    }
+
+    // Expected RED: validating one node in isolation permits a response that the
+    // shipping producer consumed into its preceding request to masquerade as a chunk.
+    func testTMDSS03CRejectsConsumedV2ResponseForgedAsStandaloneChunk() throws {
+        let fixture = try makeFixture()
+        let pair = try installShippingSizeV2RequestResponse(in: fixture)
+        let forgedResponse = v2Chunk(
+            base: fixture.chunks[0],
+            nodeID: pair.responseNodeID,
+            unitKind: "discovery_response",
+            text: pair.responseText,
+            start: 0,
+            end: pair.responseText.count
+        )
+        try fixture.store.documentIndex.replaceChunks(
+            documentID: fixture.chunks[0].documentID,
+            chunks: [forgedResponse]
+        )
+
+        XCTAssertThrowsError(
+            try fixture.store.draftingSources.captureMotionSnapshot(
+                request(for: fixture, factChunkIDs: [forgedResponse.id])
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? MotionDraftSnapshotError,
+                .factBindingInvalid(forgedResponse.id)
+            )
+        }
+    }
+
     // Expected RED: raw authority flags and citation text can currently enter a motion
     // without proposition-specific reviewed evidence for the selected ground.
     func testTMDSS04CaptureRequiresLiveReviewedAuthorityProposition() throws {
@@ -278,6 +358,77 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         let chunks: [DocumentChunkRecord]
         let authority: AuthorityRecord
         let review: AuthorityReviewedProposition
+    }
+
+    private struct V2RequestResponseFixture {
+        let requestNodeID: String
+        let responseNodeID: String
+        let requestText: String
+        let responseText: String
+    }
+
+    private func installShippingSizeV2RequestResponse(
+        in fixture: Fixture
+    ) throws -> V2RequestResponseFixture {
+        let requestNodeID = "v2-shipping-request"
+        let responseNodeID = "v2-shipping-response"
+        let requestText = "Request No. 4: "
+            + String(repeating: "Produce the synthetic invoice ledger. ", count: 4)
+        let responseText = "Response No. 4: "
+            + String(repeating: "The synthetic ledger will be produced. ", count: 3)
+        let combinedText = requestText + "\n" + responseText
+        XCTAssertGreaterThan(combinedText.count, 200)
+        XCTAssertLessThanOrEqual(combinedText.count, 1_200)
+
+        try fixture.store.documentStructure.replaceStructure(
+            documentID: fixture.chunks[0].documentID,
+            revisionID: fixture.revision.id,
+            nodes: [
+                DocumentStructureNodeRecord(
+                    id: "v2-shipping-root",
+                    documentID: fixture.chunks[0].documentID,
+                    revisionID: fixture.revision.id,
+                    nodeKey: "document",
+                    ordinal: 0,
+                    kind: "document"
+                ),
+                DocumentStructureNodeRecord(
+                    id: requestNodeID,
+                    documentID: fixture.chunks[0].documentID,
+                    revisionID: fixture.revision.id,
+                    nodeKey: "request",
+                    parentNodeID: "v2-shipping-root",
+                    ordinal: 0,
+                    kind: "discovery_request",
+                    textContent: requestText
+                ),
+                DocumentStructureNodeRecord(
+                    id: responseNodeID,
+                    documentID: fixture.chunks[0].documentID,
+                    revisionID: fixture.revision.id,
+                    nodeKey: "response",
+                    parentNodeID: "v2-shipping-root",
+                    ordinal: 1,
+                    kind: "discovery_response",
+                    textContent: responseText
+                ),
+            ],
+            edges: [
+                DocumentStructureEdgeRecord(
+                    id: "v2-shipping-response-edge",
+                    matterID: fixture.matter.id,
+                    fromNodeID: responseNodeID,
+                    toNodeID: requestNodeID,
+                    kind: "responds_to"
+                ),
+            ]
+        )
+        return V2RequestResponseFixture(
+            requestNodeID: requestNodeID,
+            responseNodeID: responseNodeID,
+            requestText: requestText,
+            responseText: responseText
+        )
     }
 
     private func makeFixture(reviewAuthority: Bool = true) throws -> Fixture {
