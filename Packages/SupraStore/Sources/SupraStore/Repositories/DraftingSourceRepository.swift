@@ -331,12 +331,18 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                 ).filter {
                     nodeIDs.contains($0.fromNodeID) && nodeIDs.contains($0.toNodeID)
                 }
-                let allowedTexts = try allowedStructuredChunkTexts(
-                    primary: node,
+                let expectedChunks = shippingStructuredChunks(
+                    nodes: nodes,
                     resolvedByID: resolvedByID,
                     edges: edges
                 )
-                guard allowedTexts.contains(chunk.normalizedText) else {
+                guard expectedChunks.contains(where: {
+                    $0.nodeID == node.id
+                        && $0.unitKind == node.kind
+                        && $0.charStart == start
+                        && $0.charEnd == end
+                        && $0.text == chunk.normalizedText
+                }) else {
                     throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
                 }
             } else {
@@ -576,44 +582,136 @@ public final class DraftingSourceRepository: @unchecked Sendable {
         return String(text[lower..<upper])
     }
 
-    /// Mirrors the v2 chunker's edge priority and ordering using only immutable
-    /// revision-bound structure rows. The chunker's configured maximum is not
-    /// persisted, but it is clamped to at least 200 characters: a short
-    /// request/response pair must therefore be combined, while a longer pair may
-    /// legitimately be either split or combined under an injected configuration.
-    private static func allowedStructuredChunkTexts(
-        primary: DocumentStructureNodeRecord,
+    private struct StructuredChunkProjection {
+        let nodeID: String
+        let unitKind: String
+        let charStart: Int
+        let charEnd: Int
+        let text: String
+    }
+
+    private static let shippingV2MaxChars = 1_200
+
+    /// Mirrors the shipping v2 producer's candidate ordering, edge priority,
+    /// consumption, and default request/response split boundary without making
+    /// the persistence package depend on SupraDocuments.
+    private static func shippingStructuredChunks(
+        nodes: [DocumentStructureNodeRecord],
         resolvedByID: [String: String],
         edges: [DocumentStructureEdgeRecord]
-    ) throws -> Set<String> {
-        guard let primaryText = resolvedByID[primary.id] else {
-            throw StructureRepositoryError.invalidTextContract(primary.id)
+    ) -> [StructuredChunkProjection] {
+        let recognizedKinds: Set<String> = [
+            "document", "section", "heading", "paragraph", "list", "list_item",
+            "table", "table_row", "table_cell", "footnote", "endnote", "comment",
+            "header", "footer", "tracked_insertion", "tracked_deletion", "page",
+            "region", "sheet", "cell_range", "email_message", "email_body",
+            "email_quote", "attachment_ref", "discovery_request", "discovery_response",
+            "objection", "deposition_question", "deposition_answer", "exhibit_ref",
+        ]
+        let legalKinds: Set<String> = [
+            "discovery_request", "discovery_response", "objection",
+            "deposition_question", "deposition_answer",
+        ]
+        let genericKinds: Set<String> = ["paragraph", "list_item", "region", "email_body"]
+        let producerNodes = nodes.filter { recognizedKinds.contains($0.kind) }
+        let nodesByID = Dictionary(uniqueKeysWithValues: producerNodes.map { ($0.id, $0) })
+        let legalRanges = producerNodes.filter {
+            legalKinds.contains($0.kind) && $0.charStart != nil && $0.charEnd != nil
         }
-        let ordered = edges.sorted {
+        let candidates = producerNodes.filter { node in
+            let hasRange = node.charStart != nil && node.charEnd != nil
+            let hasText = nonblank(node.textContent) != nil
+            guard hasRange || hasText,
+                  node.kind != "tracked_insertion",
+                  node.kind != "tracked_deletion" else {
+                return false
+            }
+            if genericKinds.contains(node.kind),
+               let start = node.charStart,
+               let end = node.charEnd,
+               legalRanges.contains(where: {
+                   guard let legalStart = $0.charStart, let legalEnd = $0.charEnd else {
+                       return false
+                   }
+                   return start < legalEnd && legalStart < end
+               }) {
+                return false
+            }
+            return true
+        }.sorted { lhs, rhs in
+            if lhs.ordinal != rhs.ordinal { return lhs.ordinal < rhs.ordinal }
+            if lhs.charStart != rhs.charStart {
+                return (lhs.charStart ?? .max) < (rhs.charStart ?? .max)
+            }
+            return lhs.id < rhs.id
+        }
+        let orderedEdges = edges.filter {
+            nodesByID[$0.fromNodeID] != nil && nodesByID[$0.toNodeID] != nil
+        }.sorted {
             if $0.fromNodeID != $1.fromNodeID { return $0.fromNodeID < $1.fromNodeID }
             return $0.toNodeID < $1.toNodeID
         }
 
-        if let responseEdge = ordered.first(where: {
-            $0.kind == "responds_to" && $0.toNodeID == primary.id
-        }), let responseText = resolvedByID[responseEdge.fromNodeID] {
-            let combined = primaryText + "\n" + responseText
-            return combined.count <= 200 ? [combined] : [primaryText, combined]
-        }
+        var result: [StructuredChunkProjection] = []
+        var consumed = Set<String>()
+        for node in candidates where !consumed.contains(node.id) {
+            guard let primaryText = nonblank(resolvedByID[node.id]) else { continue }
 
-        if let referenceEdge = ordered.first(where: {
-            $0.kind == "references" && $0.toNodeID == primary.id
-        }), let useText = resolvedByID[referenceEdge.fromNodeID] {
-            return [primaryText + "\n" + useText]
-        }
+            if let responseEdge = orderedEdges.first(where: {
+                $0.kind == "responds_to" && $0.toNodeID == node.id
+            }), let response = nodesByID[responseEdge.fromNodeID],
+               let responseText = nonblank(resolvedByID[response.id]) {
+                let combined = primaryText + "\n" + responseText
+                if combined.count <= shippingV2MaxChars {
+                    result.append(structuredProjection(node: node, text: combined))
+                } else {
+                    result.append(structuredProjection(node: node, text: primaryText))
+                    result.append(structuredProjection(node: response, text: responseText))
+                }
+                consumed.formUnion([node.id, response.id])
+                continue
+            }
 
-        let headers = ordered.filter {
-            $0.kind == "header_for" && $0.fromNodeID == primary.id
-        }.compactMap { resolvedByID[$0.toNodeID] }
-        if !headers.isEmpty {
-            return [headers.joined(separator: "\n") + "\n" + primaryText]
+            if let referenceEdge = orderedEdges.first(where: {
+                $0.kind == "references" && $0.toNodeID == node.id
+            }), let useText = nonblank(resolvedByID[referenceEdge.fromNodeID]) {
+                result.append(structuredProjection(
+                    node: node,
+                    text: primaryText + "\n" + useText
+                ))
+                consumed.insert(node.id)
+                continue
+            }
+
+            let headers = orderedEdges.filter {
+                $0.kind == "header_for" && $0.fromNodeID == node.id
+            }.compactMap { nonblank(resolvedByID[$0.toNodeID]) }
+            if !headers.isEmpty {
+                result.append(structuredProjection(
+                    node: node,
+                    text: headers.joined(separator: "\n") + "\n" + primaryText
+                ))
+                consumed.insert(node.id)
+                continue
+            }
+
+            result.append(structuredProjection(node: node, text: primaryText))
+            consumed.insert(node.id)
         }
-        return [primaryText]
+        return result
+    }
+
+    private static func structuredProjection(
+        node: DocumentStructureNodeRecord,
+        text: String
+    ) -> StructuredChunkProjection {
+        StructuredChunkProjection(
+            nodeID: node.id,
+            unitKind: node.kind,
+            charStart: node.charStart ?? 0,
+            charEnd: node.charEnd ?? node.textContent?.count ?? 0,
+            text: text
+        )
     }
 
     private static func nonblank(_ value: String?) -> String? {
