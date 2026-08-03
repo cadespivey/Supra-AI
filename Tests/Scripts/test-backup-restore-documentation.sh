@@ -48,6 +48,8 @@ require_literal "$restore_doc" 'Recovery Required' \
 # instead of the complete safety folder containing its managed-document blobs.
 require_literal "$restore_doc" 'preserve the entire safety folder' \
   'restore documentation must preserve the complete safety directory and blob tree'
+require_literal "$restore_doc" 'managed-document blobs' \
+  'restore documentation must name the managed-document blobs preserved with the database'
 require_literal "$restore_doc" 'Recovery-required operation trees are deliberately' \
   'restore documentation must preserve recovery-required operation trees'
 require_literal "$restore_doc" "removes only that authenticated operation's private staging tree" \
@@ -69,6 +71,8 @@ require_literal "$settings_view" 'How restore works' \
 # T-RST-H08 expected RED: Settings still offers only the recovery database.
 require_literal "$settings_view" 'entire verified safety folder' \
   'Settings restore help must preserve the database and managed-document blobs together'
+require_literal "$settings_view" 'managed-document blobs' \
+  'Settings restore help must name the managed-document blobs in the safety folder'
 
 if (( failures != 0 )); then
   printf 'Backup and restore documentation checks failed: %d\n' "$failures" >&2

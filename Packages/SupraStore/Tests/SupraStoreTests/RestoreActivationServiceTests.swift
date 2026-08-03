@@ -274,7 +274,7 @@ final class RestoreActivationServiceTests: XCTestCase {
         let result = activate(operations: operations)
 
         XCTAssertEqual(result.status, .failedAndRolledBack)
-        XCTAssertNil(result.recoveryDatabaseURL)
+        XCTAssertNil(result.recoverySafetyDirectoryURL)
         XCTAssertFalse(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
         XCTAssertTrue(operations.events.contains(.removeOperationTree))
         XCTAssertTrue(operations.events.contains(.synchronizeOperationsDirectory))
@@ -387,7 +387,10 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(result.status, .recoveryRequired)
         XCTAssertEqual(result.activationFailure, .databaseReplacementFailed)
         XCTAssertEqual(result.rollbackFailure, .databaseReplacementFailed)
-        XCTAssertEqual(result.recoveryDatabaseURL, staged.safetyDatabaseURL)
+        XCTAssertEqual(
+            result.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
         XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
         XCTAssertFalse(operations.events.contains(.removeOperationTree))
@@ -398,14 +401,21 @@ final class RestoreActivationServiceTests: XCTestCase {
     func testRecoveryRequiredExposesCompleteSafetyDirectoryForManualPreservation() throws {
         let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
         let staged = try stage(currentBlobs: [currentBlob])
-        let operations = RecordingRestoreActivationOperations(
-            failures: [.replaceSelectedDatabase, .replaceSafetyDatabase]
-        )
+        let operations = RecordingRestoreActivationOperations(failures: [.copySafetyBlob])
 
-        let result = activate(operations: operations)
+        let result = activate(operations: operations) { _ in
+            operations.record(.openSelectedDatabase)
+            throw ActivationTestError.selectedOpen
+        }
 
-        let recoveryDirectory = try XCTUnwrap(result.recoveryDirectoryURL)
+        XCTAssertEqual(result.status, .recoveryRequired)
+        XCTAssertEqual(result.activationFailure, .databaseOpenFailed)
+        XCTAssertEqual(result.rollbackFailure, .blobInstallationFailed)
+        let recoveryDirectory = try XCTUnwrap(result.recoverySafetyDirectoryURL)
         XCTAssertEqual(recoveryDirectory, staged.safetyDatabaseURL.deletingLastPathComponent())
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryDirectory.appendingPathComponent("restore-safety.sqlite").path
+        ))
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: recoveryDirectory
                 .appendingPathComponent("blobs", isDirectory: true)
@@ -437,7 +447,10 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(second.rollbackFailure, first.rollbackFailure)
         XCTAssertEqual(second.operationID, staged.intent.operationID)
         XCTAssertEqual(second.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
-        XCTAssertEqual(second.recoveryDatabaseURL, staged.safetyDatabaseURL)
+        XCTAssertEqual(
+            second.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
         XCTAssertTrue(secondOperations.events.isEmpty)
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
         XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
@@ -495,7 +508,10 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(result.rollbackFailure, .markerRemovalFailed)
         XCTAssertEqual(result.operationID, staged.intent.operationID)
         XCTAssertEqual(result.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
-        XCTAssertEqual(result.recoveryDatabaseURL, staged.safetyDatabaseURL)
+        XCTAssertEqual(
+            result.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
         XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
         XCTAssertFalse(operations.events.contains(.replaceSelectedDatabase))
@@ -541,7 +557,10 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(result.status, .recoveryRequired)
         XCTAssertEqual(result.activationFailure, .databaseOpenFailed)
         XCTAssertEqual(result.rollbackFailure, .databaseOpenFailed)
-        XCTAssertEqual(result.recoveryDatabaseURL, staged.safetyDatabaseURL)
+        XCTAssertEqual(
+            result.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
     }
 
@@ -556,7 +575,7 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(result.status, .recoveryRequired)
         XCTAssertEqual(result.activationFailure, .safetyStateInvalid)
         XCTAssertEqual(result.rollbackFailure, .safetyStateInvalid)
-        XCTAssertNil(result.recoveryDatabaseURL)
+        XCTAssertNil(result.recoverySafetyDirectoryURL)
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
     }
 
@@ -609,7 +628,10 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(replay.rollbackFailure, failed.rollbackFailure)
         XCTAssertEqual(replay.operationID, staged.intent.operationID)
         XCTAssertEqual(replay.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
-        XCTAssertEqual(replay.recoveryDatabaseURL, staged.safetyDatabaseURL)
+        XCTAssertEqual(
+            replay.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
         XCTAssertTrue(replayOperations.events.isEmpty)
     }
 
@@ -635,7 +657,7 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(replay.status, .recoveryRequired)
         XCTAssertEqual(replay.activationFailure, .safetyStateInvalid)
         XCTAssertEqual(replay.rollbackFailure, .safetyStateInvalid)
-        XCTAssertNil(replay.recoveryDatabaseURL)
+        XCTAssertNil(replay.recoverySafetyDirectoryURL)
         XCTAssertEqual(try fixture.fingerprint(fixture.liveDatabaseURL), liveFingerprint)
         XCTAssertTrue(replayOperations.events.isEmpty)
     }
