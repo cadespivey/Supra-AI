@@ -162,6 +162,67 @@ final class DurableFileWriterTests: XCTestCase {
         XCTAssertTrue(try temporaryArtifacts(in: directory).isEmpty)
     }
 
+    // Expected RED: a successful rename does not make the destination directory
+    // entry durable until the parent directory is synchronized.
+    func testACRFILE008ReplacementSynchronizesParentAfterInstallAndPropagatesFailure() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = directory.appendingPathComponent("replacement.txt")
+        let replacement = Data("durable-replacement".utf8)
+        try Data("old-canary".utf8).write(to: destination)
+
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { observedParent in
+                guard observedParent == directory.standardizedFileURL else {
+                    throw InjectedDirectorySyncFailure.unexpectedParent(observedParent)
+                }
+                guard try Data(contentsOf: destination) == replacement else {
+                    throw InjectedDirectorySyncFailure.destinationNotInstalled
+                }
+                throw InjectedDirectorySyncFailure.injected
+            }
+        )
+
+        XCTAssertThrowsError(
+            try writer.write(replacement, to: destination, validator: { _ in })
+        ) { error in
+            XCTAssertEqual(error as? InjectedDirectorySyncFailure, .injected)
+        }
+        XCTAssertEqual(try Data(contentsOf: destination), replacement)
+        XCTAssertTrue(try temporaryArtifacts(in: directory).isEmpty)
+    }
+
+    // Expected RED: create-only installation needs the same parent-directory
+    // durability boundary as replacement installation.
+    func testACRFILE009CreateOnlySynchronizesParentAfterInstallAndPropagatesFailure() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = directory.appendingPathComponent("new-motion.docx")
+        let payload = Data("durable-new-motion".utf8)
+
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { observedParent in
+                guard observedParent == directory.standardizedFileURL else {
+                    throw InjectedDirectorySyncFailure.unexpectedParent(observedParent)
+                }
+                guard try Data(contentsOf: destination) == payload else {
+                    throw InjectedDirectorySyncFailure.destinationNotInstalled
+                }
+                throw InjectedDirectorySyncFailure.injected
+            }
+        )
+
+        XCTAssertThrowsError(
+            try writer.writeNew(payload, to: destination, validator: { _ in })
+        ) { error in
+            XCTAssertEqual(error as? InjectedDirectorySyncFailure, .injected)
+        }
+        XCTAssertEqual(try Data(contentsOf: destination), payload)
+        XCTAssertTrue(try temporaryArtifacts(in: directory).isEmpty)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("Supra-DurableFileWriter-\(UUID().uuidString)", isDirectory: true)
@@ -179,4 +240,10 @@ final class DurableFileWriterTests: XCTestCase {
 
 private struct InjectedFailure: Error {
     let stage: DurableFileWriter.FaultStage
+}
+
+private enum InjectedDirectorySyncFailure: Error, Equatable {
+    case injected
+    case unexpectedParent(URL)
+    case destinationNotInstalled
 }
