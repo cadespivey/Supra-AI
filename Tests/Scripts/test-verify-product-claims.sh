@@ -51,7 +51,7 @@ run_case \
 run_case \
   "quiesced restore staging claim is registered" \
   0 \
-  'Packages/SupraSessions/Tests/SupraSessionsTests/RestoreControllerTests.swift' \
+  'Apps/SupraAI/SupraAIUITests/RestoreSettingsUITests.swift' \
   awk '
     /^  - id: "RESTORE-QUIESCED-STAGING"/ { in_claim = 1 }
     in_claim { print }
@@ -74,6 +74,18 @@ run_case \
   'Packages/SupraStore/Tests/SupraStoreTests/RestoreActivationServiceTests.swift' \
   awk '
     /^  - id: "RESTORE-COLD-START-RECOVERY"/ { in_claim = 1 }
+    in_claim { print }
+    in_claim && /^    publication_anchor:/ { exit }
+  ' "$claims"
+
+# Expected RED: app-start ordering and the recovery-required store boundary are
+# implemented but have no independently owned, versioned claim or guard.
+run_case \
+  "cold-start restore ordering claim is registered" \
+  0 \
+  'Tests/Scripts/test-backup-restore-documentation.sh' \
+  awk '
+    /^  - id: "RESTORE-COLD-START-ORDER"/ { in_claim = 1 }
     in_claim { print }
     in_claim && /^    publication_anchor:/ { exit }
   ' "$claims"
