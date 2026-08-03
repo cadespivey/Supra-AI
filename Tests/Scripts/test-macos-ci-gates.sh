@@ -547,6 +547,44 @@ else
   record_failure 'app smoke does not execute the supported motion hosted guards'
 fi
 
+motion_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift"
+motion_ui_tests="${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift"
+if grep -Fq 'drafting.motion.fact.\(source.chunkID)' "$motion_view" \
+    && grep -Fq 'drafting.motion.authority.\(source.authorityID)' "$motion_view" \
+    && grep -Fq 'drafting.motion.fact.ui-motion-fact-chunk' "$motion_ui_tests" \
+    && grep -Fq 'drafting.motion.authority.ui-motion-authority-success' "$motion_ui_tests"; then
+  printf '%s\n' 'PASS: motion smoke selects exact identified production source rows'
+else
+  record_failure 'motion smoke does not select exact identified production source rows'
+fi
+
+motion_source_loader="$(sed -n '/private func loadMotionSourcesIfNeeded()/,/^    }/p' "$motion_view")"
+if grep -Fq -- '-uiTestMotionDraftSuccess' <<<"$motion_source_loader" \
+    || grep -Fq 'selectedMotionFactIDs.insert' <<<"$motion_source_loader" \
+    || grep -Fq 'selectedMotionAuthorityIDs.insert' <<<"$motion_source_loader"; then
+  record_failure 'motion UI-test launch still auto-selects filing sources'
+else
+  printf '%s\n' 'PASS: motion UI-test launch requires explicit source selection'
+fi
+
+motion_launch_helper="$(sed -n '/private func launchMotionApp(/,/^    }/p' "$motion_ui_tests")"
+if grep -Fq -- '-uiTestSelectFirstMatter' <<<"$motion_launch_helper" \
+    || grep -Fq -- '-uiTestOpenDraftSheet' <<<"$motion_launch_helper" \
+    || ! grep -Fq 'matter.click()' "$motion_ui_tests" \
+    || ! grep -Fq 'draft.click()' "$motion_ui_tests"; then
+  record_failure 'motion hosted smoke bypasses production matter and Draft navigation'
+else
+  printf '%s\n' 'PASS: motion hosted smoke uses production matter and Draft navigation'
+fi
+
+if grep -Fq '.disabled(controller.isGenerating)' "$motion_view" \
+    && grep -Fq 'if controller.isGenerating {' "$motion_view" \
+    && grep -Fq 'docxArtifacts(beneath: storageRoot)' "$motion_ui_tests"; then
+  printf '%s\n' 'PASS: in-flight motion UI stays locked with reachable cancellation and disk proof'
+else
+  record_failure 'in-flight motion UI can hide cancellation or lacks disk-level absence proof'
+fi
+
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_ALLOWED=YES' "$app_smoke_script" \
     || ! grep -Fq 'CODE_SIGNING_REQUIRED=YES' "$app_smoke_script" \

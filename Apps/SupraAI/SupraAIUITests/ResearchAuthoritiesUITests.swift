@@ -771,15 +771,8 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let app = launchMotionApp(flag: "-uiTestMotionDraftSuccess", storageRoot: storageRoot)
         let documentConsumer = try registeredDOCXConsumer()
 
-        let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
-        XCTAssertTrue(matter.waitForExistence(timeout: 20))
-        let motion = app.buttons["drafting.kind.motionToDismiss"]
-        XCTAssertTrue(motion.waitForExistence(timeout: 10))
-        XCTAssertTrue(motion.isEnabled)
-        motion.click()
-
-        XCTAssertTrue(app.textFields["drafting.motion.respondingTo"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.textFields["drafting.motion.relief"].exists)
+        openMotionDraftThroughProductionNavigation(in: app)
+        fillMotionInputsAndSelectSources(in: app, includeAuthority: true)
         XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.factSources"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.authoritySources"].exists)
         let readiness = app.descendants(matching: .any)["drafting.motion.readiness"]
@@ -830,11 +823,11 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let storageRoot = appSandboxWritableStorageRoot(prefix: "MotionDraftBlockedUITest")
         let app = launchMotionApp(flag: "-uiTestMotionDraftBlocked", storageRoot: storageRoot)
 
-        let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
-        XCTAssertTrue(matter.waitForExistence(timeout: 20))
-        let motion = app.buttons["drafting.kind.motionToDismiss"]
-        XCTAssertTrue(motion.waitForExistence(timeout: 10))
-        motion.click()
+        openMotionDraftThroughProductionNavigation(in: app)
+        fillMotionInputsAndSelectSources(in: app, includeAuthority: false)
+        let blockedAuthority = app.buttons["drafting.motion.authority.ui-motion-authority-blocked"]
+        XCTAssertTrue(blockedAuthority.waitForExistence(timeout: 5))
+        XCTAssertFalse(blockedAuthority.isEnabled)
         let readiness = app.descendants(matching: .any)["drafting.motion.readiness"]
         XCTAssertTrue(readiness.waitForExistence(timeout: 5))
         XCTAssertTrue(
@@ -856,11 +849,8 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
             additionalArguments: ["-uiTestMotionDraftDelayed"]
         )
 
-        let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
-        XCTAssertTrue(matter.waitForExistence(timeout: 20))
-        let motion = app.buttons["drafting.kind.motionToDismiss"]
-        XCTAssertTrue(motion.waitForExistence(timeout: 10))
-        motion.click()
+        openMotionDraftThroughProductionNavigation(in: app)
+        fillMotionInputsAndSelectSources(in: app, includeAuthority: true)
         let generate = app.buttons["drafting.generate"]
         XCTAssertTrue(generate.waitForExistence(timeout: 5))
         XCTAssertTrue(generate.isEnabled)
@@ -868,6 +858,11 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
 
         let cancel = app.buttons["drafting.cancel"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 5), "The deterministic UI fixture never held generation in flight")
+        let notice = app.buttons["drafting.kind.noticeAppearance"]
+        XCTAssertTrue(notice.exists)
+        XCTAssertFalse(notice.isEnabled, "Work-product switching must stay locked while generation is in flight")
+        XCTAssertTrue(cancel.isEnabled)
+        XCTAssertTrue(cancel.isHittable)
         cancel.click()
         let cancelled = app.descendants(matching: .any)["drafting.blocked"]
         XCTAssertTrue(cancelled.waitForExistence(timeout: 5), cancelled.debugDescription)
@@ -876,6 +871,60 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["drafting.open"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["drafting.reveal"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["drafting.share"].exists)
+        XCTAssertEqual(docxArtifacts(beneath: storageRoot), [], "Cancellation left a DOCX in the injected production storage root")
+    }
+
+    private func openMotionDraftThroughProductionNavigation(in app: XCUIApplication) {
+        let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
+        XCTAssertTrue(matter.waitForExistence(timeout: 20))
+        XCTAssertTrue(matter.isHittable)
+        matter.click()
+
+        let draft = app.buttons["matter.draft"]
+        XCTAssertTrue(draft.waitForExistence(timeout: 10), "Matter workspace did not expose the production Draft action")
+        XCTAssertTrue(draft.isHittable)
+        draft.click()
+
+        let motion = app.buttons["drafting.kind.motionToDismiss"]
+        XCTAssertTrue(motion.waitForExistence(timeout: 10))
+        XCTAssertTrue(motion.isEnabled)
+        motion.click()
+    }
+
+    private func fillMotionInputsAndSelectSources(in app: XCUIApplication, includeAuthority: Bool) {
+        let respondingTo = app.textFields["drafting.motion.respondingTo"]
+        XCTAssertTrue(respondingTo.waitForExistence(timeout: 5))
+        respondingTo.click()
+        respondingTo.typeText("Plaintiff's First Amended Complaint")
+
+        let relief = app.textFields["drafting.motion.relief"]
+        XCTAssertTrue(relief.waitForExistence(timeout: 5))
+        relief.click()
+        relief.typeText("dismissal without prejudice and leave to amend")
+
+        let fact = app.buttons["drafting.motion.fact.ui-motion-fact-chunk"]
+        XCTAssertTrue(fact.waitForExistence(timeout: 5), "The seeded fact was not exposed as a selectable production row")
+        XCTAssertTrue(fact.isEnabled)
+        fact.click()
+
+        if includeAuthority {
+            let authority = app.buttons["drafting.motion.authority.ui-motion-authority-success"]
+            XCTAssertTrue(authority.waitForExistence(timeout: 5), "The reviewed authority was not exposed as a selectable production row")
+            XCTAssertTrue(authority.isEnabled)
+            authority.click()
+        }
+    }
+
+    private func docxArtifacts(beneath root: URL) -> [String] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return enumerator.compactMap { item in
+            guard let url = item as? URL, url.pathExtension.lowercased() == "docx" else { return nil }
+            return url.path
+        }.sorted()
     }
 
     private func launchMotionApp(
@@ -888,8 +937,6 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
             "-ApplePersistenceIgnoreState", "YES",
             "-uiTestMode",
             "-uiTestEnsureFreshWindow",
-            "-uiTestSelectFirstMatter",
-            "-uiTestOpenDraftSheet",
             flag,
         ]
         app.launchArguments += additionalArguments
@@ -901,8 +948,8 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
     }
 
     /// The launched app is sandboxed, so its injected drafting root must live
-    /// inside that app's own container. Artifact absence is asserted by the
-    /// controller companion tests; this hosted class observes only production UI.
+    /// inside that app's own container. The hosted cancellation test reads this
+    /// exact root after the production controller reaches its cancelled terminal state.
     private func appSandboxWritableStorageRoot(prefix: String) -> URL {
         let runnerHome = FileManager.default.homeDirectoryForCurrentUser.path
         let containerMarker = "/Library/Containers/"
