@@ -200,17 +200,20 @@ final class DurableFileWriterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let destination = directory.appendingPathComponent("new-motion.docx")
         let payload = Data("durable-new-motion".utf8)
+        let synchronizer = FailFirstDirectorySynchronizer { observedParent in
+            guard observedParent == directory.standardizedFileURL else {
+                throw InjectedDirectorySyncFailure.unexpectedParent(observedParent)
+            }
+            guard try Data(contentsOf: destination) == payload else {
+                throw InjectedDirectorySyncFailure.destinationNotInstalled
+            }
+            throw InjectedDirectorySyncFailure.injected
+        }
 
         let writer = DurableFileWriter(
             faultInjector: { _ in },
             parentDirectorySynchronizer: { observedParent in
-                guard observedParent == directory.standardizedFileURL else {
-                    throw InjectedDirectorySyncFailure.unexpectedParent(observedParent)
-                }
-                guard try Data(contentsOf: destination) == payload else {
-                    throw InjectedDirectorySyncFailure.destinationNotInstalled
-                }
-                throw InjectedDirectorySyncFailure.injected
+                try synchronizer.synchronize(observedParent)
             }
         )
 
@@ -219,7 +222,35 @@ final class DurableFileWriterTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? InjectedDirectorySyncFailure, .injected)
         }
-        XCTAssertEqual(try Data(contentsOf: destination), payload)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(synchronizer.callCount, 2, "Rollback deletion must also be synchronized")
+        XCTAssertTrue(try temporaryArtifacts(in: directory).isEmpty)
+    }
+
+    // Expected RED: rollback must not remove a different file that replaced the
+    // installed create-only destination before synchronization reported failure.
+    func testACRFILE010CreateOnlySyncRollbackPreservesConcurrentReplacement() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = directory.appendingPathComponent("new-motion.docx")
+        let payload = Data("motion-created-by-writer".utf8)
+        let concurrentPayload = Data("concurrent-owner-data".utf8)
+        let synchronizer = FailFirstDirectorySynchronizer { _ in
+            try concurrentPayload.write(to: destination, options: .atomic)
+            throw InjectedDirectorySyncFailure.injected
+        }
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try synchronizer.synchronize($0) }
+        )
+
+        XCTAssertThrowsError(
+            try writer.writeNew(payload, to: destination, validator: { _ in })
+        ) { error in
+            XCTAssertEqual(error as? InjectedDirectorySyncFailure, .injected)
+        }
+        XCTAssertEqual(try Data(contentsOf: destination), concurrentPayload)
+        XCTAssertEqual(synchronizer.callCount, 1, "A foreign destination needs no writer rollback")
         XCTAssertTrue(try temporaryArtifacts(in: directory).isEmpty)
     }
 
@@ -246,4 +277,26 @@ private enum InjectedDirectorySyncFailure: Error, Equatable {
     case injected
     case unexpectedParent(URL)
     case destinationNotInstalled
+}
+
+private final class FailFirstDirectorySynchronizer: @unchecked Sendable {
+    private let lock = NSLock()
+    private let firstCall: @Sendable (URL) throws -> Void
+    private var calls = 0
+
+    init(firstCall: @escaping @Sendable (URL) throws -> Void) {
+        self.firstCall = firstCall
+    }
+
+    var callCount: Int {
+        lock.withLock { calls }
+    }
+
+    func synchronize(_ directory: URL) throws {
+        let call = lock.withLock {
+            calls += 1
+            return calls
+        }
+        if call == 1 { try firstCall(directory) }
+    }
 }
