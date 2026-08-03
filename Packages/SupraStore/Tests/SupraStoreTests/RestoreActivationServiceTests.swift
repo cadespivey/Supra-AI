@@ -118,6 +118,28 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(operations.events.contains(.synchronizeLiveBlobParent))
     }
 
+    func testLiveBlobRootPublicationRetriesWhenVisibleAfterSyncFailure() throws {
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        _ = try stage(selectedBlobs: [selectedBlob])
+        let first = activate(operations: RecordingRestoreActivationOperations(
+            failures: [.synchronizeLiveBlobParent]
+        ))
+        XCTAssertEqual(first.status, .failedAndRolledBack)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.liveBlobsDirectory.path))
+        try RestoreSidecarStore.acknowledgeActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+        _ = try stageCandidate(knownMigrations: migrations)
+        let retryOperations = RecordingRestoreActivationOperations()
+
+        XCTAssertEqual(activate(operations: retryOperations).status, .activated)
+
+        XCTAssertLessThan(
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .synchronizeLiveBlobParent)),
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .writeOutcome))
+        )
+    }
+
     // T-RST-21 expected RED: blob installation has no idempotent reuse rule.
     func testActivationReusesAlreadyCorrectSelectedBlobWithoutOverwritingIt() throws {
         let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
@@ -938,7 +960,9 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
             if shouldFail(.synchronizeOperationsDirectory) {
                 throw ActivationTestError.markerSync
             }
-        } else if url.lastPathComponent == "Live" {
+        } else if url.lastPathComponent == "Live",
+                  !events.contains(.replaceSelectedDatabase),
+                  !events.contains(.replaceSafetyDatabase) {
             events.append(.synchronizeLiveBlobParent)
             if shouldFail(.synchronizeLiveBlobParent) {
                 throw ActivationTestError.markerSync

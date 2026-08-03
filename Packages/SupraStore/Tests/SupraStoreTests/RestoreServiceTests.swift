@@ -222,8 +222,13 @@ final class RestoreServiceTests: XCTestCase {
         XCTAssertLessThan(selectedTreeSync, selectedMove)
         XCTAssertTrue(operationDirectorySyncs.contains { $0 > selectedMove })
         XCTAssertEqual(
-            Array(operations.events.suffix(3)),
-            [.synchronizeOperationsRoot, .synchronizeStagingRoot, .writeMarker]
+            Array(operations.events.suffix(4)),
+            [
+                .synchronizeOperationsRoot,
+                .synchronizeStagingRoot,
+                .synchronizeStagingParent,
+                .writeMarker,
+            ]
         )
         XCTAssertEqual(result.intent.schemaVersion, 1)
         XCTAssertEqual(result.intent.selectedBlobCount, 1)
@@ -393,6 +398,37 @@ final class RestoreServiceTests: XCTestCase {
             atPath: fixture.stagingRootDirectory
                 .appendingPathComponent(RestoreIntent.pendingFileName).path
         ))
+    }
+
+    func testStagingParentPublicationRetriesAfterFirstUseSyncFailure() throws {
+        try fixture.writeLiveState(sentinel: "current row")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
+        let candidate = try compatibleCandidate()
+        let failingOperations = RecordingRestoreFileOperations(
+            failurePoint: .stagingRootParentSynchronization
+        )
+        XCTAssertThrowsError(try RestoreService.stageRestore(
+            candidate: candidate,
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: failingOperations
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: fixture.stagingRootDirectory.path
+        ))
+        let retryOperations = RecordingRestoreFileOperations()
+
+        _ = try RestoreService.stageRestore(
+            candidate: candidate,
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: retryOperations
+        )
+
+        XCTAssertLessThan(
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .synchronizeStagingParent)),
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .writeMarker))
+        )
     }
 
     private func assertInjectedFailure(_ point: RecordingRestoreFileOperations.FailurePoint) throws {
