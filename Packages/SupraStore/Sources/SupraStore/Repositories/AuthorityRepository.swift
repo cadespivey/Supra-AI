@@ -13,6 +13,9 @@ public final class AuthorityRepository: @unchecked Sendable {
     @discardableResult
     public func insertAuthority(_ authority: AuthorityRecord) throws -> AuthorityRecord {
         try writer.write { db in
+            guard authority.reviewedPropositionJSON == nil else {
+                throw AuthorityRepositoryError.untrustedPropositionEvidenceOnInsert
+            }
             try authority.insert(db, onConflict: .ignore)
             return authority
         }
@@ -267,7 +270,8 @@ public final class AuthorityRepository: @unchecked Sendable {
             }
 
             let excerptBytes = Data(excerpt.utf8)
-            guard !excerptBytes.isEmpty else {
+            guard !excerptBytes.isEmpty,
+                  !excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw AuthorityRepositoryError.excerptEmpty
             }
             guard excerptBytes.count <= AuthorityReviewedProposition.maximumExcerptUTF8Bytes else {
@@ -550,12 +554,16 @@ public final class AuthorityRepository: @unchecked Sendable {
             AuthorityReviewedProposition.self,
             from: Data(raw.utf8)
         ), reviewed.schemaVersion == AuthorityReviewedProposition.currentSchemaVersion,
+           !reviewed.excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           reviewed.reviewedBy == reviewed.reviewedBy.trimmingCharacters(in: .whitespacesAndNewlines),
+           !reviewed.reviewedBy.isEmpty,
            reviewed.excerptByteStart >= 0,
            reviewed.excerptByteLength >= 0,
            isSHA256(reviewed.opinionSHA256),
            isSHA256(reviewed.excerptSHA256),
            isSHA256(reviewed.effectiveCitationSHA256),
-           isSHA256(reviewed.courtSHA256) else {
+           isSHA256(reviewed.courtSHA256),
+           isSHA256(reviewed.bindingSHA256) else {
             throw EvidenceDecodeError.malformed
         }
         return reviewed
@@ -603,7 +611,12 @@ public final class AuthorityRepository: @unchecked Sendable {
     }
 
     private static func isSHA256(_ value: String) -> Bool {
-        value.count == 64 && value.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            switch $0 {
+            case 48...57, 97...102: true
+            default: false
+            }
+        }
     }
 
     private static func reviewAuditMetadata(_ reviewed: AuthorityReviewedProposition) throws -> String {
@@ -623,7 +636,8 @@ public final class AuthorityRepository: @unchecked Sendable {
 
     private static func priorEvidenceAuditMetadata(_ rawEvidence: String) throws -> String {
         var metadata: [String: Any] = ["schema_version": 1]
-        if let reviewed = try? decodeEvidence(rawEvidence) {
+        if let reviewed = try? decodeEvidence(rawEvidence),
+           reviewed.bindingSHA256 == (try? bindingSHA256(reviewed)) {
             metadata["ground_key"] = reviewed.groundKey.rawValue
             metadata["previous_binding_sha256"] = reviewed.bindingSHA256
         } else {

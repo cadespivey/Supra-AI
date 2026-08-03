@@ -31,8 +31,9 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
     public var caseSummary: String?
     /// Versioned proposition-review evidence. Callers must use
     /// `AuthorityRepository.reviewedPropositionState` rather than trusting this
-    /// raw envelope directly.
-    public var reviewedPropositionJSON: String?
+    /// raw envelope directly. Only SupraStore may assign it; new records always
+    /// begin unreviewed and the audited repository lifecycle owns later writes.
+    public internal(set) var reviewedPropositionJSON: String?
     public var rawMetadataJSON: String
     public var createdAt: Date
     public var updatedAt: Date
@@ -61,7 +62,6 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
         userNotes: String? = nil,
         opinionText: String? = nil,
         caseSummary: String? = nil,
-        reviewedPropositionJSON: String? = nil,
         rawMetadataJSON: String = "{}",
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -89,7 +89,7 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
         self.userNotes = userNotes
         self.opinionText = opinionText
         self.caseSummary = caseSummary
-        self.reviewedPropositionJSON = reviewedPropositionJSON
+        self.reviewedPropositionJSON = nil
         self.rawMetadataJSON = rawMetadataJSON
         self.createdAt = createdAt
         self.updatedAt = updatedAt

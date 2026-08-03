@@ -98,6 +98,7 @@ public enum AuthorityReviewedPropositionState: Equatable, Sendable {
 }
 
 public enum AuthorityRepositoryError: Error, Equatable, Sendable {
+    case untrustedPropositionEvidenceOnInsert
     case authorityNotFound
     case reviewRequiresLiveAuthority
     case reviewRequiresNotAdverse
