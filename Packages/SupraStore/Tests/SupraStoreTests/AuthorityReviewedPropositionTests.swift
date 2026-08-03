@@ -130,7 +130,11 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         )
         XCTAssertEqual(audits.count, 1)
         let audit = try XCTUnwrap(audits.first)
+        XCTAssertEqual(audit.matterID, fixture.authority.matterID)
+        XCTAssertEqual(audit.timestamp, fixedReviewDate)
         XCTAssertEqual(audit.actor, "synthetic-reviewer")
+        XCTAssertEqual(audit.relatedTable, AuthorityRecord.databaseTableName)
+        XCTAssertEqual(audit.relatedID, fixture.authority.id)
         let auditMetadataJSON = try XCTUnwrap(audit.metadataJSON)
         let metadata = try jsonObject(auditMetadataJSON)
         XCTAssertEqual(Set(metadata.keys), Set([
@@ -138,7 +142,19 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
             "excerpt_byte_length", "opinion_sha256", "excerpt_sha256",
             "effective_citation_sha256", "court_sha256", "binding_sha256",
         ]))
+        XCTAssertEqual(metadata["schema_version"] as? Int, 1)
         XCTAssertEqual(metadata["ground_key"] as? String, "mtd.failureToStateClaim")
+        XCTAssertEqual(metadata["source_kind"] as? String, "stored_opinion_text")
+        XCTAssertEqual(metadata["excerpt_byte_start"] as? Int, expectedStart)
+        XCTAssertEqual(metadata["excerpt_byte_length"] as? Int, excerpt.utf8.count)
+        XCTAssertEqual(metadata["opinion_sha256"] as? String, reviewed.opinionSHA256)
+        XCTAssertEqual(metadata["excerpt_sha256"] as? String, reviewed.excerptSHA256)
+        XCTAssertEqual(
+            metadata["effective_citation_sha256"] as? String,
+            reviewed.effectiveCitationSHA256
+        )
+        XCTAssertEqual(metadata["court_sha256"] as? String, reviewed.courtSHA256)
+        XCTAssertEqual(metadata["binding_sha256"] as? String, reviewed.bindingSHA256)
         XCTAssertFalse(auditMetadataJSON.contains(excerpt))
         XCTAssertFalse(auditMetadataJSON.contains(opinion))
         XCTAssertFalse(auditMetadataJSON.contains(citation))
@@ -159,6 +175,46 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         )
         XCTAssertEqual(unicodeReview.excerptByteStart, unicodePrefix.utf8.count)
         XCTAssertEqual(unicodeReview.excerptByteLength, excerpt.utf8.count)
+
+        // Standing boundary guard: exactly 2,000 UTF-8 bytes remain valid even
+        // when the character count is much smaller.
+        let exactBoundaryText = String(repeating: "🙂", count: 500)
+        let exactBoundary = try makeFixture(opinion: "Prefix " + exactBoundaryText + " suffix.")
+        let exactBoundaryReview = try exactBoundary.store.authorities.reviewProposition(
+            authorityID: exactBoundary.authority.id,
+            groundKey: .failureToStateClaim,
+            excerpt: exactBoundaryText,
+            reviewedBy: "synthetic-reviewer",
+            reviewedAt: fixedReviewDate
+        )
+        XCTAssertEqual(exactBoundaryText.utf8.count, 2_000)
+        XCTAssertEqual(exactBoundaryReview.excerptByteLength, 2_000)
+
+        // Standing UTF-8 wire proof: a character-count implementation would
+        // incorrectly accept these 501 characters even though they are 2,004 bytes.
+        let multibyteOversizedText = String(repeating: "🙂", count: 501)
+        let multibyteOversized = try makeFixture(opinion: multibyteOversizedText)
+        XCTAssertThrowsError(try multibyteOversized.store.authorities.reviewProposition(
+            authorityID: multibyteOversized.authority.id,
+            groundKey: .failureToStateClaim,
+            excerpt: multibyteOversizedText,
+            reviewedBy: "synthetic-reviewer",
+            reviewedAt: fixedReviewDate
+        )) { error in
+            XCTAssertEqual(error as? AuthorityRepositoryError, .excerptTooLong(maximumUTF8Bytes: 2_000))
+        }
+
+        let whitespaceOnly = "\n\t\n"
+        let whitespace = try makeFixture(opinion: "Lead." + whitespaceOnly + "Tail.")
+        XCTAssertThrowsError(try whitespace.store.authorities.reviewProposition(
+            authorityID: whitespace.authority.id,
+            groundKey: .failureToStateClaim,
+            excerpt: whitespaceOnly,
+            reviewedBy: "synthetic-reviewer",
+            reviewedAt: fixedReviewDate
+        )) { error in
+            XCTAssertEqual(error as? AuthorityRepositoryError, .excerptEmpty)
+        }
 
         let duplicate = try makeFixture(opinion: "\(excerpt) Between. \(excerpt)")
         XCTAssertThrowsError(try duplicate.store.authorities.reviewProposition(
@@ -362,6 +418,46 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         let after = try XCTUnwrap(try invalidationFixture.store.authorities.fetchAuthority(id: invalidationFixture.authority.id))
         XCTAssertEqual(after.opinionText, before.opinionText)
         XCTAssertEqual(after.reviewedPropositionJSON, before.reviewedPropositionJSON)
+
+        // Standing transaction guards for the other two audited clearing paths.
+        let revocationFixture = try makeFixture()
+        _ = try tryReview(revocationFixture)
+        let revocationBefore = try XCTUnwrap(try rawEvidenceJSON(
+            authorityID: revocationFixture.authority.id,
+            store: revocationFixture.store
+        ))
+        try installAuditFailureTrigger(
+            eventType: "authority_proposition_review_revoked",
+            store: revocationFixture.store
+        )
+        XCTAssertThrowsError(try revocationFixture.store.authorities.revokePropositionReview(
+            authorityID: revocationFixture.authority.id,
+            revokedBy: "synthetic-revoker",
+            revokedAt: fixedReviewDate.addingTimeInterval(2)
+        ))
+        XCTAssertEqual(
+            try rawEvidenceJSON(authorityID: revocationFixture.authority.id, store: revocationFixture.store),
+            revocationBefore
+        )
+
+        let citationFixture = try makeFixture()
+        _ = try tryReview(citationFixture)
+        let citationBefore = try XCTUnwrap(try citationFixture.store.authorities.fetchAuthority(
+            id: citationFixture.authority.id
+        ))
+        try installAuditFailureTrigger(
+            eventType: "authority_proposition_review_invalidated",
+            store: citationFixture.store
+        )
+        XCTAssertThrowsError(try citationFixture.store.authorities.updatePreferredCitation(
+            authorityID: citationFixture.authority.id,
+            preferredCitation: "998 So. 3d 222 (Fla. 4th DCA 2026)"
+        ))
+        let citationAfter = try XCTUnwrap(try citationFixture.store.authorities.fetchAuthority(
+            id: citationFixture.authority.id
+        ))
+        XCTAssertEqual(citationAfter.preferredCitation, citationBefore.preferredCitation)
+        XCTAssertEqual(citationAfter.reviewedPropositionJSON, citationBefore.reviewedPropositionJSON)
     }
 
     func testTARP08StatusDowngradeBlocksUseWithoutErasingEvidence() throws {
@@ -453,6 +549,200 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? AuthorityRepositoryError, .propositionReviewNotFound)
         }
+    }
+
+    func testTARP10BindingCoversReviewerAndDateAndUntrustedSchemaFailsClosed() throws {
+        // T-ARP-10 expected RED: self-consistent blank/padded reviewer evidence,
+        // whitespace-only proposition text, and non-ASCII digest text can pass
+        // the current untrusted read boundary.
+        let fixture = try makeFixture()
+        let reviewed = try tryReview(fixture)
+
+        let reviewerTamper = try replacingReview(
+            reviewed,
+            reviewedBy: "different-synthetic-reviewer"
+        )
+        try setEvidenceJSON(
+            try evidenceJSON(reviewerTamper),
+            authorityID: fixture.authority.id,
+            store: fixture.store
+        )
+        XCTAssertEqual(
+            try fixture.store.authorities.reviewedPropositionState(
+                authorityID: fixture.authority.id,
+                groundKey: .failureToStateClaim
+            ),
+            .blocked(.forgedEvidence),
+            "reviewed_by must participate in the binding digest"
+        )
+
+        let dateTamper = try replacingReview(
+            reviewed,
+            reviewedAt: reviewed.reviewedAt.addingTimeInterval(1)
+        )
+        try setEvidenceJSON(
+            try evidenceJSON(dateTamper),
+            authorityID: fixture.authority.id,
+            store: fixture.store
+        )
+        XCTAssertEqual(
+            try fixture.store.authorities.reviewedPropositionState(
+                authorityID: fixture.authority.id,
+                groundKey: .failureToStateClaim
+            ),
+            .blocked(.forgedEvidence),
+            "reviewed_at must participate in the binding digest"
+        )
+
+        for invalidReviewer in ["   ", " synthetic-reviewer "] {
+            let invalid = try replacingReview(
+                reviewed,
+                reviewedBy: invalidReviewer,
+                recomputeBinding: true
+            )
+            try setEvidenceJSON(
+                try evidenceJSON(invalid),
+                authorityID: fixture.authority.id,
+                store: fixture.store
+            )
+            XCTAssertEqual(
+                try fixture.store.authorities.reviewedPropositionState(
+                    authorityID: fixture.authority.id,
+                    groundKey: .failureToStateClaim
+                ),
+                .blocked(.malformedEvidence),
+                "reviewed_by must be nonblank and stored in canonical trimmed form"
+            )
+        }
+
+        let fullwidthDigest = String(repeating: "ａ", count: 64)
+        let nonASCIIDigest = try replacingReview(
+            reviewed,
+            opinionSHA256: fullwidthDigest,
+            recomputeBinding: true
+        )
+        try setEvidenceJSON(
+            try evidenceJSON(nonASCIIDigest),
+            authorityID: fixture.authority.id,
+            store: fixture.store
+        )
+        XCTAssertEqual(
+            try fixture.store.authorities.reviewedPropositionState(
+                authorityID: fixture.authority.id,
+                groundKey: .failureToStateClaim
+            ),
+            .blocked(.malformedEvidence),
+            "SHA-256 text must be exactly 64 lowercase ASCII hex bytes"
+        )
+
+        let whitespaceOnly = "\n\t\n"
+        let whitespaceOpinion = "Lead." + whitespaceOnly + excerpt
+        let whitespaceFixture = try makeFixture(opinion: whitespaceOpinion)
+        let whitespaceBase = try tryReview(whitespaceFixture)
+        let whitespaceStart = try XCTUnwrap(
+            Data(whitespaceOpinion.utf8).range(of: Data(whitespaceOnly.utf8))
+        ).lowerBound
+        let whitespaceEvidence = try replacingReview(
+            whitespaceBase,
+            excerpt: whitespaceOnly,
+            excerptByteStart: whitespaceStart,
+            excerptByteLength: whitespaceOnly.utf8.count,
+            excerptSHA256: sha256(whitespaceOnly),
+            recomputeBinding: true
+        )
+        try setEvidenceJSON(
+            try evidenceJSON(whitespaceEvidence),
+            authorityID: whitespaceFixture.authority.id,
+            store: whitespaceFixture.store
+        )
+        XCTAssertEqual(
+            try whitespaceFixture.store.authorities.reviewedPropositionState(
+                authorityID: whitespaceFixture.authority.id,
+                groundKey: .failureToStateClaim
+            ),
+            .blocked(.malformedEvidence)
+        )
+    }
+
+    func testTARP11ForgedPriorBindingFallsBackToExactRawEvidenceHashInAudit() throws {
+        // T-ARP-11 expected RED: the prior-evidence audit path copies any decoded
+        // binding string without checking its shape or recomputing it.
+        let contentFixture = try makeFixture()
+        let contentReview = try tryReview(contentFixture)
+        let contentForged = try replacingReview(
+            contentReview,
+            bindingSHA256: excerpt
+        )
+        let contentRaw = try evidenceJSON(contentForged)
+        try setEvidenceJSON(
+            contentRaw,
+            authorityID: contentFixture.authority.id,
+            store: contentFixture.store
+        )
+        try contentFixture.store.authorities.revokePropositionReview(
+            authorityID: contentFixture.authority.id,
+            revokedBy: "synthetic-revoker",
+            revokedAt: fixedReviewDate.addingTimeInterval(20)
+        )
+        let revocationAudit = try XCTUnwrap(try contentFixture.store.auditEvents.fetchEvents(
+            relatedTable: AuthorityRecord.databaseTableName,
+            relatedID: contentFixture.authority.id,
+            eventType: "authority_proposition_review_revoked"
+        ).first)
+        let revocationMetadataJSON = try XCTUnwrap(revocationAudit.metadataJSON)
+        let revocationMetadata = try jsonObject(revocationMetadataJSON)
+        XCTAssertNil(revocationMetadata["previous_binding_sha256"])
+        XCTAssertEqual(revocationMetadata["previous_evidence_sha256"] as? String, sha256(contentRaw))
+        XCTAssertEqual(revocationMetadata["ground_key"] as? String, "unknown")
+        XCTAssertFalse(revocationMetadataJSON.contains(excerpt))
+
+        let digestFixture = try makeFixture()
+        let digestReview = try tryReview(digestFixture)
+        let digestForged = try replacingReview(
+            digestReview,
+            bindingSHA256: String(repeating: "0", count: 64)
+        )
+        let digestRaw = try evidenceJSON(digestForged)
+        try setEvidenceJSON(
+            digestRaw,
+            authorityID: digestFixture.authority.id,
+            store: digestFixture.store
+        )
+        try digestFixture.store.authorities.updatePreferredCitation(
+            authorityID: digestFixture.authority.id,
+            preferredCitation: "997 So. 3d 333 (Fla. 4th DCA 2026)"
+        )
+        let invalidationAudit = try XCTUnwrap(try digestFixture.store.auditEvents.fetchEvents(
+            relatedTable: AuthorityRecord.databaseTableName,
+            relatedID: digestFixture.authority.id,
+            eventType: "authority_proposition_review_invalidated"
+        ).first)
+        let invalidationMetadata = try jsonObject(try XCTUnwrap(invalidationAudit.metadataJSON))
+        XCTAssertNil(invalidationMetadata["previous_binding_sha256"])
+        XCTAssertEqual(invalidationMetadata["previous_evidence_sha256"] as? String, sha256(digestRaw))
+        XCTAssertEqual(invalidationMetadata["ground_key"] as? String, "unknown")
+        XCTAssertEqual(invalidationMetadata["reason"] as? String, "effective_citation_changed")
+    }
+
+    func testTARP12GeneralAuthorityInsertRejectsRawReviewedEvidence() throws {
+        // T-ARP-12 expected RED: the general public AuthorityRecord/insert path
+        // currently persists proposition evidence without the required review audit.
+        let fixture = try makeFixture()
+        _ = try tryReview(fixture)
+        let raw = try XCTUnwrap(try rawEvidenceJSON(
+            authorityID: fixture.authority.id,
+            store: fixture.store
+        ))
+        try fixture.store.database.writer.write { db in
+            _ = try AuthorityRecord.deleteOne(db, key: fixture.authority.id)
+        }
+
+        var injected = fixture.authority
+        injected.reviewedPropositionJSON = raw
+        XCTAssertThrowsError(try fixture.store.authorities.insertAuthority(injected)) { error in
+            XCTAssertEqual(String(describing: error), "untrustedPropositionEvidenceOnInsert")
+        }
+        XCTAssertNil(try fixture.store.authorities.fetchAuthority(id: fixture.authority.id))
     }
 
     private struct Fixture {
@@ -591,6 +881,103 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
     }
 
     private func isSHA256(_ value: String) -> Bool {
-        value.count == 64 && value.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            switch $0 {
+            case 48...57, 97...102: true
+            default: false
+            }
+        }
+    }
+
+    private struct TestBindingPayload: Encodable {
+        let schemaVersion: Int
+        let authorityID: String
+        let groundKey: String
+        let sourceKind: String
+        let excerpt: String
+        let excerptByteStart: Int
+        let excerptByteLength: Int
+        let opinionSHA256: String
+        let excerptSHA256: String
+        let effectiveCitationSHA256: String
+        let courtSHA256: String
+        let reviewedBy: String
+        let reviewedAtBitPattern: UInt64
+    }
+
+    private func bindingSHA256(_ reviewed: AuthorityReviewedProposition) throws -> String {
+        let payload = TestBindingPayload(
+            schemaVersion: reviewed.schemaVersion,
+            authorityID: reviewed.authorityID,
+            groundKey: reviewed.groundKey.rawValue,
+            sourceKind: reviewed.sourceKind.rawValue,
+            excerpt: reviewed.excerpt,
+            excerptByteStart: reviewed.excerptByteStart,
+            excerptByteLength: reviewed.excerptByteLength,
+            opinionSHA256: reviewed.opinionSHA256,
+            excerptSHA256: reviewed.excerptSHA256,
+            effectiveCitationSHA256: reviewed.effectiveCitationSHA256,
+            courtSHA256: reviewed.courtSHA256,
+            reviewedBy: reviewed.reviewedBy,
+            reviewedAtBitPattern: reviewed.reviewedAt.timeIntervalSinceReferenceDate.bitPattern
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return SHA256.hash(data: try encoder.encode(payload))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private func replacingReview(
+        _ original: AuthorityReviewedProposition,
+        excerpt: String? = nil,
+        excerptByteStart: Int? = nil,
+        excerptByteLength: Int? = nil,
+        opinionSHA256: String? = nil,
+        excerptSHA256: String? = nil,
+        reviewedBy: String? = nil,
+        reviewedAt: Date? = nil,
+        bindingSHA256: String? = nil,
+        recomputeBinding: Bool = false
+    ) throws -> AuthorityReviewedProposition {
+        let candidate = AuthorityReviewedProposition(
+            schemaVersion: original.schemaVersion,
+            authorityID: original.authorityID,
+            groundKey: original.groundKey,
+            sourceKind: original.sourceKind,
+            excerpt: excerpt ?? original.excerpt,
+            excerptByteStart: excerptByteStart ?? original.excerptByteStart,
+            excerptByteLength: excerptByteLength ?? original.excerptByteLength,
+            opinionSHA256: opinionSHA256 ?? original.opinionSHA256,
+            excerptSHA256: excerptSHA256 ?? original.excerptSHA256,
+            effectiveCitationSHA256: original.effectiveCitationSHA256,
+            courtSHA256: original.courtSHA256,
+            bindingSHA256: bindingSHA256 ?? original.bindingSHA256,
+            reviewedBy: reviewedBy ?? original.reviewedBy,
+            reviewedAt: reviewedAt ?? original.reviewedAt
+        )
+        guard recomputeBinding else { return candidate }
+        return AuthorityReviewedProposition(
+            schemaVersion: candidate.schemaVersion,
+            authorityID: candidate.authorityID,
+            groundKey: candidate.groundKey,
+            sourceKind: candidate.sourceKind,
+            excerpt: candidate.excerpt,
+            excerptByteStart: candidate.excerptByteStart,
+            excerptByteLength: candidate.excerptByteLength,
+            opinionSHA256: candidate.opinionSHA256,
+            excerptSHA256: candidate.excerptSHA256,
+            effectiveCitationSHA256: candidate.effectiveCitationSHA256,
+            courtSHA256: candidate.courtSHA256,
+            bindingSHA256: try self.bindingSHA256(candidate),
+            reviewedBy: candidate.reviewedBy,
+            reviewedAt: candidate.reviewedAt
+        )
+    }
+
+    private func evidenceJSON(_ reviewed: AuthorityReviewedProposition) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(reviewed), as: UTF8.self)
     }
 }
