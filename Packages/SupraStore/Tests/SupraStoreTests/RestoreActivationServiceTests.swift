@@ -491,6 +491,37 @@ final class RestoreActivationServiceTests: XCTestCase {
         )
     }
 
+    // T-RST-H09 expected RED: marker reconciliation accepts a schema-v2
+    // outcome whose schedule timestamp conflicts with the authenticated intent.
+    func testMarkerRetainedRetryRejectsConflictingScheduleTimestamp() throws {
+        let staged = try stage()
+        let conflictingOutcome = RestoreOutcomeRecord(
+            schemaVersion: RestoreOutcomeRecord.currentSchemaVersion,
+            operationID: staged.intent.operationID,
+            snapshotIdentifier: staged.intent.selectedSnapshotIdentifier,
+            scheduledAt: staged.intent.createdAt.addingTimeInterval(60),
+            status: .activated,
+            activationFailure: nil,
+            rollbackFailure: nil,
+            completedAt: Date(timeIntervalSince1970: 1_788_969_600),
+            operationTreeCleanupPending: true
+        )
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        try RestoreOutcomeRecord.encode(conflictingOutcome).write(to: outcomeURL, options: .atomic)
+        let operations = RecordingRestoreActivationOperations()
+
+        let result = activate(operations: operations)
+
+        XCTAssertEqual(result.status, .recoveryRequired)
+        XCTAssertEqual(result.activationFailure, .invalidIntent)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertFalse(operations.events.contains(.removeMarker))
+        XCTAssertFalse(operations.events.contains(.replaceSelectedDatabase))
+        XCTAssertFalse(operations.events.contains(.replaceSafetyDatabase))
+    }
+
     // expected RED: marker-removal retry failure returns recovery without the
     // authenticated operation, snapshot, and verified safety-database context.
     func testTerminalOutcomeMarkerRetryFailureRetainsAuthenticatedRecoveryContext() throws {
@@ -1015,6 +1046,25 @@ final class RestoreActivationServiceTests: XCTestCase {
         ))
         XCTAssertEqual(record.schemaVersion, 1)
         XCTAssertNil(record.scheduledAt)
+    }
+
+    // T-RST-H09 expected RED: a schema-v1 record can smuggle the schema-v2
+    // timestamp field and have it treated as authenticated scheduling evidence.
+    func testActivationOutcomeReadRejectsLegacyV1WithScheduleTimestamp() throws {
+        try FileManager.default.createDirectory(
+            at: fixture.stagingRootDirectory,
+            withIntermediateDirectories: true
+        )
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let downgradedOutcome = """
+        {"schemaVersion":1,"operationID":"11111111-2222-3333-4444-555555555555","snapshotIdentifier":"SupraAI-20260731-090000-000","status":"activated","scheduledAt":"2024-09-22T23:59:00Z","completedAt":"2024-09-23T00:00:00Z"}
+        """
+        try Data(downgradedOutcome.utf8).write(to: outcomeURL, options: .atomic)
+
+        XCTAssertThrowsError(try RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
     }
 
     // Standing fail-closed guard: adding legacy-v1 compatibility must never
