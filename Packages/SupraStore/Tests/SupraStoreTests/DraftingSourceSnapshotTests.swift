@@ -96,6 +96,32 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         try assertChunkMutationRejected(column: "bounding_boxes_json", value: #"[{"forged":true}]"#)
     }
 
+    // Expected RED: matching denormalized part and chunk metadata can both drift
+    // from the selected immutable revision while the current binding still passes.
+    func testTMDSS03CRejectsPartAndChunkProvenanceDriftFromCurrentRevision() throws {
+        let fixture = try makeFixture()
+        let chunk = fixture.chunks[0]
+        let forgedBoxes = #"[{"x":0.9,"y":0.8,"width":0.7,"height":0.6}]"#
+        try fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE document_pages_parts SET ocr_confidence = ?, bounding_boxes_json = ? WHERE id = ?",
+                arguments: [0.12, forgedBoxes, chunk.pagePartID]
+            )
+            try db.execute(
+                sql: "UPDATE document_chunks SET ocr_confidence = ?, bounding_boxes_json = ? WHERE id = ?",
+                arguments: [0.12, forgedBoxes, chunk.id]
+            )
+        }
+
+        XCTAssertThrowsError(
+            try fixture.store.draftingSources.captureMotionSnapshot(
+                request(for: fixture, factChunkIDs: [chunk.id])
+            )
+        ) { error in
+            XCTAssertEqual(error as? MotionDraftSnapshotError, .factBindingInvalid(chunk.id))
+        }
+    }
+
     // Expected RED: v2 validation currently accepts a deterministic chunk whose text is
     // composed from the primary node plus any unrelated node in the revision. Only the
     // exact responds_to/references/header_for graph projection may bind motion evidence.
@@ -189,9 +215,9 @@ final class DraftingSourceSnapshotTests: XCTestCase {
             XCTAssertEqual(error as? MotionDraftSnapshotError, .factBindingInvalid(forged.id))
         }
 
-        // Standing fallback guard: a node-less v2 chunk is still exact revision text,
-        // never arbitrary deterministic text with a recomputed id.
-        let fallback = v2Chunk(
+        // Expected RED: a node-less v2 row is the shipping producer's v1 fallback
+        // projection, not any exact subrange with a recomputed deterministic id.
+        let forgedFallback = v2Chunk(
             base: fixture.chunks[0],
             nodeID: nil,
             unitKind: nil,
@@ -201,13 +227,41 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         )
         try fixture.store.documentIndex.replaceChunks(
             documentID: fixture.chunks[0].documentID,
-            chunks: [fallback]
+            chunks: [forgedFallback]
+        )
+        XCTAssertThrowsError(
+            try fixture.store.draftingSources.captureMotionSnapshot(
+                request(for: fixture, factChunkIDs: [forgedFallback.id])
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? MotionDraftSnapshotError,
+                .factBindingInvalid(forgedFallback.id)
+            )
+        }
+
+        // Positive control uses a separate document with no usable structure
+        // candidates, which is the only point where the shipping v2 producer
+        // delegates to its node-less v1 fallback.
+        let fallbackFixture = try makeFixture()
+        let fallbackText = fallbackFixture.revision.text
+        let shippingFallback = v2Chunk(
+            base: fallbackFixture.chunks[0],
+            nodeID: nil,
+            unitKind: nil,
+            text: fallbackText,
+            start: 0,
+            end: fallbackText.count
+        )
+        try fallbackFixture.store.documentIndex.replaceChunks(
+            documentID: fallbackFixture.chunks[0].documentID,
+            chunks: [shippingFallback]
         )
         XCTAssertEqual(
-            try fixture.store.draftingSources.captureMotionSnapshot(
-                request(for: fixture, factChunkIDs: [fallback.id])
+            try fallbackFixture.store.draftingSources.captureMotionSnapshot(
+                request(for: fallbackFixture, factChunkIDs: [shippingFallback.id])
             ).facts.first?.text,
-            primaryText
+            fallbackText
         )
     }
 
@@ -263,7 +317,7 @@ final class DraftingSourceSnapshotTests: XCTestCase {
 
     // Expected RED: validating one node in isolation permits a response that the
     // shipping producer consumed into its preceding request to masquerade as a chunk.
-    func testTMDSS03CRejectsConsumedV2ResponseForgedAsStandaloneChunk() throws {
+    func testTMDSS03DRejectsConsumedV2ResponseForgedAsStandaloneChunk() throws {
         let fixture = try makeFixture()
         let pair = try installShippingSizeV2RequestResponse(in: fixture)
         let forgedResponse = v2Chunk(
@@ -288,6 +342,35 @@ final class DraftingSourceSnapshotTests: XCTestCase {
                 error as? MotionDraftSnapshotError,
                 .factBindingInvalid(forgedResponse.id)
             )
+        }
+    }
+
+    // Expected RED: a recomputed deterministic id currently blesses an arbitrary
+    // persisted chunk index even when the shipping producer emits the exact graph
+    // projection at a different global index.
+    func testTMDSS03ERejectsV2ChunkWithForgedProducerIndex() throws {
+        let fixture = try makeFixture()
+        let pair = try installShippingSizeV2RequestResponse(in: fixture)
+        let forged = v2Chunk(
+            base: fixture.chunks[0],
+            nodeID: pair.requestNodeID,
+            unitKind: "discovery_request",
+            text: pair.requestText + "\n" + pair.responseText,
+            start: 0,
+            end: pair.requestText.count,
+            chunkIndex: 73
+        )
+        try fixture.store.documentIndex.replaceChunks(
+            documentID: fixture.chunks[0].documentID,
+            chunks: [forged]
+        )
+
+        XCTAssertThrowsError(
+            try fixture.store.draftingSources.captureMotionSnapshot(
+                request(for: fixture, factChunkIDs: [forged.id])
+            )
+        ) { error in
+            XCTAssertEqual(error as? MotionDraftSnapshotError, .factBindingInvalid(forged.id))
         }
     }
 
@@ -730,11 +813,13 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         unitKind: String?,
         text: String,
         start: Int,
-        end: Int
+        end: Int,
+        chunkIndex: Int? = nil
     ) -> DocumentChunkRecord {
+        let resolvedChunkIndex = chunkIndex ?? base.chunkIndex
         let identity = [
             "chunk-v2", base.documentID, base.revisionID ?? "", base.pagePartID ?? "",
-            nodeID ?? "", String(base.chunkIndex), String(start), String(end), text,
+            nodeID ?? "", String(resolvedChunkIndex), String(start), String(end), text,
         ].joined(separator: "\u{001f}")
         return DocumentChunkRecord(
             id: "chunk-v2-\(sha256(identity))",
@@ -744,7 +829,7 @@ final class DraftingSourceSnapshotTests: XCTestCase {
             nodeID: nodeID,
             unitKind: unitKind,
             chunkerVersion: 2,
-            chunkIndex: base.chunkIndex,
+            chunkIndex: resolvedChunkIndex,
             sourceKind: base.sourceKind,
             pageIndex: base.pageIndex,
             pageLabel: base.pageLabel,
