@@ -16,6 +16,7 @@ public struct DurableFileWriter: Sendable {
     public enum WriterError: Error, Equatable, Sendable {
         case invalidDestination
         case temporaryFileCreationFailed(Int32)
+        case destinationExists
         case atomicInstallFailed(Int32)
     }
 
@@ -33,8 +34,25 @@ public struct DurableFileWriter: Sendable {
         to destination: URL,
         validator: (URL) throws -> Void
     ) throws {
-        try write(
+        try performWrite(
             to: destination,
+            installPolicy: .replace,
+            writer: { sink in try sink.write(data) },
+            validator: validator
+        )
+    }
+
+    /// Writes a new file without replacing a destination that already exists.
+    /// The exclusive rename is the collision boundary; callers must not rely on
+    /// a prior `fileExists` check for correctness.
+    public func writeNew(
+        _ data: Data,
+        to destination: URL,
+        validator: (URL) throws -> Void
+    ) throws {
+        try performWrite(
+            to: destination,
+            installPolicy: .createExclusive,
             writer: { sink in try sink.write(data) },
             validator: validator
         )
@@ -44,6 +62,39 @@ public struct DurableFileWriter: Sendable {
     /// sink checks task cancellation at each chunk boundary.
     public func write(
         to destination: URL,
+        writer: (DurableFileSink) throws -> Void,
+        validator: (URL) throws -> Void
+    ) throws {
+        try performWrite(
+            to: destination,
+            installPolicy: .replace,
+            writer: writer,
+            validator: validator
+        )
+    }
+
+    /// Streaming create-only counterpart to `writeNew(_:to:validator:)`.
+    public func writeNew(
+        to destination: URL,
+        writer: (DurableFileSink) throws -> Void,
+        validator: (URL) throws -> Void
+    ) throws {
+        try performWrite(
+            to: destination,
+            installPolicy: .createExclusive,
+            writer: writer,
+            validator: validator
+        )
+    }
+
+    private enum InstallPolicy {
+        case replace
+        case createExclusive
+    }
+
+    private func performWrite(
+        to destination: URL,
+        installPolicy: InstallPolicy,
         writer: (DurableFileSink) throws -> Void,
         validator: (URL) throws -> Void
     ) throws {
@@ -83,7 +134,7 @@ public struct DurableFileWriter: Sendable {
         try validator(temporary)
         try Task.checkCancellation()
         try faultInjector(.beforeInstall)
-        try Self.atomicInstall(temporary, at: standardizedDestination)
+        try Self.atomicInstall(temporary, at: standardizedDestination, policy: installPolicy)
         installed = true
     }
 
@@ -97,14 +148,27 @@ public struct DurableFileWriter: Sendable {
         return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     }
 
-    private static func atomicInstall(_ temporary: URL, at destination: URL) throws {
-        let result = temporary.path.withCString { source in
+    private static func atomicInstall(
+        _ temporary: URL,
+        at destination: URL,
+        policy: InstallPolicy
+    ) throws {
+        let result: Int32 = temporary.path.withCString { source in
             destination.path.withCString { target in
-                Darwin.rename(source, target)
+                switch policy {
+                case .replace:
+                    Darwin.rename(source, target)
+                case .createExclusive:
+                    Darwin.renamex_np(source, target, UInt32(RENAME_EXCL))
+                }
             }
         }
         guard result == 0 else {
-            throw WriterError.atomicInstallFailed(errno)
+            let code = errno
+            if policy == .createExclusive, code == EEXIST {
+                throw WriterError.destinationExists
+            }
+            throw WriterError.atomicInstallFailed(code)
         }
     }
 }
