@@ -93,6 +93,75 @@ final class DurableFileWriterTests: XCTestCase {
         XCTAssertTrue(try temporaryArtifacts(in: directory).isEmpty)
     }
 
+    // Expected RED: DurableFileWriter has no create-only install API, so callers can
+    // accidentally replace an earlier export that has the same display filename.
+    func testACRFILE006CreateOnlyWriteNeverReplacesExistingDestination() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = directory.appendingPathComponent("motion.docx")
+        let canary = Data("first-motion-canary".utf8)
+        try canary.write(to: destination)
+
+        XCTAssertThrowsError(
+            try DurableFileWriter().writeNew(
+                Data("second-motion".utf8),
+                to: destination,
+                validator: { _ in }
+            )
+        ) { error in
+            XCTAssertEqual(error as? DurableFileWriter.WriterError, .destinationExists)
+        }
+        XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertTrue(try temporaryArtifacts(in: directory).isEmpty)
+    }
+
+    // Expected RED: the replacement rename permits both concurrent writers to report
+    // success; create-only installation must choose exactly one winner atomically.
+    func testACRFILE007ConcurrentCreateOnlyWritesHaveOneWinner() async throws {
+        enum Outcome: Sendable, Equatable {
+            case installed(String)
+            case destinationExists
+            case unexpected(String)
+        }
+
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = directory.appendingPathComponent("raced-motion.docx")
+        let writer = DurableFileWriter()
+        let payloads = ["motion-alpha", "motion-beta"]
+
+        let outcomes = await withTaskGroup(of: Outcome.self, returning: [Outcome].self) { group in
+            for payload in payloads {
+                group.addTask {
+                    do {
+                        try writer.writeNew(
+                            Data(payload.utf8),
+                            to: destination,
+                            validator: { _ in }
+                        )
+                        return .installed(payload)
+                    } catch DurableFileWriter.WriterError.destinationExists {
+                        return .destinationExists
+                    } catch {
+                        return .unexpected(String(describing: error))
+                    }
+                }
+            }
+            var values: [Outcome] = []
+            for await outcome in group { values.append(outcome) }
+            return values
+        }
+
+        let winners = outcomes.compactMap { outcome -> String? in
+            if case let .installed(payload) = outcome { return payload }
+            return nil
+        }
+        XCTAssertEqual(winners.count, 1, "Expected one atomic create winner, got \(outcomes)")
+        XCTAssertEqual(outcomes.filter { $0 == .destinationExists }.count, 1)
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), winners.first)
+        XCTAssertTrue(try temporaryArtifacts(in: directory).isEmpty)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("Supra-DurableFileWriter-\(UUID().uuidString)", isDirectory: true)
