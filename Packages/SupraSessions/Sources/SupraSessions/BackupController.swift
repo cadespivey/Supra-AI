@@ -397,16 +397,17 @@ public final class BackupController: ObservableObject {
                     markRestoreEvidenceAcknowledgementPending()
                 }
             }
-        } else if !appliedActivation,
-                  let launchStagingFailure,
-                  let storedStatus,
-                  storedStatus.state == .staging,
-                  storedStatus.operationID?.lowercased() == launchStagingFailure.operationID,
-                  applyLaunchStagingFailure(launchStagingFailure, storedStatus: storedStatus)
-        {
-            do {
-                try acknowledgeStagingFailure()
-            } catch {
+        } else if !appliedActivation, let launchStagingFailure {
+            if let storedStatus,
+               storedStatus.operationID?.lowercased() == launchStagingFailure.operationID,
+               applyLaunchStagingFailure(launchStagingFailure, storedStatus: storedStatus)
+            {
+                do {
+                    try acknowledgeStagingFailure()
+                } catch {
+                    markRestoreEvidenceAcknowledgementPending()
+                }
+            } else if !restoreEvidenceRequiresAcknowledgement {
                 markRestoreEvidenceAcknowledgementPending()
             }
         } else if restoreState == .staging,
@@ -862,6 +863,11 @@ public final class BackupController: ObservableObject {
         case .copiedStateInvalid, .stagingIOFailed:
             message = "Restore staging did not finish safely. The live data was not replaced."
         }
+        let isInitialReplay = storedStatus.state == .staging
+        let isAcknowledgementRetry = storedStatus.state == .failed
+            && storedStatus.message == message
+            && storedStatus.updatedAt == failure.failedAt
+        guard isInitialReplay || isAcknowledgementRetry else { return false }
         do {
             guard try cleanupInterruptedStagingOperation(operationID: failure.operationID) else {
                 markInterruptedRestoreCleanupPending(
