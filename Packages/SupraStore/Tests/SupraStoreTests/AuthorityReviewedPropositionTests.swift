@@ -210,23 +210,23 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         // T-ARP-04 expected RED: proposition review does not enforce the live,
         // not-adverse, and user-verified preconditions in the writer transaction.
         let adverse = try makeFixture(reviewState: .potentiallyAdverse)
-        XCTAssertThrowsError(tryReview(adverse)) { error in
+        XCTAssertThrowsError(try tryReview(adverse)) { error in
             XCTAssertEqual(error as? AuthorityRepositoryError, .reviewRequiresNotAdverse)
         }
 
         let unverified = try makeFixture(useStatus: .needsCitatorCheck)
-        XCTAssertThrowsError(tryReview(unverified)) { error in
+        XCTAssertThrowsError(try tryReview(unverified)) { error in
             XCTAssertEqual(error as? AuthorityRepositoryError, .reviewRequiresUserMarkedVerified)
         }
 
         let missingOpinion = try makeFixtureWithoutOpinion()
-        XCTAssertThrowsError(tryReview(missingOpinion)) { error in
+        XCTAssertThrowsError(try tryReview(missingOpinion)) { error in
             XCTAssertEqual(error as? AuthorityRepositoryError, .opinionTextUnavailable)
         }
 
         let deleted = try makeFixture()
         XCTAssertTrue(try deleted.store.authorities.softDeleteAuthority(id: deleted.authority.id))
-        XCTAssertThrowsError(tryReview(deleted)) { error in
+        XCTAssertThrowsError(try tryReview(deleted)) { error in
             XCTAssertEqual(error as? AuthorityRepositoryError, .reviewRequiresLiveAuthority)
         }
     }
