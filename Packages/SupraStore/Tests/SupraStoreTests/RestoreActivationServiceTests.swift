@@ -108,7 +108,7 @@ final class RestoreActivationServiceTests: XCTestCase {
         _ = try stage(selectedBlobs: [selectedBlob])
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.liveBlobsDirectory.path))
         let operations = RecordingRestoreActivationOperations(
-            failures: [.synchronizeLiveBlobParent]
+            failureCounts: [.synchronizeLiveBlobParent: 1]
         )
 
         let result = activate(operations: operations)
@@ -122,7 +122,7 @@ final class RestoreActivationServiceTests: XCTestCase {
         let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
         _ = try stage(selectedBlobs: [selectedBlob])
         let first = activate(operations: RecordingRestoreActivationOperations(
-            failures: [.synchronizeLiveBlobParent]
+            failureCounts: [.synchronizeLiveBlobParent: 1]
         ))
         XCTAssertEqual(first.status, .failedAndRolledBack)
         XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.liveBlobsDirectory.path))
@@ -133,6 +133,36 @@ final class RestoreActivationServiceTests: XCTestCase {
         let retryOperations = RecordingRestoreActivationOperations()
 
         XCTAssertEqual(activate(operations: retryOperations).status, .activated)
+
+        XCTAssertLessThan(
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .synchronizeLiveBlobParent)),
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .writeOutcome))
+        )
+    }
+
+    func testTwoLevelBlobRootRetryPublishesThroughLiveDatabaseParent() throws {
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        _ = try stage(selectedBlobs: [selectedBlob])
+        let nestedBlobsDirectory = fixture.liveDatabaseURL.deletingLastPathComponent()
+            .appendingPathComponent("MatterDocuments/blobs", isDirectory: true)
+        let first = activate(
+            operations: RecordingRestoreActivationOperations(
+                failureCounts: [.synchronizeLiveBlobParent: 1]
+            ),
+            liveBlobsDirectory: nestedBlobsDirectory
+        )
+        XCTAssertEqual(first.status, .failedAndRolledBack)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: nestedBlobsDirectory.path))
+        try RestoreSidecarStore.acknowledgeActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+        _ = try stageCandidate(knownMigrations: migrations)
+        let retryOperations = RecordingRestoreActivationOperations()
+
+        XCTAssertEqual(activate(
+            operations: retryOperations,
+            liveBlobsDirectory: nestedBlobsDirectory
+        ).status, .activated)
 
         XCTAssertLessThan(
             try XCTUnwrap(retryOperations.events.firstIndex(of: .synchronizeLiveBlobParent)),
@@ -863,10 +893,11 @@ final class RestoreActivationServiceTests: XCTestCase {
 
     private func activate(
         operations: RecordingRestoreActivationOperations,
+        liveBlobsDirectory: URL? = nil,
         openDatabase: ((URL) throws -> SupraDatabase)? = nil
     ) -> RestoreActivationResult {
         RestoreActivationService.activatePendingRestore(
-            liveLayout: liveLayout(),
+            liveLayout: liveLayout(blobsDirectory: liveBlobsDirectory),
             knownMigrationIdentifiers: migrations,
             operations: operations,
             openDatabase: openDatabase ?? { url in
@@ -879,10 +910,10 @@ final class RestoreActivationServiceTests: XCTestCase {
         )
     }
 
-    private func liveLayout() -> RestoreLiveLayout {
+    private func liveLayout(blobsDirectory: URL? = nil) -> RestoreLiveLayout {
         RestoreLiveLayout(
             databaseURL: fixture.liveDatabaseURL,
-            blobsDirectory: fixture.liveBlobsDirectory,
+            blobsDirectory: blobsDirectory ?? fixture.liveBlobsDirectory,
             stagingRootDirectory: fixture.stagingRootDirectory
         )
     }
