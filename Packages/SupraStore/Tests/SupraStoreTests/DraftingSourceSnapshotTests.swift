@@ -80,6 +80,121 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         }
     }
 
+    // Expected RED: v2 validation currently accepts a deterministic chunk whose text is
+    // composed from the primary node plus any unrelated node in the revision. Only the
+    // exact responds_to/references/header_for graph projection may bind motion evidence.
+    func testTMDSS03ARejectsV2ChunkComposedWithUnrelatedStructureNode() throws {
+        let fixture = try makeFixture()
+        let text = fixture.revision.text
+        let primaryText = fixture.chunks[0].normalizedText
+        let responseText = fixture.chunks[1].normalizedText
+        let unrelatedText = "complaint"
+        let primaryRange = try XCTUnwrap(text.range(of: primaryText))
+        let responseRange = try XCTUnwrap(text.range(of: responseText))
+        let unrelatedRange = try XCTUnwrap(text.range(of: unrelatedText))
+        let start = text.distance(from: text.startIndex, to: primaryRange.lowerBound)
+        let end = text.distance(from: text.startIndex, to: primaryRange.upperBound)
+        let nodes = [
+            DocumentStructureNodeRecord(
+                id: "v2-root",
+                documentID: fixture.chunks[0].documentID,
+                revisionID: fixture.revision.id,
+                nodeKey: "document",
+                ordinal: 0,
+                kind: "document"
+            ),
+            DocumentStructureNodeRecord(
+                id: "v2-primary",
+                documentID: fixture.chunks[0].documentID,
+                revisionID: fixture.revision.id,
+                nodeKey: "request",
+                parentNodeID: "v2-root",
+                ordinal: 0,
+                kind: "discovery_request",
+                charStart: start,
+                charEnd: end
+            ),
+            DocumentStructureNodeRecord(
+                id: "v2-response",
+                documentID: fixture.chunks[0].documentID,
+                revisionID: fixture.revision.id,
+                nodeKey: "response",
+                parentNodeID: "v2-root",
+                ordinal: 1,
+                kind: "discovery_response",
+                charStart: text.distance(from: text.startIndex, to: responseRange.lowerBound),
+                charEnd: text.distance(from: text.startIndex, to: responseRange.upperBound)
+            ),
+            DocumentStructureNodeRecord(
+                id: "v2-unrelated",
+                documentID: fixture.chunks[0].documentID,
+                revisionID: fixture.revision.id,
+                nodeKey: "unrelated",
+                parentNodeID: "v2-root",
+                ordinal: 2,
+                kind: "paragraph",
+                charStart: text.distance(from: text.startIndex, to: unrelatedRange.lowerBound),
+                charEnd: text.distance(from: text.startIndex, to: unrelatedRange.upperBound)
+            ),
+        ]
+        try fixture.store.documentStructure.replaceStructure(
+            documentID: fixture.chunks[0].documentID,
+            revisionID: fixture.revision.id,
+            nodes: nodes,
+            edges: [
+                DocumentStructureEdgeRecord(
+                    id: "v2-response-edge",
+                    matterID: fixture.matter.id,
+                    fromNodeID: "v2-response",
+                    toNodeID: "v2-primary",
+                    kind: "responds_to"
+                ),
+            ]
+        )
+        let forgedText = primaryText + "\n" + unrelatedText
+        let forged = v2Chunk(
+            base: fixture.chunks[0],
+            nodeID: "v2-primary",
+            unitKind: "discovery_request",
+            text: forgedText,
+            start: start,
+            end: end
+        )
+        try fixture.store.documentIndex.replaceChunks(
+            documentID: fixture.chunks[0].documentID,
+            chunks: [forged]
+        )
+
+        XCTAssertThrowsError(
+            try fixture.store.draftingSources.captureMotionSnapshot(
+                request(for: fixture, factChunkIDs: [forged.id])
+            )
+        ) { error in
+            XCTAssertEqual(error as? MotionDraftSnapshotError, .factBindingInvalid(forged.id))
+        }
+
+        // Standing fallback guard: a node-less v2 chunk is still exact revision text,
+        // never arbitrary deterministic text with a recomputed id.
+        let fallback = v2Chunk(
+            base: fixture.chunks[0],
+            nodeID: nil,
+            unitKind: nil,
+            text: primaryText,
+            start: start,
+            end: end
+        )
+        try fixture.store.documentIndex.replaceChunks(
+            documentID: fixture.chunks[0].documentID,
+            chunks: [fallback]
+        )
+        XCTAssertEqual(
+            try fixture.store.draftingSources.captureMotionSnapshot(
+                request(for: fixture, factChunkIDs: [fallback.id])
+            ).facts.first?.text,
+            primaryText
+        )
+    }
+
     // Expected RED: raw authority flags and citation text can currently enter a motion
     // without proposition-specific reviewed evidence for the selected ground.
     func testTMDSS04CaptureRequiresLiveReviewedAuthorityProposition() throws {
@@ -345,6 +460,34 @@ final class DraftingSourceSnapshotTests: XCTestCase {
             ],
             assistantProfileSettingKey: assistantKey,
             firmStyleProfileSettingKey: styleKey
+        )
+    }
+
+    private func v2Chunk(
+        base: DocumentChunkRecord,
+        nodeID: String?,
+        unitKind: String?,
+        text: String,
+        start: Int,
+        end: Int
+    ) -> DocumentChunkRecord {
+        let identity = [
+            "chunk-v2", base.documentID, base.revisionID ?? "", base.pagePartID ?? "",
+            nodeID ?? "", String(base.chunkIndex), String(start), String(end), text,
+        ].joined(separator: "\u{001f}")
+        return DocumentChunkRecord(
+            id: "chunk-v2-\(sha256(identity))",
+            documentID: base.documentID,
+            pagePartID: base.pagePartID,
+            revisionID: base.revisionID,
+            nodeID: nodeID,
+            unitKind: unitKind,
+            chunkerVersion: 2,
+            chunkIndex: base.chunkIndex,
+            sourceKind: base.sourceKind,
+            charStart: start,
+            charEnd: end,
+            normalizedText: text
         )
     }
 
