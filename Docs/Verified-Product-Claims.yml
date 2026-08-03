@@ -217,7 +217,7 @@ claims:
 
   - id: "RESTORE-COLD-START-RECOVERY"
     topic: "restore-cold-start-recovery"
-    wording: "Cold-start restore activation installs the selected database before the app constructs its normal store, then opens, migrates, and validates it through SupraDatabase; failure reinstalls and validates the safety database before normal work resumes."
+    wording: "Cold-start restore activation installs the selected database before the app constructs its normal store, then opens, migrates, and validates it through SupraDatabase; after activation failure, normal work resumes only if the safety database is reinstalled and validated, otherwise the app stays in recovery-only mode."
     owner: "Application recovery engineering"
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Backup/RestoreActivationService.swift"
     verification: "Packages/SupraStore/Tests/SupraStoreTests/RestoreActivationServiceTests.swift"

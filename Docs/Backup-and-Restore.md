@@ -23,7 +23,7 @@ whether staging succeeds or fails; the closed controller graph is never reused.
 
 Restore staging blocks further workspace work, closes the exact live database writer, and always exits the process after the quiesced runner begins.
 Restore staging verifies the current database and managed blobs into a safety copy, verifies the selected snapshot on the live volume, and publishes the cold-start marker only after every staged component passes.
-Cold-start restore activation installs the selected database before the app constructs its normal store, then opens, migrates, and validates it through SupraDatabase; failure reinstalls and validates the safety database before normal work resumes.
+Cold-start restore activation installs the selected database before the app constructs its normal store, then opens, migrates, and validates it through SupraDatabase; after activation failure, normal work resumes only if the safety database is reinstalled and validated, otherwise the app stays in recovery-only mode.
 
 Restore does not modify the backup source. It reads the selected snapshot and shared document pool,
 then works from private staged copies. A completed restore consumes its restart marker, so later
