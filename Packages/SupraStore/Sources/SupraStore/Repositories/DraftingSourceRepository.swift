@@ -330,52 +330,29 @@ public final class DraftingSourceRepository: @unchecked Sendable {
               part.boundingBoxesJSON == chunk.boundingBoxesJSON,
               let revision = try DocumentPartRevisionRecord.fetchOne(db, key: revisionID),
               revision.documentID == document.id,
-              revision.partIndex == part.partIndex else {
+              revision.partIndex == part.partIndex,
+              part.normalizedText == revision.text,
+              part.charCount == revision.charCount,
+              revision.charCount == revision.text.count,
+              part.ocrConfidence == revision.ocrConfidence,
+              part.boundingBoxesJSON == revision.boundingBoxesJSON else {
             throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
         }
 
         let relatedStructureEdges: [MotionDraftStructureEdgeSnapshot]
         do {
-            if let nodeID = nonblank(chunk.nodeID) {
-                guard let node = try DocumentStructureNodeRecord.fetchOne(db, key: nodeID),
-                      chunk.chunkerVersion == 2,
-                      node.documentID == document.id,
-                      node.revisionID == revision.id,
-                      chunk.unitKind == node.kind,
-                      (node.charStart ?? 0) == start,
-                      (node.charEnd ?? node.textContent?.count ?? 0) == end else {
-                    throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
-                }
-                let nodes = try DocumentStructureNodeRecord.fetchAll(
-                    db,
-                    sql: "SELECT * FROM document_structure_nodes WHERE document_id = ? AND revision_id = ?",
-                    arguments: [document.id, revision.id]
-                )
-                var resolvedByID: [String: String] = [:]
-                for candidate in nodes {
-                    if let text = try StructureRepository.resolvedText(
-                        node: candidate,
-                        revisionText: revision.text
-                    ), !text.isEmpty {
-                        resolvedByID[candidate.id] = text
-                    }
-                }
-                let nodeIDs = Set(nodes.map(\.id))
-                let edges = try DocumentStructureEdgeRecord.fetchAll(
-                    db,
-                    sql: "SELECT * FROM document_structure_edges WHERE matter_id = ?",
-                    arguments: [matterID]
-                ).filter {
-                    nodeIDs.contains($0.fromNodeID) && nodeIDs.contains($0.toNodeID)
-                }
-                let expectedChunks = shippingStructuredChunks(
-                    nodes: nodes,
-                    resolvedByID: resolvedByID,
-                    edges: edges
+            if chunk.chunkerVersion == 2 {
+                let expectedChunks = try shippingV2Chunks(
+                    documentID: document.id,
+                    matterID: matterID,
+                    db: db
                 )
                 guard let matched = expectedChunks.first(where: {
-                    $0.nodeID == node.id
-                        && $0.unitKind == node.kind
+                    $0.chunkIndex == chunk.chunkIndex
+                        && $0.partID == part.id
+                        && $0.revisionID == revision.id
+                        && $0.nodeID == chunk.nodeID
+                        && $0.unitKind == chunk.unitKind
                         && $0.charStart == start
                         && $0.charEnd == end
                         && $0.text == chunk.normalizedText
@@ -384,6 +361,10 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                 }
                 relatedStructureEdges = matched.relatedStructureEdges
             } else {
+                guard nonblank(chunk.nodeID) == nil,
+                      nonblank(chunk.unitKind) == nil else {
+                    throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
+                }
                 guard exactCharacterSlice(revision.text, start: start, end: end) == chunk.normalizedText else {
                     throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
                 }
@@ -862,8 +843,11 @@ public final class DraftingSourceRepository: @unchecked Sendable {
     }
 
     private struct StructuredChunkProjection {
-        let nodeID: String
-        let unitKind: String
+        let chunkIndex: Int
+        let partID: String
+        let revisionID: String?
+        let nodeID: String?
+        let unitKind: String?
         let charStart: Int
         let charEnd: Int
         let text: String
@@ -871,15 +855,33 @@ public final class DraftingSourceRepository: @unchecked Sendable {
     }
 
     private static let shippingV2MaxChars = 1_200
+    private static let shippingV2OverlapChars = 200
 
     /// Mirrors the shipping v2 producer's candidate ordering, edge priority,
-    /// consumption, and default request/response split boundary without making
-    /// the persistence package depend on SupraDocuments.
-    private static func shippingStructuredChunks(
-        nodes: [DocumentStructureNodeRecord],
-        resolvedByID: [String: String],
-        edges: [DocumentStructureEdgeRecord]
-    ) -> [StructuredChunkProjection] {
+    /// consumption, global chunk indices, and node-less fallback boundaries
+    /// without making the persistence package depend on SupraDocuments.
+    private static func shippingV2Chunks(
+        documentID: String,
+        matterID: String,
+        db: Database
+    ) throws -> [StructuredChunkProjection] {
+        let parts = try DocumentPagePartRecord.fetchAll(
+            db,
+            sql: "SELECT * FROM document_pages_parts WHERE document_id = ? ORDER BY part_index ASC",
+            arguments: [documentID]
+        )
+        let partsByID = Dictionary(uniqueKeysWithValues: parts.map { ($0.id, $0) })
+        let partOrder = Dictionary(uniqueKeysWithValues: parts.enumerated().map { ($0.element.id, $0.offset) })
+        let revisionIDsByPartID = Dictionary(uniqueKeysWithValues: parts.compactMap { part in
+            part.currentRevisionID.map { (part.id, $0) }
+        })
+        var partIDsByRevisionID: [String: String] = [:]
+        for (partID, revisionID) in revisionIDsByPartID {
+            guard partIDsByRevisionID.updateValue(partID, forKey: revisionID) == nil else {
+                throw MotionDraftSnapshotError.factBindingInvalid(documentID)
+            }
+        }
+
         let recognizedKinds: Set<String> = [
             "document", "section", "heading", "paragraph", "list", "list_item",
             "table", "table_row", "table_cell", "footnote", "endnote", "comment",
@@ -893,12 +895,24 @@ public final class DraftingSourceRepository: @unchecked Sendable {
             "deposition_question", "deposition_answer",
         ]
         let genericKinds: Set<String> = ["paragraph", "list_item", "region", "email_body"]
-        let producerNodes = nodes.filter { recognizedKinds.contains($0.kind) }
+        let producerNodes = try DocumentStructureNodeRecord.fetchAll(
+            db,
+            sql: "SELECT * FROM document_structure_nodes WHERE document_id = ?",
+            arguments: [documentID]
+        ).filter {
+            recognizedKinds.contains($0.kind) && partIDsByRevisionID[$0.revisionID] != nil
+        }
         let nodesByID = Dictionary(uniqueKeysWithValues: producerNodes.map { ($0.id, $0) })
-        let legalRanges = producerNodes.filter {
+        let legalRangesByPart = Dictionary(grouping: producerNodes.filter {
             legalKinds.contains($0.kind) && $0.charStart != nil && $0.charEnd != nil
+        }) { node in
+            partIDsByRevisionID[node.revisionID] ?? ""
         }
         let candidates = producerNodes.filter { node in
+            guard let partID = partIDsByRevisionID[node.revisionID],
+                  partsByID[partID] != nil else {
+                return false
+            }
             let hasRange = node.charStart != nil && node.charEnd != nil
             let hasText = nonblank(node.textContent) != nil
             guard hasRange || hasText,
@@ -909,24 +923,41 @@ public final class DraftingSourceRepository: @unchecked Sendable {
             if genericKinds.contains(node.kind),
                let start = node.charStart,
                let end = node.charEnd,
-               legalRanges.contains(where: {
+               legalRangesByPart[partID]?.contains(where: {
                    guard let legalStart = $0.charStart, let legalEnd = $0.charEnd else {
                        return false
                    }
                    return start < legalEnd && legalStart < end
-               }) {
+               }) == true {
                 return false
             }
             return true
         }.sorted { lhs, rhs in
+            let lhsPart = partOrder[partIDsByRevisionID[lhs.revisionID] ?? ""] ?? .max
+            let rhsPart = partOrder[partIDsByRevisionID[rhs.revisionID] ?? ""] ?? .max
+            if lhsPart != rhsPart { return lhsPart < rhsPart }
             if lhs.ordinal != rhs.ordinal { return lhs.ordinal < rhs.ordinal }
             if lhs.charStart != rhs.charStart {
                 return (lhs.charStart ?? .max) < (rhs.charStart ?? .max)
             }
             return lhs.id < rhs.id
         }
-        let orderedEdges = edges.filter {
-            nodesByID[$0.fromNodeID] != nil && nodesByID[$0.toNodeID] != nil
+        guard !candidates.isEmpty else {
+            return shippingV1FallbackChunks(parts: parts)
+        }
+
+        let orderedEdges = try DocumentStructureEdgeRecord.fetchAll(
+            db,
+            sql: "SELECT * FROM document_structure_edges WHERE matter_id = ?",
+            arguments: [matterID]
+        ).filter { edge in
+            guard let from = nodesByID[edge.fromNodeID],
+                  let to = nodesByID[edge.toNodeID],
+                  let fromPartID = partIDsByRevisionID[from.revisionID],
+                  let toPartID = partIDsByRevisionID[to.revisionID] else {
+                return false
+            }
+            return fromPartID == toPartID && from.revisionID == to.revisionID
         }.sorted {
             if $0.fromNodeID != $1.fromNodeID { return $0.fromNodeID < $1.fromNodeID }
             return $0.toNodeID < $1.toNodeID
@@ -935,27 +966,39 @@ public final class DraftingSourceRepository: @unchecked Sendable {
         var result: [StructuredChunkProjection] = []
         var consumed = Set<String>()
         for node in candidates where !consumed.contains(node.id) {
-            guard let primaryText = nonblank(resolvedByID[node.id]) else { continue }
+            guard let partID = partIDsByRevisionID[node.revisionID],
+                  let part = partsByID[partID],
+                  let primaryText = shippingNodeText(node, partText: part.normalizedText) else {
+                continue
+            }
 
             if let responseEdge = orderedEdges.first(where: {
                 $0.kind == "responds_to" && $0.toNodeID == node.id
             }), let response = nodesByID[responseEdge.fromNodeID],
-               let responseText = nonblank(resolvedByID[response.id]) {
+               let responsePartID = partIDsByRevisionID[response.revisionID],
+               let responsePart = partsByID[responsePartID],
+               let responseText = shippingNodeText(response, partText: responsePart.normalizedText) {
                 let combined = primaryText + "\n" + responseText
                 if combined.count <= shippingV2MaxChars {
                     result.append(structuredProjection(
+                        index: result.count,
                         node: node,
+                        partID: partID,
                         text: combined,
                         relatedEdges: [responseEdge]
                     ))
                 } else {
                     result.append(structuredProjection(
+                        index: result.count,
                         node: node,
+                        partID: partID,
                         text: primaryText,
                         relatedEdges: [responseEdge]
                     ))
                     result.append(structuredProjection(
+                        index: result.count,
                         node: response,
+                        partID: responsePartID,
                         text: responseText,
                         relatedEdges: [responseEdge]
                     ))
@@ -966,9 +1009,14 @@ public final class DraftingSourceRepository: @unchecked Sendable {
 
             if let referenceEdge = orderedEdges.first(where: {
                 $0.kind == "references" && $0.toNodeID == node.id
-            }), let useText = nonblank(resolvedByID[referenceEdge.fromNodeID]) {
+            }), let use = nodesByID[referenceEdge.fromNodeID],
+               let usePartID = partIDsByRevisionID[use.revisionID],
+               let usePart = partsByID[usePartID],
+               let useText = shippingNodeText(use, partText: usePart.normalizedText) {
                 result.append(structuredProjection(
+                    index: result.count,
                     node: node,
+                    partID: partID,
                     text: primaryText + "\n" + useText,
                     relatedEdges: [referenceEdge]
                 ))
@@ -978,11 +1026,27 @@ public final class DraftingSourceRepository: @unchecked Sendable {
 
             let headerEdges = orderedEdges.filter {
                 $0.kind == "header_for" && $0.fromNodeID == node.id
-            }.filter { nonblank(resolvedByID[$0.toNodeID]) != nil }
-            let headers = headerEdges.compactMap { nonblank(resolvedByID[$0.toNodeID]) }
+            }.filter { edge in
+                guard let header = nodesByID[edge.toNodeID],
+                      let headerPartID = partIDsByRevisionID[header.revisionID],
+                      let headerPart = partsByID[headerPartID] else {
+                    return false
+                }
+                return shippingNodeText(header, partText: headerPart.normalizedText) != nil
+            }
+            let headers = headerEdges.compactMap { edge -> String? in
+                guard let header = nodesByID[edge.toNodeID],
+                      let headerPartID = partIDsByRevisionID[header.revisionID],
+                      let headerPart = partsByID[headerPartID] else {
+                    return nil
+                }
+                return shippingNodeText(header, partText: headerPart.normalizedText)
+            }
             if !headers.isEmpty {
                 result.append(structuredProjection(
+                    index: result.count,
                     node: node,
+                    partID: partID,
                     text: headers.joined(separator: "\n") + "\n" + primaryText,
                     relatedEdges: headerEdges
                 ))
@@ -990,18 +1054,29 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                 continue
             }
 
-            result.append(structuredProjection(node: node, text: primaryText, relatedEdges: []))
+            result.append(structuredProjection(
+                index: result.count,
+                node: node,
+                partID: partID,
+                text: primaryText,
+                relatedEdges: []
+            ))
             consumed.insert(node.id)
         }
         return result
     }
 
     private static func structuredProjection(
+        index: Int,
         node: DocumentStructureNodeRecord,
+        partID: String,
         text: String,
         relatedEdges: [DocumentStructureEdgeRecord]
     ) -> StructuredChunkProjection {
         StructuredChunkProjection(
+            chunkIndex: index,
+            partID: partID,
+            revisionID: node.revisionID,
             nodeID: node.id,
             unitKind: node.kind,
             charStart: node.charStart ?? 0,
@@ -1017,6 +1092,101 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                 )
             }
         )
+    }
+
+    private static func shippingNodeText(
+        _ node: DocumentStructureNodeRecord,
+        partText: String
+    ) -> String? {
+        if let start = node.charStart, let end = node.charEnd {
+            return exactCharacterSlice(partText, start: start, end: end).flatMap { value in
+                nonblank(value) == nil ? nil : value
+            }
+        }
+        return nonblank(node.textContent)
+    }
+
+    private static func shippingV1FallbackChunks(
+        parts: [DocumentPagePartRecord]
+    ) -> [StructuredChunkProjection] {
+        var result: [StructuredChunkProjection] = []
+        for part in parts {
+            for range in shippingV1Ranges(part.normalizedText) {
+                result.append(StructuredChunkProjection(
+                    chunkIndex: result.count,
+                    partID: part.id,
+                    revisionID: part.currentRevisionID,
+                    nodeID: nil,
+                    unitKind: nil,
+                    charStart: range.start,
+                    charEnd: range.end,
+                    text: range.text,
+                    relatedStructureEdges: []
+                ))
+            }
+        }
+        return result
+    }
+
+    private struct ShippingTextRange {
+        let start: Int
+        let end: Int
+        let text: String
+    }
+
+    private static func shippingV1Ranges(_ text: String) -> [ShippingTextRange] {
+        let characters = Array(text)
+        guard characters.contains(where: { !$0.isWhitespace }) else { return [] }
+        var offsets: [(Int, Int)] = []
+        var start = 0
+        while start < characters.count {
+            let hardEnd = min(start + shippingV2MaxChars, characters.count)
+            var end = hardEnd
+            if hardEnd < characters.count {
+                let windowStart = max(hardEnd - shippingV2OverlapChars - 1, start + 1)
+                end = preferredShippingBreak(
+                    in: characters,
+                    from: windowStart,
+                    to: hardEnd
+                ) ?? hardEnd
+            }
+            offsets.append((start, end))
+            if end >= characters.count { break }
+            start = max(end - shippingV2OverlapChars, start + 1)
+        }
+        return offsets.compactMap { start, end in
+            let value = String(characters[start..<end])
+            guard nonblank(value) != nil else { return nil }
+            return ShippingTextRange(start: start, end: end, text: value)
+        }
+    }
+
+    private static func preferredShippingBreak(
+        in characters: [Character],
+        from lower: Int,
+        to upper: Int
+    ) -> Int? {
+        var lastParagraph: Int?
+        var lastSpace: Int?
+        var lastSentence: Int?
+        var index = lower
+        while index < upper {
+            let character = characters[index]
+            if character == "\n" {
+                if index + 1 < upper, characters[index + 1] == "\n" {
+                    lastParagraph = index + 2
+                }
+                lastSentence = index + 1
+            } else if character == "." || character == "!" || character == "?" {
+                if index + 1 < upper, characters[index + 1] == " " {
+                    lastSentence = index + 1
+                }
+            } else if character == " " {
+                lastSpace = index + 1
+            }
+            index += 1
+        }
+        return lastParagraph ?? lastSentence ?? lastSpace
     }
 
     private static func nonblank(_ value: String?) -> String? {
