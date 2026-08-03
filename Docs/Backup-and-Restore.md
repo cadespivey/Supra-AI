@@ -21,9 +21,10 @@ whether staging succeeds or fails; the closed controller graph is never reused.
    before constructing the normal app store, then opens, migrates, and validates the database through
    the normal database boundary.
 
-Restore staging blocks further workspace work, closes the exact live database writer, and always exits the process after the quiesced runner begins.
-Restore staging verifies the current database and managed blobs into a safety copy, verifies the selected snapshot on the live volume, and publishes the cold-start marker only after every staged component passes.
-Cold-start restore activation installs the selected database before the app constructs its normal store, then opens, migrates, and validates it through SupraDatabase; after activation failure, normal work resumes only if the safety database is reinstalled and validated, otherwise the app stays in recovery-only mode.
+Successful restore staging replaces the hosted workspace with a terminal restore shell before the process exits; a recovery-required launch replaces normal work with a recovery shell that identifies the entire safety folder for preservation.
+Quiesced restore staging rejects a mismatched live database, closes the supplied live database writer before capturing a verified safety database and managed blobs, verifies the selected snapshot on the live volume, and publishes the cold-start marker only after every staged component passes.
+Restore activation installs the selected database, opens and migrates it with SupraDatabase, and then validates it with RestoreValidation; after activation failure, it reports rollback success only if the safety database is reinstalled and passes the same open-and-validation boundary, otherwise it returns recovery required.
+On a normal production launch, AppEnvironment completes pending-restore activation before constructing the normal SupraStore; a recovery-required activation, recovery-required durable outcome, or unreadable outcome prevents the user's Application Support store from opening.
 
 Restore does not modify the backup source. It reads the selected snapshot and shared document pool,
 then works from private staged copies. A completed restore consumes its restart marker, so later

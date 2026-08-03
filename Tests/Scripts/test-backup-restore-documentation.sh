@@ -5,6 +5,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 restore_doc="${repo_root}/Docs/Backup-and-Restore.md"
 readme="${repo_root}/README.md"
 settings_view="${repo_root}/Apps/SupraAI/SupraAI/SettingsView.swift"
+app_environment="${repo_root}/Apps/SupraAI/SupraAI/AppEnvironment.swift"
 failures=0
 
 require_file() {
@@ -21,6 +22,126 @@ require_literal() {
   local description="$3"
   if [[ ! -f "$path" ]] || ! grep -Fq -- "$literal" "$path"; then
     printf 'FAIL: %s\n' "$description" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+require_restore_startup_ordering() {
+  local path="$1"
+  if ! awk '
+    $0 == "    init() {" { in_init = 1; next }
+    in_init && /^    private func / { in_init = 0 }
+    $0 == "    private static func makeStore(" { in_store = 1; next }
+    in_store && /^    private static func / { in_store = 0 }
+    $0 == "    private static func prepareColdStartRestore() -> ColdStartRestoreEvidence? {" {
+      in_prepare = 1
+      next
+    }
+    in_prepare && /^    private static func / { in_prepare = 0 }
+    {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      if (line !~ /^(\/\/|\/\*|\*)/ && index(line, "SupraStore.openAppSupportStore(") != 0) {
+        app_support_opens++
+      }
+    }
+    in_init {
+      if (line == "let coldStartRestore = AppEnvironment.prepareColdStartRestore()") {
+        if (init_step != 0) invalid = 1
+        init_step = 1
+      } else if (line == "let restoreActivation = coldStartRestore?.activation") {
+        if (init_step != 1) invalid = 1
+        init_step = 2
+      } else if (line == "let storeResult = AppEnvironment.makeStore(") {
+        if (init_step != 2) invalid = 1
+        init_step = 3
+      } else if (line == "after: restoreActivation,") {
+        if (init_step != 3) invalid = 1
+        init_step = 4
+      } else if (line == "replayOutcome: coldStartRestore?.outcome,") {
+        if (init_step != 4) invalid = 1
+        init_step = 5
+      } else if (line == "outcomeReadFailed: coldStartRestore?.outcomeReadFailed == true") {
+        if (init_step != 5) invalid = 1
+        init_step = 6
+      } else if (line == "let store = storeResult.store") {
+        if (init_step != 6) invalid = 1
+        init_step = 7
+      } else if (line == "self.chatController = GlobalChatController(") {
+        if (init_step != 7) invalid = 1
+        init_step = 8
+      }
+    }
+    in_store {
+      if (line == "if restoreActivation?.status == .recoveryRequired") {
+        if (store_step != 0) invalid = 1
+        store_step = 1
+      } else if (line == "|| replayOutcome?.status == .recoveryRequired") {
+        if (store_step != 1) invalid = 1
+        store_step = 2
+      } else if (line == "|| outcomeReadFailed") {
+        if (store_step != 2) invalid = 1
+        store_step = 3
+      } else if (line == "return (" && store_step != 0) {
+        if (store_step != 3) invalid = 1
+        store_step = 4
+      } else if (line == "makeFallbackStore()," && store_step != 0) {
+        if (store_step != 4) invalid = 1
+        store_step = 5
+      } else if (line == "failure: .restore," && store_step != 0) {
+        if (store_step != 5) invalid = 1
+        store_step = 6
+      } else if (line == "return (try SupraStore.openAppSupportStore(), false, nil)") {
+        if (store_step != 6) invalid = 1
+        store_step = 7
+      }
+    }
+    in_prepare {
+      if (line == "guard !isUITestMode, !isDemoMode, !isHeadlessProbeMode,") {
+        if (prepare_step != 0) invalid = 1
+        prepare_step = 1
+      } else if (line == "let activation = RestoreActivationService.activatePendingRestore(liveLayout: layout)") {
+        if (prepare_step != 1) invalid = 1
+        prepare_step = 2
+      } else if (line == "do {") {
+        if (prepare_step != 2) invalid = 1
+        prepare_step = 3
+      } else if (line == "outcome = try RestoreSidecarStore.readActivationOutcome(") {
+        if (prepare_step != 3) invalid = 1
+        prepare_step = 4
+      } else if (line == "outcomeReadFailed = false") {
+        if (prepare_step != 4) invalid = 1
+        prepare_step = 5
+      } else if (line == "} catch {") {
+        if (prepare_step != 5) invalid = 1
+        prepare_step = 6
+      } else if (line == "outcome = nil") {
+        if (prepare_step != 6) invalid = 1
+        prepare_step = 7
+      } else if (line == "outcomeReadFailed = true") {
+        if (prepare_step != 7) invalid = 1
+        prepare_step = 8
+      } else if (line == "return ColdStartRestoreEvidence(") {
+        if (prepare_step != 8) invalid = 1
+        prepare_step = 9
+      } else if (line == "activation: activation,") {
+        if (prepare_step != 9) invalid = 1
+        prepare_step = 10
+      } else if (line == "outcome: outcome,") {
+        if (prepare_step != 10) invalid = 1
+        prepare_step = 11
+      } else if (line == "outcomeReadFailed: outcomeReadFailed,") {
+        if (prepare_step != 11) invalid = 1
+        prepare_step = 12
+      }
+    }
+    END {
+      exit (init_step == 8 && store_step == 7 && prepare_step == 12 && app_support_opens == 1 && !invalid ? 0 : 1)
+    }
+  ' "$path"; then
+    printf '%s\n' \
+      'FAIL: AppEnvironment must activate restore before store/controller construction and route every recovery predicate to the restore fallback before opening the user store' >&2
     failures=$((failures + 1))
   fi
 }
@@ -77,6 +198,7 @@ require_literal "$settings_view" 'entire verified safety folder' \
   'Settings restore help must preserve the database and managed-document blobs together'
 require_literal "$settings_view" 'managed-document blobs' \
   'Settings restore help must name the managed-document blobs in the safety folder'
+require_restore_startup_ordering "$app_environment"
 
 if (( failures != 0 )); then
   printf 'Backup and restore documentation checks failed: %d\n' "$failures" >&2
