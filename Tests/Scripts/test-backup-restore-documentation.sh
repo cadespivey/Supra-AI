@@ -54,6 +54,10 @@ require_literal "$restore_doc" 'Recovery-required operation trees are deliberate
   'restore documentation must preserve recovery-required operation trees'
 require_literal "$restore_doc" "removes only that authenticated operation's private staging tree" \
   'restore documentation must clean only terminal authenticated operation trees'
+# T-RST-H09 expected RED: the guide does not disclose that successful database
+# replacement reconstructs the authenticated scheduling audit in the restored ledger.
+require_literal "$restore_doc" 'replays the authenticated scheduling audit into the restored database with its original timestamp' \
+  'restore documentation must explain scheduling-audit continuity across activation'
 require_literal "$restore_doc" 'does not modify the backup source' \
   'restore documentation must promise source immutability narrowly'
 require_literal "$readme" '[Backup and restore](Docs/Backup-and-Restore.md)' \
