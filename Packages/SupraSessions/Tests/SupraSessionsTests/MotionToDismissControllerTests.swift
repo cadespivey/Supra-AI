@@ -83,6 +83,8 @@ final class MotionToDismissControllerTests: XCTestCase {
         try DocumentExportValidator.validate(artifact.fileURL, as: .docx)
 
         let model = try XCTUnwrap(renderer.capturedCourtModel)
+        XCTAssertNil(model.caption.division)
+        XCTAssertEqual(model.caption.judge, "Avery Stone")
         let renderedStyle = try XCTUnwrap(renderer.capturedStyle)
         let xml = try CourtFLRenderer().documentXML(model, style: renderedStyle)
         for required in [
@@ -93,6 +95,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             "MEMORANDUM OF LAW",
             "FAILS TO STATE A CLAIM",
             fixture.selectedAuthorityCitation,
+            "JUDGE: Avery Stone",
             "Submitted for review:",
             "/s/ Harvey Specter",
             "CERTIFICATE OF SERVICE",
@@ -121,13 +124,13 @@ final class MotionToDismissControllerTests: XCTestCase {
         try assertNoSuccessfulMotionSideEffects(fixture)
     }
 
-    // T-MTD-14 — malformed citations and authorities that do not support the selected
-    // proposition both fail before runMotion/render/persistence.
+    // T-MTD-14 — malformed citations and authorities without reviewed proposition
+    // evidence both fail before runMotion/render/persistence.
     func testTMTD14UnsupportedCitationAndPropositionCreateNoFileOrSuccessAudit() async throws {
         let fixture = try makeFixture()
         let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
 
-        for authorityID in [fixture.invalidCitationAuthorityID, fixture.unsupportedAuthorityID] {
+        for authorityID in [fixture.invalidCitationAuthorityID, fixture.unreviewedAuthorityID] {
             var input = fixture.selectedInput
             input.selectedAuthorityIDs = [authorityID]
             let readiness = controller.motionReadiness(input: input, matterID: fixture.matterID)
@@ -154,9 +157,13 @@ final class MotionToDismissControllerTests: XCTestCase {
         try assertNoSuccessfulMotionSideEffects(fixture)
     }
 
-    // T-MTD-16 — the success audit metadata is the auditable draft record.
+    // T-MTD-16 — expected RED: lineage uses controller-authored version strings and
+    // omits exact snapshot, component, receipt, request, and output identities.
     func testTMTD16AuditLineageRetainsExactInputsRevisionsAndEngineVersions() async throws {
         let fixture = try makeFixture()
+        let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(
+            snapshotRequest(for: fixture)
+        )
         let controller = MatterDraftingController(
             store: fixture.store,
             storage: fixture.storage,
@@ -173,21 +180,45 @@ final class MotionToDismissControllerTests: XCTestCase {
         let metadata = try XCTUnwrap(event.metadataJSON)
         let lineage = try JSONDecoder().decode(MotionDraftAuditLineage.self, from: Data(metadata.utf8))
 
+        XCTAssertEqual(lineage.schemaVersion, 2)
         XCTAssertEqual(lineage.kindID, DraftKindID.motionToDismiss.rawValue)
-        XCTAssertEqual(lineage.factChunkIDs, [fixture.selectedFact.chunkID])
-        XCTAssertEqual(lineage.documentIDs, [fixture.selectedFact.documentID])
-        XCTAssertEqual(lineage.documentRevisionIDs, [fixture.selectedFact.revisionID])
-        XCTAssertEqual(lineage.authorityIDs, [fixture.selectedAuthorityID])
+        XCTAssertEqual(lineage.sourceSnapshotSHA256, snapshot.fingerprintSHA256)
+        XCTAssertEqual(lineage.facts.map(\.chunkID), [fixture.selectedFact.chunkID])
+        XCTAssertEqual(lineage.facts.map(\.documentID), [fixture.selectedFact.documentID])
+        XCTAssertEqual(lineage.facts.map(\.revisionID), [fixture.selectedFact.revisionID])
+        XCTAssertEqual(lineage.facts.map(\.excerptSHA256), snapshot.facts.map(\.excerptSHA256))
+        XCTAssertEqual(lineage.authorities.map(\.authorityID), [fixture.selectedAuthorityID])
+        XCTAssertEqual(lineage.authorities.map(\.bindingSHA256), snapshot.authorities.map(\.bindingSHA256))
         XCTAssertEqual(lineage.groundKeys, [MotionGroundSpec.failureToStateClaim.key])
-        XCTAssertEqual(lineage.respondingToSHA256, DocumentStorage.sha256Hex(of: Data(fixture.selectedInput.respondingTo.utf8)))
-        XCTAssertEqual(lineage.reliefSoughtSHA256, DocumentStorage.sha256Hex(of: Data(fixture.selectedInput.reliefSought.utf8)))
-        XCTAssertEqual(lineage.modelRepository, "not_applicable")
-        XCTAssertEqual(lineage.modelRevision, "deterministic_assembly")
-        XCTAssertEqual(lineage.definitionVersion, MatterDraftingController.motionDefinitionVersion)
-        XCTAssertEqual(lineage.verifierVersion, MatterDraftingController.motionVerifierVersion)
-        XCTAssertEqual(lineage.verificationStatus, "passed")
+        XCTAssertTrue(isSHA256(lineage.requestSHA256))
+        XCTAssertTrue(isSHA256(lineage.captionSHA256))
+        XCTAssertEqual(lineage.assistantProfileSHA256, snapshot.assistantProfile.valueSHA256)
+        XCTAssertTrue(isSHA256(lineage.effectiveStyleSHA256))
+        XCTAssertEqual(lineage.groundContractIdentity, MotionGroundSpec.contractIdentity)
+        XCTAssertEqual(lineage.assemblerIdentity, MotionToDismiss.assemblerIdentity)
+        XCTAssertEqual(lineage.verifierIdentity, DraftVerifier().identity)
+        XCTAssertEqual(lineage.gateIdentity, PreFileGate.identity)
+        XCTAssertEqual(lineage.rendererIdentity, CompositeRenderer().identity)
+        XCTAssertEqual(lineage.verificationStatus, .passed)
+        XCTAssertTrue(isSHA256(lineage.verificationReceiptSHA256))
         XCTAssertEqual(lineage.outputFileName, artifact.fileURL.lastPathComponent)
+        let output = try Data(contentsOf: artifact.fileURL)
+        XCTAssertEqual(lineage.outputSHA256, DocumentStorage.sha256Hex(of: output))
+        XCTAssertEqual(lineage.outputByteSize, output.count)
         XCTAssertFalse(lineage.outputFileName.contains("/"))
+        for rawSource in [
+            fixture.selectedFact.text,
+            fixture.selectedAuthorityCitation,
+            "SELECTED_AUTHORITY_CANARY",
+            "Pearson Specter Litt",
+        ] {
+            XCTAssertFalse(metadata.contains(rawSource), "audit leaked raw source/profile text")
+        }
+        let keys = Set(try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(metadata.utf8)) as? [String: Any]
+        ).keys)
+        XCTAssertFalse(keys.contains("model_repository"))
+        XCTAssertFalse(keys.contains("model_revision"))
     }
 
     // T-MTD-17 — writer failure preserves a reviewed canary and writes no success audit.
@@ -214,20 +245,18 @@ final class MotionToDismissControllerTests: XCTestCase {
         XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains { $0.eventType == "draft_generated" })
     }
 
-    // T-MTD-18 — a required audit failure restores the preexisting file byte-for-byte.
-    func testTMTD18AuditFailureRestoresCanaryAndReportsFailure() async throws {
+    // T-MTD-18 — expected RED: the motion audit is not coupled to source
+    // revalidation and rollback still assumes replacement semantics.
+    func testTMTD18AuditFailureRemovesOnlyNewExclusiveFileAndReportsFailure() async throws {
         let fixture = try makeFixture()
         let destination = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
             .appendingPathComponent("Motion-to-Dismiss-fixed.docx")
-        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let canary = Data("reviewed-motion-canary".utf8)
-        try canary.write(to: destination)
         var observedMetadata = false
         let controller = MatterDraftingController(
             store: fixture.store,
             storage: fixture.storage,
             fileStampProvider: { "fixed" },
-            auditRecorder: { event in
+            motionAuditCommitter: { event, _ in
                 observedMetadata = event.eventType == "draft_generated" && event.metadataJSON != nil
                 throw InjectedFailure.stop
             }
@@ -236,8 +265,112 @@ final class MotionToDismissControllerTests: XCTestCase {
         let result = await controller.draft(.motionToDismiss(fixture.selectedInput), matterID: fixture.matterID)
         assertFailure(result)
         XCTAssertTrue(observedMetadata)
-        XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains { $0.eventType == "draft_generated" })
+    }
+
+    // T-MTD-19 — expected RED: second-granularity filenames replace an earlier DOCX.
+    func testTMTD19FilenameCollisionPreservesExistingMotionAndCreatesDistinctArtifact() async throws {
+        let fixture = try makeFixture()
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let existing = directory.appendingPathComponent("Motion-to-Dismiss-fixed.docx")
+        let canary = Data("prior-reviewed-motion".utf8)
+        try canary.write(to: existing)
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileStampProvider: { "fixed" }
+        )
+
+        let artifact = try successArtifact(
+            await controller.draft(.motionToDismiss(fixture.selectedInput), matterID: fixture.matterID)
+        )
+
+        XCTAssertEqual(try Data(contentsOf: existing), canary)
+        XCTAssertEqual(artifact.fileURL.lastPathComponent, "Motion-to-Dismiss-fixed-2.docx")
+        XCTAssertNotEqual(artifact.fileURL, existing)
+        try DocumentExportValidator.validate(artifact.fileURL, as: .docx)
+    }
+
+    // T-MTD-20 — expected RED: a profile/source mutation during async verification is
+    // not rechecked in the transaction that inserts the success audit.
+    func testTMTD20DependencyDriftBeforeAuditRollsBackNewFileAndWritesNoAudit() async throws {
+        let fixture = try makeFixture()
+        let store = fixture.store
+        var changedProfile = completeProfile()
+        changedProfile.organization = "Changed After Snapshot LLP"
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileStampProvider: { "drift" },
+            beforeMotionPersistence: {
+                try store.appSettings.setSetting(
+                    AssistantProfile.profileKey,
+                    value: changedProfile
+                )
+            }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        assertFailure(result)
+        try assertNoSuccessfulMotionSideEffects(fixture)
+    }
+
+    // T-MTD-21 — expected RED: jurisdiction currently substitutes for a missing court
+    // and prints "Florida" as though it were a filing court.
+    func testTMTD21MissingExplicitCourtNeverFallsBackToJurisdiction() async throws {
+        let fixture = try makeFixture()
+        try fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE matters SET court = NULL WHERE id = ?",
+                arguments: [fixture.matterID]
+            )
+        }
+        let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        assertFailure(result)
+        try assertNoSuccessfulMotionSideEffects(fixture)
+    }
+
+    // T-MTD-22 — expected RED: assembly currently prefers mutable case_summary over
+    // the exact proposition bytes bound by counsel's reviewed evidence.
+    func testTMTD22AssemblyUsesReviewedExcerptNotMutableCaseSummary() async throws {
+        let fixture = try makeFixture()
+        try fixture.store.authorities.updateCaseSummary(
+            authorityID: fixture.selectedAuthorityID,
+            summary: "UNREVIEWED_SUMMARY_CANARY A motion to dismiss for failure to state a claim tests the legal sufficiency of complaint allegations."
+        )
+        let renderer = CapturingMotionRenderer()
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            pipelineFactory: { DraftPipeline(verifier: DraftVerifier(), renderer: renderer) }
+        )
+
+        _ = try successArtifact(
+            await controller.draft(.motionToDismiss(fixture.selectedInput), matterID: fixture.matterID)
+        )
+
+        let model = try XCTUnwrap(renderer.capturedCourtModel)
+        let bodyText = model.body.map { block -> String in
+            switch block {
+            case let .paragraph(text), let .numberedAllegation(_, text),
+                 let .pointHeading(_, _, text), let .sectionHeading(text):
+                return text
+            }
+        }.joined(separator: "\n")
+        XCTAssertTrue(bodyText.contains("SELECTED_AUTHORITY_CANARY"))
+        XCTAssertFalse(bodyText.contains("UNREVIEWED_SUMMARY_CANARY"))
     }
 
     // T-UI-MTD-06 companion — cancellation after the async verifier boundary cannot persist.
@@ -287,7 +420,7 @@ final class MotionToDismissControllerTests: XCTestCase {
         let selectedAuthorityID: String
         let unselectedAuthorityID: String
         let invalidCitationAuthorityID: String
-        let unsupportedAuthorityID: String
+        let unreviewedAuthorityID: String
         let selectedAuthorityCitation: String
         let selectedInput: MotionToDismissDraftInput
     }
@@ -300,7 +433,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             jurisdiction: "Florida",
             partyPerspective: .defendant,
             court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
-            judge: "CV-G",
+            judge: "Avery Stone",
             docketNumber: "2026-CA-001847"
         )
         let selectedFact = try insertFact(
@@ -357,14 +490,15 @@ final class MotionToDismissControllerTests: XCTestCase {
             citation: "not-a-citation",
             supportText: "A motion to dismiss for failure to state a claim tests legal sufficiency of the complaint allegations."
         )
-        let unsupportedAuthorityID = try insertAuthority(
+        let unreviewedAuthorityID = try insertAuthority(
             store: store,
             matterID: matter.id,
             sessionID: session.id,
             queryID: query.id,
             caseName: "Fictional Discovery Case",
             citation: "Fictional Discovery Case, 347 So. 3d 300, 304 (Fla. 3d DCA 2025)",
-            supportText: "A discovery order may require production of nonprivileged accounting records."
+            supportText: "A discovery order may require production of nonprivileged accounting records.",
+            reviewGround: false
         )
         let storage = DocumentStorage(
             root: FileManager.default.temporaryDirectory
@@ -391,7 +525,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             selectedAuthorityID: selectedAuthorityID,
             unselectedAuthorityID: unselectedAuthorityID,
             invalidCitationAuthorityID: invalidCitationAuthorityID,
-            unsupportedAuthorityID: unsupportedAuthorityID,
+            unreviewedAuthorityID: unreviewedAuthorityID,
             selectedAuthorityCitation: selectedCitation,
             selectedInput: input
         )
@@ -467,7 +601,8 @@ final class MotionToDismissControllerTests: XCTestCase {
         queryID: String,
         caseName: String,
         citation: String,
-        supportText: String
+        supportText: String,
+        reviewGround: Bool = true
     ) throws -> String {
         let result = try store.research.insertResult(ResearchResultRecord(researchQueryID: queryID, caseName: caseName))
         let authority = try store.authorities.insertAuthority(AuthorityRecord(
@@ -484,6 +619,16 @@ final class MotionToDismissControllerTests: XCTestCase {
             opinionText: supportText,
             caseSummary: supportText
         ))
+        if reviewGround {
+            let reviewed = try store.authorities.reviewProposition(
+                authorityID: authority.id,
+                groundKey: .failureToStateClaim,
+                excerpt: supportText,
+                reviewedBy: "synthetic-motion-reviewer",
+                reviewedAt: Date(timeIntervalSince1970: 1_785_513_600)
+            )
+            XCTAssertEqual(reviewed.excerpt, supportText)
+        }
         return authority.id
     }
 
@@ -547,6 +692,27 @@ final class MotionToDismissControllerTests: XCTestCase {
         }
     }
 
+    private func snapshotRequest(for fixture: Fixture) -> MotionDraftSnapshotRequest {
+        MotionDraftSnapshotRequest(
+            matterID: fixture.matterID,
+            factChunkIDs: fixture.selectedInput.selectedFactChunkIDs,
+            authoritySelections: fixture.selectedInput.selectedAuthorityIDs.map {
+                MotionDraftAuthoritySelection(
+                    authorityID: $0,
+                    groundKey: .failureToStateClaim
+                )
+            },
+            assistantProfileSettingKey: AssistantProfile.profileKey,
+            firmStyleProfileSettingKey: FirmStyleProfile.profileKey
+        )
+    }
+
+    private func isSHA256(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            (48...57).contains($0) || (97...102).contains($0)
+        }
+    }
+
     private func assertFailure(
         _ result: Result<MatterDraftingController.DraftArtifact, MatterDraftingController.DraftError>,
         file: StaticString = #filePath,
@@ -584,6 +750,7 @@ final class MotionToDismissControllerTests: XCTestCase {
 }
 
 private final class CapturingMotionRenderer: Renderer, @unchecked Sendable {
+    let identity = DraftComponentIdentity(id: "test.capturing-motion-renderer", version: "1")
     private(set) var renderCount = 0
     private(set) var capturedCourtModel: DocumentModel?
     private(set) var capturedStyle: HouseStyleSheet?
@@ -597,6 +764,8 @@ private final class CapturingMotionRenderer: Renderer, @unchecked Sendable {
 }
 
 private struct BlockingMotionVerifier: Verifier {
+    let identity = DraftComponentIdentity(id: "test.blocking-motion-verifier", version: "1")
+
     func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
         VerificationResult(
             failures: [GateFailure(
@@ -610,6 +779,7 @@ private struct BlockingMotionVerifier: Verifier {
 }
 
 private final class DelayedMotionVerifier: Verifier, @unchecked Sendable {
+    let identity = DraftComponentIdentity(id: "test.delayed-motion-verifier", version: "1")
     let started: XCTestExpectation
 
     init(started: XCTestExpectation) { self.started = started }
@@ -624,6 +794,6 @@ private final class DelayedMotionVerifier: Verifier, @unchecked Sendable {
         } catch {
             XCTFail("unexpected verifier delay error: \(error)")
         }
-        return VerificationResult(failures: [], followUps: [])
+        return await DraftVerifier().verify(unit, kind: kind, style: style)
     }
 }

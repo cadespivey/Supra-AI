@@ -811,6 +811,7 @@ final class MatterDraftingControllerTests: XCTestCase {
 /// dummy bytes — the tests inspect the captured sheet, not the document. `@unchecked Sendable`
 /// is safe here: the render happens on the controller's @MainActor and the test awaits it.
 final class StyleSpyRenderer: Renderer, @unchecked Sendable {
+    let identity = DraftComponentIdentity(id: "test.style-spy-renderer", version: "1")
     private(set) var captured: HouseStyleSheet?
     private(set) var renderCount = 0
     func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {
