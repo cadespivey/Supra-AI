@@ -400,7 +400,11 @@ final class RestoreActivationServiceTests: XCTestCase {
     // sibling managed-blob tree can be omitted from the item offered for preservation.
     func testRecoveryRequiredExposesCompleteSafetyDirectoryForManualPreservation() throws {
         let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
-        let staged = try stage(currentBlobs: [currentBlob])
+        let selectedBlob = RestoreTestBlob("aa/current.bin", "SELECTED BLOB")
+        let staged = try stage(
+            currentBlobs: [currentBlob],
+            selectedBlobs: [selectedBlob]
+        )
         let operations = RecordingRestoreActivationOperations(failures: [.copySafetyBlob])
 
         let result = activate(operations: operations) { _ in
