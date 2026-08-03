@@ -74,6 +74,7 @@ struct MatterAuthoritiesView: View {
         } else {
             List(controller.authorities) { authority in
                 NavigationLink(value: authority.id) { row(authority) }
+                    .accessibilityIdentifier("authorities.row.\(authority.id)")
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) { pendingDelete = authority } label: {
                             Label("Delete", systemImage: "trash")
