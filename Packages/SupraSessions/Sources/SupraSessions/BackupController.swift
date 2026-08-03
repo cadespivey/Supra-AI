@@ -378,54 +378,66 @@ public final class BackupController: ObservableObject {
             launchRestoreResult,
             completedAt: matchingOutcome?.completedAt
         )
-        if appliedActivation,
-           launchRestoreResult?.status != .recoveryRequired
+        var handledLaunchEvidence = false
+        if let launchRestoreResult,
+           launchRestoreResult.status != .noPendingRestore
         {
-            do {
-                try acknowledgeRestoreOutcome()
-            } catch {
-                markRestoreEvidenceAcknowledgementPending()
+            handledLaunchEvidence = true
+            if launchRestoreResult.status != .recoveryRequired {
+                if appliedActivation {
+                    do {
+                        try acknowledgeRestoreOutcome()
+                    } catch {
+                        markRestoreEvidenceAcknowledgementPending()
+                    }
+                } else {
+                    markRestoreEvidenceAcknowledgementPending()
+                }
             }
-        } else if !appliedActivation,
-                  let launchRestoreOutcome,
-                  applyLaunchRestoreOutcome(launchRestoreOutcome)
-        {
+        } else if let launchRestoreOutcome {
+            handledLaunchEvidence = true
+            let appliedOutcome = applyLaunchRestoreOutcome(launchRestoreOutcome)
             if launchRestoreOutcome.status != .recoveryRequired {
+                guard appliedOutcome else {
+                    markRestoreEvidenceAcknowledgementPending()
+                    return
+                }
                 do {
                     try acknowledgeRestoreOutcome()
                 } catch {
                     markRestoreEvidenceAcknowledgementPending()
                 }
             }
-        } else if !appliedActivation, let launchStagingFailure {
-            if let storedStatus,
-               storedStatus.operationID?.lowercased() == launchStagingFailure.operationID,
-               applyLaunchStagingFailure(launchStagingFailure, storedStatus: storedStatus)
-            {
-                do {
-                    try acknowledgeStagingFailure()
-                } catch {
+        }
+        if !handledLaunchEvidence {
+            if let launchStagingFailure {
+                if let storedStatus,
+                   storedStatus.operationID?.lowercased() == launchStagingFailure.operationID,
+                   applyLaunchStagingFailure(launchStagingFailure, storedStatus: storedStatus)
+                {
+                    do {
+                        try acknowledgeStagingFailure()
+                    } catch {
+                        markRestoreEvidenceAcknowledgementPending()
+                    }
+                } else if !restoreEvidenceRequiresAcknowledgement {
                     markRestoreEvidenceAcknowledgementPending()
                 }
-            } else if !restoreEvidenceRequiresAcknowledgement {
-                markRestoreEvidenceAcknowledgementPending()
-            }
-        } else if restoreState == .staging,
-                  let stranded = storedStatus
-        {
-            if (try? cleanupInterruptedStagingOperation(
-                operationID: stranded.operationID
-            )) == true {
-                setRestoreStatus(
-                    .failed,
-                    "Restore staging was interrupted before activation. Inspect and schedule the backup again.",
-                    operationID: stranded.operationID,
-                    snapshotIdentifier: stranded.snapshotIdentifier
-                )
-            } else {
-                markInterruptedRestoreCleanupPending(
-                    "Interrupted restore cleanup could not finish and will retry on the next launch."
-                )
+            } else if restoreState == .staging, let stranded = storedStatus {
+                if (try? cleanupInterruptedStagingOperation(
+                    operationID: stranded.operationID
+                )) == true {
+                    setRestoreStatus(
+                        .failed,
+                        "Restore staging was interrupted before activation. Inspect and schedule the backup again.",
+                        operationID: stranded.operationID,
+                        snapshotIdentifier: stranded.snapshotIdentifier
+                    )
+                } else {
+                    markInterruptedRestoreCleanupPending(
+                        "Interrupted restore cleanup could not finish and will retry on the next launch."
+                    )
+                }
             }
         }
     }
