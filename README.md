@@ -101,7 +101,9 @@ Packages/
 └─ SupraTestKit            Test fixtures / seed corpus
 ```
 
-See [`Docs/Architecture/`](Docs/Architecture/) for dependency and runtime-file-access notes.
+See [`Docs/Architecture/`](Docs/Architecture/) for dependency and runtime-file-access notes, and
+[Backup and restore](Docs/Backup-and-Restore.md) for the user-facing recovery workflow and safety
+boundaries.
 
 ## Requirements
 

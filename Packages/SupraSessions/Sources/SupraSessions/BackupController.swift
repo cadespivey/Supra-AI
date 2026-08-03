@@ -129,6 +129,86 @@ public enum LaunchBackupOutcome: Equatable, Sendable {
     case failed
 }
 
+/// Restore's durable, display-safe state machine. Staging is intentionally the
+/// final live-process state: activation is permitted only at the next cold start.
+public enum RestoreControllerState: String, Codable, Equatable, Sendable {
+    case idle
+    case inspecting
+    case ready
+    case incompatible
+    case staging
+    case stagedRestartRequired
+    case succeeded
+    case failed
+    case failedAndRolledBack
+    case recoveryRequired
+    case needsDestinationRepick
+}
+
+/// Content-free restore status persisted in `app_settings`. It deliberately
+/// contains no filesystem URL, matter/document name, or user-provided content.
+public struct RestoreStatusRecord: Codable, Equatable, Sendable {
+    public let state: RestoreControllerState
+    public let message: String
+    public let operationID: String?
+    public let snapshotIdentifier: String?
+    public let updatedAt: Date
+
+    public init(
+        state: RestoreControllerState,
+        message: String,
+        operationID: String? = nil,
+        snapshotIdentifier: String? = nil,
+        updatedAt: Date
+    ) {
+        self.state = state
+        self.message = message
+        self.operationID = operationID
+        self.snapshotIdentifier = snapshotIdentifier
+        self.updatedAt = updatedAt
+    }
+}
+
+/// One inspected snapshot as exposed to Settings. Source URLs and hashes stay
+/// private to the controller so accessibility and logs cannot leak paths.
+public struct RestoreSnapshotListItem: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let createdAt: Date?
+    public let appVersion: String?
+    public let appBuild: String?
+    public let databaseBytes: Int?
+    public let referencedBlobCount: Int?
+    public let incompatibility: RestoreIncompatibility?
+
+    public var isRestorable: Bool { incompatibility == nil }
+    public var blockedReason: String? { incompatibility?.localizedDescription }
+}
+
+/// The facts shown immediately before the destructive confirmation. This is a
+/// display model only; an internal hash/manifest identity is frozen separately.
+public struct RestoreConfirmation: Equatable, Sendable {
+    public let snapshotIdentifier: String
+    public let createdAt: Date
+    public let appVersion: String
+    public let appBuild: String
+    public let databaseBytes: Int
+    public let referencedBlobCount: Int
+}
+
+/// Minimal result returned across the controller's injectable staging boundary.
+/// Core staging URLs remain private to `RestoreService`.
+public struct RestoreStageSummary: Equatable, Sendable {
+    public let operationID: String
+    public let snapshotIdentifier: String
+    public let stagedAt: Date
+
+    public init(operationID: String, snapshotIdentifier: String, stagedAt: Date) {
+        self.operationID = operationID
+        self.snapshotIdentifier = snapshotIdentifier
+        self.stagedAt = stagedAt
+    }
+}
+
 /// P2 app-facing backup orchestration: persisted destination, manual runs,
 /// on-launch-if-stale scheduling, and user-facing health state. The package layer
 /// owns no panel or UI; Settings only mints the bookmark and renders this state.
@@ -137,8 +217,19 @@ public final class BackupController: ObservableObject {
     public typealias BackupRunner = @MainActor (URL) async throws -> BackupRunSummary
     public typealias DestinationFactory = @MainActor (Data) -> any BackupDestination
     public typealias SourceSizeProvider = @MainActor () async -> Int64
+    public typealias RestoreInspector = @MainActor (URL) async throws -> [RestoreSnapshotCandidate]
+    public typealias RestoreRunner = @MainActor (
+        RestoreSnapshotCandidate,
+        RestoreLiveLayout,
+        UUID,
+        Date
+    ) async throws -> RestoreStageSummary
+    public typealias RestoreOperationIDProvider = @MainActor () -> UUID
+    public typealias ProcessExitRequester = @MainActor () -> Void
+    public typealias RestoreEvidenceAcknowledger = @MainActor () throws -> Void
 
     public static let storageKey = "backup.configuration.v1"
+    public static let restoreStatusStorageKey = "restore.status.v1"
     public static let staleInterval: TimeInterval = 24 * 60 * 60
     public static let firstBackupWarningBytes: Int64 = 5 * 1_024 * 1_024 * 1_024
 
@@ -146,12 +237,32 @@ public final class BackupController: ObservableObject {
     @Published public private(set) var state: BackupControllerState
     @Published public private(set) var statusMessage: String?
     @Published public private(set) var estimatedSourceBytes: Int64 = 0
+    @Published public private(set) var restoreSnapshots: [RestoreSnapshotListItem] = []
+    @Published public private(set) var selectedRestoreSnapshotID: String?
+    @Published public private(set) var restoreConfirmation: RestoreConfirmation?
+    @Published public private(set) var restoreState: RestoreControllerState = .idle
+    @Published public private(set) var restoreStatusMessage: String?
+    /// Once true, the live controller/store graph must never be used for work
+    /// again. The application replaces its shell and exits after staging returns.
+    @Published public private(set) var restoreProcessIsTerminal = false
+    /// A terminal sidecar that could not be acknowledged remains a launch-time
+    /// reconciliation key. New backup/restore work stays closed until relaunch
+    /// retries that acknowledgement.
+    @Published public private(set) var restoreEvidenceRequiresAcknowledgement = false
 
     private let store: SupraStore
     private let destinationFactory: DestinationFactory
     private let backupRunner: BackupRunner
     private let sourceSizeProvider: SourceSizeProvider
+    private let restoreLiveLayout: RestoreLiveLayout?
+    private let restoreInspector: RestoreInspector
+    private let restoreRunner: RestoreRunner
+    private let restoreOperationIDProvider: RestoreOperationIDProvider
+    private let requestProcessExit: ProcessExitRequester
     private let now: @MainActor () -> Date
+    private var restoreCandidates: [String: RestoreSnapshotCandidate] = [:]
+    private var confirmedRestoreIdentity: RestoreSnapshotIdentity?
+    private var activeOperation: ActiveOperation?
 
     public init(
         store: SupraStore,
@@ -161,6 +272,16 @@ public final class BackupController: ObservableObject {
         destinationFactory: DestinationFactory? = nil,
         backupRunner: BackupRunner? = nil,
         sourceSizeProvider: SourceSizeProvider? = nil,
+        restoreLiveLayout: RestoreLiveLayout? = nil,
+        restoreInspector: RestoreInspector? = nil,
+        restoreRunner: RestoreRunner? = nil,
+        restoreOperationIDProvider: @escaping RestoreOperationIDProvider = { UUID() },
+        requestProcessExit: @escaping ProcessExitRequester = {},
+        launchRestoreResult: RestoreActivationResult? = nil,
+        launchRestoreOutcome: RestoreOutcomeRecord? = nil,
+        launchStagingFailure: RestoreStagingFailureRecord? = nil,
+        acknowledgeRestoreOutcome: RestoreEvidenceAcknowledger = {},
+        acknowledgeStagingFailure: RestoreEvidenceAcknowledger = {},
         now: @escaping @MainActor () -> Date = { Date() }
     ) {
         self.store = store
@@ -189,6 +310,39 @@ public final class BackupController: ObservableObject {
                 Self.directoryByteCount(at: blobsDirectory)
             }.value
         }
+        self.restoreLiveLayout = restoreLiveLayout
+        self.restoreInspector = restoreInspector ?? { destination in
+            try await Task.detached(priority: .utility) {
+                try RestoreSnapshotInspector.discover(in: destination)
+            }.value
+        }
+        self.restoreRunner = restoreRunner ?? { candidate, layout, operationID, scheduledAt in
+            try await Task.detached(priority: .utility) {
+                do {
+                    let staged = try RestoreService.stageQuiescedRestore(
+                        candidate: candidate,
+                        liveDatabase: store.database,
+                        liveLayout: layout,
+                        operationID: operationID,
+                        now: { scheduledAt }
+                    )
+                    return RestoreStageSummary(
+                        operationID: staged.intent.operationID,
+                        snapshotIdentifier: staged.intent.selectedSnapshotIdentifier,
+                        stagedAt: staged.intent.createdAt
+                    )
+                } catch {
+                    _ = try? RestoreSidecarStore.recordStagingFailure(
+                        operationID: operationID,
+                        reason: Self.stagingFailureReason(for: error),
+                        stagingRootDirectory: layout.stagingRootDirectory
+                    )
+                    throw error
+                }
+            }.value
+        }
+        self.restoreOperationIDProvider = restoreOperationIDProvider
+        self.requestProcessExit = requestProcessExit
         self.now = now
 
         let stored = try? store.appSettings.getSetting(Self.storageKey, as: BackupConfiguration.self)
@@ -206,10 +360,107 @@ public final class BackupController: ObservableObject {
             self.state = .unconfigured
             self.statusMessage = "Choose a backup folder to get started."
         }
+
+        let storedStatus = try? store.appSettings.getSetting(
+            Self.restoreStatusStorageKey,
+            as: RestoreStatusRecord.self
+        )
+        if let storedStatus {
+            self.restoreState = storedStatus.state
+            self.restoreStatusMessage = storedStatus.message
+            self.selectedRestoreSnapshotID = storedStatus.snapshotIdentifier
+        } else if stored?.requiresDestinationRepick == true {
+            self.restoreState = .needsDestinationRepick
+            self.restoreStatusMessage = stored?.lastErrorDescription
+        }
+        let matchingOutcome = launchRestoreOutcome.flatMap { outcome in
+            Self.outcome(outcome, matches: launchRestoreResult) ? outcome : nil
+        }
+        let launchEvidenceConflicts = launchRestoreResult.map { result in
+            result.status != .noPendingRestore
+                && launchRestoreOutcome != nil
+                && matchingOutcome == nil
+        } ?? false
+        let appliedActivation = launchEvidenceConflicts ? false : applyLaunchRestoreResult(
+            launchRestoreResult,
+            completedAt: matchingOutcome?.completedAt
+        )
+        var handledLaunchEvidence = false
+        if let launchRestoreResult,
+           launchRestoreResult.status != .noPendingRestore
+        {
+            handledLaunchEvidence = true
+            if launchEvidenceConflicts {
+                markRestoreEvidenceAcknowledgementPending()
+            } else if launchRestoreResult.status != .recoveryRequired {
+                if appliedActivation {
+                    do {
+                        try acknowledgeRestoreOutcome()
+                    } catch {
+                        markRestoreEvidenceAcknowledgementPending()
+                    }
+                } else {
+                    markRestoreEvidenceAcknowledgementPending()
+                }
+            }
+        } else if let launchRestoreOutcome {
+            handledLaunchEvidence = true
+            let appliedOutcome = applyLaunchRestoreOutcome(launchRestoreOutcome)
+            if launchRestoreOutcome.status != .recoveryRequired {
+                guard appliedOutcome else {
+                    markRestoreEvidenceAcknowledgementPending()
+                    return
+                }
+                do {
+                    try acknowledgeRestoreOutcome()
+                } catch {
+                    markRestoreEvidenceAcknowledgementPending()
+                }
+            }
+        }
+        if !handledLaunchEvidence {
+            if let launchStagingFailure {
+                if let storedStatus,
+                   storedStatus.operationID?.lowercased() == launchStagingFailure.operationID,
+                   applyLaunchStagingFailure(launchStagingFailure, storedStatus: storedStatus)
+                {
+                    do {
+                        try acknowledgeStagingFailure()
+                    } catch {
+                        markRestoreEvidenceAcknowledgementPending()
+                    }
+                } else if !restoreEvidenceRequiresAcknowledgement {
+                    markRestoreEvidenceAcknowledgementPending()
+                }
+            } else if restoreState == .staging, let stranded = storedStatus {
+                if (try? cleanupInterruptedStagingOperation(
+                    operationID: stranded.operationID
+                )) == true {
+                    setRestoreStatus(
+                        .failed,
+                        "Restore staging was interrupted before activation. Inspect and schedule the backup again.",
+                        operationID: stranded.operationID,
+                        snapshotIdentifier: stranded.snapshotIdentifier
+                    )
+                } else {
+                    markInterruptedRestoreCleanupPending(
+                        "Interrupted restore cleanup could not finish and will retry on the next launch."
+                    )
+                }
+            }
+        }
     }
 
     public var hasDestination: Bool { configuration != nil }
     public var isBackingUp: Bool { state == .backingUp }
+    public var isRestoreBusy: Bool { restoreState == .inspecting || restoreState == .staging }
+    public var isAnyBackupOperationBusy: Bool {
+        activeOperation != nil
+            || requiresRestartForRestore
+            || restoreProcessIsTerminal
+            || restoreEvidenceRequiresAcknowledgement
+    }
+    public var requiresRestartForRestore: Bool { restoreState == .stagedRestartRequired }
     public var destinationPath: String? { configuration?.destinationPath }
     public var destinationIsICloudDrive: Bool { configuration?.isICloudDrive == true }
     public var lastSuccessAt: Date? { configuration?.lastSuccessAt }
@@ -231,6 +482,7 @@ public final class BackupController: ObservableObject {
     /// reset because the new folder has not received any backup yet.
     @discardableResult
     public func configureDestination(bookmarkData: Data, url: URL) -> Bool {
+        guard !isAnyBackupOperationBusy else { return false }
         let candidate = BackupConfiguration(
             bookmarkData: bookmarkData,
             destinationPath: url.path,
@@ -241,6 +493,8 @@ public final class BackupController: ObservableObject {
             configuration = candidate
             state = .ready
             statusMessage = nil
+            resetRestoreSelection()
+            setRestoreStatus(.idle, "Inspect this folder to choose a completed backup.")
             return true
         } catch {
             state = .failed
@@ -250,6 +504,10 @@ public final class BackupController: ObservableObject {
     }
 
     public func reportDestinationSelectionFailure(_ message: String) {
+        guard !isAnyBackupOperationBusy else {
+            statusMessage = message
+            return
+        }
         state = configuration == nil ? .unconfigured : .failed
         statusMessage = message
     }
@@ -263,7 +521,9 @@ public final class BackupController: ObservableObject {
             statusMessage = "Choose a backup folder to get started."
             return false
         }
-        guard state != .backingUp else { return false }
+        guard !isAnyBackupOperationBusy else { return false }
+        activeOperation = .backup
+        defer { activeOperation = nil }
 
         let attemptDate = now()
         current.lastAttemptAt = attemptDate
@@ -329,6 +589,198 @@ public final class BackupController: ObservableObject {
         estimatedSourceBytes = max(0, await sourceSizeProvider())
     }
 
+    /// Inspects every manifest-backed snapshot while the destination's security
+    /// scope is held. Invalid candidates remain visible with a typed reason.
+    @discardableResult
+    public func inspectRestoreSnapshots() async -> Bool {
+        guard !restoreProcessIsTerminal,
+              !restoreEvidenceRequiresAcknowledgement
+        else { return false }
+        guard let current = configuration else {
+            setRestoreStatus(.idle, "Choose a backup folder before inspecting snapshots.")
+            return false
+        }
+        guard !requiresRestartForRestore else { return false }
+        guard activeOperation == nil else {
+            setRestoreStatus(.failed, "Wait for the current backup or restore operation to finish.")
+            return false
+        }
+        activeOperation = .restoreInspection
+        defer { activeOperation = nil }
+        resetRestoreSelection()
+        restoreState = .inspecting
+        restoreStatusMessage = "Inspecting completed backup snapshots…"
+
+        do {
+            let destination = destinationFactory(current.bookmarkData)
+            let candidates = try await destination.withAccess { url in
+                try await restoreInspector(url)
+            }
+            restoreCandidates = Dictionary(
+                uniqueKeysWithValues: candidates.map { ($0.identifier, $0) }
+            )
+            restoreSnapshots = candidates.map(Self.displayItem)
+            if candidates.isEmpty {
+                setRestoreStatus(.idle, "No completed backup snapshots were found in this folder.")
+            } else if candidates.contains(where: \.isRestorable) {
+                setRestoreStatus(.ready, "Select a verified snapshot to review the restore.")
+            } else {
+                setRestoreStatus(.incompatible, "No compatible backup snapshot is available.")
+            }
+            return true
+        } catch {
+            handleRestoreFailure(error, phase: .inspection)
+            return false
+        }
+    }
+
+    /// Invalid rows fail closed even if invoked outside SwiftUI's disabled state.
+    @discardableResult
+    public func selectRestoreSnapshot(id: String) -> Bool {
+        guard !restoreProcessIsTerminal,
+              !restoreEvidenceRequiresAcknowledgement,
+              !requiresRestartForRestore,
+              activeOperation == nil,
+              let candidate = restoreCandidates[id],
+              candidate.isRestorable,
+              candidate.summary != nil
+        else { return false }
+        selectedRestoreSnapshotID = id
+        restoreConfirmation = nil
+        confirmedRestoreIdentity = nil
+        setRestoreStatus(.ready, "Selected backup \(id). Review the replacement before staging.")
+        return true
+    }
+
+    /// Freezes both the visible facts and the exact inspected manifest/hash/blob
+    /// identity. Staging independently re-inspects before trusting this choice.
+    @discardableResult
+    public func prepareRestoreConfirmation() -> Bool {
+        guard !restoreProcessIsTerminal,
+              !restoreEvidenceRequiresAcknowledgement,
+              !requiresRestartForRestore,
+              activeOperation == nil,
+              let id = selectedRestoreSnapshotID,
+              let candidate = restoreCandidates[id],
+              candidate.isRestorable,
+              let summary = candidate.summary
+        else { return false }
+        restoreConfirmation = RestoreConfirmation(
+            snapshotIdentifier: candidate.identifier,
+            createdAt: summary.createdAt,
+            appVersion: summary.appVersion,
+            appBuild: summary.appBuild,
+            databaseBytes: summary.databaseBytes,
+            referencedBlobCount: summary.referencedBlobCount
+        )
+        confirmedRestoreIdentity = RestoreSnapshotIdentity(candidate)
+        return true
+    }
+
+    public func cancelRestoreConfirmation() {
+        guard !restoreProcessIsTerminal,
+              !restoreEvidenceRequiresAcknowledgement
+        else { return }
+        restoreConfirmation = nil
+        confirmedRestoreIdentity = nil
+    }
+
+    /// Persists a content-free schedule, then crosses the terminal staging
+    /// boundary. The runner owns writer quiescence and this process always exits
+    /// after that boundary is invoked, whether staging succeeds or fails.
+    @discardableResult
+    public func stageConfirmedRestore() async -> Bool {
+        guard !restoreProcessIsTerminal,
+              !restoreEvidenceRequiresAcknowledgement,
+              !requiresRestartForRestore
+        else { return false }
+        guard activeOperation == nil else {
+            setRestoreStatus(.failed, "Wait for the current backup or restore operation to finish.")
+            return false
+        }
+        guard let current = configuration,
+              let layout = restoreLiveLayout,
+              let confirmation = restoreConfirmation,
+              let confirmedIdentity = confirmedRestoreIdentity
+        else {
+            setRestoreStatus(.failed, "Review and confirm a compatible snapshot before staging restore.")
+            return false
+        }
+        activeOperation = .restoreStaging
+        var runnerWasInvoked = false
+        var scheduledOperationID: UUID?
+        var scheduledTimestamp: Date?
+        defer {
+            activeOperation = nil
+            if runnerWasInvoked { requestProcessExit() }
+        }
+        restoreState = .staging
+        restoreStatusMessage = "Creating a safety copy and staging the selected backup…"
+
+        do {
+            let destination = destinationFactory(current.bookmarkData)
+            let summary = try await destination.withAccess { url in
+                let refreshed = try await restoreInspector(url)
+                guard let candidate = refreshed.first(where: {
+                    $0.identifier == confirmation.snapshotIdentifier
+                }), candidate.isRestorable,
+                    RestoreSnapshotIdentity(candidate) == confirmedIdentity
+                else { throw RestoreControllerError.snapshotChanged }
+
+                let operationID = restoreOperationIDProvider()
+                scheduledOperationID = operationID
+                let operationIDString = operationID.uuidString
+                let scheduledAt = Date(
+                    timeIntervalSince1970: floor(now().timeIntervalSince1970)
+                )
+                scheduledTimestamp = scheduledAt
+                let scheduleMessage = "Restore scheduled. Supra AI is finishing safely and will quit automatically."
+                try persistRestoreStatus(
+                    .staging,
+                    scheduleMessage,
+                    operationID: operationIDString,
+                    snapshotIdentifier: candidate.identifier,
+                    updatedAt: scheduledAt
+                )
+                try recordRestoreAuditOrThrow(
+                    eventType: "restore_scheduled",
+                    summary: "Restore scheduled for quiesced cold-start activation.",
+                    operationID: operationIDString,
+                    snapshotIdentifier: candidate.identifier,
+                    state: .staging,
+                    occurredAt: scheduledAt
+                )
+                restoreConfirmation = nil
+                confirmedRestoreIdentity = nil
+                restoreProcessIsTerminal = true
+                runnerWasInvoked = true
+                return try await restoreRunner(candidate, layout, operationID, scheduledAt)
+            }
+            guard summary.snapshotIdentifier == confirmation.snapshotIdentifier,
+                  UUID(uuidString: summary.operationID) == scheduledOperationID,
+                  summary.stagedAt == scheduledTimestamp
+            else { throw RestoreControllerError.invalidStageResult }
+
+            setRestorePresentation(
+                .stagedRestartRequired,
+                "Restore staged. Supra AI is quitting now and will activate it on the next launch."
+            )
+            return true
+        } catch {
+            restoreConfirmation = nil
+            confirmedRestoreIdentity = nil
+            if runnerWasInvoked {
+                setRestorePresentation(
+                    .failed,
+                    "Restore staging did not finish. Supra AI will quit; the live data was not replaced."
+                )
+            } else {
+                handleRestoreFailure(error, phase: .staging)
+            }
+            return false
+        }
+    }
+
     private func persistBestEffort(_ configuration: BackupConfiguration) {
         do {
             try store.appSettings.setSetting(Self.storageKey, value: configuration)
@@ -337,11 +789,400 @@ public final class BackupController: ObservableObject {
         }
     }
 
+    @discardableResult
+    private func applyLaunchRestoreResult(
+        _ result: RestoreActivationResult?,
+        completedAt: Date?
+    ) -> Bool {
+        guard let result, result.status != .noPendingRestore else { return false }
+        return applyLaunchRestoreEvidence(
+            status: result.status,
+            operationID: result.operationID,
+            snapshotIdentifier: result.snapshotIdentifier,
+            scheduledAt: result.scheduledAt,
+            activationFailure: result.activationFailure,
+            rollbackFailure: result.rollbackFailure,
+            completedAt: completedAt
+        )
+    }
+
+    @discardableResult
+    private func applyLaunchRestoreOutcome(_ outcome: RestoreOutcomeRecord) -> Bool {
+        applyLaunchRestoreEvidence(
+            status: outcome.status,
+            operationID: outcome.operationID,
+            snapshotIdentifier: outcome.snapshotIdentifier,
+            scheduledAt: outcome.schemaVersion >= 2 ? outcome.scheduledAt : nil,
+            activationFailure: outcome.activationFailure,
+            rollbackFailure: outcome.rollbackFailure,
+            completedAt: outcome.completedAt
+        )
+    }
+
+    @discardableResult
+    private func applyLaunchRestoreEvidence(
+        status: RestoreActivationStatus,
+        operationID: String?,
+        snapshotIdentifier: String?,
+        scheduledAt: Date?,
+        activationFailure: RestoreActivationFailure?,
+        rollbackFailure: RestoreActivationFailure?,
+        completedAt: Date?
+    ) -> Bool {
+        let schedulingAuditAt = status == .activated ? scheduledAt : nil
+        let state: RestoreControllerState
+        let message: String
+        let eventType: String
+        switch status {
+        case .activated:
+            state = .succeeded
+            message = "Restore complete. The selected backup is now active."
+            eventType = "restore_activated"
+        case .failedAndRolledBack:
+            state = .failedAndRolledBack
+            message = "Restore failed, and Supra AI returned to the verified pre-restore data."
+            eventType = "restore_failed_rolled_back"
+        case .recoveryRequired:
+            state = .recoveryRequired
+            message = "Restore recovery is required before normal work can continue."
+            eventType = "restore_recovery_required"
+        case .noPendingRestore:
+            return false
+        }
+        do {
+            try persistRestoreStatus(
+                state,
+                message,
+                operationID: operationID,
+                snapshotIdentifier: snapshotIdentifier,
+                updatedAt: completedAt
+            )
+            if status == .activated, let schedulingAuditAt {
+                try recordRestoreAuditOrThrow(
+                    eventType: "restore_scheduled",
+                    summary: "Restore scheduled for quiesced cold-start activation.",
+                    operationID: operationID,
+                    snapshotIdentifier: snapshotIdentifier,
+                    state: .staging,
+                    occurredAt: schedulingAuditAt
+                )
+            }
+            if status != .recoveryRequired {
+                try recordRestoreAuditOrThrow(
+                    eventType: eventType,
+                    summary: message,
+                    operationID: operationID,
+                    snapshotIdentifier: snapshotIdentifier,
+                    state: state,
+                    activationFailure: activationFailure,
+                    rollbackFailure: rollbackFailure,
+                    occurredAt: completedAt
+                )
+            }
+            return true
+        } catch {
+            setRestorePresentation(state, message)
+            return false
+        }
+    }
+
+    @discardableResult
+    private func applyLaunchStagingFailure(
+        _ failure: RestoreStagingFailureRecord,
+        storedStatus: RestoreStatusRecord
+    ) -> Bool {
+        let message: String
+        switch failure.reason {
+        case .liveDatabasePathMismatch:
+            message = "Restore staging stopped because the active database did not match the live restore location. The live data was not replaced."
+        case .liveDatabaseCloseFailed:
+            message = "Restore staging stopped because the live database could not close safely. The live data was not replaced."
+        case .selectedSnapshotUnavailable, .selectedSnapshotChanged, .selectedSnapshotIncompatible:
+            message = "Restore staging stopped because the selected backup was no longer the verified snapshot. Inspect and schedule it again."
+        case .liveStateInvalid:
+            message = "Restore staging stopped because the current data could not be verified for rollback. The live data was not replaced."
+        case .stagingVolumeMismatch:
+            message = "Restore staging stopped because its safety files were not on the live database disk. The live data was not replaced."
+        case .copiedStateInvalid, .stagingIOFailed:
+            message = "Restore staging did not finish safely. The live data was not replaced."
+        }
+        let isInitialReplay = storedStatus.state == .staging
+        let isAcknowledgementRetry = storedStatus.state == .failed
+            && storedStatus.message == message
+            && storedStatus.updatedAt == failure.failedAt
+        guard isInitialReplay || isAcknowledgementRetry else { return false }
+        do {
+            guard try cleanupInterruptedStagingOperation(operationID: failure.operationID) else {
+                markInterruptedRestoreCleanupPending(
+                    "Interrupted restore cleanup could not finish and will retry on the next launch."
+                )
+                return false
+            }
+        } catch {
+            markInterruptedRestoreCleanupPending(
+                "Interrupted restore cleanup could not finish and will retry on the next launch."
+            )
+            return false
+        }
+        do {
+            try persistRestoreStatus(
+                .failed,
+                message,
+                operationID: failure.operationID,
+                snapshotIdentifier: storedStatus.snapshotIdentifier,
+                updatedAt: failure.failedAt
+            )
+            try recordRestoreAuditOrThrow(
+                eventType: "restore_staging_failed",
+                summary: message,
+                operationID: failure.operationID,
+                snapshotIdentifier: storedStatus.snapshotIdentifier,
+                state: .failed,
+                stagingFailure: failure.reason,
+                occurredAt: failure.failedAt
+            )
+            return true
+        } catch {
+            setRestorePresentation(.failed, message)
+            return false
+        }
+    }
+
+    private func handleRestoreFailure(_ error: Error, phase: RestoreFailurePhase) {
+        if let destinationError = error as? BackupDestinationError {
+            markDestinationForRepick(destinationError)
+            setRestoreStatus(.needsDestinationRepick, destinationError.localizedDescription)
+            return
+        }
+        let message: String
+        switch error {
+        case RestoreControllerError.snapshotChanged,
+             RestoreStageError.sourceSnapshotChanged,
+             RestoreStageError.sourceSnapshotUnavailable:
+            message = "The selected backup changed after inspection. Inspect and select it again."
+        case let stageError as RestoreStageError:
+            message = "Restore could not be staged. \(stageError.localizedDescription)"
+        default:
+            message = phase == .inspection
+                ? "Backup snapshots could not be inspected. The saved folder and current data were not changed."
+                : "Restore could not be staged. The current data was not changed."
+        }
+        setRestoreStatus(.failed, message)
+    }
+
+    private func markDestinationForRepick(_ error: BackupDestinationError) {
+        guard var current = configuration else { return }
+        current.requiresDestinationRepick = true
+        current.lastErrorDescription = error.localizedDescription
+        configuration = current
+        state = .needsDestinationRepick
+        statusMessage = current.lastErrorDescription
+        persistBestEffort(current)
+    }
+
+    private func setRestoreStatus(
+        _ newState: RestoreControllerState,
+        _ message: String,
+        operationID: String? = nil,
+        snapshotIdentifier: String? = nil,
+        updatedAt: Date? = nil
+    ) {
+        do {
+            try persistRestoreStatus(
+                newState,
+                message,
+                operationID: operationID,
+                snapshotIdentifier: snapshotIdentifier,
+                updatedAt: updatedAt
+            )
+        } catch {
+            setRestorePresentation(newState, message)
+        }
+    }
+
+    private func persistRestoreStatus(
+        _ newState: RestoreControllerState,
+        _ message: String,
+        operationID: String? = nil,
+        snapshotIdentifier: String? = nil,
+        updatedAt: Date? = nil
+    ) throws {
+        let record = RestoreStatusRecord(
+            state: newState,
+            message: message,
+            operationID: operationID,
+            snapshotIdentifier: snapshotIdentifier,
+            updatedAt: updatedAt ?? now()
+        )
+        try store.appSettings.setSetting(Self.restoreStatusStorageKey, value: record)
+        setRestorePresentation(newState, message)
+    }
+
+    private func setRestorePresentation(
+        _ newState: RestoreControllerState,
+        _ message: String
+    ) {
+        restoreState = newState
+        restoreStatusMessage = message
+    }
+
+    private func markRestoreEvidenceAcknowledgementPending() {
+        restoreEvidenceRequiresAcknowledgement = true
+        restoreStatusMessage = "Restore finished, but its recovery evidence could not be finalized. Quit and reopen Supra AI to retry before starting another backup or restore."
+    }
+
+    private func markInterruptedRestoreCleanupPending(_ message: String) {
+        restoreEvidenceRequiresAcknowledgement = true
+        setRestorePresentation(.failed, message)
+    }
+
+    private func resetRestoreSelection() {
+        restoreCandidates = [:]
+        restoreSnapshots = []
+        selectedRestoreSnapshotID = nil
+        restoreConfirmation = nil
+        confirmedRestoreIdentity = nil
+    }
+
+    @discardableResult
+    private func cleanupInterruptedStagingOperation(operationID: String?) throws -> Bool {
+        guard let restoreLiveLayout,
+              let operationID,
+              let identifier = UUID(uuidString: operationID)
+        else { return false }
+        return try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: identifier,
+            stagingRootDirectory: restoreLiveLayout.stagingRootDirectory
+        )
+    }
+
+    private func recordRestoreAudit(
+        eventType: String,
+        summary: String,
+        operationID: String?,
+        snapshotIdentifier: String?,
+        state: RestoreControllerState,
+        activationFailure: RestoreActivationFailure? = nil,
+        rollbackFailure: RestoreActivationFailure? = nil,
+        stagingFailure: RestoreStagingFailureReason? = nil,
+        occurredAt: Date? = nil
+    ) {
+        try? recordRestoreAuditOrThrow(
+            eventType: eventType,
+            summary: summary,
+            operationID: operationID,
+            snapshotIdentifier: snapshotIdentifier,
+            state: state,
+            activationFailure: activationFailure,
+            rollbackFailure: rollbackFailure,
+            stagingFailure: stagingFailure,
+            occurredAt: occurredAt
+        )
+    }
+
+    private func recordRestoreAuditOrThrow(
+        eventType: String,
+        summary: String,
+        operationID: String?,
+        snapshotIdentifier: String?,
+        state: RestoreControllerState,
+        activationFailure: RestoreActivationFailure? = nil,
+        rollbackFailure: RestoreActivationFailure? = nil,
+        stagingFailure: RestoreStagingFailureReason? = nil,
+        occurredAt: Date? = nil
+    ) throws {
+        if let operationID,
+           try store.auditEvents.fetchEvents(
+               relatedTable: "backup_snapshots",
+               relatedID: snapshotIdentifier ?? "unknown",
+               eventType: eventType
+           ).contains(where: {
+               $0.metadataJSON?.lowercased().contains(operationID.lowercased()) == true
+           })
+        {
+            return
+        }
+        let metadata = RestoreAuditMetadata(
+            schemaVersion: 1,
+            operationID: operationID,
+            snapshotIdentifier: snapshotIdentifier,
+            state: state.rawValue,
+            activationFailure: activationFailure?.rawValue,
+            rollbackFailure: rollbackFailure?.rawValue,
+            stagingFailure: stagingFailure?.rawValue
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let metadataJSON = (try? encoder.encode(metadata)).map {
+            String(decoding: $0, as: UTF8.self)
+        }
+        _ = try store.auditEvents.recordEvent(AuditEventRecord(
+            timestamp: occurredAt ?? now(),
+            eventType: eventType,
+            actor: "user",
+            summary: summary,
+            relatedTable: "backup_snapshots",
+            relatedID: snapshotIdentifier ?? "unknown",
+            metadataJSON: metadataJSON
+        ))
+    }
+
+    private static func outcome(
+        _ outcome: RestoreOutcomeRecord,
+        matches result: RestoreActivationResult?
+    ) -> Bool {
+        guard let result, result.status != .noPendingRestore else { return false }
+        return outcome.status == result.status
+            && outcome.operationID == result.operationID
+            && outcome.snapshotIdentifier == result.snapshotIdentifier
+            && outcome.scheduledAt == result.scheduledAt
+            && outcome.activationFailure == result.activationFailure
+            && outcome.rollbackFailure == result.rollbackFailure
+    }
+
+    private static func displayItem(_ candidate: RestoreSnapshotCandidate) -> RestoreSnapshotListItem {
+        RestoreSnapshotListItem(
+            id: candidate.identifier,
+            createdAt: candidate.summary?.createdAt,
+            appVersion: candidate.summary?.appVersion,
+            appBuild: candidate.summary?.appBuild,
+            databaseBytes: candidate.summary?.databaseBytes,
+            referencedBlobCount: candidate.summary?.referencedBlobCount,
+            incompatibility: candidate.incompatibility
+        )
+    }
+
     private static func failureMessage(for error: Error) -> String {
         if let destinationError = error as? BackupDestinationError {
             return destinationError.localizedDescription
         }
         return "Backup failed. \(error.localizedDescription)"
+    }
+
+    nonisolated private static func stagingFailureReason(
+        for error: Error
+    ) -> RestoreStagingFailureReason {
+        guard let error = error as? RestoreStageError else { return .stagingIOFailed }
+        switch error {
+        case .liveDatabasePathMismatch:
+            return .liveDatabasePathMismatch
+        case .liveDatabaseCloseFailed:
+            return .liveDatabaseCloseFailed
+        case .sourceSnapshotUnavailable:
+            return .selectedSnapshotUnavailable
+        case .sourceSnapshotChanged:
+            return .selectedSnapshotChanged
+        case .sourceSnapshotIncompatible:
+            return .selectedSnapshotIncompatible
+        case .liveDatabaseMissing, .liveStateIncompatible:
+            return .liveStateInvalid
+        case .stagingVolumeMismatch:
+            return .stagingVolumeMismatch
+        case .copiedSafetyStateMismatch, .copiedSelectedStateMismatch:
+            return .copiedStateInvalid
+        case .restoreAlreadyPending:
+            return .stagingIOFailed
+        }
     }
 
     private static func isICloudDrive(_ url: URL) -> Bool {
@@ -366,4 +1207,44 @@ public final class BackupController: ObservableObject {
         }
         return total
     }
+}
+
+private enum ActiveOperation {
+    case backup
+    case restoreInspection
+    case restoreStaging
+}
+
+private enum RestoreFailurePhase {
+    case inspection
+    case staging
+}
+
+private enum RestoreControllerError: Error {
+    case snapshotChanged
+    case invalidStageResult
+}
+
+private struct RestoreSnapshotIdentity: Equatable {
+    let identifier: String
+    let manifest: BackupManifest?
+    let databaseSHA256: String?
+    let referencedBlobs: [RestoreBlobReference]
+
+    init(_ candidate: RestoreSnapshotCandidate) {
+        identifier = candidate.identifier
+        manifest = candidate.manifest
+        databaseSHA256 = candidate.databaseSHA256
+        referencedBlobs = candidate.referencedBlobs
+    }
+}
+
+private struct RestoreAuditMetadata: Codable {
+    let schemaVersion: Int
+    let operationID: String?
+    let snapshotIdentifier: String?
+    let state: String
+    let activationFailure: String?
+    let rollbackFailure: String?
+    let stagingFailure: String?
 }

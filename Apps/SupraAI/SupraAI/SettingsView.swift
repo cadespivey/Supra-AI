@@ -181,6 +181,7 @@ struct SettingsView: View {
 /// while folder choice and execution remain ordinary macOS controls.
 private struct BackupSection: View {
     @ObservedObject var backup: BackupController
+    @State private var showingRestoreConfirmation = false
 
     var body: some View {
         Section {
@@ -266,20 +267,196 @@ private struct BackupSection: View {
 
             HStack(spacing: 10) {
                 Button(folderButtonTitle) { chooseFolder() }
+                    .disabled(backup.isAnyBackupOperationBusy)
                 Button("Back Up Now") {
                     Task { await backup.backUpNow() }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(!backup.hasDestination || backup.isBackingUp)
+                .disabled(!backup.hasDestination || backup.isAnyBackupOperationBusy)
                 Spacer()
                 Text("Keeps the newest 10 database snapshots; document blobs are incremental.")
                     .font(.supraCaption)
                     .foregroundStyle(.secondary)
             }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Restore from Backup")
+                            .font(.supraHeadline)
+                        Text("Inspect completed snapshots, review the exact replacement, then quit. Supra AI activates a staged restore only during the next cold launch.")
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Inspect Backups") {
+                        Task { await backup.inspectRestoreSnapshots() }
+                    }
+                    .accessibilityIdentifier("restore.inspect")
+                    .disabled(!backup.hasDestination || backup.isAnyBackupOperationBusy)
+                }
+
+                if backup.restoreState == .inspecting || backup.restoreState == .staging {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(backup.restoreStatusMessage ?? "Working…")
+                    }
+                    .font(.supraCaption)
+                    .accessibilityIdentifier("restore.progress")
+                } else if let message = backup.restoreStatusMessage {
+                    Text(message)
+                        .font(.supraCaption)
+                        .foregroundStyle(restoreStatusColor)
+                        .accessibilityIdentifier("restore.status")
+                }
+
+                ForEach(backup.restoreSnapshots) { snapshot in
+                    restoreSnapshotRow(snapshot)
+                }
+
+                if !backup.restoreSnapshots.isEmpty,
+                   backup.restoreState != .stagedRestartRequired {
+                    HStack {
+                        Button("Review Restore…") {
+                            if backup.prepareRestoreConfirmation() {
+                                showingRestoreConfirmation = true
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("restore.review")
+                        .disabled(
+                            backup.selectedRestoreSnapshotID == nil
+                                || backup.isAnyBackupOperationBusy
+                        )
+                        Spacer()
+                    }
+                }
+
+                DisclosureGroup("How restore works") {
+                    Text("Supra AI verifies the snapshot and managed documents, records the restore schedule, blocks further work, closes the live database, creates a safety copy, stages the selected backup, and quits automatically. On the next launch, it activates the staged copy before any writer opens; if activation fails, it verifies and restores the safety copy. A double failure blocks normal work and offers the entire verified safety folder for preservation, including the recovery database and managed-document blobs.")
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.supraCaption)
+            }
+            .padding(.top, 4)
         } header: {
             Text("Backup")
         }
         .task { await backup.refreshEstimatedSourceSize() }
+        .sheet(isPresented: $showingRestoreConfirmation) {
+            if let confirmation = backup.restoreConfirmation {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Schedule Restore and Quit?")
+                        .font(.title2.weight(.semibold))
+                    Text("Backup \(confirmation.snapshotIdentifier) from \(confirmation.createdAt.formatted(date: .abbreviated, time: .shortened)) will replace the current database and add its managed documents. Supra AI will block further work, close the live database, create a verified safety copy, stage the backup, and quit automatically. Reopen Supra AI to activate it on the next launch.")
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("restore.confirmation.message")
+                        .accessibilityLabel("Backup \(confirmation.snapshotIdentifier) will replace the current database. Supra AI will quit automatically and activate it on the next launch.")
+                    HStack {
+                        Spacer()
+                        Button("Cancel") {
+                            backup.cancelRestoreConfirmation()
+                            showingRestoreConfirmation = false
+                        }
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityIdentifier("restore.cancel")
+                        Button("Schedule Restore and Quit", role: .destructive) {
+                            showingRestoreConfirmation = false
+                            Task { await backup.stageConfirmedRestore() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("restore.confirm")
+                    }
+                }
+                .padding(24)
+                .frame(width: 540)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("restore.confirmation.sheet")
+            }
+        }
+    }
+
+    private func restoreSnapshotRow(_ snapshot: RestoreSnapshotListItem) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                _ = backup.selectRestoreSnapshot(id: snapshot.id)
+            } label: {
+                HStack(alignment: .top, spacing: 9) {
+                    Image(systemName: selectionSymbol(for: snapshot))
+                        .foregroundStyle(snapshot.isRestorable ? Color.accentColor : .orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(snapshot.id)
+                            .font(.supraCaption.weight(.semibold))
+                        Text(restoreSnapshotFacts(snapshot))
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text(snapshot.isRestorable ? "Verified" : "Blocked")
+                        .font(.supraCaption.weight(.medium))
+                        .foregroundStyle(snapshot.isRestorable ? .green : .orange)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!snapshot.isRestorable || backup.isAnyBackupOperationBusy)
+            .accessibilityIdentifier("restore.select.\(snapshot.id)")
+            .accessibilityLabel(
+                "\(snapshot.id), \(restoreSnapshotFacts(snapshot)), \(snapshot.isRestorable ? "verified" : "blocked")"
+            )
+
+            if let reason = snapshot.blockedReason {
+                Text(reason)
+                    .font(.supraCaption)
+                    .foregroundStyle(.orange)
+                    .padding(.leading, 25)
+                    .accessibilityIdentifier("restore.reason.\(snapshot.id)")
+                    .accessibilityLabel(reason)
+            }
+        }
+        .padding(9)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(
+                    backup.selectedRestoreSnapshotID == snapshot.id
+                        ? Color.accentColor.opacity(0.1)
+                        : Color(nsColor: .controlBackgroundColor)
+                )
+        )
+    }
+
+    private func selectionSymbol(for snapshot: RestoreSnapshotListItem) -> String {
+        if !snapshot.isRestorable { return "exclamationmark.triangle.fill" }
+        return backup.selectedRestoreSnapshotID == snapshot.id
+            ? "checkmark.circle.fill"
+            : "circle"
+    }
+
+    private func restoreSnapshotFacts(_ snapshot: RestoreSnapshotListItem) -> String {
+        let date = snapshot.createdAt?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown date"
+        let version: String
+        if let appVersion = snapshot.appVersion, let appBuild = snapshot.appBuild {
+            version = "Supra AI \(appVersion) (\(appBuild))"
+        } else {
+            version = "Unknown app version"
+        }
+        let size = snapshot.databaseBytes.map { formattedBytes(Int64($0)) } ?? "Unknown size"
+        let blobs = snapshot.referencedBlobCount.map { "\($0) managed document\($0 == 1 ? "" : "s")" }
+            ?? "Unknown document count"
+        return "\(date) · \(version) · \(size) · \(blobs)"
+    }
+
+    private var restoreStatusColor: Color {
+        switch backup.restoreState {
+        case .failed, .recoveryRequired: .red
+        case .failedAndRolledBack, .incompatible, .needsDestinationRepick: .orange
+        case .succeeded, .stagedRestartRequired: .green
+        default: .secondary
+        }
     }
 
     @ViewBuilder
@@ -385,7 +562,12 @@ private struct BackupSection: View {
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
-            _ = backup.configureDestination(bookmarkData: bookmark, url: url)
+            guard backup.configureDestination(bookmarkData: bookmark, url: url) else {
+                backup.reportDestinationSelectionFailure(
+                    "The backup folder could not be changed because another backup or restore operation is finishing."
+                )
+                return
+            }
         } catch {
             backup.reportDestinationSelectionFailure(
                 "The folder permission could not be saved. Choose a different folder."

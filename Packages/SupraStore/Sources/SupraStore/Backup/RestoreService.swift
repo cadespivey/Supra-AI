@@ -21,6 +21,7 @@ public struct RestoreLiveLayout: Equatable, Sendable {
 /// selected restore copy have passed database, blob-size, and blob-digest checks.
 public struct RestoreIntent: Codable, Equatable, Sendable {
     public static let pendingFileName = "pending-restore.json"
+    public static let operationFileName = "restore-operation-intent.json"
     public static let currentSchemaVersion = 1
 
     public let schemaVersion: Int
@@ -58,6 +59,8 @@ public struct RestoreStagingResult: Equatable, Sendable {
 }
 
 public enum RestoreStageError: Error, Equatable, LocalizedError {
+    case liveDatabasePathMismatch
+    case liveDatabaseCloseFailed
     case restoreAlreadyPending
     case sourceSnapshotUnavailable
     case sourceSnapshotChanged
@@ -70,6 +73,10 @@ public enum RestoreStageError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
+        case .liveDatabasePathMismatch:
+            return "The active database does not match the live restore location. Restart Supra AI before trying again."
+        case .liveDatabaseCloseFailed:
+            return "The active database could not be closed safely. Restart Supra AI before trying again."
         case .restoreAlreadyPending:
             return "A restore is already staged and waiting for restart."
         case .sourceSnapshotUnavailable:
@@ -158,7 +165,65 @@ public enum RestoreService {
     static let safetyDatabaseFileName = "restore-safety.sqlite"
     static let stagedDatabaseFileName = "restore-selected.sqlite"
 
-    public static func stageRestore(
+    /// The only public live-process staging boundary. It proves that the
+    /// supplied database owns the canonical live path and closes that exact
+    /// writer before core staging can validate or snapshot live state.
+    public static func stageQuiescedRestore(
+        candidate: RestoreSnapshotCandidate,
+        liveDatabase: SupraDatabase,
+        liveLayout: RestoreLiveLayout,
+        operationID: UUID,
+        knownMigrationIdentifiers: [String] = SupraMigrator.makeMigrator().migrations,
+        fileManager: FileManager = .default,
+        now: () -> Date = { Date() }
+    ) throws -> RestoreStagingResult {
+        try stageQuiescedRestore(
+            candidate: candidate,
+            liveDatabase: liveDatabase,
+            liveLayout: liveLayout,
+            operationID: operationID,
+            knownMigrationIdentifiers: knownMigrationIdentifiers,
+            fileManager: fileManager,
+            now: now,
+            operations: SystemRestoreFileOperations(fileManager: fileManager)
+        )
+    }
+
+    static func stageQuiescedRestore(
+        candidate: RestoreSnapshotCandidate,
+        liveDatabase: SupraDatabase,
+        liveLayout: RestoreLiveLayout,
+        operationID: UUID,
+        knownMigrationIdentifiers: [String],
+        fileManager: FileManager = .default,
+        now: () -> Date = { Date() },
+        operations: any RestoreFileOperations
+    ) throws -> RestoreStagingResult {
+        let expectedURL = liveLayout.databaseURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        guard liveDatabase.canonicalDatabaseURL == expectedURL else {
+            throw RestoreStageError.liveDatabasePathMismatch
+        }
+        do {
+            try liveDatabase.writer.close()
+        } catch {
+            throw RestoreStageError.liveDatabaseCloseFailed
+        }
+        return try stageRestore(
+            candidate: candidate,
+            liveLayout: liveLayout,
+            knownMigrationIdentifiers: knownMigrationIdentifiers,
+            fileManager: fileManager,
+            now: now,
+            operationID: { operationID },
+            operations: operations
+        )
+    }
+
+    /// Internal raw seam retained for staging fault injection and cold fixture
+    /// tests. App-facing packages cannot bypass the quiesced writer boundary.
+    static func stageRestore(
         candidate: RestoreSnapshotCandidate,
         liveLayout: RestoreLiveLayout,
         knownMigrationIdentifiers: [String] = SupraMigrator.makeMigrator().migrations,
@@ -246,6 +311,13 @@ public enum RestoreService {
             throw RestoreStageError.liveStateIncompatible(reason)
         }
 
+        let stagingRootExisted = fileManager.fileExists(
+            atPath: liveLayout.stagingRootDirectory.path
+        )
+        let stagingExistingAncestor = nearestExistingAncestor(
+            of: liveLayout.stagingRootDirectory,
+            fileManager: fileManager
+        )
         let operationsRoot = liveLayout.stagingRootDirectory
             .appendingPathComponent("operations", isDirectory: true)
         try fileManager.createDirectory(at: operationsRoot, withIntermediateDirectories: true)
@@ -264,16 +336,21 @@ public enum RestoreService {
                 // atomic writer has made the marker visible. Remove the marker
                 // before its operation tree; if marker removal itself fails,
                 // preserve the complete tree rather than leave a dangling marker.
-                if fileManager.fileExists(atPath: pendingMarker.path) {
-                    if (try? fileManager.removeItem(at: pendingMarker)) != nil {
+                var markerRemovalIsDurable = !fileManager.fileExists(atPath: pendingMarker.path)
+                if !markerRemovalIsDurable {
+                    do {
+                        try fileManager.removeItem(at: pendingMarker)
                         // The atomic marker rename may already have become visible
                         // before its writer reported a durability error. Publish
                         // this compensating unlink before removing the tree it
                         // names, so a crash cannot resurrect a ready marker.
-                        try? operations.synchronizeItem(at: liveLayout.stagingRootDirectory)
+                        try operations.synchronizeItem(at: liveLayout.stagingRootDirectory)
+                        markerRemovalIsDurable = true
+                    } catch {
+                        markerRemovalIsDurable = false
                     }
                 }
-                if !fileManager.fileExists(atPath: pendingMarker.path) {
+                if markerRemovalIsDurable {
                     if (try? fileManager.removeItem(at: operationDirectory)) != nil {
                         // Likewise make the bounded operation cleanup durable.
                         // A resurrected orphan tree is not activatable, but it is
@@ -374,9 +451,23 @@ public enum RestoreService {
             selectedBlobCount: refreshed.referencedBlobs.count,
             safetyBlobCount: liveValidation.blobs.count
         )
+        let intentData = try RestoreIntent.encode(intent)
+        let operationIntentURL = operationDirectory
+            .appendingPathComponent(RestoreIntent.operationFileName)
+        // Keep an authenticated, content-free validation context inside the
+        // retained operation tree. Recovery can revalidate the safety state
+        // even if marker unlink became visible before its directory sync.
+        try operations.writeIntentAtomically(intentData, to: operationIntentURL)
         try operations.synchronizeItem(at: operationsRoot)
         try operations.synchronizeItem(at: liveLayout.stagingRootDirectory)
-        try operations.writeIntentAtomically(RestoreIntent.encode(intent), to: pendingMarker)
+        try synchronizeCreatedDirectoryParents(
+            of: liveLayout.stagingRootDirectory,
+            through: stagingRootExisted
+                ? liveLayout.stagingRootDirectory.deletingLastPathComponent()
+                : stagingExistingAncestor,
+            operations: operations
+        )
+        try operations.writeIntentAtomically(intentData, to: pendingMarker)
         markerPublished = true
 
         return RestoreStagingResult(
@@ -463,6 +554,29 @@ public enum RestoreService {
               let stagingSystem = stagingAttributes[.systemNumber] as? NSNumber
         else { return false }
         return liveSystem == stagingSystem
+    }
+
+    /// Publishes every directory entry created by an intermediate-directory
+    /// operation, from the new root's parent back through the ancestor that was
+    /// known to exist before creation.
+    private static func synchronizeCreatedDirectoryParents(
+        of createdRoot: URL,
+        through existingAncestor: URL,
+        operations: any RestoreFileOperations
+    ) throws {
+        let ancestor = existingAncestor.standardizedFileURL
+        let root = createdRoot.standardizedFileURL
+        guard root.path.hasPrefix(ancestor.path + "/") else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        var directory = root.deletingLastPathComponent().standardizedFileURL
+        while true {
+            try operations.synchronizeItem(at: directory)
+            guard directory != ancestor else { return }
+            let parent = directory.deletingLastPathComponent().standardizedFileURL
+            guard parent != directory else { throw CocoaError(.fileWriteUnknown) }
+            directory = parent
+        }
     }
 
     private static func nearestExistingAncestor(

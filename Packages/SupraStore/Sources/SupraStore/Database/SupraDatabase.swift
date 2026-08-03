@@ -25,14 +25,27 @@ public enum SupraDatabaseOpenError: Error, LocalizedError {
 
 public final class SupraDatabase: @unchecked Sendable {
     public let writer: any DatabaseWriter
+    /// Canonical on-disk identity retained for safety-sensitive operations that
+    /// must bind a supplied writer to one exact live database path. In-memory
+    /// and externally supplied writers intentionally have no file identity.
+    let canonicalDatabaseURL: URL?
 
-    private init(writer: any DatabaseWriter, migrator: DatabaseMigrator) throws {
+    private init(
+        writer: any DatabaseWriter,
+        migrator: DatabaseMigrator,
+        canonicalDatabaseURL: URL? = nil
+    ) throws {
         self.writer = writer
+        self.canonicalDatabaseURL = canonicalDatabaseURL
         try migrator.migrate(writer)
     }
 
     public convenience init(writer: any DatabaseWriter) throws {
-        try self.init(writer: writer, migrator: SupraMigrator.makeMigrator())
+        try self.init(
+            writer: writer,
+            migrator: SupraMigrator.makeMigrator(),
+            canonicalDatabaseURL: nil
+        )
     }
 
     public convenience init(url: URL) throws {
@@ -76,7 +89,11 @@ public final class SupraDatabase: @unchecked Sendable {
         }
         let queue = try DatabaseQueue(path: url.path, configuration: configuration)
         do {
-            try self.init(writer: queue, migrator: migrator)
+            try self.init(
+                writer: queue,
+                migrator: migrator,
+                canonicalDatabaseURL: url.resolvingSymlinksInPath().standardizedFileURL
+            )
         } catch {
             throw SupraDatabaseOpenError.migrationFailed(
                 snapshotURL: snapshotURL,

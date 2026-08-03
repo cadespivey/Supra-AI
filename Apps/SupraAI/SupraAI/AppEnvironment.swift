@@ -20,7 +20,7 @@ struct DatabaseRecoveryState: Sendable {
     }
 
     let failure: Failure
-    let snapshotURL: URL?
+    let recoveryItemURL: URL?
 
     var title: String {
         switch failure {
@@ -37,7 +37,23 @@ struct DatabaseRecoveryState: Sendable {
         case .migration:
             "Supra AI could not complete the database upgrade. New work is disabled so it cannot be written to temporary storage. Your existing database and the verified pre-upgrade snapshot remain available for recovery."
         case .restore:
-            "Supra AI could not activate the staged restore or return the live database to its verified pre-restore state. Normal work is disabled. Quit the app and preserve the restore safety copy before attempting manual recovery."
+            "Supra AI could not activate the staged restore or return the live database to its verified pre-restore state. Normal work is disabled. Quit the app and preserve the entire safety folder, including its recovery database and managed-document blobs, before attempting manual recovery."
+        }
+    }
+
+    var recoveryActionTitle: String {
+        switch failure {
+        case .restore: "Show Recovery Safety Copy"
+        case .snapshot, .migration: "Show Recovery Snapshot"
+        }
+    }
+
+    var recoveryActionHint: String {
+        switch failure {
+        case .restore:
+            "Opens Finder with the complete verified safety folder selected."
+        case .snapshot, .migration:
+            "Opens Finder with the verified recovery database selected."
         }
     }
 }
@@ -121,7 +137,8 @@ final class AppEnvironment: ObservableObject {
     private var classifyOnModelLoadCancellable: AnyCancellable?
 
     init() {
-        let restoreActivation = AppEnvironment.prepareColdStartRestore()
+        let coldStartRestore = AppEnvironment.prepareColdStartRestore()
+        let restoreActivation = coldStartRestore?.activation
         let runtimeClient = RuntimeClient()
         let guidedQAUITestAuthorized = Self.isUITestMode && ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA")
         let guidedQAUITestModelRoot = guidedQAUITestAuthorized
@@ -133,7 +150,11 @@ final class AppEnvironment: ObservableObject {
         let guidedQAUITestManagedRoots = guidedQAUITestModelRoot.map { [$0] }
             ?? [ManagedModelStorage.modelsDirectory()]
         let taskRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient
-        let storeResult = AppEnvironment.makeStore(after: restoreActivation)
+        let storeResult = AppEnvironment.makeStore(
+            after: restoreActivation,
+            replayOutcome: coldStartRestore?.outcome,
+            outcomeReadFailed: coldStartRestore?.outcomeReadFailed == true
+        )
         let store = storeResult.store
         let systemPrompt = DefaultSystemPrompt.milestone1()
         let appVersion = AppEnvironment.currentAppVersion()
@@ -166,12 +187,49 @@ final class AppEnvironment: ObservableObject {
             appVersion: appVersion,
             tokenStore: tokenStore
         )
-        self.backupController = BackupController(
+        let documentStorage = DocumentStorage.makeDefault()
+#if DEBUG
+        let restoreUITestFixture = AppEnvironment.makeRestoreUITestFixtureIfRequested()
+#else
+        let restoreUITestFixture: RestoreUITestFixture? = nil
+#endif
+        let restoreLiveLayout = restoreUITestFixture?.liveLayout
+            ?? AppEnvironment.makeRestoreLiveLayoutForController(
+                blobsDirectory: documentStorage.blobsDirectory
+            )
+        let backupController = BackupController(
             store: store,
-            blobsDirectory: DocumentStorage.makeDefault().blobsDirectory,
+            blobsDirectory: documentStorage.blobsDirectory,
             appVersion: appVersion.marketingVersion,
-            appBuild: appVersion.buildNumber
+            appBuild: appVersion.buildNumber,
+            destinationFactory: restoreUITestFixture?.destinationFactory,
+            restoreLiveLayout: restoreLiveLayout,
+            restoreInspector: restoreUITestFixture?.inspector,
+            restoreRunner: restoreUITestFixture?.runner,
+            requestProcessExit: { NSApplication.shared.terminate(nil) },
+            launchRestoreResult: restoreActivation,
+            launchRestoreOutcome: coldStartRestore?.outcome,
+            launchStagingFailure: coldStartRestore?.stagingFailure,
+            acknowledgeRestoreOutcome: {
+                guard let stagingRoot = coldStartRestore?.stagingRootDirectory else { return }
+                try RestoreSidecarStore.acknowledgeActivationOutcome(
+                    stagingRootDirectory: stagingRoot
+                )
+            },
+            acknowledgeStagingFailure: {
+                guard let stagingRoot = coldStartRestore?.stagingRootDirectory else { return }
+                try RestoreSidecarStore.acknowledgeStagingFailure(
+                    stagingRootDirectory: stagingRoot
+                )
+            }
         )
+        if let restoreUITestFixture {
+            _ = backupController.configureDestination(
+                bookmarkData: Data("synthetic-ui-bookmark".utf8),
+                url: restoreUITestFixture.destinationURL
+            )
+        }
+        self.backupController = backupController
         self.assistantProfileController = AssistantProfileController(store: store, basePrompt: systemPrompt)
         // Firm structural style: autosaves to the store; MatterDraftingController reads the
         // persisted profile fresh at draft time via effectiveStyle(), so no threading is needed.
@@ -1817,7 +1875,11 @@ final class AppEnvironment: ObservableObject {
     /// Opens the on-disk store, falling back to a temporary store so the app still
     /// launches if the Application Support database cannot be created. `isFallback`
     /// is true for that degraded last-resort store (not for the UI-test store).
-    private static func makeStore(after restoreActivation: RestoreActivationResult?) -> (
+    private static func makeStore(
+        after restoreActivation: RestoreActivationResult?,
+        replayOutcome: RestoreOutcomeRecord?,
+        outcomeReadFailed: Bool
+    ) -> (
         store: SupraStore,
         isFallback: Bool,
         recoveryState: DatabaseRecoveryState?
@@ -1834,7 +1896,39 @@ final class AppEnvironment: ObservableObject {
             // erase-on-schema-change hazard for probe runs.
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("SupraAI-\(headlessProbeRequiresIsolatedStore ? "Probe" : "UITest")-\(UUID().uuidString).sqlite")
-            if let store = try? SupraStore(url: url) { return (store, false, nil) }
+            if let store = try? SupraStore(url: url) {
+#if DEBUG
+                if isUITestMode,
+                   ProcessInfo.processInfo.arguments.contains("-uiTestRestoreRecoveryRequired") {
+                    let safetyDirectory = url.deletingLastPathComponent()
+                        .appendingPathComponent(
+                            "\(url.deletingPathExtension().lastPathComponent)-restore-safety",
+                            isDirectory: true
+                        )
+                    try? FileManager.default.createDirectory(
+                        at: safetyDirectory.appendingPathComponent("blobs", isDirectory: true),
+                        withIntermediateDirectories: true
+                    )
+                    try? Data("SYNTHETIC UI TEST SAFETY DATABASE".utf8).write(
+                        to: safetyDirectory.appendingPathComponent("restore-safety.sqlite")
+                    )
+                    try? Data("SYNTHETIC UI TEST MANAGED BLOB".utf8).write(
+                        to: safetyDirectory
+                            .appendingPathComponent("blobs", isDirectory: true)
+                            .appendingPathComponent("synthetic-managed-document.bin")
+                    )
+                    return (
+                        store,
+                        true,
+                        DatabaseRecoveryState(
+                            failure: .restore,
+                            recoveryItemURL: safetyDirectory
+                        )
+                    )
+                }
+#endif
+                return (store, false, nil)
+            }
 
             // A failed temporary-store open must not widen this launch's authority
             // to the user's Application Support database. Stay hermetic even in the
@@ -1842,13 +1936,16 @@ final class AppEnvironment: ObservableObject {
             if let store = try? SupraStore.inMemory() { return (store, true, nil) }
             return (unavailableStore(), true, nil)
         }
-        if restoreActivation?.status == .recoveryRequired {
+        if restoreActivation?.status == .recoveryRequired
+            || replayOutcome?.status == .recoveryRequired
+            || outcomeReadFailed
+        {
             return (
                 makeFallbackStore(),
                 true,
                 DatabaseRecoveryState(
                     failure: .restore,
-                    snapshotURL: restoreActivation?.recoveryDatabaseURL
+                    recoveryItemURL: restoreActivation?.recoverySafetyDirectoryURL
                 )
             )
         }
@@ -1858,11 +1955,11 @@ final class AppEnvironment: ObservableObject {
             let recoveryState: DatabaseRecoveryState
             switch error {
             case .snapshotFailed:
-                recoveryState = DatabaseRecoveryState(failure: .snapshot, snapshotURL: nil)
+                recoveryState = DatabaseRecoveryState(failure: .snapshot, recoveryItemURL: nil)
             case let .migrationFailed(snapshotURL, _):
                 recoveryState = DatabaseRecoveryState(
                     failure: .migration,
-                    snapshotURL: snapshotURL
+                    recoveryItemURL: snapshotURL
                 )
             }
             return (makeFallbackStore(), true, recoveryState)
@@ -1877,7 +1974,7 @@ final class AppEnvironment: ObservableObject {
     /// Consumes a complete restore intent before any user-store writer or
     /// controller graph exists. Hermetic and headless launches skip this seam so
     /// test/demo/probe authority can never mutate the user's live data.
-    private static func prepareColdStartRestore() -> RestoreActivationResult? {
+    private static func prepareColdStartRestore() -> ColdStartRestoreEvidence? {
         guard !isUITestMode, !isDemoMode, !isHeadlessProbeMode,
               let databaseURL = try? DatabasePath.appSupportDatabaseURL()
         else { return nil }
@@ -1887,8 +1984,128 @@ final class AppEnvironment: ObservableObject {
             stagingRootDirectory: databaseURL.deletingLastPathComponent()
                 .appendingPathComponent(RestoreService.stagingDirectoryName, isDirectory: true)
         )
-        return RestoreActivationService.activatePendingRestore(liveLayout: layout)
+        let activation = RestoreActivationService.activatePendingRestore(liveLayout: layout)
+        let outcome: RestoreOutcomeRecord?
+        let outcomeReadFailed: Bool
+        do {
+            outcome = try RestoreSidecarStore.readActivationOutcome(
+                stagingRootDirectory: layout.stagingRootDirectory
+            )
+            outcomeReadFailed = false
+        } catch {
+            outcome = nil
+            outcomeReadFailed = true
+        }
+        let stagingFailure: RestoreStagingFailureRecord?
+        if activation.status == .noPendingRestore, outcome == nil, !outcomeReadFailed {
+            stagingFailure = try? RestoreSidecarStore.readStagingFailure(
+                stagingRootDirectory: layout.stagingRootDirectory
+            )
+        } else {
+            stagingFailure = nil
+        }
+        return ColdStartRestoreEvidence(
+            activation: activation,
+            outcome: outcome,
+            stagingFailure: stagingFailure,
+            outcomeReadFailed: outcomeReadFailed,
+            stagingRootDirectory: layout.stagingRootDirectory
+        )
     }
+
+    private static func makeRestoreLiveLayoutForController(
+        blobsDirectory: URL
+    ) -> RestoreLiveLayout? {
+        guard !isUITestMode, !isDemoMode, !isHeadlessProbeMode,
+              let databaseURL = try? DatabasePath.appSupportDatabaseURL()
+        else { return nil }
+        return RestoreLiveLayout(
+            databaseURL: databaseURL,
+            blobsDirectory: blobsDirectory,
+            stagingRootDirectory: databaseURL.deletingLastPathComponent()
+                .appendingPathComponent(RestoreService.stagingDirectoryName, isDirectory: true)
+        )
+    }
+
+#if DEBUG
+    /// Synthetic controller dependencies for the hosted restore UI tests. They
+    /// are reachable only with both `-uiTestMode` and the dedicated scenario flag.
+    private static func makeRestoreUITestFixtureIfRequested() -> RestoreUITestFixture? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard isUITestMode,
+              let marker = arguments.firstIndex(of: "-uiTestRestoreScenario"),
+              arguments.indices.contains(marker + 1),
+              arguments[marker + 1] == "mixed"
+        else { return nil }
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "SupraAI-UITest-Restore-\(ProcessInfo.processInfo.processIdentifier)",
+            isDirectory: true
+        )
+        let destination = root.appendingPathComponent("Backups", isDirectory: true)
+        let createdAt = Date(timeIntervalSince1970: 1_786_000_500)
+
+        func candidate(
+            identifier: String,
+            incompatibility: RestoreIncompatibility?
+        ) -> RestoreSnapshotCandidate {
+            let manifest = BackupManifest(
+                appVersion: "2.3.2",
+                appBuild: "391",
+                schemaMigrationIdentifiers: ["v069_add_verification_dimensions"],
+                createdAt: createdAt,
+                sourceDbBytes: 8_388_608,
+                referencedBlobCount: 3
+            )
+            return RestoreSnapshotCandidate(
+                identifier: identifier,
+                backupDirectoryURL: destination,
+                snapshotURL: destination.appendingPathComponent("db/\(identifier).sqlite"),
+                manifestURL: destination.appendingPathComponent("db/\(identifier).json"),
+                manifest: manifest,
+                summary: RestoreSnapshotSummary(
+                    createdAt: createdAt,
+                    appVersion: manifest.appVersion,
+                    appBuild: manifest.appBuild,
+                    databaseBytes: manifest.sourceDbBytes,
+                    referencedBlobCount: manifest.referencedBlobCount
+                ),
+                databaseSHA256: String(repeating: incompatibility == nil ? "a" : "b", count: 64),
+                referencedBlobs: [],
+                incompatibility: incompatibility
+            )
+        }
+
+        let candidates = [
+            candidate(identifier: "SupraAI-20260731-090000-000", incompatibility: nil),
+            candidate(
+                identifier: "SupraAI-20260730-081500-000",
+                incompatibility: .databaseIntegrityFailed
+            ),
+        ]
+        let layout = RestoreLiveLayout(
+            databaseURL: root.appendingPathComponent("Live/SupraAI.sqlite"),
+            blobsDirectory: root.appendingPathComponent("Live/Documents/blobs", isDirectory: true),
+            stagingRootDirectory: root.appendingPathComponent("Live/RestoreStaging", isDirectory: true)
+        )
+        return RestoreUITestFixture(
+            destinationURL: destination,
+            liveLayout: layout,
+            destinationFactory: { _ in RestoreUITestDestination(url: destination) },
+            inspector: { _ in candidates },
+            runner: { selected, _, operationID, scheduledAt in
+                // Keep the terminal surface observable across XCUITest's
+                // accessibility polling interval before simulating completion.
+                try await Task.sleep(for: .seconds(5))
+                return RestoreStageSummary(
+                    operationID: operationID.uuidString,
+                    snapshotIdentifier: selected.identifier,
+                    stagedAt: scheduledAt
+                )
+            }
+        )
+    }
+#endif
 
     private static func makeFallbackStore() -> SupraStore {
         // Unique-named on-disk fallback so a corrupt/locked leftover fallback file
@@ -2037,4 +2254,29 @@ private final class GuidedQAUITestRuntimeClient: RuntimeClientProtocol, @uncheck
     }
 
     func restartRuntimeService() async throws {}
+}
+
+private struct RestoreUITestFixture {
+    let destinationURL: URL
+    let liveLayout: RestoreLiveLayout
+    let destinationFactory: BackupController.DestinationFactory
+    let inspector: BackupController.RestoreInspector
+    let runner: BackupController.RestoreRunner
+}
+
+private struct ColdStartRestoreEvidence: Sendable {
+    let activation: RestoreActivationResult
+    let outcome: RestoreOutcomeRecord?
+    let stagingFailure: RestoreStagingFailureRecord?
+    let outcomeReadFailed: Bool
+    let stagingRootDirectory: URL
+}
+
+@MainActor
+private struct RestoreUITestDestination: BackupDestination {
+    let url: URL
+
+    func withAccess<T: Sendable>(_ operation: (URL) async throws -> T) async throws -> T {
+        try await operation(url)
+    }
 }

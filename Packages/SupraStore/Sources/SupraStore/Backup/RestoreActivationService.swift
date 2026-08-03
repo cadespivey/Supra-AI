@@ -20,53 +20,169 @@ public enum RestoreActivationFailure: String, Codable, Equatable, Error, Sendabl
     case databaseReplacementFailed
     case databaseOpenFailed
     case markerRemovalFailed
+    case outcomePersistenceFailed
 }
 
 public struct RestoreActivationResult: Equatable, Sendable {
     public let status: RestoreActivationStatus
     public let activationFailure: RestoreActivationFailure?
     public let rollbackFailure: RestoreActivationFailure?
-    /// The verified staged safety database is exposed only in memory so the app
-    /// can offer recovery when neither automatic activation nor rollback works.
-    public let recoveryDatabaseURL: URL?
+    /// Content-free identifiers copied from the authenticated pending intent.
+    /// They let the newly opened store persist an outcome after activation has
+    /// replaced the database that originally recorded the staging event.
+    public let operationID: String?
+    public let snapshotIdentifier: String?
+    /// Authenticated staging time copied from the durable restore intent so the
+    /// replacement database can reconstruct the user's scheduling audit.
+    public let scheduledAt: Date?
+    /// The database-only location stays file-private for internal retry logic;
+    /// recovery consumers receive the complete containing safety tree instead.
+    fileprivate let recoveryDatabaseURL: URL?
+    /// The complete verified safety tree that must be preserved for manual
+    /// recovery, including the database and its sibling managed-blob directory.
+    public var recoverySafetyDirectoryURL: URL? {
+        recoveryDatabaseURL?.deletingLastPathComponent()
+    }
 
     private init(
         status: RestoreActivationStatus,
         activationFailure: RestoreActivationFailure? = nil,
         rollbackFailure: RestoreActivationFailure? = nil,
+        operationID: String? = nil,
+        snapshotIdentifier: String? = nil,
+        scheduledAt: Date? = nil,
         recoveryDatabaseURL: URL? = nil
     ) {
         self.status = status
         self.activationFailure = activationFailure
         self.rollbackFailure = rollbackFailure
+        self.operationID = operationID
+        self.snapshotIdentifier = snapshotIdentifier
+        self.scheduledAt = scheduledAt
         self.recoveryDatabaseURL = recoveryDatabaseURL
     }
 
     static let noPendingRestore = RestoreActivationResult(status: .noPendingRestore)
-    static let activated = RestoreActivationResult(status: .activated)
+    static func activated(_ intent: RestoreIntent) -> RestoreActivationResult {
+        RestoreActivationResult(
+            status: .activated,
+            operationID: intent.operationID,
+            snapshotIdentifier: intent.selectedSnapshotIdentifier,
+            scheduledAt: intent.createdAt
+        )
+    }
 
     static func failedAndRolledBack(
         _ failure: RestoreActivationFailure,
-        safetyDatabaseURL: URL
+        intent: RestoreIntent
     ) -> RestoreActivationResult {
         RestoreActivationResult(
             status: .failedAndRolledBack,
             activationFailure: failure,
-            recoveryDatabaseURL: safetyDatabaseURL
+            operationID: intent.operationID,
+            snapshotIdentifier: intent.selectedSnapshotIdentifier,
+            scheduledAt: intent.createdAt
         )
     }
 
     static func recoveryRequired(
         activation failure: RestoreActivationFailure,
         rollback rollbackFailure: RestoreActivationFailure?,
+        intent: RestoreIntent? = nil,
         safetyDatabaseURL: URL?
     ) -> RestoreActivationResult {
         RestoreActivationResult(
             status: .recoveryRequired,
             activationFailure: failure,
             rollbackFailure: rollbackFailure,
+            operationID: intent?.operationID,
+            snapshotIdentifier: intent?.selectedSnapshotIdentifier,
+            scheduledAt: intent?.createdAt,
             recoveryDatabaseURL: safetyDatabaseURL
         )
+    }
+
+    static func replayingRecovery(
+        _ record: RestoreOutcomeRecord,
+        safetyDatabaseURL: URL?
+    ) -> RestoreActivationResult {
+        RestoreActivationResult(
+            status: .recoveryRequired,
+            activationFailure: record.activationFailure ?? .invalidIntent,
+            rollbackFailure: record.rollbackFailure,
+            operationID: record.operationID,
+            snapshotIdentifier: record.snapshotIdentifier,
+            scheduledAt: record.scheduledAt,
+            recoveryDatabaseURL: safetyDatabaseURL
+        )
+    }
+}
+
+/// Durable, display-safe record of the most recent attempted restore activation.
+/// It deliberately excludes filesystem locations and user/database content.
+public struct RestoreOutcomeRecord: Codable, Equatable, Sendable {
+    public static let currentSchemaVersion = 2
+    public static let lastOutcomeFileName = "last-restore-outcome.json"
+
+    public let schemaVersion: Int
+    public let operationID: String?
+    public let snapshotIdentifier: String?
+    public let scheduledAt: Date?
+    public let status: RestoreActivationStatus
+    public let activationFailure: RestoreActivationFailure?
+    public let rollbackFailure: RestoreActivationFailure?
+    public let completedAt: Date
+    /// `nil` is a legacy terminal record and is retried conservatively. New
+    /// terminal records transition from `true` to `false` only after the
+    /// operation-tree unlink and containing-directory sync both succeed.
+    public let operationTreeCleanupPending: Bool?
+
+    init(result: RestoreActivationResult, completedAt: Date) {
+        schemaVersion = Self.currentSchemaVersion
+        operationID = result.operationID
+        snapshotIdentifier = result.snapshotIdentifier
+        scheduledAt = result.scheduledAt
+        status = result.status
+        activationFailure = result.activationFailure
+        rollbackFailure = result.rollbackFailure
+        self.completedAt = completedAt
+        operationTreeCleanupPending = result.status == .activated
+            || result.status == .failedAndRolledBack
+    }
+
+    init(
+        schemaVersion: Int,
+        operationID: String?,
+        snapshotIdentifier: String?,
+        scheduledAt: Date?,
+        status: RestoreActivationStatus,
+        activationFailure: RestoreActivationFailure?,
+        rollbackFailure: RestoreActivationFailure?,
+        completedAt: Date,
+        operationTreeCleanupPending: Bool?
+    ) {
+        self.schemaVersion = schemaVersion
+        self.operationID = operationID
+        self.snapshotIdentifier = snapshotIdentifier
+        self.scheduledAt = scheduledAt
+        self.status = status
+        self.activationFailure = activationFailure
+        self.rollbackFailure = rollbackFailure
+        self.completedAt = completedAt
+        self.operationTreeCleanupPending = operationTreeCleanupPending
+    }
+
+    public static func encode(_ record: RestoreOutcomeRecord) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(record)
+    }
+
+    public static func decode(_ data: Data) throws -> RestoreOutcomeRecord {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(RestoreOutcomeRecord.self, from: data)
     }
 }
 
@@ -77,6 +193,7 @@ protocol RestoreActivationFileOperations {
     func synchronizeItem(at url: URL) throws
     func atomicallyReplaceItem(at destination: URL, withItemAt prepared: URL) throws
     func removeItem(at url: URL) throws
+    func writeOutcomeAtomically(_ data: Data, to url: URL) throws
 }
 
 struct SystemRestoreActivationFileOperations: RestoreActivationFileOperations {
@@ -110,6 +227,10 @@ struct SystemRestoreActivationFileOperations: RestoreActivationFileOperations {
     func removeItem(at url: URL) throws {
         try fileManager.removeItem(at: url)
     }
+
+    func writeOutcomeAtomically(_ data: Data, to url: URL) throws {
+        try stagingOperations.writeIntentAtomically(data, to: url)
+    }
 }
 
 /// Runs only at a cold-start boundary, before the app constructs its store or
@@ -136,17 +257,10 @@ public enum RestoreActivationService {
         operations: any RestoreActivationFileOperations,
         openDatabase: (URL) throws -> SupraDatabase
     ) -> RestoreActivationResult {
-        let markerURL = liveLayout.stagingRootDirectory
-            .appendingPathComponent(RestoreIntent.pendingFileName)
-        guard itemExists(at: markerURL) else {
-            return .noPendingRestore
-        }
-
-        let context: ActivationContext
+        let previousOutcome: RestoreOutcomeRecord?
         do {
-            context = try loadContext(
-                markerURL: markerURL,
-                liveLayout: liveLayout,
+            previousOutcome = try RestoreSidecarStore.readActivationOutcome(
+                stagingRootDirectory: liveLayout.stagingRootDirectory,
                 fileManager: fileManager
             )
         } catch {
@@ -156,7 +270,410 @@ public enum RestoreActivationService {
                 safetyDatabaseURL: nil
             )
         }
+        if let previousOutcome {
+            return reconcileDurableOutcome(
+                previousOutcome,
+                liveLayout: liveLayout,
+                knownMigrationIdentifiers: knownMigrationIdentifiers,
+                fileManager: fileManager,
+                operations: operations
+            )
+        }
 
+        let markerURL = liveLayout.stagingRootDirectory
+            .appendingPathComponent(RestoreIntent.pendingFileName)
+        guard itemExists(at: markerURL) else { return .noPendingRestore }
+
+        let context: ActivationContext
+        do {
+            context = try loadContext(
+                markerURL: markerURL,
+                liveLayout: liveLayout,
+                fileManager: fileManager
+            )
+        } catch {
+            let result = RestoreActivationResult.recoveryRequired(
+                activation: .invalidIntent,
+                rollback: nil,
+                safetyDatabaseURL: nil
+            )
+            _ = try? recordOutcome(
+                result,
+                liveLayout: liveLayout,
+                fileManager: fileManager,
+                operations: operations
+            )
+            return result
+        }
+
+        let result = performPendingRestore(
+            context: context,
+            liveLayout: liveLayout,
+            knownMigrationIdentifiers: knownMigrationIdentifiers,
+            fileManager: fileManager,
+            operations: operations,
+            openDatabase: openDatabase
+        )
+        return persistAndFinalize(
+            result,
+            context: context,
+            liveLayout: liveLayout,
+            knownMigrationIdentifiers: knownMigrationIdentifiers,
+            fileManager: fileManager,
+            operations: operations,
+            openDatabase: openDatabase
+        )
+    }
+
+    private static func persistAndFinalize(
+        _ result: RestoreActivationResult,
+        context: ActivationContext,
+        liveLayout: RestoreLiveLayout,
+        knownMigrationIdentifiers: [String],
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations,
+        openDatabase: (URL) throws -> SupraDatabase
+    ) -> RestoreActivationResult {
+        let outcome: RestoreOutcomeRecord
+        do {
+            outcome = try recordOutcome(
+                result,
+                liveLayout: liveLayout,
+                fileManager: fileManager,
+                operations: operations
+            )
+        } catch {
+            return outcomePersistenceFailure(after: result, context: context)
+        }
+
+        switch result.status {
+        case .noPendingRestore, .recoveryRequired:
+            return result
+        case .activated:
+            do {
+                try consumePendingMarker(
+                    context: context,
+                    stagingRootDirectory: liveLayout.stagingRootDirectory,
+                    operations: operations
+                )
+            } catch {
+                return rollbackAfterMarkerConsumptionFailure(
+                    context: context,
+                    liveLayout: liveLayout,
+                    knownMigrationIdentifiers: knownMigrationIdentifiers,
+                    fileManager: fileManager,
+                    operations: operations,
+                    openDatabase: openDatabase
+                )
+            }
+        case .failedAndRolledBack:
+            do {
+                try consumePendingMarker(
+                    context: context,
+                    stagingRootDirectory: liveLayout.stagingRootDirectory,
+                    operations: operations
+                )
+            } catch {
+                let recovery = RestoreActivationResult.recoveryRequired(
+                    activation: result.activationFailure ?? .markerRemovalFailed,
+                    rollback: .markerRemovalFailed,
+                    intent: context.intent,
+                    safetyDatabaseURL: context.safetyDatabaseURL
+                )
+                _ = try? recordOutcome(
+                    recovery,
+                    liveLayout: liveLayout,
+                    fileManager: fileManager,
+                    operations: operations
+                )
+                return recovery
+            }
+        }
+
+        try? RestoreSidecarStore.cleanupTerminalOperation(
+            outcome,
+            stagingRootDirectory: liveLayout.stagingRootDirectory,
+            fileManager: fileManager,
+            operations: operations
+        )
+        return result
+    }
+
+    private static func rollbackAfterMarkerConsumptionFailure(
+        context: ActivationContext,
+        liveLayout: RestoreLiveLayout,
+        knownMigrationIdentifiers: [String],
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations,
+        openDatabase: (URL) throws -> SupraDatabase
+    ) -> RestoreActivationResult {
+        let freeze = RestoreActivationResult.recoveryRequired(
+            activation: .markerRemovalFailed,
+            rollback: nil,
+            intent: context.intent,
+            safetyDatabaseURL: context.safetyDatabaseURL
+        )
+        do {
+            _ = try recordOutcome(
+                freeze,
+                liveLayout: liveLayout,
+                fileManager: fileManager,
+                operations: operations
+            )
+        } catch {
+            return freeze
+        }
+
+        let safetyValidation: ValidatedRestoreDatabase
+        do {
+            safetyValidation = try validateStagedState(
+                databaseURL: context.safetyDatabaseURL,
+                blobsDirectory: context.safetyBlobsDirectory,
+                containmentRoot: liveLayout.stagingRootDirectory,
+                expectedDatabaseSHA256: context.intent.safetyDatabaseSHA256,
+                expectedBlobCount: context.intent.safetyBlobCount,
+                knownMigrationIdentifiers: knownMigrationIdentifiers,
+                fileManager: fileManager
+            )
+        } catch {
+            let recovery = RestoreActivationResult.recoveryRequired(
+                activation: .markerRemovalFailed,
+                rollback: .safetyStateInvalid,
+                intent: context.intent,
+                safetyDatabaseURL: nil
+            )
+            _ = try? recordOutcome(
+                recovery,
+                liveLayout: liveLayout,
+                fileManager: fileManager,
+                operations: operations
+            )
+            return recovery
+        }
+
+        let rollback = finishFailure(
+            .markerRemovalFailed,
+            context: context,
+            safetyValidation: safetyValidation,
+            liveLayout: liveLayout,
+            knownMigrationIdentifiers: knownMigrationIdentifiers,
+            fileManager: fileManager,
+            operations: operations,
+            openDatabase: openDatabase
+        )
+        let rollbackOutcome: RestoreOutcomeRecord
+        do {
+            rollbackOutcome = try recordOutcome(
+                rollback,
+                liveLayout: liveLayout,
+                fileManager: fileManager,
+                operations: operations
+            )
+        } catch {
+            return outcomePersistenceFailure(after: rollback, context: context)
+        }
+        guard rollback.status == .failedAndRolledBack else { return rollback }
+
+        do {
+            try consumePendingMarker(
+                context: context,
+                stagingRootDirectory: liveLayout.stagingRootDirectory,
+                operations: operations
+            )
+        } catch {
+            let recovery = RestoreActivationResult.recoveryRequired(
+                activation: .markerRemovalFailed,
+                rollback: .markerRemovalFailed,
+                intent: context.intent,
+                safetyDatabaseURL: context.safetyDatabaseURL
+            )
+            _ = try? recordOutcome(
+                recovery,
+                liveLayout: liveLayout,
+                fileManager: fileManager,
+                operations: operations
+            )
+            return recovery
+        }
+        try? RestoreSidecarStore.cleanupTerminalOperation(
+            rollbackOutcome,
+            stagingRootDirectory: liveLayout.stagingRootDirectory,
+            fileManager: fileManager,
+            operations: operations
+        )
+        return rollback
+    }
+
+    private static func reconcileDurableOutcome(
+        _ outcome: RestoreOutcomeRecord,
+        liveLayout: RestoreLiveLayout,
+        knownMigrationIdentifiers: [String],
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations
+    ) -> RestoreActivationResult {
+        let markerURL = liveLayout.stagingRootDirectory
+            .appendingPathComponent(RestoreIntent.pendingFileName)
+        if outcome.status == .recoveryRequired {
+            do {
+                let context = if itemExists(at: markerURL) {
+                    try loadContext(
+                        markerURL: markerURL,
+                        liveLayout: liveLayout,
+                        fileManager: fileManager
+                    )
+                } else {
+                    try loadRecoveryContext(
+                        outcome: outcome,
+                        markerURL: markerURL,
+                        liveLayout: liveLayout,
+                        fileManager: fileManager
+                    )
+                }
+                guard outcomeMatchesContext(outcome, context: context) else {
+                    throw RestoreActivationFailure.invalidIntent
+                }
+                _ = try validateStagedState(
+                    databaseURL: context.safetyDatabaseURL,
+                    blobsDirectory: context.safetyBlobsDirectory,
+                    containmentRoot: liveLayout.stagingRootDirectory,
+                    expectedDatabaseSHA256: context.intent.safetyDatabaseSHA256,
+                    expectedBlobCount: context.intent.safetyBlobCount,
+                    knownMigrationIdentifiers: knownMigrationIdentifiers,
+                    fileManager: fileManager
+                )
+                return .replayingRecovery(
+                    outcome,
+                    safetyDatabaseURL: context.safetyDatabaseURL
+                )
+            } catch {
+                return .recoveryRequired(
+                    activation: .safetyStateInvalid,
+                    rollback: .safetyStateInvalid,
+                    safetyDatabaseURL: nil
+                )
+            }
+        }
+
+        guard outcome.status == .activated || outcome.status == .failedAndRolledBack else {
+            return .recoveryRequired(
+                activation: .invalidIntent,
+                rollback: nil,
+                safetyDatabaseURL: nil
+            )
+        }
+        if itemExists(at: markerURL) {
+            let context: ActivationContext
+            do {
+                context = try loadContext(
+                    markerURL: markerURL,
+                    liveLayout: liveLayout,
+                    fileManager: fileManager
+                )
+                guard outcomeMatchesContext(outcome, context: context) else {
+                    throw RestoreActivationFailure.invalidIntent
+                }
+            } catch {
+                return .recoveryRequired(
+                    activation: .invalidIntent,
+                    rollback: nil,
+                    safetyDatabaseURL: nil
+                )
+            }
+            let safetyDatabaseURL: URL?
+            if (try? validateStagedState(
+                databaseURL: context.safetyDatabaseURL,
+                blobsDirectory: context.safetyBlobsDirectory,
+                containmentRoot: liveLayout.stagingRootDirectory,
+                expectedDatabaseSHA256: context.intent.safetyDatabaseSHA256,
+                expectedBlobCount: context.intent.safetyBlobCount,
+                knownMigrationIdentifiers: knownMigrationIdentifiers,
+                fileManager: fileManager
+            )) != nil {
+                safetyDatabaseURL = context.safetyDatabaseURL
+            } else {
+                safetyDatabaseURL = nil
+            }
+            do {
+                try consumePendingMarker(
+                    context: context,
+                    stagingRootDirectory: liveLayout.stagingRootDirectory,
+                    operations: operations
+                )
+            } catch {
+                let recovery = RestoreActivationResult.recoveryRequired(
+                    activation: outcome.activationFailure ?? .markerRemovalFailed,
+                    rollback: outcome.status == .failedAndRolledBack ? .markerRemovalFailed : nil,
+                    intent: context.intent,
+                    safetyDatabaseURL: safetyDatabaseURL
+                )
+                _ = try? recordOutcome(
+                    recovery,
+                    liveLayout: liveLayout,
+                    fileManager: fileManager,
+                    operations: operations
+                )
+                return recovery
+            }
+        }
+        try? RestoreSidecarStore.cleanupTerminalOperation(
+            outcome,
+            stagingRootDirectory: liveLayout.stagingRootDirectory,
+            fileManager: fileManager,
+            operations: operations
+        )
+        return .noPendingRestore
+    }
+
+    @discardableResult
+    private static func recordOutcome(
+        _ result: RestoreActivationResult,
+        liveLayout: RestoreLiveLayout,
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations
+    ) throws -> RestoreOutcomeRecord {
+        try RestoreSidecarStore.recordActivationOutcome(
+            result,
+            stagingRootDirectory: liveLayout.stagingRootDirectory,
+            completedAt: Date(),
+            fileManager: fileManager,
+            operations: operations
+        )
+    }
+
+    private static func outcomePersistenceFailure(
+        after result: RestoreActivationResult,
+        context: ActivationContext
+    ) -> RestoreActivationResult {
+        .recoveryRequired(
+            activation: .outcomePersistenceFailed,
+            rollback: result.rollbackFailure,
+            intent: context.intent,
+            safetyDatabaseURL: result.status == .recoveryRequired
+                ? result.recoveryDatabaseURL
+                : context.safetyDatabaseURL
+        )
+    }
+
+    private static func outcomeMatchesContext(
+        _ outcome: RestoreOutcomeRecord,
+        context: ActivationContext
+    ) -> Bool {
+        (outcome.operationID == nil || outcome.operationID == context.intent.operationID)
+            && (outcome.snapshotIdentifier == nil
+                || outcome.snapshotIdentifier == context.intent.selectedSnapshotIdentifier)
+            && (outcome.schemaVersion == 1
+                ? outcome.scheduledAt == nil
+                : outcome.scheduledAt == context.intent.createdAt)
+    }
+
+    private static func performPendingRestore(
+        context: ActivationContext,
+        liveLayout: RestoreLiveLayout,
+        knownMigrationIdentifiers: [String],
+        fileManager: FileManager,
+        operations: any RestoreActivationFileOperations,
+        openDatabase: (URL) throws -> SupraDatabase
+    ) -> RestoreActivationResult {
         let safetyValidation: ValidatedRestoreDatabase
         do {
             safetyValidation = try validateStagedState(
@@ -172,6 +689,7 @@ public enum RestoreActivationService {
             return .recoveryRequired(
                 activation: .safetyStateInvalid,
                 rollback: .safetyStateInvalid,
+                intent: context.intent,
                 safetyDatabaseURL: nil
             )
         }
@@ -206,6 +724,7 @@ public enum RestoreActivationService {
                 selectedValidation.blobs,
                 from: context.selectedBlobsDirectory,
                 into: liveLayout.blobsDirectory,
+                through: liveLayout.databaseURL.deletingLastPathComponent(),
                 operationID: context.intent.operationID,
                 phase: .activate,
                 fileManager: fileManager,
@@ -271,27 +790,7 @@ public enum RestoreActivationService {
             )
         }
 
-        do {
-            try consumePendingMarker(
-                context: context,
-                stagingRootDirectory: liveLayout.stagingRootDirectory,
-                operations: operations
-            )
-        } catch {
-            activationFailure = .markerRemovalFailed
-            return finishFailure(
-                activationFailure,
-                context: context,
-                safetyValidation: safetyValidation,
-                liveLayout: liveLayout,
-                knownMigrationIdentifiers: knownMigrationIdentifiers,
-                fileManager: fileManager,
-                operations: operations,
-                openDatabase: openDatabase
-            )
-        }
-
-        return .activated
+        return .activated(context.intent)
     }
 
     private static func finishFailure(
@@ -309,6 +808,7 @@ public enum RestoreActivationService {
                 safetyValidation.blobs,
                 from: context.safetyBlobsDirectory,
                 into: liveLayout.blobsDirectory,
+                through: liveLayout.databaseURL.deletingLastPathComponent(),
                 operationID: context.intent.operationID,
                 phase: .rollback,
                 fileManager: fileManager,
@@ -318,6 +818,7 @@ public enum RestoreActivationService {
             return .recoveryRequired(
                 activation: activationFailure,
                 rollback: .blobInstallationFailed,
+                intent: context.intent,
                 safetyDatabaseURL: context.safetyDatabaseURL
             )
         }
@@ -335,6 +836,7 @@ public enum RestoreActivationService {
             return .recoveryRequired(
                 activation: activationFailure,
                 rollback: .databaseReplacementFailed,
+                intent: context.intent,
                 safetyDatabaseURL: context.safetyDatabaseURL
             )
         }
@@ -352,27 +854,14 @@ public enum RestoreActivationService {
             return .recoveryRequired(
                 activation: activationFailure,
                 rollback: .databaseOpenFailed,
-                safetyDatabaseURL: context.safetyDatabaseURL
-            )
-        }
-
-        do {
-            try consumePendingMarker(
-                context: context,
-                stagingRootDirectory: liveLayout.stagingRootDirectory,
-                operations: operations
-            )
-        } catch {
-            return .recoveryRequired(
-                activation: activationFailure,
-                rollback: .markerRemovalFailed,
+                intent: context.intent,
                 safetyDatabaseURL: context.safetyDatabaseURL
             )
         }
 
         return .failedAndRolledBack(
             activationFailure,
-            safetyDatabaseURL: context.safetyDatabaseURL
+            intent: context.intent
         )
     }
 
@@ -407,10 +896,75 @@ public enum RestoreActivationService {
             throw RestoreActivationFailure.invalidIntent
         }
         let markerData = try Data(contentsOf: markerURL)
-        let intent = try RestoreIntent.decode(markerData)
+        let context = try makeContext(
+            intentData: markerData,
+            markerURL: markerURL,
+            expectedOperationID: nil,
+            liveLayout: liveLayout,
+            fileManager: fileManager
+        )
+        let operationIntentURL = context.markerURL.deletingLastPathComponent()
+            .appendingPathComponent("operations", isDirectory: true)
+            .appendingPathComponent(context.intent.operationID, isDirectory: true)
+            .appendingPathComponent(RestoreIntent.operationFileName)
+        guard RestoreValidation.isContainedRegularFile(
+            operationIntentURL,
+            in: liveLayout.stagingRootDirectory,
+            fileManager: fileManager
+        ), try Data(contentsOf: operationIntentURL) == markerData else {
+            throw RestoreActivationFailure.invalidIntent
+        }
+        return context
+    }
+
+    private static func loadRecoveryContext(
+        outcome: RestoreOutcomeRecord,
+        markerURL: URL,
+        liveLayout: RestoreLiveLayout,
+        fileManager: FileManager
+    ) throws -> ActivationContext {
+        guard let operationID = outcome.operationID,
+              let uuid = UUID(uuidString: operationID),
+              uuid.uuidString.lowercased() == operationID
+        else {
+            throw RestoreActivationFailure.invalidIntent
+        }
+        let operationIntentURL = liveLayout.stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+            .appendingPathComponent(operationID, isDirectory: true)
+            .appendingPathComponent(RestoreIntent.operationFileName)
+        guard RestoreValidation.isContainedRegularFile(
+            operationIntentURL,
+            in: liveLayout.stagingRootDirectory,
+            fileManager: fileManager
+        ) else {
+            throw RestoreActivationFailure.invalidIntent
+        }
+        return try makeContext(
+            intentData: Data(contentsOf: operationIntentURL),
+            markerURL: markerURL,
+            expectedOperationID: operationID,
+            liveLayout: liveLayout,
+            fileManager: fileManager
+        )
+    }
+
+    private static func makeContext(
+        intentData: Data,
+        markerURL: URL,
+        expectedOperationID: String?,
+        liveLayout: RestoreLiveLayout,
+        fileManager: FileManager
+    ) throws -> ActivationContext {
+        let intent = try RestoreIntent.decode(intentData)
         guard intent.schemaVersion == RestoreIntent.currentSchemaVersion,
               let uuid = UUID(uuidString: intent.operationID),
               uuid.uuidString.lowercased() == intent.operationID,
+              expectedOperationID == nil || expectedOperationID == intent.operationID,
+              RestoreSidecarStore.isValidSnapshotIdentifier(
+                  intent.selectedSnapshotIdentifier,
+                  required: true
+              ),
               intent.selectedBlobCount >= 0,
               intent.safetyBlobCount >= 0,
               isSHA256(intent.stagedDatabaseSHA256),
@@ -427,7 +981,7 @@ public enum RestoreActivationService {
         return ActivationContext(
             intent: intent,
             markerURL: markerURL,
-            markerData: markerData,
+            markerData: intentData,
             selectedDatabaseURL: selectedDirectory
                 .appendingPathComponent(RestoreService.stagedDatabaseFileName),
             selectedBlobsDirectory: selectedDirectory.appendingPathComponent("blobs", isDirectory: true),
@@ -472,12 +1026,23 @@ public enum RestoreActivationService {
         _ blobs: [RestoreBlobReference],
         from sourceRoot: URL,
         into liveRoot: URL,
+        through durableAncestor: URL,
         operationID: String,
         phase: ReplacementPhase,
         fileManager: FileManager,
         operations: any RestoreActivationFileOperations
     ) throws {
+        let resolvedAncestor = durableAncestor.resolvingSymlinksInPath().standardizedFileURL
+        let prospectiveRoot = liveRoot.resolvingSymlinksInPath().standardizedFileURL
+        guard prospectiveRoot.path.hasPrefix(resolvedAncestor.path + "/") else {
+            throw RestoreActivationFailure.blobInstallationFailed
+        }
         try fileManager.createDirectory(at: liveRoot, withIntermediateDirectories: true)
+        try publishCreatedDirectory(
+            liveRoot,
+            through: resolvedAncestor,
+            operations: operations
+        )
         let resolvedLiveRoot = liveRoot.resolvingSymlinksInPath().standardizedFileURL
 
         for blob in blobs {
@@ -615,6 +1180,32 @@ public enum RestoreActivationService {
             directory.deleteLastPathComponent()
         }
         throw RestoreActivationFailure.blobInstallationFailed
+    }
+
+    private static func publishCreatedDirectory(
+        _ createdRoot: URL,
+        through existingAncestor: URL,
+        operations: any RestoreActivationFileOperations
+    ) throws {
+        let root = createdRoot.resolvingSymlinksInPath().standardizedFileURL
+        let ancestor = existingAncestor.resolvingSymlinksInPath().standardizedFileURL
+        guard root.path.hasPrefix(ancestor.path + "/") else {
+            throw RestoreActivationFailure.blobInstallationFailed
+        }
+        try operations.synchronizeItem(at: root)
+        var directory = root.deletingLastPathComponent().standardizedFileURL
+        while true {
+            try operations.synchronizeItem(at: directory)
+            guard directory == ancestor else {
+                let parent = directory.deletingLastPathComponent().standardizedFileURL
+                guard parent != directory else {
+                    throw RestoreActivationFailure.blobInstallationFailed
+                }
+                directory = parent
+                continue
+            }
+            return
+        }
     }
 
     private static func isSHA256(_ value: String) -> Bool {

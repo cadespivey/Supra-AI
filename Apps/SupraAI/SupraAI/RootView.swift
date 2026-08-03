@@ -22,6 +22,12 @@ struct RootView: View {
     }
 
     private var applicationRoot: some View {
+        RestoreTerminalGate(backup: environment.backupController) {
+            standardApplicationRoot
+        }
+    }
+
+    private var standardApplicationRoot: some View {
         ZStack {
             // The main shell is a NavigationSplitView whose sidebar is backed by an
             // AppKit NSVisualEffectView (vibrancy). That material renders straight to
@@ -99,6 +105,51 @@ struct RootView: View {
     }
 }
 
+private struct RestoreTerminalGate<Content: View>: View {
+    @ObservedObject var backup: BackupController
+    let content: Content
+
+    init(
+        backup: BackupController,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.backup = backup
+        self.content = content()
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if backup.restoreProcessIsTerminal {
+            RestoreFinishingView()
+        } else {
+            content
+        }
+    }
+}
+
+private struct RestoreFinishingView: View {
+    var body: some View {
+        VStack(spacing: 18) {
+            ProgressView()
+                .controlSize(.large)
+                .accessibilityLabel("Restore finishing")
+            Text("Finishing restore")
+                .font(.title2.weight(.semibold))
+            Text("Supra AI is closing its database, creating a verified safety copy, and staging the selected backup. It will quit automatically. Reopen Supra AI to activate the restore on its next launch.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 620)
+                .accessibilityIdentifier("restore.terminal.status")
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Restore finishing. Supra AI will quit automatically.")
+        .accessibilityIdentifier("restore.terminal.shell")
+    }
+}
+
 private struct DatabaseRecoveryView: View {
     let state: DatabaseRecoveryState
 
@@ -114,19 +165,23 @@ private struct DatabaseRecoveryView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 620)
+                .accessibilityIdentifier("restore.recovery.instructions")
+                .accessibilityLabel(state.message)
 
             HStack(spacing: 12) {
-                if let snapshotURL = state.snapshotURL {
-                    Button("Show Recovery Snapshot") {
-                        NSWorkspace.shared.activateFileViewerSelecting([snapshotURL])
+                if let recoveryItemURL = state.recoveryItemURL {
+                    Button(state.recoveryActionTitle) {
+                        NSWorkspace.shared.activateFileViewerSelecting([recoveryItemURL])
                     }
-                    .accessibilityHint("Opens Finder with the verified recovery database selected.")
+                    .accessibilityHint(state.recoveryActionHint)
+                    .accessibilityIdentifier("restore.recovery.snapshot")
                 }
                 Button("Quit Without Changes") {
                     NSApplication.shared.terminate(nil)
                 }
                 .keyboardShortcut(.cancelAction)
                 .accessibilityHint("Quits without allowing new work to be saved to temporary storage.")
+                .accessibilityIdentifier("restore.recovery.quit")
             }
         }
         .padding(40)
@@ -134,6 +189,7 @@ private struct DatabaseRecoveryView: View {
         .background(.background)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Database recovery required")
+        .accessibilityIdentifier("restore.recovery.shell")
     }
 }
 

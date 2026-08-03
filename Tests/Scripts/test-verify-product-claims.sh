@@ -46,6 +46,50 @@ run_case \
     in_claim && /^    verification:/ { print; exit }
   ' "$claims"
 
+# T-RST-H10 expected RED: the public restore safety guarantees have no owned,
+# versioned entries in the controlled claims inventory, so drift is not gated.
+run_case \
+  "quiesced restore staging claim is registered" \
+  0 \
+  'Apps/SupraAI/SupraAIUITests/RestoreSettingsUITests.swift' \
+  awk '
+    /^  - id: "RESTORE-QUIESCED-STAGING"/ { in_claim = 1 }
+    in_claim { print }
+    in_claim && /^    publication_anchor:/ { exit }
+  ' "$claims"
+
+run_case \
+  "verified restore staging claim is registered" \
+  0 \
+  'Packages/SupraStore/Tests/SupraStoreTests/RestoreServiceTests.swift' \
+  awk '
+    /^  - id: "RESTORE-VERIFIED-STAGING"/ { in_claim = 1 }
+    in_claim { print }
+    in_claim && /^    publication_anchor:/ { exit }
+  ' "$claims"
+
+run_case \
+  "cold-start restore recovery claim is registered" \
+  0 \
+  'Packages/SupraStore/Tests/SupraStoreTests/RestoreActivationServiceTests.swift' \
+  awk '
+    /^  - id: "RESTORE-COLD-START-RECOVERY"/ { in_claim = 1 }
+    in_claim { print }
+    in_claim && /^    publication_anchor:/ { exit }
+  ' "$claims"
+
+# Expected RED: app-start ordering and the recovery-required store boundary are
+# implemented but have no independently owned, versioned claim or guard.
+run_case \
+  "cold-start restore ordering claim is registered" \
+  0 \
+  'Tests/Scripts/test-backup-restore-documentation.sh' \
+  awk '
+    /^  - id: "RESTORE-COLD-START-ORDER"/ { in_claim = 1 }
+    in_claim { print }
+    in_claim && /^    publication_anchor:/ { exit }
+  ' "$claims"
+
 drifted_count="${temporary_dir}/drifted-count.yml"
 awk '!changed && sub(/expected: "14"/, "expected: \"13\"") { changed = 1 } { print }' \
   "$claims" >"$drifted_count"

@@ -70,6 +70,20 @@ public struct RestoreSnapshotSummary: Equatable, Sendable {
     public let appBuild: String
     public let databaseBytes: Int
     public let referencedBlobCount: Int
+
+    public init(
+        createdAt: Date,
+        appVersion: String,
+        appBuild: String,
+        databaseBytes: Int,
+        referencedBlobCount: Int
+    ) {
+        self.createdAt = createdAt
+        self.appVersion = appVersion
+        self.appBuild = appBuild
+        self.databaseBytes = databaseBytes
+        self.referencedBlobCount = referencedBlobCount
+    }
 }
 
 /// The inspection result for one manifest-backed snapshot. A malformed
@@ -89,6 +103,28 @@ public struct RestoreSnapshotCandidate: Equatable, Sendable {
     public let incompatibility: RestoreIncompatibility?
 
     public var isRestorable: Bool { incompatibility == nil }
+
+    public init(
+        identifier: String,
+        backupDirectoryURL: URL,
+        snapshotURL: URL,
+        manifestURL: URL,
+        manifest: BackupManifest?,
+        summary: RestoreSnapshotSummary?,
+        databaseSHA256: String?,
+        referencedBlobs: [RestoreBlobReference],
+        incompatibility: RestoreIncompatibility?
+    ) {
+        self.identifier = identifier
+        self.backupDirectoryURL = backupDirectoryURL
+        self.snapshotURL = snapshotURL
+        self.manifestURL = manifestURL
+        self.manifest = manifest
+        self.summary = summary
+        self.databaseSHA256 = databaseSHA256
+        self.referencedBlobs = referencedBlobs
+        self.incompatibility = incompatibility
+    }
 }
 
 /// Discovers and validates manifest-backed backup snapshots without modifying

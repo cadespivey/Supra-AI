@@ -57,7 +57,123 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: staged.markerURL.path))
     }
 
-    // T-RST-20 expected RED: selected blobs are not installed at cold start.
+    // Review follow-up expected RED if post-open validation is removed: a
+    // successful database open is not sufficient. If the selected blob state
+    // changes inside the open seam, RestoreValidation must reject activation and
+    // verify the safety rollback.
+    func testSelectedStateValidationAfterOpenTriggersVerifiedRollback() throws {
+        let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        _ = try stage(
+            currentBlobs: [currentBlob],
+            selectedBlobs: [selectedBlob]
+        )
+        let operations = RecordingRestoreActivationOperations()
+        var openCount = 0
+
+        let result = activate(operations: operations) { _ in
+            openCount += 1
+            let database = try SupraDatabase.inMemory()
+            if openCount == 1 {
+                operations.record(.openSelectedDatabase)
+                let selectedURL = self.fixture.liveBlobsDirectory.appendingPathComponent(
+                    selectedBlob.relativePath
+                )
+                let installedBytes = try? Data(contentsOf: selectedURL)
+                XCTAssertEqual(installedBytes, selectedBlob.bytes)
+                guard installedBytes == selectedBlob.bytes else {
+                    XCTFail("Selected blob must be installed before the open seam mutates it")
+                    throw ActivationTestError.selectedOpen
+                }
+                try FileManager.default.removeItem(
+                    at: selectedURL
+                )
+                XCTAssertFalse(FileManager.default.fileExists(atPath: selectedURL.path))
+            } else {
+                operations.record(.openSafetyDatabase)
+            }
+            return database
+        }
+
+        XCTAssertEqual(openCount, 2)
+        XCTAssertEqual(result.status, .failedAndRolledBack)
+        XCTAssertEqual(result.activationFailure, .databaseOpenFailed)
+        XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
+        XCTAssertEqual(
+            try Data(contentsOf: fixture.liveBlobsDirectory.appendingPathComponent(
+                currentBlob.relativePath
+            )),
+            currentBlob.bytes
+        )
+    }
+
+    // Review follow-up expected RED if rollback post-open validation is removed:
+    // a safety blob changed inside that open seam must require recovery rather
+    // than reporting a verified rollback.
+    func testRollbackStateValidationAfterOpenRequiresRecovery() throws {
+        let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        let staged = try stage(
+            currentBlobs: [currentBlob],
+            selectedBlobs: [selectedBlob]
+        )
+        let operations = RecordingRestoreActivationOperations()
+        var openCount = 0
+
+        let result = activate(operations: operations) { _ in
+            openCount += 1
+            let database = try SupraDatabase.inMemory()
+            if openCount == 1 {
+                operations.record(.openSelectedDatabase)
+                let selectedURL = self.fixture.liveBlobsDirectory.appendingPathComponent(
+                    selectedBlob.relativePath
+                )
+                let installedBytes = try? Data(contentsOf: selectedURL)
+                XCTAssertEqual(installedBytes, selectedBlob.bytes)
+                guard installedBytes == selectedBlob.bytes else {
+                    XCTFail("Selected blob must be installed before the open seam mutates it")
+                    throw ActivationTestError.selectedOpen
+                }
+                try FileManager.default.removeItem(
+                    at: selectedURL
+                )
+                XCTAssertFalse(FileManager.default.fileExists(atPath: selectedURL.path))
+            } else {
+                operations.record(.openSafetyDatabase)
+                let safetyURL = self.fixture.liveBlobsDirectory.appendingPathComponent(
+                    currentBlob.relativePath
+                )
+                let installedBytes = try? Data(contentsOf: safetyURL)
+                XCTAssertEqual(installedBytes, currentBlob.bytes)
+                guard installedBytes == currentBlob.bytes else {
+                    XCTFail("Safety blob must be reinstalled before the open seam mutates it")
+                    throw ActivationTestError.safetyOpen
+                }
+                try FileManager.default.removeItem(
+                    at: safetyURL
+                )
+                XCTAssertFalse(FileManager.default.fileExists(atPath: safetyURL.path))
+            }
+            return database
+        }
+
+        XCTAssertEqual(openCount, 2)
+        XCTAssertEqual(result.status, .recoveryRequired)
+        XCTAssertEqual(result.activationFailure, .databaseOpenFailed)
+        XCTAssertEqual(result.rollbackFailure, .databaseOpenFailed)
+        XCTAssertEqual(
+            result.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: staged.safetyBlobsDirectory.appendingPathComponent(
+                currentBlob.relativePath
+            ).path
+        ))
+    }
+
+    // T-RST-20/T-RST-38 expected RED: selected blobs are not installed at cold
+    // start, so the selected managed blob is absent from the live tree.
     func testActivationInstallsSelectedBlobsAndPreservesUnrelatedLiveObjects() throws {
         let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
         let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
@@ -81,6 +197,102 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(operations.events.contains(.copySelectedBlob))
     }
 
+    // expected RED: first-use blob installation publishes the outcome and
+    // consumes the marker without synchronizing the new live blob-root parent.
+    func testActivationPublishesNewLiveBlobRootBeforeOutcomeAndMarkerConsumption() throws {
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        _ = try stage(selectedBlobs: [selectedBlob])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.liveBlobsDirectory.path))
+        let operations = RecordingRestoreActivationOperations()
+
+        XCTAssertEqual(activate(operations: operations).status, .activated)
+
+        let parentSync = try XCTUnwrap(
+            operations.events.firstIndex(of: .synchronizeLiveBlobParent)
+        )
+        XCTAssertLessThan(
+            parentSync,
+            try XCTUnwrap(operations.events.firstIndex(of: .writeOutcome))
+        )
+        XCTAssertLessThan(
+            parentSync,
+            try XCTUnwrap(operations.events.firstIndex(of: .removeMarker))
+        )
+    }
+
+    // expected RED: failure to synchronize the new live blob-root parent is
+    // ignored, so activation reports success and consumes the pending marker.
+    func testActivationFailsClosedWhenNewLiveBlobRootParentSyncFails() throws {
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        _ = try stage(selectedBlobs: [selectedBlob])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.liveBlobsDirectory.path))
+        let operations = RecordingRestoreActivationOperations(
+            failureCounts: [.synchronizeLiveBlobParent: 1]
+        )
+
+        let result = activate(operations: operations)
+
+        XCTAssertEqual(result.status, .failedAndRolledBack)
+        XCTAssertEqual(result.activationFailure, .blobInstallationFailed)
+        XCTAssertTrue(operations.events.contains(.synchronizeLiveBlobParent))
+    }
+
+    // expected RED: once the blob root is visible after a failed parent sync,
+    // retry skips the publication proof and writes terminal evidence first.
+    func testLiveBlobRootPublicationRetriesWhenVisibleAfterSyncFailure() throws {
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        _ = try stage(selectedBlobs: [selectedBlob])
+        let first = activate(operations: RecordingRestoreActivationOperations(
+            failureCounts: [.synchronizeLiveBlobParent: 1]
+        ))
+        XCTAssertEqual(first.status, .failedAndRolledBack)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.liveBlobsDirectory.path))
+        try RestoreSidecarStore.acknowledgeActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+        _ = try stageCandidate(knownMigrations: migrations)
+        let retryOperations = RecordingRestoreActivationOperations()
+
+        XCTAssertEqual(activate(operations: retryOperations).status, .activated)
+
+        XCTAssertLessThan(
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .synchronizeLiveBlobParent)),
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .writeOutcome))
+        )
+    }
+
+    // expected RED: retry of a two-level MatterDocuments/blobs root does not
+    // publish through the known live-database parent before terminal evidence.
+    func testTwoLevelBlobRootRetryPublishesThroughLiveDatabaseParent() throws {
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        _ = try stage(selectedBlobs: [selectedBlob])
+        let nestedBlobsDirectory = fixture.liveDatabaseURL.deletingLastPathComponent()
+            .appendingPathComponent("MatterDocuments/blobs", isDirectory: true)
+        let first = activate(
+            operations: RecordingRestoreActivationOperations(
+                failureCounts: [.synchronizeLiveBlobParent: 1]
+            ),
+            liveBlobsDirectory: nestedBlobsDirectory
+        )
+        XCTAssertEqual(first.status, .failedAndRolledBack)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: nestedBlobsDirectory.path))
+        try RestoreSidecarStore.acknowledgeActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+        _ = try stageCandidate(knownMigrations: migrations)
+        let retryOperations = RecordingRestoreActivationOperations()
+
+        XCTAssertEqual(activate(
+            operations: retryOperations,
+            liveBlobsDirectory: nestedBlobsDirectory
+        ).status, .activated)
+
+        XCTAssertLessThan(
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .synchronizeLiveBlobParent)),
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .writeOutcome))
+        )
+    }
+
     // T-RST-21 expected RED: blob installation has no idempotent reuse rule.
     func testActivationReusesAlreadyCorrectSelectedBlobWithoutOverwritingIt() throws {
         let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
@@ -100,7 +312,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertFalse(operations.events.contains(.copySelectedBlob))
     }
 
-    // T-RST-22 expected RED: a consumed marker cannot yet be proven a no-op.
+    // T-RST-22/T-RST-41 expected RED: a consumed marker cannot yet be proven a
+    // no-op, so a later launch can attempt selected-state mutation again.
     func testActivationIsNoOpAfterSuccessfulMarkerConsumption() throws {
         _ = try stage()
         let operations = RecordingRestoreActivationOperations()
@@ -112,6 +325,20 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(second.status, .noPendingRestore)
         XCTAssertEqual(operations.events.count, eventCount)
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "selected canary")
+    }
+
+    // T-RST-H04 expected RED: successful activation consumes the marker but
+    // leaves the authenticated selected and safety trees indefinitely.
+    func testActivatedOutcomeRemovesItsOperationTreeDurably() throws {
+        let staged = try stage()
+        let operations = RecordingRestoreActivationOperations()
+
+        let result = activate(operations: operations)
+
+        XCTAssertEqual(result.status, .activated)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertTrue(operations.events.contains(.removeOperationTree))
+        XCTAssertTrue(operations.events.contains(.synchronizeOperationsDirectory))
     }
 
     // T-RST-23 expected RED: replacement failure has no verified safety rollback.
@@ -149,6 +376,72 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(second.status, .noPendingRestore)
         XCTAssertTrue(secondOperations.events.isEmpty)
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
+    }
+
+    // T-RST-H05 expected RED: verified rollback is terminal, but its operation
+    // tree is retained even though recovery no longer depends on it.
+    func testFailedAndRolledBackOutcomeRemovesItsOperationTreeDurably() throws {
+        let staged = try stage()
+        let operations = RecordingRestoreActivationOperations(
+            failures: [.replaceSelectedDatabase]
+        )
+
+        let result = activate(operations: operations)
+
+        XCTAssertEqual(result.status, .failedAndRolledBack)
+        XCTAssertNil(result.recoverySafetyDirectoryURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertTrue(operations.events.contains(.removeOperationTree))
+        XCTAssertTrue(operations.events.contains(.synchronizeOperationsDirectory))
+    }
+
+    // T-RST-H06 expected RED: a terminal cleanup failure has no durable retry
+    // key once its pending marker has already been consumed.
+    func testTerminalCleanupFailureRetriesFromDurableOutcomeOnNextLaunch() throws {
+        let staged = try stage()
+        let firstOperations = RecordingRestoreActivationOperations(
+            failures: [.removeOperationTree]
+        )
+
+        let first = activate(operations: firstOperations)
+
+        XCTAssertEqual(first.status, .activated)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        let firstOutcome = try XCTUnwrap(RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+        XCTAssertEqual(firstOutcome.operationID, staged.intent.operationID)
+        XCTAssertEqual(firstOutcome.status, .activated)
+        let secondOperations = RecordingRestoreActivationOperations()
+
+        let second = activate(operations: secondOperations)
+
+        XCTAssertEqual(second.status, .noPendingRestore)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertTrue(secondOperations.events.contains(.removeOperationTree))
+        XCTAssertTrue(secondOperations.events.contains(.synchronizeOperationsDirectory))
+    }
+
+    // T-RST-H06 expected RED: if unlink succeeds but the containing-directory
+    // sync fails, the next launch does not republish that removal because the
+    // operation directory is already absent in the running filesystem view.
+    func testTerminalCleanupRetriesDirectorySyncAfterUnlinkAlreadySucceeded() throws {
+        let staged = try stage()
+        let firstOperations = RecordingRestoreActivationOperations(
+            failures: [.synchronizeOperationsDirectory]
+        )
+
+        let first = activate(operations: firstOperations)
+
+        XCTAssertEqual(first.status, .activated)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertTrue(firstOperations.events.contains(.synchronizeOperationsDirectory))
+        let secondOperations = RecordingRestoreActivationOperations()
+
+        let second = activate(operations: secondOperations)
+
+        XCTAssertEqual(second.status, .noPendingRestore)
+        XCTAssertTrue(secondOperations.events.contains(.synchronizeOperationsDirectory))
     }
 
     // T-RST-24 expected RED: first-open failure can leave selected data live.
@@ -209,8 +502,194 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(result.status, .recoveryRequired)
         XCTAssertEqual(result.activationFailure, .databaseReplacementFailed)
         XCTAssertEqual(result.rollbackFailure, .databaseReplacementFailed)
-        XCTAssertEqual(result.recoveryDatabaseURL, staged.safetyDatabaseURL)
+        XCTAssertEqual(
+            result.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
         XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertFalse(operations.events.contains(.removeOperationTree))
+    }
+
+    // T-RST-H08 expected RED: recovery exposes only the safety database, so the
+    // sibling managed-blob tree can be omitted from the item offered for preservation.
+    func testRecoveryRequiredExposesCompleteSafetyDirectoryForManualPreservation() throws {
+        let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
+        let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
+        let staged = try stage(
+            currentBlobs: [currentBlob],
+            selectedBlobs: [selectedBlob]
+        )
+        try FileManager.default.removeItem(
+            at: fixture.liveBlobsDirectory.appendingPathComponent(currentBlob.relativePath)
+        )
+        let operations = RecordingRestoreActivationOperations(failures: [.copySafetyBlob])
+
+        let result = activate(operations: operations) { _ in
+            operations.record(.openSelectedDatabase)
+            throw ActivationTestError.selectedOpen
+        }
+
+        XCTAssertEqual(result.status, .recoveryRequired)
+        XCTAssertEqual(result.activationFailure, .databaseOpenFailed)
+        XCTAssertEqual(result.rollbackFailure, .blobInstallationFailed)
+        let recoveryDirectory = try XCTUnwrap(result.recoverySafetyDirectoryURL)
+        XCTAssertEqual(recoveryDirectory, staged.safetyDatabaseURL.deletingLastPathComponent())
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryDirectory.appendingPathComponent("restore-safety.sqlite").path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryDirectory
+                .appendingPathComponent("blobs", isDirectory: true)
+                .appendingPathComponent(currentBlob.relativePath)
+                .path
+        ))
+    }
+
+    // expected RED: a durable recovery-required outcome is ignored on the next
+    // launch, which retries selected-state mutation instead of freezing replay.
+    func testDurableRecoveryOutcomeFreezesSecondLaunchBeforeMutation() throws {
+        let staged = try stage()
+        let firstOperations = RecordingRestoreActivationOperations(
+            failures: [.replaceSelectedDatabase, .replaceSafetyDatabase]
+        )
+
+        let first = activate(operations: firstOperations)
+
+        XCTAssertEqual(first.status, .recoveryRequired)
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let durableOutcome = try Data(contentsOf: outcomeURL)
+        let secondOperations = RecordingRestoreActivationOperations()
+
+        let second = activate(operations: secondOperations)
+
+        XCTAssertEqual(second.status, .recoveryRequired)
+        XCTAssertEqual(second.activationFailure, first.activationFailure)
+        XCTAssertEqual(second.rollbackFailure, first.rollbackFailure)
+        XCTAssertEqual(second.operationID, staged.intent.operationID)
+        XCTAssertEqual(second.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertEqual(
+            second.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
+        XCTAssertTrue(secondOperations.events.isEmpty)
+        XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertEqual(try Data(contentsOf: outcomeURL), durableOutcome)
+    }
+
+    // expected RED: activation and rollback consume the pending marker before
+    // the terminal outcome sidecar has been written durably.
+    func testTerminalOutcomeIsDurableBeforePendingMarkerConsumption() throws {
+        _ = try stage()
+        let activationOperations = RecordingRestoreActivationOperations()
+
+        XCTAssertEqual(activate(operations: activationOperations).status, .activated)
+        XCTAssertLessThan(
+            try XCTUnwrap(activationOperations.events.firstIndex(of: .writeOutcome)),
+            try XCTUnwrap(activationOperations.events.firstIndex(of: .removeMarker))
+        )
+
+        fixture.remove()
+        fixture = try RestoreTestFixture()
+        _ = try stage()
+        let rollbackOperations = RecordingRestoreActivationOperations(
+            failures: [.replaceSelectedDatabase]
+        )
+
+        XCTAssertEqual(activate(operations: rollbackOperations).status, .failedAndRolledBack)
+        XCTAssertLessThan(
+            try XCTUnwrap(rollbackOperations.events.firstIndex(of: .writeOutcome)),
+            try XCTUnwrap(rollbackOperations.events.firstIndex(of: .removeMarker))
+        )
+    }
+
+    // T-RST-H09 expected RED: marker reconciliation accepts a schema-v2
+    // outcome whose schedule timestamp conflicts with the authenticated intent.
+    func testMarkerRetainedRetryRejectsConflictingScheduleTimestamp() throws {
+        let staged = try stage()
+        let conflictingOutcome = RestoreOutcomeRecord(
+            schemaVersion: RestoreOutcomeRecord.currentSchemaVersion,
+            operationID: staged.intent.operationID,
+            snapshotIdentifier: staged.intent.selectedSnapshotIdentifier,
+            scheduledAt: staged.intent.createdAt.addingTimeInterval(60),
+            status: .activated,
+            activationFailure: nil,
+            rollbackFailure: nil,
+            completedAt: Date(timeIntervalSince1970: 1_788_969_600),
+            operationTreeCleanupPending: true
+        )
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        try RestoreOutcomeRecord.encode(conflictingOutcome).write(to: outcomeURL, options: .atomic)
+        let operations = RecordingRestoreActivationOperations()
+
+        let result = activate(operations: operations)
+
+        XCTAssertEqual(result.status, .recoveryRequired)
+        XCTAssertEqual(result.activationFailure, .invalidIntent)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertFalse(operations.events.contains(.removeMarker))
+        XCTAssertFalse(operations.events.contains(.replaceSelectedDatabase))
+        XCTAssertFalse(operations.events.contains(.replaceSafetyDatabase))
+    }
+
+    // expected RED: marker-removal retry failure returns recovery without the
+    // authenticated operation, snapshot, and verified safety-database context.
+    func testTerminalOutcomeMarkerRetryFailureRetainsAuthenticatedRecoveryContext() throws {
+        let staged = try stage()
+        let terminal = RestoreActivationResult.failedAndRolledBack(
+            .databaseReplacementFailed,
+            intent: staged.intent
+        )
+        _ = try RestoreSidecarStore.recordActivationOutcome(
+            terminal,
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            completedAt: Date(timeIntervalSince1970: 1_788_969_600),
+            fileManager: .default,
+            operations: SystemRestoreActivationFileOperations()
+        )
+        let operations = RecordingRestoreActivationOperations(failures: [.removeMarker])
+
+        let result = activate(operations: operations)
+
+        XCTAssertEqual(result.status, .recoveryRequired)
+        XCTAssertEqual(result.activationFailure, .databaseReplacementFailed)
+        XCTAssertEqual(result.rollbackFailure, .markerRemovalFailed)
+        XCTAssertEqual(result.operationID, staged.intent.operationID)
+        XCTAssertEqual(result.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertEqual(
+            result.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertFalse(operations.events.contains(.replaceSelectedDatabase))
+        XCTAssertFalse(operations.events.contains(.replaceSafetyDatabase))
+    }
+
+    // expected RED: an outcome-sidecar write fault consumes the pending marker
+    // or loses authenticated context, silently discarding replay and cleanup state.
+    func testOutcomeWriteFailureKeepsPendingMarkerAndBlocksLaunch() throws {
+        let staged = try stage()
+        let operations = RecordingRestoreActivationOperations(failures: [.writeOutcome])
+
+        let result = activate(operations: operations)
+
+        XCTAssertEqual(result.status, .recoveryRequired)
+        XCTAssertEqual(result.activationFailure, .outcomePersistenceFailed)
+        XCTAssertEqual(result.operationID, staged.intent.operationID)
+        XCTAssertEqual(result.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+        XCTAssertFalse(operations.events.contains(.removeMarker))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.stagingRootDirectory
+                .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName).path
+        ))
     }
 
     // T-RST-27 expected RED: rollback open/validation double failure can be
@@ -231,7 +710,10 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(result.status, .recoveryRequired)
         XCTAssertEqual(result.activationFailure, .databaseOpenFailed)
         XCTAssertEqual(result.rollbackFailure, .databaseOpenFailed)
-        XCTAssertEqual(result.recoveryDatabaseURL, staged.safetyDatabaseURL)
+        XCTAssertEqual(
+            result.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
     }
 
@@ -246,7 +728,7 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(result.status, .recoveryRequired)
         XCTAssertEqual(result.activationFailure, .safetyStateInvalid)
         XCTAssertEqual(result.rollbackFailure, .safetyStateInvalid)
-        XCTAssertNil(result.recoveryDatabaseURL)
+        XCTAssertNil(result.recoverySafetyDirectoryURL)
         XCTAssertEqual(try fixture.sentinel(in: fixture.liveDatabaseURL), "current canary")
     }
 
@@ -290,6 +772,433 @@ final class RestoreActivationServiceTests: XCTestCase {
             failingOperations.events.filter { $0 == .synchronizeMarkerDirectory }.count,
             2
         )
+
+        let replayOperations = RecordingRestoreActivationOperations()
+        let replay = activate(operations: replayOperations)
+
+        XCTAssertEqual(replay.status, .recoveryRequired)
+        XCTAssertEqual(replay.activationFailure, failed.activationFailure)
+        XCTAssertEqual(replay.rollbackFailure, failed.rollbackFailure)
+        XCTAssertEqual(replay.operationID, staged.intent.operationID)
+        XCTAssertEqual(replay.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertEqual(
+            replay.recoverySafetyDirectoryURL,
+            staged.safetyDatabaseURL.deletingLastPathComponent()
+        )
+        XCTAssertTrue(replayOperations.events.isEmpty)
+    }
+
+    // expected RED: markerless recovery trusts tampered operation-local intent
+    // and can re-enter live-state mutation instead of failing closed.
+    func testMarkerlessRecoveryRejectsTamperedOperationIntentWithoutLiveMutation() throws {
+        let staged = try stage()
+        let failed = activate(operations: RecordingRestoreActivationOperations(
+            failures: [.synchronizeMarkerDirectory]
+        ))
+        XCTAssertEqual(failed.status, .recoveryRequired)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        try Data("{}".utf8).write(
+            to: staged.operationDirectoryURL
+                .appendingPathComponent(RestoreIntent.operationFileName),
+            options: .atomic
+        )
+        let liveFingerprint = try fixture.fingerprint(fixture.liveDatabaseURL)
+        let replayOperations = RecordingRestoreActivationOperations()
+
+        let replay = activate(operations: replayOperations)
+
+        XCTAssertEqual(replay.status, .recoveryRequired)
+        XCTAssertEqual(replay.activationFailure, .safetyStateInvalid)
+        XCTAssertEqual(replay.rollbackFailure, .safetyStateInvalid)
+        XCTAssertNil(replay.recoverySafetyDirectoryURL)
+        XCTAssertEqual(try fixture.fingerprint(fixture.liveDatabaseURL), liveFingerprint)
+        XCTAssertTrue(replayOperations.events.isEmpty)
+    }
+
+    // T-RST-40...42 expected RED: the launch service has no durable,
+    // content-free outcome record whose bytes remain stable on a second launch.
+    // T-RST-H09 expected RED: the authenticated scheduling timestamp is lost
+    // when activation replaces the database that contains restore_scheduled.
+    func testTRST40Through42OutcomeIsContentFreeIdempotentAndLeavesBackupUntouched() throws {
+        try fixture.writeShippingLiveState(sentinel: "current private canary")
+        let source = try fixture.writeCompleteShippingSnapshot(
+            sentinel: "selected private canary"
+        )
+        let sourceFingerprint = try [source.snapshot, source.manifest].map(fixture.fingerprint)
+        let shippingMigrations = SupraMigrator.makeMigrator().migrations
+        let staged = try stageCandidate(knownMigrations: shippingMigrations)
+
+        let first = RestoreActivationService.activatePendingRestore(
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: shippingMigrations
+        )
+
+        XCTAssertEqual(first.status, .activated)
+        XCTAssertEqual(first.operationID, staged.intent.operationID)
+        XCTAssertEqual(first.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertEqual(first.scheduledAt, staged.intent.createdAt)
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let firstOutcomeData = try Data(contentsOf: outcomeURL)
+        let outcome = try RestoreOutcomeRecord.decode(firstOutcomeData)
+        XCTAssertEqual(outcome.schemaVersion, RestoreOutcomeRecord.currentSchemaVersion)
+        XCTAssertEqual(outcome.status, .activated)
+        XCTAssertEqual(outcome.operationID, staged.intent.operationID)
+        XCTAssertEqual(outcome.snapshotIdentifier, staged.intent.selectedSnapshotIdentifier)
+        XCTAssertEqual(outcome.scheduledAt, staged.intent.createdAt)
+        XCTAssertNil(outcome.activationFailure)
+        XCTAssertNil(outcome.rollbackFailure)
+
+        let serialized = try XCTUnwrap(String(data: firstOutcomeData, encoding: .utf8))
+        XCTAssertFalse(serialized.contains(fixture.root.path))
+        XCTAssertFalse(serialized.contains(source.snapshot.path))
+        XCTAssertFalse(serialized.contains("private canary"))
+
+        let second = RestoreActivationService.activatePendingRestore(
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: shippingMigrations
+        )
+
+        XCTAssertEqual(second.status, .noPendingRestore)
+        XCTAssertEqual(try Data(contentsOf: outcomeURL), firstOutcomeData)
+        XCTAssertEqual(
+            try [source.snapshot, source.manifest].map(fixture.fingerprint),
+            sourceFingerprint
+        )
+    }
+
+    // T-RST-H07 expected RED: activation writes a display-safe outcome, but
+    // clients must read and unlink its raw file themselves.
+    func testActivationOutcomeReadAndAcknowledgeAPI() throws {
+        try fixture.writeShippingLiveState(sentinel: "current canary")
+        _ = try fixture.writeCompleteShippingSnapshot(sentinel: "selected canary")
+        let shippingMigrations = SupraMigrator.makeMigrator().migrations
+        let staged = try stageCandidate(knownMigrations: shippingMigrations)
+
+        let result = RestoreActivationService.activatePendingRestore(
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: shippingMigrations
+        )
+
+        XCTAssertEqual(result.status, .activated)
+        let record = try XCTUnwrap(RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+        XCTAssertEqual(record.operationID, staged.intent.operationID)
+        XCTAssertEqual(record.status, .activated)
+
+        try RestoreSidecarStore.acknowledgeActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+
+        XCTAssertNil(try RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+    }
+
+    // expected RED: after outcome unlink succeeds but directory sync fails, a
+    // retry sees no sidecar and omits the outstanding removal durability proof.
+    func testActivationOutcomeAcknowledgementRetriesAfterUnlinkSyncFailure() throws {
+        _ = try stage()
+        XCTAssertEqual(
+            activate(operations: RecordingRestoreActivationOperations()).status,
+            .activated
+        )
+        let failingOperations = RecordingRestoreActivationOperations(
+            failureCounts: [.synchronizeMarkerDirectory: 1]
+        )
+
+        XCTAssertThrowsError(try RestoreSidecarStore.acknowledgeActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: failingOperations
+        ))
+
+        let replayOperations = RecordingRestoreActivationOperations()
+        XCTAssertNil(try RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: replayOperations
+        ))
+        XCTAssertTrue(replayOperations.events.contains(.synchronizeMarkerDirectory))
+    }
+
+    // expected RED: after staging-failure unlink succeeds but directory sync
+    // fails, a retry sees no sidecar and omits the outstanding durability proof.
+    func testStagingFailureAcknowledgementRetriesAfterUnlinkSyncFailure() throws {
+        let operationID = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
+        _ = try RestoreSidecarStore.recordStagingFailure(
+            operationID: operationID,
+            reason: .stagingIOFailed,
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+        let failingOperations = RecordingRestoreActivationOperations(
+            failureCounts: [.synchronizeMarkerDirectory: 1]
+        )
+
+        XCTAssertThrowsError(try RestoreSidecarStore.acknowledgeStagingFailure(
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: failingOperations
+        ))
+
+        let replayOperations = RecordingRestoreActivationOperations()
+        XCTAssertNil(try RestoreSidecarStore.readStagingFailure(
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: replayOperations
+        ))
+        XCTAssertTrue(replayOperations.events.contains(.synchronizeMarkerDirectory))
+    }
+
+    // expected RED: first-use failure-sidecar creation does not durably publish
+    // the staging root through its parent or retry that proof after failure.
+    func testFirstUseStagingFailureSidecarPublishesParentAndRetriesProof() throws {
+        let operationID = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
+        let stagingParent = fixture.stagingRootDirectory.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: stagingParent,
+            withIntermediateDirectories: true
+        )
+        let failingOperations = RecordingRestoreActivationOperations(
+            failureCounts: [.synchronizeStagingParent: 1],
+            stagingParentURL: stagingParent
+        )
+
+        XCTAssertThrowsError(try RestoreSidecarStore.recordStagingFailure(
+            operationID: operationID,
+            reason: .stagingIOFailed,
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: failingOperations
+        ))
+
+        let retryOperations = RecordingRestoreActivationOperations(
+            stagingParentURL: stagingParent
+        )
+        XCTAssertEqual(try RestoreSidecarStore.readStagingFailure(
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: retryOperations
+        )?.operationID, operationID.uuidString.lowercased())
+        XCTAssertTrue(retryOperations.events.contains(.synchronizeStagingParent))
+    }
+
+    // expected RED: acknowledging a recovery-required outcome removes its
+    // durable freeze even though the marker and recovery operation tree remain.
+    func testRecoveryOutcomeAcknowledgementPreservesDurableFreezeAndOperationTree() throws {
+        let staged = try stage()
+        let result = activate(operations: RecordingRestoreActivationOperations(
+            failures: [.replaceSelectedDatabase, .replaceSafetyDatabase]
+        ))
+        XCTAssertEqual(result.status, .recoveryRequired)
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let outcomeData = try Data(contentsOf: outcomeURL)
+
+        try RestoreSidecarStore.acknowledgeActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+
+        XCTAssertEqual(try Data(contentsOf: outcomeURL), outcomeData)
+        XCTAssertEqual(
+            try RestoreSidecarStore.readActivationOutcome(
+                stagingRootDirectory: fixture.stagingRootDirectory
+            )?.status,
+            .recoveryRequired
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.markerURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
+    }
+
+    // expected RED: no bounded cleanup seam removes only the exact unclaimed
+    // interrupted operation while preserving unrelated operation trees.
+    func testInterruptedStagingCleanupRemovesOnlyExactUnclaimedOperation() throws {
+        let interruptedID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let unrelatedID = "44444444-4444-4444-4444-444444444444"
+        let operationsDirectory = fixture.stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+        let interruptedDirectory = operationsDirectory.appendingPathComponent(
+            interruptedID.uuidString.lowercased(),
+            isDirectory: true
+        )
+        let unrelatedDirectory = operationsDirectory.appendingPathComponent(
+            unrelatedID,
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: interruptedDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: unrelatedDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let removed = try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: interruptedID,
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+
+        XCTAssertTrue(removed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: interruptedDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedDirectory.path))
+    }
+
+    // expected RED: interrupted cleanup returns early when the child is already
+    // absent, skipping the operations-directory sync still owed after unlink.
+    func testInterruptedStagingCleanupRetriesOperationsSyncWhenTreeAlreadyAbsent() throws {
+        let interruptedID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let operationDirectory = fixture.stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+            .appendingPathComponent(interruptedID.uuidString.lowercased(), isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: operationDirectory,
+            withIntermediateDirectories: true
+        )
+        let firstOperations = RecordingRestoreActivationOperations(
+            failureCounts: [.synchronizeOperationsDirectory: 1]
+        )
+
+        XCTAssertThrowsError(try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: interruptedID,
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: firstOperations
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: operationDirectory.path))
+
+        let retryOperations = RecordingRestoreActivationOperations()
+        XCTAssertTrue(try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: interruptedID,
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            fileManager: .default,
+            operations: retryOperations
+        ))
+        XCTAssertEqual(
+            retryOperations.events.filter { $0 == .synchronizeOperationsDirectory }.count,
+            1
+        )
+    }
+
+    // expected RED: interrupted cleanup has no durable claim check and can
+    // remove an operation still owned by a pending marker or recovery outcome.
+    func testInterruptedStagingCleanupPreservesMarkerAndRecoveryClaimedTrees() throws {
+        let markerClaimed = try stage()
+        let markerOperationID = try XCTUnwrap(UUID(uuidString: markerClaimed.intent.operationID))
+
+        XCTAssertFalse(try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: markerOperationID,
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: markerClaimed.operationDirectoryURL.path))
+
+        let recovery = activate(operations: RecordingRestoreActivationOperations(
+            failures: [.replaceSelectedDatabase, .replaceSafetyDatabase]
+        ))
+        XCTAssertEqual(recovery.status, .recoveryRequired)
+        XCTAssertFalse(try RestoreSidecarStore.cleanupInterruptedStagingOperation(
+            operationID: markerOperationID,
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: markerClaimed.operationDirectoryURL.path))
+    }
+
+    // T-RST-H07 expected RED: raw outcome decoding accepts a path-like snapshot
+    // identifier even though the sidecar is documented as content-free.
+    func testActivationOutcomeReadRejectsPathLikeSnapshotIdentifier() throws {
+        try FileManager.default.createDirectory(
+            at: fixture.stagingRootDirectory,
+            withIntermediateDirectories: true
+        )
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let unsafeOutcome = """
+        {"schemaVersion":\(RestoreOutcomeRecord.currentSchemaVersion),"operationID":"11111111-2222-3333-4444-555555555555","snapshotIdentifier":"/Users/private/client.sqlite","status":"activated","scheduledAt":"2024-09-22T23:59:00Z","completedAt":"2024-09-23T00:00:00Z"}
+        """
+        try Data(unsafeOutcome.utf8).write(to: outcomeURL, options: .atomic)
+
+        XCTAssertThrowsError(try RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+    }
+
+    // T-RST-H09 expected RED: an activated outcome without the authenticated
+    // scheduling timestamp is accepted and can erase the scheduling audit silently.
+    func testActivationOutcomeReadRejectsActivatedRecordWithoutScheduleTimestamp() throws {
+        try FileManager.default.createDirectory(
+            at: fixture.stagingRootDirectory,
+            withIntermediateDirectories: true
+        )
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let incompleteOutcome = """
+        {"schemaVersion":\(RestoreOutcomeRecord.currentSchemaVersion),"operationID":"11111111-2222-3333-4444-555555555555","snapshotIdentifier":"SupraAI-20260731-090000-000","status":"activated","completedAt":"2024-09-23T00:00:00Z"}
+        """
+        try Data(incompleteOutcome.utf8).write(to: outcomeURL, options: .atomic)
+
+        XCTAssertThrowsError(try RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+    }
+
+    // T-RST-H09 expected RED: the versioned outcome API cannot yet expose a
+    // legacy v1 terminal record while distinguishing its absent schedule timestamp.
+    func testActivationOutcomeReadAcceptsLegacyV1WithoutScheduleTimestamp() throws {
+        try FileManager.default.createDirectory(
+            at: fixture.stagingRootDirectory,
+            withIntermediateDirectories: true
+        )
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let legacyOutcome = """
+        {"schemaVersion":1,"operationID":"11111111-2222-3333-4444-555555555555","snapshotIdentifier":"SupraAI-20260731-090000-000","status":"activated","completedAt":"2024-09-23T00:00:00Z"}
+        """
+        try Data(legacyOutcome.utf8).write(to: outcomeURL, options: .atomic)
+
+        let record = try XCTUnwrap(RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+        XCTAssertEqual(record.schemaVersion, 1)
+        XCTAssertNil(record.scheduledAt)
+    }
+
+    // T-RST-H09 expected RED: a schema-v1 record can smuggle the schema-v2
+    // timestamp field and have it treated as authenticated scheduling evidence.
+    func testActivationOutcomeReadRejectsLegacyV1WithScheduleTimestamp() throws {
+        try FileManager.default.createDirectory(
+            at: fixture.stagingRootDirectory,
+            withIntermediateDirectories: true
+        )
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let downgradedOutcome = """
+        {"schemaVersion":1,"operationID":"11111111-2222-3333-4444-555555555555","snapshotIdentifier":"SupraAI-20260731-090000-000","status":"activated","scheduledAt":"2024-09-22T23:59:00Z","completedAt":"2024-09-23T00:00:00Z"}
+        """
+        try Data(downgradedOutcome.utf8).write(to: outcomeURL, options: .atomic)
+
+        XCTAssertThrowsError(try RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+    }
+
+    // Standing fail-closed guard: adding legacy-v1 compatibility must never
+    // broaden outcome decoding to schemas this build does not understand.
+    func testActivationOutcomeReadRejectsFutureSchemaVersion() throws {
+        try FileManager.default.createDirectory(
+            at: fixture.stagingRootDirectory,
+            withIntermediateDirectories: true
+        )
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let futureOutcome = """
+        {"schemaVersion":\(RestoreOutcomeRecord.currentSchemaVersion + 1),"operationID":"11111111-2222-3333-4444-555555555555","snapshotIdentifier":"SupraAI-20260731-090000-000","status":"activated","scheduledAt":"2024-09-22T23:59:00Z","completedAt":"2024-09-23T00:00:00Z"}
+        """
+        try Data(futureOutcome.utf8).write(to: outcomeURL, options: .atomic)
+
+        XCTAssertThrowsError(try RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
     }
 
     private func stage(
@@ -320,10 +1229,11 @@ final class RestoreActivationServiceTests: XCTestCase {
 
     private func activate(
         operations: RecordingRestoreActivationOperations,
+        liveBlobsDirectory: URL? = nil,
         openDatabase: ((URL) throws -> SupraDatabase)? = nil
     ) -> RestoreActivationResult {
         RestoreActivationService.activatePendingRestore(
-            liveLayout: liveLayout(),
+            liveLayout: liveLayout(blobsDirectory: liveBlobsDirectory),
             knownMigrationIdentifiers: migrations,
             operations: operations,
             openDatabase: openDatabase ?? { url in
@@ -336,10 +1246,10 @@ final class RestoreActivationServiceTests: XCTestCase {
         )
     }
 
-    private func liveLayout() -> RestoreLiveLayout {
+    private func liveLayout(blobsDirectory: URL? = nil) -> RestoreLiveLayout {
         RestoreLiveLayout(
             databaseURL: fixture.liveDatabaseURL,
-            blobsDirectory: fixture.liveBlobsDirectory,
+            blobsDirectory: blobsDirectory ?? fixture.liveBlobsDirectory,
             stagingRootDirectory: fixture.stagingRootDirectory
         )
     }
@@ -363,14 +1273,34 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
         case openSafetyDatabase
         case removeMarker
         case synchronizeMarkerDirectory
+        case writeOutcome
+        case removeOperationTree
+        case synchronizeOperationsDirectory
+        case synchronizeLiveBlobParent
+        case synchronizeStagingParent
     }
 
     private let system = SystemRestoreActivationFileOperations()
     private let failures: Set<Event>
+    private var remainingFailureCounts: [Event: Int]
+    private let stagingParentURL: URL?
     private(set) var events: [Event] = []
 
-    init(failures: Set<Event> = []) {
+    init(
+        failures: Set<Event> = [],
+        failureCounts: [Event: Int] = [:],
+        stagingParentURL: URL? = nil
+    ) {
         self.failures = failures
+        self.remainingFailureCounts = failureCounts
+        self.stagingParentURL = stagingParentURL?.standardizedFileURL
+    }
+
+    private func shouldFail(_ event: Event) -> Bool {
+        if failures.contains(event) { return true }
+        guard let remaining = remainingFailureCounts[event], remaining > 0 else { return false }
+        remainingFailureCounts[event] = remaining - 1
+        return true
     }
 
     func record(_ event: Event) {
@@ -389,14 +1319,31 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
             event = .copySafetyDatabase
         }
         events.append(event)
-        if failures.contains(event) { throw ActivationTestError.selectedOpen }
+        if shouldFail(event) { throw ActivationTestError.selectedOpen }
         try system.copyItem(from: source, to: target)
     }
 
     func synchronizeItem(at url: URL) throws {
-        if url.lastPathComponent == "RestoreStaging" {
+        if let stagingParentURL, url.standardizedFileURL == stagingParentURL {
+            events.append(.synchronizeStagingParent)
+            if shouldFail(.synchronizeStagingParent) {
+                throw ActivationTestError.markerSync
+            }
+        } else if url.lastPathComponent == "RestoreStaging" {
             events.append(.synchronizeMarkerDirectory)
-            if failures.contains(.synchronizeMarkerDirectory) {
+            if shouldFail(.synchronizeMarkerDirectory) {
+                throw ActivationTestError.markerSync
+            }
+        } else if url.lastPathComponent == "operations" {
+            events.append(.synchronizeOperationsDirectory)
+            if shouldFail(.synchronizeOperationsDirectory) {
+                throw ActivationTestError.markerSync
+            }
+        } else if url.lastPathComponent == "Live",
+                  !events.contains(.replaceSelectedDatabase),
+                  !events.contains(.replaceSafetyDatabase) {
+            events.append(.synchronizeLiveBlobParent)
+            if shouldFail(.synchronizeLiveBlobParent) {
                 throw ActivationTestError.markerSync
             }
         }
@@ -408,15 +1355,24 @@ private final class RecordingRestoreActivationOperations: RestoreActivationFileO
             ? .replaceSafetyDatabase
             : .replaceSelectedDatabase
         events.append(event)
-        if failures.contains(event) { throw ActivationTestError.selectedOpen }
+        if shouldFail(event) { throw ActivationTestError.selectedOpen }
         try system.atomicallyReplaceItem(at: destination, withItemAt: prepared)
     }
 
     func removeItem(at url: URL) throws {
         if url.lastPathComponent == RestoreIntent.pendingFileName {
             events.append(.removeMarker)
-            if failures.contains(.removeMarker) { throw ActivationTestError.selectedOpen }
+            if shouldFail(.removeMarker) { throw ActivationTestError.selectedOpen }
+        } else if url.deletingLastPathComponent().lastPathComponent == "operations" {
+            events.append(.removeOperationTree)
+            if shouldFail(.removeOperationTree) { throw ActivationTestError.selectedOpen }
         }
         try system.removeItem(at: url)
+    }
+
+    func writeOutcomeAtomically(_ data: Data, to url: URL) throws {
+        events.append(.writeOutcome)
+        if shouldFail(.writeOutcome) { throw ActivationTestError.markerSync }
+        try SystemRestoreFileOperations().writeIntentAtomically(data, to: url)
     }
 }

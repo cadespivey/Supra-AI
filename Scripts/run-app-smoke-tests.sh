@@ -4,10 +4,44 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 xpc_test="${SUPRA_XPC_INTEGRATION_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/RuntimeXPCIntegrationTests.swift}"
 accessibility_test="${SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift}"
+restore_test="${SUPRA_RESTORE_UI_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/RestoreSettingsUITests.swift}"
 check_only=0
 if [[ "${1:-}" == "--check" ]]; then
   check_only=1
   shift
+fi
+
+class_contains_test() {
+  local file="$1"
+  local class_name="$2"
+  local method_name="$3"
+  awk -v class_name="$class_name" -v method_name="$method_name" '
+    function count_matches(value, pattern, copy) {
+      copy = value
+      return gsub(pattern, "", copy)
+    }
+    {
+      opens = count_matches($0, "\\{")
+      closes = count_matches($0, "\\}")
+      if ($0 ~ "^[[:space:]]*final[[:space:]]+class[[:space:]]+" class_name "[[:space:]]*:") {
+        in_class = 1
+        class_depth = depth + 1
+      }
+      if (in_class && index($0, "func " method_name "(") > 0) { found = 1 }
+      depth += opens - closes
+      if (in_class && depth < class_depth) { in_class = 0 }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$file"
+}
+
+if [[ ! -f "$restore_test" ]] \
+    || ! class_contains_test "$restore_test" RestoreSettingsUITests testInvalidSnapshotShowsFactsAndCannotBeSelected \
+    || ! class_contains_test "$restore_test" RestoreSettingsUITests testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel \
+    || ! class_contains_test "$restore_test" RestoreSettingsUITests testSuccessfulStageShowsTerminalSurfaceAndQuits \
+    || ! class_contains_test "$restore_test" RestoreSettingsUITests testRecoveryRequiredShellProvidesPreservationAndQuitInstructions; then
+  printf '%s\n' 'ERROR: restore Settings/recovery accessibility smoke tests are missing' >&2
+  exit 1
 fi
 if (( $# != 0 )); then
   printf 'Usage: %s [--check]\n' "$0" >&2
@@ -44,5 +78,6 @@ xcodebuild \
   -only-testing:SupraAIUITests/ResearchAuthoritiesUITests/testLegacyOutputWarningAnnouncesStatusAndUnavailableExport \
   -only-testing:SupraAIUITests/ResearchAuthoritiesUITests/testLegacyBillingWarningAnnouncesReviewAndUnavailableExport \
   -only-testing:SupraAIUITests/GuidedDocumentQAUITests/testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult \
+  -only-testing:SupraAIUITests/RestoreSettingsUITests \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \
   test

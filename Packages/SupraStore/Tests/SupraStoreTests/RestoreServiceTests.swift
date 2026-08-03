@@ -16,6 +16,146 @@ final class RestoreServiceTests: XCTestCase {
         fixture = nil
     }
 
+    // T-RST-H01 expected RED: the public staging entry point accepts only a
+    // layout, so a caller can stage while the app's live writer remains open.
+    // The replacement API must bind the exact on-disk SupraDatabase, close it,
+    // and preserve the caller's operation UUID before core staging begins.
+    func testQuiescedStageClosesExactWriterBeforeSafetySnapshotAndUsesCallerOperationID() throws {
+        try fixture.writeShippingLiveState(sentinel: "current canary")
+        _ = try fixture.writeCompleteShippingSnapshot(sentinel: "selected canary")
+        let candidate = try shippingCandidate()
+        let liveDatabase = try SupraDatabase(url: fixture.liveDatabaseURL)
+        let operationID = try XCTUnwrap(UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
+        var observedClosedWriter = false
+        let operations = RecordingRestoreFileOperations(
+            safetySnapshotProbe: {
+                XCTAssertThrowsError(try liveDatabase.writer.read { _ in () })
+                observedClosedWriter = true
+            }
+        )
+
+        let result = try RestoreService.stageQuiescedRestore(
+            candidate: candidate,
+            liveDatabase: liveDatabase,
+            liveLayout: liveLayout(),
+            operationID: operationID,
+            knownMigrationIdentifiers: SupraMigrator.makeMigrator().migrations,
+            operations: operations
+        )
+
+        XCTAssertTrue(observedClosedWriter, "the safety snapshot seam must execute after close")
+        XCTAssertEqual(result.intent.operationID, operationID.uuidString.lowercased())
+        XCTAssertThrowsError(try liveDatabase.writer.read { _ in () })
+    }
+
+    // T-RST-H02 expected RED: core staging cannot currently prove that the
+    // writer it is about to close owns RestoreLiveLayout.databaseURL.
+    func testQuiescedStageRejectsDifferentCanonicalDatabaseWithoutClosingWriter() throws {
+        try fixture.writeShippingLiveState(sentinel: "current canary")
+        _ = try fixture.writeCompleteShippingSnapshot(sentinel: "selected canary")
+        let candidate = try shippingCandidate()
+        let liveDatabase = try SupraDatabase(url: fixture.liveDatabaseURL)
+        let mismatchedLayout = RestoreLiveLayout(
+            databaseURL: fixture.root.appendingPathComponent("different.sqlite"),
+            blobsDirectory: fixture.liveBlobsDirectory,
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+
+        XCTAssertThrowsError(try RestoreService.stageQuiescedRestore(
+            candidate: candidate,
+            liveDatabase: liveDatabase,
+            liveLayout: mismatchedLayout,
+            operationID: UUID(),
+            knownMigrationIdentifiers: SupraMigrator.makeMigrator().migrations
+        )) { error in
+            XCTAssertEqual(error as? RestoreStageError, .liveDatabasePathMismatch)
+        }
+
+        XCTAssertNoThrow(try liveDatabase.writer.read { _ in () })
+        try liveDatabase.writer.close()
+    }
+
+    // Review follow-up expected RED if the same-volume guard is removed: the
+    // controlled staging claim promises that selected state is staged on the live
+    // volume, before any operation tree or pending marker can be created.
+    func testStageRejectsStagingRootOnDifferentVolume() throws {
+        try fixture.writeLiveState(sentinel: "current canary")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected canary")
+        let candidate = try compatibleCandidate()
+        let stagingParent = fixture.root.appendingPathComponent(
+            "synthetic-other-volume",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: stagingParent,
+            withIntermediateDirectories: true
+        )
+        let stagingRoot = stagingParent.appendingPathComponent(
+            RestoreService.stagingDirectoryName,
+            isDirectory: true
+        )
+        let fileManager = MismatchedRestoreVolumeFileManager(
+            liveParentPath: fixture.liveDatabaseURL.deletingLastPathComponent().path,
+            stagingParentPath: stagingParent.path
+        )
+
+        XCTAssertThrowsError(try RestoreService.stageRestore(
+            candidate: candidate,
+            liveLayout: RestoreLiveLayout(
+                databaseURL: fixture.liveDatabaseURL,
+                blobsDirectory: fixture.liveBlobsDirectory,
+                stagingRootDirectory: stagingRoot
+            ),
+            knownMigrationIdentifiers: migrations,
+            fileManager: fileManager
+        )) { error in
+            XCTAssertEqual(error as? RestoreStageError, .stagingVolumeMismatch)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: stagingRoot.appendingPathComponent(RestoreIntent.pendingFileName).path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: stagingRoot.appendingPathComponent("operations", isDirectory: true).path
+        ))
+    }
+
+    // T-RST-H03 expected RED: once the live writer is closed, staging failures
+    // have no durable database-independent handoff or acknowledgement API.
+    func testStagingFailureSidecarIsContentFreeReadableAndAcknowledgedDurably() throws {
+        let operationID = try XCTUnwrap(UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
+        let failedAt = Date(timeIntervalSince1970: 1_727_000_000)
+
+        let written = try RestoreSidecarStore.recordStagingFailure(
+            operationID: operationID,
+            reason: .liveStateInvalid,
+            stagingRootDirectory: fixture.stagingRootDirectory,
+            failedAt: failedAt
+        )
+
+        XCTAssertEqual(written.operationID, operationID.uuidString.lowercased())
+        XCTAssertEqual(written.reason, .liveStateInvalid)
+        XCTAssertEqual(
+            try RestoreSidecarStore.readStagingFailure(
+                stagingRootDirectory: fixture.stagingRootDirectory
+            ),
+            written
+        )
+        let sidecarURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreStagingFailureRecord.lastFailureFileName)
+        let serialized = try XCTUnwrap(String(data: Data(contentsOf: sidecarURL), encoding: .utf8))
+        XCTAssertFalse(serialized.contains(fixture.root.path))
+        XCTAssertFalse(serialized.contains("current canary"))
+
+        try RestoreSidecarStore.acknowledgeStagingFailure(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        )
+
+        XCTAssertNil(try RestoreSidecarStore.readStagingFailure(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarURL.path))
+    }
+
     // T-RST-10...12 expected RED: RestoreService has no safety capture,
     // selected staging tree, durable marker, or ordering seam.
     func testStageCapturesVerifiedCurrentDatabaseAndReferencedBlobs() throws {
@@ -126,8 +266,13 @@ final class RestoreServiceTests: XCTestCase {
         XCTAssertLessThan(selectedTreeSync, selectedMove)
         XCTAssertTrue(operationDirectorySyncs.contains { $0 > selectedMove })
         XCTAssertEqual(
-            Array(operations.events.suffix(3)),
-            [.synchronizeOperationsRoot, .synchronizeStagingRoot, .writeMarker]
+            Array(operations.events.suffix(4)),
+            [
+                .synchronizeOperationsRoot,
+                .synchronizeStagingRoot,
+                .synchronizeStagingParent,
+                .writeMarker,
+            ]
         )
         XCTAssertEqual(result.intent.schemaVersion, 1)
         XCTAssertEqual(result.intent.selectedBlobCount, 1)
@@ -138,6 +283,32 @@ final class RestoreServiceTests: XCTestCase {
         let markerText = try String(contentsOf: result.markerURL, encoding: .utf8)
         XCTAssertFalse(markerText.contains(fixture.root.path))
         XCTAssertFalse(markerText.contains(fixture.backupDirectory.path))
+    }
+
+    // expected RED: staging publishes the global pending marker without first
+    // durably writing a matching content-free intent inside the operation tree.
+    func testStagePersistsMatchingOperationIntentBeforePendingMarker() throws {
+        try fixture.writeLiveState(sentinel: "current row")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
+        let operations = RecordingRestoreFileOperations()
+
+        let result = try RestoreService.stageRestore(
+            candidate: compatibleCandidate(),
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: operations
+        )
+
+        let operationIntentURL = result.operationDirectoryURL
+            .appendingPathComponent(RestoreIntent.operationFileName)
+        XCTAssertEqual(
+            try Data(contentsOf: operationIntentURL),
+            try Data(contentsOf: result.markerURL)
+        )
+        XCTAssertLessThan(
+            try XCTUnwrap(operations.events.firstIndex(of: .writeOperationIntent)),
+            try XCTUnwrap(operations.events.firstIndex(of: .writeMarker))
+        )
     }
 
     // T-RST-13 expected RED: a failed safety database capture has no bounded
@@ -202,6 +373,118 @@ final class RestoreServiceTests: XCTestCase {
         )
     }
 
+    // expected RED: marker publication compensation deletes the operation tree
+    // even when marker unlink or its directory sync has not completed durably.
+    func testMarkerCleanupFailurePreservesOperationUntilUnlinkIsDurable() throws {
+        try fixture.writeLiveState(sentinel: "current row")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
+        let operations = RecordingRestoreFileOperations(
+            failurePoint: .markerWriteAndCompensatingDirectorySynchronization
+        )
+
+        XCTAssertThrowsError(try RestoreService.stageRestore(
+            candidate: compatibleCandidate(),
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: operations
+        ))
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.stagingRootDirectory
+                .appendingPathComponent(RestoreIntent.pendingFileName).path
+        ))
+        let operationsDirectory = fixture.stagingRootDirectory
+            .appendingPathComponent("operations", isDirectory: true)
+        let leftovers = try FileManager.default.contentsOfDirectory(
+            at: operationsDirectory,
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(leftovers.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: leftovers[0].appendingPathComponent(RestoreIntent.operationFileName).path
+        ))
+    }
+
+    // expected RED: first-use staging creates RestoreStaging and writes the
+    // pending marker without synchronizing the staging root's parent directory.
+    func testFirstUseStagingRootPublishesParentBeforeMarker() throws {
+        try fixture.writeLiveState(sentinel: "current row")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
+        let operations = RecordingRestoreFileOperations()
+
+        _ = try RestoreService.stageRestore(
+            candidate: compatibleCandidate(),
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: operations
+        )
+
+        XCTAssertLessThan(
+            try XCTUnwrap(operations.events.firstIndex(of: .synchronizeStagingParent)),
+            try XCTUnwrap(operations.events.firstIndex(of: .writeMarker))
+        )
+    }
+
+    // expected RED: a first-use staging-parent sync failure is ignored and the
+    // pending marker is still published without a durable root.
+    func testFirstUseStagingParentSyncFailurePublishesNoMarker() throws {
+        try fixture.writeLiveState(sentinel: "current row")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
+        let operations = RecordingRestoreFileOperations(
+            failurePoint: .stagingRootParentSynchronization
+        )
+
+        XCTAssertThrowsError(try RestoreService.stageRestore(
+            candidate: compatibleCandidate(),
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: operations
+        )) { error in
+            XCTAssertEqual(
+                error as? InjectedRestoreFailure,
+                .requested(.stagingRootParentSynchronization)
+            )
+        }
+        XCTAssertFalse(operations.events.contains(.writeMarker))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.stagingRootDirectory
+                .appendingPathComponent(RestoreIntent.pendingFileName).path
+        ))
+    }
+
+    // expected RED: once RestoreStaging is visible after a failed parent sync,
+    // retry skips the publication proof and writes the pending marker first.
+    func testStagingParentPublicationRetriesAfterFirstUseSyncFailure() throws {
+        try fixture.writeLiveState(sentinel: "current row")
+        _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
+        let candidate = try compatibleCandidate()
+        let failingOperations = RecordingRestoreFileOperations(
+            failurePoint: .stagingRootParentSynchronization
+        )
+        XCTAssertThrowsError(try RestoreService.stageRestore(
+            candidate: candidate,
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: failingOperations
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: fixture.stagingRootDirectory.path
+        ))
+        let retryOperations = RecordingRestoreFileOperations()
+
+        _ = try RestoreService.stageRestore(
+            candidate: candidate,
+            liveLayout: liveLayout(),
+            knownMigrationIdentifiers: migrations,
+            operations: retryOperations
+        )
+
+        XCTAssertLessThan(
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .synchronizeStagingParent)),
+            try XCTUnwrap(retryOperations.events.firstIndex(of: .writeMarker))
+        )
+    }
+
     private func assertInjectedFailure(_ point: RecordingRestoreFileOperations.FailurePoint) throws {
         let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
         try fixture.writeLiveState(blobs: [currentBlob], sentinel: "current row")
@@ -248,6 +531,13 @@ final class RestoreServiceTests: XCTestCase {
         ).first)
     }
 
+    private func shippingCandidate() throws -> RestoreSnapshotCandidate {
+        try XCTUnwrap(RestoreSnapshotInspector.discover(
+            in: fixture.backupDirectory,
+            knownMigrationIdentifiers: SupraMigrator.makeMigrator().migrations
+        ).first)
+    }
+
     private func liveLayout() -> RestoreLiveLayout {
         RestoreLiveLayout(
             databaseURL: fixture.liveDatabaseURL,
@@ -261,6 +551,29 @@ private enum InjectedRestoreFailure: Error, Equatable {
     case requested(RecordingRestoreFileOperations.FailurePoint)
 }
 
+private final class MismatchedRestoreVolumeFileManager: FileManager {
+    private let liveParentPath: String
+    private let stagingParentPath: String
+
+    init(liveParentPath: String, stagingParentPath: String) {
+        self.liveParentPath = liveParentPath
+        self.stagingParentPath = stagingParentPath
+        super.init()
+    }
+
+    override func attributesOfFileSystem(
+        forPath path: String
+    ) throws -> [FileAttributeKey: Any] {
+        var attributes = try super.attributesOfFileSystem(forPath: path)
+        if path == liveParentPath {
+            attributes[.systemNumber] = NSNumber(value: 101)
+        } else if path == stagingParentPath {
+            attributes[.systemNumber] = NSNumber(value: 202)
+        }
+        return attributes
+    }
+}
+
 private final class RecordingRestoreFileOperations: RestoreFileOperations {
     enum FailurePoint: Equatable {
         case safetyDatabase
@@ -269,6 +582,8 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
         case selectedBlob
         case selectedDatabaseSynchronization
         case markerWrite
+        case markerWriteAndCompensatingDirectorySynchronization
+        case stagingRootParentSynchronization
     }
 
     enum Event: Equatable {
@@ -287,20 +602,28 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
         case synchronizeOperationDirectory
         case synchronizeOperationsRoot
         case synchronizeStagingRoot
+        case synchronizeStagingParent
+        case writeOperationIntent
         case writeMarker
     }
 
     private let system = SystemRestoreFileOperations()
     private let failurePoint: FailurePoint?
+    private let safetySnapshotProbe: (() throws -> Void)?
     private(set) var events: [Event] = []
     private(set) var markerObservedCompleteTrees = false
 
-    init(failurePoint: FailurePoint? = nil) {
+    init(
+        failurePoint: FailurePoint? = nil,
+        safetySnapshotProbe: (() throws -> Void)? = nil
+    ) {
         self.failurePoint = failurePoint
+        self.safetySnapshotProbe = safetySnapshotProbe
     }
 
     func createDatabaseSnapshot(from source: URL, to target: URL) throws {
         events.append(.createSafetyDatabase)
+        try safetySnapshotProbe?()
         if failurePoint == .safetyDatabase { throw InjectedRestoreFailure.requested(.safetyDatabase) }
         try system.createDatabaseSnapshot(from: source, to: target)
     }
@@ -345,6 +668,13 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
             event = .synchronizeOperationsRoot
         } else if url.lastPathComponent == "RestoreStaging" {
             event = .synchronizeStagingRoot
+        } else if FileManager.default.fileExists(
+            atPath: url.appendingPathComponent(
+                RestoreService.stagingDirectoryName,
+                isDirectory: true
+            ).path
+        ) {
+            event = .synchronizeStagingParent
         } else if url.path.contains("/safety.tmp/") {
             event = .synchronizeSafetyBlob
         } else if url.path.contains("/selected.tmp/") {
@@ -353,6 +683,17 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
             event = .synchronizeOperationDirectory
         }
         events.append(event)
+        if failurePoint == .markerWriteAndCompensatingDirectorySynchronization,
+           event == .synchronizeStagingRoot,
+           events.contains(.writeMarker) {
+            throw InjectedRestoreFailure.requested(
+                .markerWriteAndCompensatingDirectorySynchronization
+            )
+        }
+        if failurePoint == .stagingRootParentSynchronization,
+           event == .synchronizeStagingParent {
+            throw InjectedRestoreFailure.requested(.stagingRootParentSynchronization)
+        }
         if failurePoint == .selectedDatabaseSynchronization,
            event == .synchronizeSelectedDatabase {
             throw InjectedRestoreFailure.requested(.selectedDatabaseSynchronization)
@@ -361,7 +702,12 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
     }
 
     func writeIntentAtomically(_ data: Data, to url: URL) throws {
-        events.append(.writeMarker)
+        let isOperationIntent = url.lastPathComponent == RestoreIntent.operationFileName
+        events.append(isOperationIntent ? .writeOperationIntent : .writeMarker)
+        if isOperationIntent {
+            try system.writeIntentAtomically(data, to: url)
+            return
+        }
         let operationDirectory = url.deletingLastPathComponent()
             .appendingPathComponent("operations", isDirectory: true)
         let entries = (try? FileManager.default.contentsOfDirectory(
@@ -375,9 +721,10 @@ private final class RecordingRestoreFileOperations: RestoreFileOperations {
                 atPath: entries[0].appendingPathComponent("selected", isDirectory: true).path
             )
             && !FileManager.default.fileExists(atPath: url.path)
-        if failurePoint == .markerWrite {
+        if failurePoint == .markerWrite
+            || failurePoint == .markerWriteAndCompensatingDirectorySynchronization {
             try system.writeIntentAtomically(data, to: url)
-            throw InjectedRestoreFailure.requested(.markerWrite)
+            throw InjectedRestoreFailure.requested(failurePoint!)
         }
         try system.writeIntentAtomically(data, to: url)
     }
