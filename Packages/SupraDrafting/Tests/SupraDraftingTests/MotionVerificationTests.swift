@@ -122,6 +122,29 @@ final class MotionVerificationTests: XCTestCase {
         XCTAssertEqual(renderer.renderCount, 0)
     }
 
+    // MVS-06b. Expected RED: an empty required-ID list is treated as the generic no-coverage
+    // case, so a clean injected verifier can render a motion with no facts or authorities.
+    func testEmptyMotionEvidenceWithCleanVerifierNeverReachesRenderer() async {
+        let renderer = MotionCountingRenderer(identity: .init(id: "test.empty-evidence-renderer", version: "29"))
+        let pipeline = DraftPipeline(verifier: EmptySupportVerifier(), renderer: renderer)
+
+        do {
+            _ = try await pipeline.runMotion(
+                model: validModel(),
+                evidence: MotionVerificationEvidence(facts: [], authorities: []),
+                style: .defaultFL
+            )
+            XCTFail("a motion with no selected evidence must block")
+        } catch let error as DraftError {
+            guard case .verificationBlocked = error else {
+                return XCTFail("expected verificationBlocked, got \(error)")
+            }
+        } catch {
+            XCTFail("expected DraftError.verificationBlocked, got \(error)")
+        }
+        XCTAssertEqual(renderer.renderCount, 0)
+    }
+
     // MVS-07. Expected RED: DraftResult has no passed receipt or actual component identities,
     // and the ground/assembler owners publish no identity.
     func testReceiptAndContractOwnersExposeActualIdentities() async throws {
