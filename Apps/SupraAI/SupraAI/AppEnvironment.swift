@@ -1186,7 +1186,10 @@ final class AppEnvironment: ObservableObject {
                         documentID: document.id,
                         pagePartID: part.id,
                         revisionID: revision.id,
-                        chunkerVersion: 2,
+                        // This hand-authored hosted fixture uses the stable chunk ID
+                        // asserted by XCUITest. Keep it on the supported v1 exact-slice
+                        // contract; v2 IDs are owned by the production chunk producer.
+                        chunkerVersion: 1,
                         chunkIndex: 0,
                         sourceKind: DocumentSourceKind.text.rawValue,
                         charStart: 0,
