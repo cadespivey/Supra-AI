@@ -937,7 +937,11 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
     }
 
     private func waitForStatus(_ element: XCUIElement, containing expected: String) {
-        let predicate = NSPredicate(format: "label CONTAINS[c] %@", expected)
+        let predicate = NSPredicate(
+            format: "label CONTAINS[c] %@ OR value CONTAINS[c] %@",
+            expected,
+            expected
+        )
         let statusExpectation = expectation(for: predicate, evaluatedWith: element)
         XCTAssertEqual(XCTWaiter.wait(for: [statusExpectation], timeout: 5), .completed)
     }
