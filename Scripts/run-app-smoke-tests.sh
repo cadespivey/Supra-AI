@@ -62,7 +62,8 @@ if [[ ! -f "$accessibility_test" ]] \
 fi
 if ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX \
     || ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions \
-    || ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests testTUIMTD06CancellingInFlightMotionLeavesNoArtifact; then
+    || ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests testTUIMTD06CancellingInFlightMotionLeavesNoArtifact \
+    || ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly; then
   printf '%s\n' 'ERROR: supported motion hosted smoke tests are missing' >&2
   exit 1
 fi

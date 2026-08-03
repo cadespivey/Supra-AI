@@ -456,6 +456,7 @@ printf '%s\n' \
   '  func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
   '  func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
   '  func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() {}' \
+  '  func testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly() {}' \
   '}' \
   >"$accessibility_hook"
 # Standing guard: the exact methods nested in the shipping XCTest class must
