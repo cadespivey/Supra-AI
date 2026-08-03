@@ -29,6 +29,7 @@ public struct DraftPipeline: Sendable {
         try Self.requireRenderable(verification: vr, gate: gateResult)
         try Task.checkCancellation()
         let docx = try renderer.render(.court(model), style: style)
+        try Task.checkCancellation()
         return DraftResult(
             docx: docx,
             followUps: vr.followUps + gateResult.followUps,
@@ -54,6 +55,7 @@ public struct DraftPipeline: Sendable {
         try Self.requireRenderable(verification: vr, gate: gateResult)
         try Task.checkCancellation()
         let docx = try renderer.render(.letter(model), style: style)
+        try Task.checkCancellation()
         return DraftResult(
             docx: docx,
             followUps: vr.followUps + gateResult.followUps,

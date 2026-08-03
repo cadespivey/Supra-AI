@@ -803,7 +803,7 @@ struct MatterDraftingView: View {
         case let .success(loaded):
             modelID = loaded
         case let .failure(issue):
-            guard generationIsCurrent(token, selection: requestedSelection) else { return }
+            guard generationIsCurrent(token, selection: requestedSelection), !Task.isCancelled else { return }
             routingMessage = issue.message
             return
         }

@@ -130,6 +130,7 @@ public final class ModelLibrary: ObservableObject {
         for role: ModelRole,
         configuration: LegalModelConfiguration = .fromEnvironment()
     ) async -> Result<ModelID, ModelRouteResolutionIssue> {
+        guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         refresh()
         let resolution = resolvedModelWithIssue(for: role, configuration: configuration)
         guard let preferred = resolution.model else {
@@ -141,12 +142,15 @@ public final class ModelLibrary: ObservableObject {
         guard let uuid = UUID(uuidString: preferred.id) else {
             return .failure(.assignedModelMissing(role: role, modelID: preferred.id))
         }
-        await settleInFlightLoad()
+        guard await settleInFlightLoad() else { return .failure(.cancelled(role: role)) }
         if loadedModelID?.rawValue == uuid, await runtimeConfirmsLoaded(uuid) {
+            guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
             return .success(ModelID(uuid))
         }
 
+        guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         await activateAndLoad(modelID: preferred.id)
+        guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         if loadedModelID?.rawValue == uuid {
             return .success(ModelID(uuid))
         }
@@ -209,6 +213,7 @@ public final class ModelLibrary: ObservableObject {
         for role: ModelRole,
         configuration: LegalModelConfiguration = .fromEnvironment()
     ) async -> Result<ModelID, ModelRouteResolutionIssue> {
+        guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         guard let forced = forcedModelID else {
             return await ensureLoadedRoutedModelID(for: role, configuration: configuration)
         }
@@ -217,11 +222,14 @@ public final class ModelLibrary: ObservableObject {
             setForcedModel(nil)
             return await ensureLoadedRoutedModelID(for: role, configuration: configuration)
         }
-        await settleInFlightLoad()
+        guard await settleInFlightLoad() else { return .failure(.cancelled(role: role)) }
         if loadedModelID?.rawValue == forced.rawValue, await runtimeConfirmsLoaded(forced.rawValue) {
+            guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
             return .success(forced)
         }
+        guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         await activateAndLoad(modelID: model.id)
+        guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         if loadedModelID?.rawValue == forced.rawValue {
             return .success(forced)
         }
@@ -419,12 +427,20 @@ public final class ModelLibrary: ObservableObject {
     /// load of any model is settled before deciding what to do next. Bounded well
     /// above the largest local model's load time; a load RPC always resolves the
     /// state to loaded or failed.
-    private func settleInFlightLoad() async {
+    private func settleInFlightLoad() async -> Bool {
         var iterations = 0
         while case .loading = loadState, iterations < 6000 {
+            guard !Task.isCancelled else { return false }
             iterations += 1
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch is CancellationError {
+                return false
+            } catch {
+                return false
+            }
         }
+        return !Task.isCancelled
     }
 
     /// True when the runtime service itself confirms it currently holds `uuid`.
@@ -445,6 +461,7 @@ public final class ModelLibrary: ObservableObject {
 
     /// Marks the given model active in the store and loads it into the runtime service.
     public func activateAndLoad(modelID modelIDString: String) async {
+        guard !Task.isCancelled else { return }
         // Ignore overlapping loads so concurrent taps cannot leave the published
         // load state and the runtime out of sync.
         if case .loading = loadState { return }
