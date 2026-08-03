@@ -48,9 +48,10 @@ validates the safety copy before normal work resumes. A verified rollback is ter
 operation tree is cleaned after the durable outcome is recorded.
 
 If both activation and automatic rollback fail, Supra AI opens a **Recovery Required** screen instead
-of the normal workspace. Use **Show Recovery Snapshot** to reveal the verified recovery database in
-Finder, preserve that file, and quit without creating new work. Do not move or edit restore-staging
-files while Supra AI is attempting recovery. Recovery-required operation trees are deliberately
+of the normal workspace. Use **Show Recovery Safety Copy** to reveal the verified safety directory in
+Finder, preserve the entire safety folder—including `restore-safety.sqlite` and its sibling
+managed-document blobs directory—and quit without creating new work. Do not separate, move, or edit
+those contents while Supra AI is attempting recovery. Recovery-required operation trees are deliberately
 preserved; terminal cleanup never removes them. A durable recovery-required outcome freezes later
 activation attempts. Each later launch revalidates the retained safety database for the preservation
 action without repeating live database or blob mutation, and recovery evidence is never acknowledged

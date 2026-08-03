@@ -335,7 +335,7 @@ private struct BackupSection: View {
                 }
 
                 DisclosureGroup("How restore works") {
-                    Text("Supra AI verifies the snapshot and managed documents, records the restore schedule, blocks further work, closes the live database, creates a safety copy, stages the selected backup, and quits automatically. On the next launch, it activates the staged copy before any writer opens; if activation fails, it verifies and restores the safety copy. A double failure blocks normal work and offers the verified recovery database for preservation.")
+                    Text("Supra AI verifies the snapshot and managed documents, records the restore schedule, blocks further work, closes the live database, creates a safety copy, stages the selected backup, and quits automatically. On the next launch, it activates the staged copy before any writer opens; if activation fails, it verifies and restores the safety copy. A double failure blocks normal work and offers the entire verified safety folder for preservation, including the recovery database and managed-document blobs.")
                         .font(.supraCaption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

@@ -20,7 +20,7 @@ struct DatabaseRecoveryState: Sendable {
     }
 
     let failure: Failure
-    let snapshotURL: URL?
+    let recoveryItemURL: URL?
 
     var title: String {
         switch failure {
@@ -37,7 +37,23 @@ struct DatabaseRecoveryState: Sendable {
         case .migration:
             "Supra AI could not complete the database upgrade. New work is disabled so it cannot be written to temporary storage. Your existing database and the verified pre-upgrade snapshot remain available for recovery."
         case .restore:
-            "Supra AI could not activate the staged restore or return the live database to its verified pre-restore state. Normal work is disabled. Quit the app and preserve the restore safety copy before attempting manual recovery."
+            "Supra AI could not activate the staged restore or return the live database to its verified pre-restore state. Normal work is disabled. Quit the app and preserve the entire safety folder, including its recovery database and managed-document blobs, before attempting manual recovery."
+        }
+    }
+
+    var recoveryActionTitle: String {
+        switch failure {
+        case .restore: "Show Recovery Safety Copy"
+        case .snapshot, .migration: "Show Recovery Snapshot"
+        }
+    }
+
+    var recoveryActionHint: String {
+        switch failure {
+        case .restore:
+            "Opens Finder with the complete verified safety folder selected."
+        case .snapshot, .migration:
+            "Opens Finder with the verified recovery database selected."
         }
     }
 }
@@ -1884,10 +1900,30 @@ final class AppEnvironment: ObservableObject {
 #if DEBUG
                 if isUITestMode,
                    ProcessInfo.processInfo.arguments.contains("-uiTestRestoreRecoveryRequired") {
+                    let safetyDirectory = url.deletingLastPathComponent()
+                        .appendingPathComponent(
+                            "\(url.deletingPathExtension().lastPathComponent)-restore-safety",
+                            isDirectory: true
+                        )
+                    try? FileManager.default.createDirectory(
+                        at: safetyDirectory.appendingPathComponent("blobs", isDirectory: true),
+                        withIntermediateDirectories: true
+                    )
+                    try? Data("SYNTHETIC UI TEST SAFETY DATABASE".utf8).write(
+                        to: safetyDirectory.appendingPathComponent("restore-safety.sqlite")
+                    )
+                    try? Data("SYNTHETIC UI TEST MANAGED BLOB".utf8).write(
+                        to: safetyDirectory
+                            .appendingPathComponent("blobs", isDirectory: true)
+                            .appendingPathComponent("synthetic-managed-document.bin")
+                    )
                     return (
                         store,
                         true,
-                        DatabaseRecoveryState(failure: .restore, snapshotURL: url)
+                        DatabaseRecoveryState(
+                            failure: .restore,
+                            recoveryItemURL: safetyDirectory
+                        )
                     )
                 }
 #endif
@@ -1909,7 +1945,7 @@ final class AppEnvironment: ObservableObject {
                 true,
                 DatabaseRecoveryState(
                     failure: .restore,
-                    snapshotURL: restoreActivation?.recoveryDatabaseURL
+                    recoveryItemURL: restoreActivation?.recoverySafetyDirectoryURL
                 )
             )
         }
@@ -1919,11 +1955,11 @@ final class AppEnvironment: ObservableObject {
             let recoveryState: DatabaseRecoveryState
             switch error {
             case .snapshotFailed:
-                recoveryState = DatabaseRecoveryState(failure: .snapshot, snapshotURL: nil)
+                recoveryState = DatabaseRecoveryState(failure: .snapshot, recoveryItemURL: nil)
             case let .migrationFailed(snapshotURL, _):
                 recoveryState = DatabaseRecoveryState(
                     failure: .migration,
-                    snapshotURL: snapshotURL
+                    recoveryItemURL: snapshotURL
                 )
             }
             return (makeFallbackStore(), true, recoveryState)

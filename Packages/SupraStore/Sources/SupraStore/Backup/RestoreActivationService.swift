@@ -32,9 +32,14 @@ public struct RestoreActivationResult: Equatable, Sendable {
     /// replaced the database that originally recorded the staging event.
     public let operationID: String?
     public let snapshotIdentifier: String?
-    /// The verified staged safety database is exposed only in memory so the app
-    /// can offer recovery when neither automatic activation nor rollback works.
-    public let recoveryDatabaseURL: URL?
+    /// The database-only location stays file-private for internal retry logic;
+    /// recovery consumers receive the complete containing safety tree instead.
+    fileprivate let recoveryDatabaseURL: URL?
+    /// The complete verified safety tree that must be preserved for manual
+    /// recovery, including the database and its sibling managed-blob directory.
+    public var recoverySafetyDirectoryURL: URL? {
+        recoveryDatabaseURL?.deletingLastPathComponent()
+    }
 
     private init(
         status: RestoreActivationStatus,

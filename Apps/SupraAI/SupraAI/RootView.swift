@@ -169,11 +169,11 @@ private struct DatabaseRecoveryView: View {
                 .accessibilityLabel(state.message)
 
             HStack(spacing: 12) {
-                if let snapshotURL = state.snapshotURL {
-                    Button("Show Recovery Snapshot") {
-                        NSWorkspace.shared.activateFileViewerSelecting([snapshotURL])
+                if let recoveryItemURL = state.recoveryItemURL {
+                    Button(state.recoveryActionTitle) {
+                        NSWorkspace.shared.activateFileViewerSelecting([recoveryItemURL])
                     }
-                    .accessibilityHint("Opens Finder with the verified recovery database selected.")
+                    .accessibilityHint(state.recoveryActionHint)
                     .accessibilityIdentifier("restore.recovery.snapshot")
                 }
                 Button("Quit Without Changes") {
