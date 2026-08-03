@@ -8,7 +8,7 @@ import SupraExports
 import SupraStore
 import XCTest
 
-/// T-MTD-01...18: the first supported motion vertical. Every fixture is
+/// T-MTD-01...22: the first supported motion vertical. Every fixture is
 /// fictional and every negative assertion checks both the file boundary and the
 /// success-audit boundary.
 @MainActor
@@ -157,8 +157,8 @@ final class MotionToDismissControllerTests: XCTestCase {
         try assertNoSuccessfulMotionSideEffects(fixture)
     }
 
-    // T-MTD-16 — expected RED: lineage uses controller-authored version strings and
-    // omits exact snapshot, component, receipt, request, and output identities.
+    // T-MTD-16 — lineage retains exact snapshot, component, receipt, request,
+    // and output identities without retaining raw source/profile text.
     func testTMTD16AuditLineageRetainsExactInputsRevisionsAndEngineVersions() async throws {
         let fixture = try makeFixture()
         let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(
@@ -245,8 +245,7 @@ final class MotionToDismissControllerTests: XCTestCase {
         XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains { $0.eventType == "draft_generated" })
     }
 
-    // T-MTD-18 — expected RED: the motion audit is not coupled to source
-    // revalidation and rollback still assumes replacement semantics.
+    // T-MTD-18 — audit failure removes only the new create-only artifact.
     func testTMTD18AuditFailureRemovesOnlyNewExclusiveFileAndReportsFailure() async throws {
         let fixture = try makeFixture()
         let destination = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
@@ -269,7 +268,7 @@ final class MotionToDismissControllerTests: XCTestCase {
         XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains { $0.eventType == "draft_generated" })
     }
 
-    // T-MTD-19 — expected RED: second-granularity filenames replace an earlier DOCX.
+    // T-MTD-19 — a filename collision preserves the earlier DOCX and retries.
     func testTMTD19FilenameCollisionPreservesExistingMotionAndCreatesDistinctArtifact() async throws {
         let fixture = try makeFixture()
         let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
@@ -293,13 +292,16 @@ final class MotionToDismissControllerTests: XCTestCase {
         try DocumentExportValidator.validate(artifact.fileURL, as: .docx)
     }
 
-    // T-MTD-20 — expected RED: a profile/source mutation during async verification is
-    // not rechecked in the transaction that inserts the success audit.
+    // T-MTD-20 — a profile/source mutation during async verification is
+    // rechecked in the transaction that inserts the success audit.
     func testTMTD20DependencyDriftBeforeAuditRollsBackNewFileAndWritesNoAudit() async throws {
         let fixture = try makeFixture()
         let store = fixture.store
-        var changedProfile = completeProfile()
-        changedProfile.organization = "Changed After Snapshot LLP"
+        let changedProfile: AssistantProfile = {
+            var profile = completeProfile()
+            profile.organization = "Changed After Snapshot LLP"
+            return profile
+        }()
         let controller = MatterDraftingController(
             store: fixture.store,
             storage: fixture.storage,
@@ -321,11 +323,10 @@ final class MotionToDismissControllerTests: XCTestCase {
         try assertNoSuccessfulMotionSideEffects(fixture)
     }
 
-    // T-MTD-21 — expected RED: jurisdiction currently substitutes for a missing court
-    // and prints "Florida" as though it were a filing court.
+    // T-MTD-21 — jurisdiction never substitutes for a missing filing court.
     func testTMTD21MissingExplicitCourtNeverFallsBackToJurisdiction() async throws {
         let fixture = try makeFixture()
-        try fixture.store.database.writer.write { db in
+        try await fixture.store.database.writer.write { db in
             try db.execute(
                 sql: "UPDATE matters SET court = NULL WHERE id = ?",
                 arguments: [fixture.matterID]
@@ -342,8 +343,7 @@ final class MotionToDismissControllerTests: XCTestCase {
         try assertNoSuccessfulMotionSideEffects(fixture)
     }
 
-    // T-MTD-22 — expected RED: assembly currently prefers mutable case_summary over
-    // the exact proposition bytes bound by counsel's reviewed evidence.
+    // T-MTD-22 — assembly uses the exact proposition bytes bound by counsel's review.
     func testTMTD22AssemblyUsesReviewedExcerptNotMutableCaseSummary() async throws {
         let fixture = try makeFixture()
         try fixture.store.authorities.updateCaseSummary(
