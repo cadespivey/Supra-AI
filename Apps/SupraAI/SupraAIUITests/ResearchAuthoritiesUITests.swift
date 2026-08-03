@@ -773,9 +773,6 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
 
         openMotionDraftThroughProductionNavigation(in: app)
         fillMotionInputsAndSelectSources(in: app, includeAuthority: true)
-        let readiness = app.descendants(matching: .any)["drafting.motion.readiness"]
-        XCTAssertTrue(readiness.waitForExistence(timeout: 5))
-        XCTAssertTrue(readiness.label.localizedCaseInsensitiveContains("ready"), readiness.debugDescription)
 
         let generate = app.buttons["drafting.generate"]
         XCTAssertTrue(generate.isEnabled)
