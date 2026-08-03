@@ -28,6 +28,8 @@ require_literal() {
 require_file "$restore_doc"
 require_literal "$restore_doc" '## Restore from Backup' \
   'restore documentation must describe the user restore workflow'
+# Standing guard: terminal restore documentation landed in 10bc839 before the
+# expanded literal checks; these already-green assertions lock future copy drift.
 require_literal "$restore_doc" 'Schedule Restore and Quit' \
   'restore documentation must name the terminal restore action'
 require_literal "$restore_doc" 'blocks the entire workspace' \

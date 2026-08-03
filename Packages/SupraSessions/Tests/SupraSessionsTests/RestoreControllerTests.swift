@@ -8,7 +8,8 @@ final class RestoreControllerTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_788_969_600)
     private let operationID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
 
-    // T-RST-29: a blocked candidate is visible but cannot enter confirmation or staging.
+    // T-RST-29 expected RED: BackupController has no restore candidate state or
+    // selection boundary, so an incompatible candidate cannot be blocked from staging.
     func testInvalidCandidateCannotBeSelectedConfirmedOrStaged() async throws {
         let fixture = try makeFixture()
         let invalid = candidate(
@@ -37,7 +38,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(stageCount, 0)
     }
 
-    // T-RST-30: the @MainActor controller is a single-flight owner for both operations.
+    // T-RST-30 expected RED: BackupController has no restore operation state,
+    // so backup and restore cannot reject one another as concurrent work.
     func testBackupAndRestoreRejectConcurrentCrossOperationRuns() async throws {
         let fixture = try makeFixture()
         let valid = candidate(identifier: "SupraAI-20260731-090100-000")
@@ -76,6 +78,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(controller.restoreState, .ready)
     }
 
+    // expected RED: configureDestination succeeds while backup owns the
+    // controller, replacing the destination beneath an active operation.
     func testDestinationCannotChangeWhileABackupOrRestoreOperationOwnsTheController() async throws {
         let fixture = try makeFixture()
         let backupGate = AsyncGate()
@@ -109,7 +113,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(backupSucceeded)
     }
 
-    // T-RST-31: restore uses the same stale-bookmark fail-closed path as backup.
+    // T-RST-31 expected RED: restore has no stale-bookmark path that persists
+    // the destination-repick requirement before inspection begins.
     func testRestoreStaleBookmarkPersistsDestinationRepickRequirement() async throws {
         let fixture = try makeFixture(destinationFailure: .staleBookmark)
         var inspectCount = 0
@@ -133,7 +138,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(reloaded.restoreState, .needsDestinationRepick)
     }
 
-    // T-RST-32/T-RST-40: persisted failures are actionable but never persist paths or content.
+    // T-RST-32/T-RST-40 expected RED: restore inspection has no content-free
+    // persisted failure, so an underlying error can expose the private source path.
     func testRestoreInspectionErrorPersistsContentFreeFailure() async throws {
         let fixture = try makeFixture()
         let secretPath = fixture.destinationURL.appendingPathComponent("Client Alpha/privileged memo.txt").path
@@ -169,7 +175,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(reloaded.restoreStatusMessage, controller.restoreStatusMessage)
     }
 
-    // T-RST-33: confirmation freezes identity; a same-name replacement requires reselection.
+    // T-RST-33 expected RED: confirmation does not freeze and freshly recheck
+    // snapshot identity, so a same-name replacement can reach the stager.
     func testConfirmedSnapshotMustMatchFreshlyInspectedIdentity() async throws {
         let fixture = try makeFixture()
         let original = candidate(
@@ -209,8 +216,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(controller.restoreStatusMessage?.contains("changed") == true)
     }
 
-    // T-RST-34...36/R-06: scheduling is durable before the live writer is
-    // quiesced, and invoking that boundary always requests process exit.
+    // T-RST-34...36/R-06 expected RED: staging does not durably schedule before
+    // invoking the runner and does not request process exit after quiescence.
     func testSuccessfulStagePersistsScheduleBeforeRunnerAndRequestsExitExactlyOnce() async throws {
         let fixture = try makeFixture()
         let valid = candidate(identifier: "SupraAI-20260731-090300-000")
@@ -285,6 +292,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(auditText.contains(summary.operationID))
     }
 
+    // expected RED: terminal mode begins only after the quiesced runner returns,
+    // leaving backup, restore, and destination mutation available while it runs.
     func testRestoreProcessIsTerminalWhileQuiescedRunnerIsInFlight() async throws {
         let fixture = try makeFixture()
         let valid = candidate(identifier: "SupraAI-20260731-090400-000")
@@ -359,6 +368,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(persisted.state, .staging)
     }
 
+    // expected RED: terminal state is entered before fresh identity validation,
+    // so a changed candidate can freeze the app or request an unnecessary exit.
     func testChangedCandidateNeverEntersTerminalModeOrRequestsExit() async throws {
         let fixture = try makeFixture()
         let original = candidate(
@@ -398,6 +409,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(controller.restoreState, .failed)
     }
 
+    // expected RED: a post-close runner failure releases the terminal lock,
+    // allowing controller work and repeated staging after the writer is closed.
     func testRunnerFailureAfterWriterCloseStillExitsWithoutPostCloseStoreWrites() async throws {
         let fixture = try makeFixture()
         let valid = candidate(identifier: "SupraAI-20260731-090600-000")
@@ -455,6 +468,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(durable.snapshotIdentifier, valid.identifier)
     }
 
+    // expected RED: launch converts stranded staging to failure but leaves the
+    // exact interrupted operation tree behind instead of cleaning it durably.
     func testStrandedStagingStatusBecomesInterruptedFailureOnNextLaunch() throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090700-000"
@@ -507,6 +522,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedDirectory.path))
     }
 
+    // expected RED: interrupted-tree cleanup failure overwrites the staging
+    // record, losing the operation identifier required to retry safely.
     func testInterruptedStagingCleanupFailureRetainsDurableRetryEvidence() throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090750-000"
@@ -560,6 +577,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: outsideDirectory.path))
     }
 
+    // expected RED: BackupController ignores a matching durable staging-failure
+    // sidecar instead of persisting, auditing, and acknowledging it once.
     func testMatchingStagingFailureReplaysOnceAfterDurableStatusAndAudit() throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090800-000"
@@ -609,6 +628,8 @@ final class RestoreControllerTests: XCTestCase {
         )
     }
 
+    // expected RED: the staging-failure sidecar is acknowledged even when the
+    // interrupted operation cannot be cleaned, discarding the retry key.
     func testStagingFailureSidecarIsNotAcknowledgedUntilOrphanCleanupSucceeds() throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090850-000"
@@ -677,6 +698,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: outsideDirectory.path))
     }
 
+    // expected RED: a failed staging-sidecar acknowledgement is not retried
+    // from the matching durable failed status on the next launch.
     func testStagingFailureAcknowledgementRetriesFromMatchingFailedStatusOnNextLaunch() throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090875-000"
@@ -742,6 +765,8 @@ final class RestoreControllerTests: XCTestCase {
         )
     }
 
+    // expected RED: BackupController does not replay a durable activation
+    // outcome into status and audit before acknowledging the sidecar.
     func testDurableActivationOutcomeReplaysAndAcknowledgesAfterAudit() throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090900-000"
@@ -777,6 +802,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(audit.timestamp, outcome.completedAt)
     }
 
+    // expected RED: activation-outcome acknowledgement failure leaves the
+    // controller unlocked, allowing another restore before durable evidence is cleared.
     func testOutcomeAcknowledgementFailureBlocksAnotherRestoreUntilRelaunch() async throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090950-000"
@@ -818,6 +845,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(durable.updatedAt, outcome.completedAt)
     }
 
+    // expected RED: failure to apply a durable outcome still acknowledges its
+    // sidecar and releases work instead of retaining the evidence lock.
     func testOutcomeApplicationFailureKeepsEvidenceLockBeforeAcknowledgement() throws {
         let fixture = try makeFixture()
         let snapshotID = "SupraAI-20260731-090975-000"
@@ -842,6 +871,8 @@ final class RestoreControllerTests: XCTestCase {
         XCTAssertEqual(acknowledgementCount, 0)
     }
 
+    // expected RED: a recovery-required outcome is acknowledged like a terminal
+    // success, removing the durable launch freeze needed for manual recovery.
     func testRecoveryRequiredOutcomeIsNotAcknowledged() throws {
         let fixture = try makeFixture()
         let outcome = try activationOutcome(

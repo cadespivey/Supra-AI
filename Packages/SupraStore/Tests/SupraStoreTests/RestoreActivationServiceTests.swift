@@ -57,8 +57,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: staged.markerURL.path))
     }
 
-    // T-RST-20/T-RST-38: selected managed blobs install at cold start while
-    // unrelated live content remains untouched.
+    // T-RST-20/T-RST-38 expected RED: selected blobs are not installed at cold
+    // start, so the selected managed blob is absent from the live tree.
     func testActivationInstallsSelectedBlobsAndPreservesUnrelatedLiveObjects() throws {
         let currentBlob = RestoreTestBlob("aa/current.bin", "CURRENT BLOB")
         let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
@@ -82,6 +82,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(operations.events.contains(.copySelectedBlob))
     }
 
+    // expected RED: first-use blob installation publishes the outcome and
+    // consumes the marker without synchronizing the new live blob-root parent.
     func testActivationPublishesNewLiveBlobRootBeforeOutcomeAndMarkerConsumption() throws {
         let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
         _ = try stage(selectedBlobs: [selectedBlob])
@@ -103,6 +105,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         )
     }
 
+    // expected RED: failure to synchronize the new live blob-root parent is
+    // ignored, so activation reports success and consumes the pending marker.
     func testActivationFailsClosedWhenNewLiveBlobRootParentSyncFails() throws {
         let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
         _ = try stage(selectedBlobs: [selectedBlob])
@@ -118,6 +122,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(operations.events.contains(.synchronizeLiveBlobParent))
     }
 
+    // expected RED: once the blob root is visible after a failed parent sync,
+    // retry skips the publication proof and writes terminal evidence first.
     func testLiveBlobRootPublicationRetriesWhenVisibleAfterSyncFailure() throws {
         let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
         _ = try stage(selectedBlobs: [selectedBlob])
@@ -140,6 +146,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         )
     }
 
+    // expected RED: retry of a two-level MatterDocuments/blobs root does not
+    // publish through the known live-database parent before terminal evidence.
     func testTwoLevelBlobRootRetryPublishesThroughLiveDatabaseParent() throws {
         let selectedBlob = RestoreTestBlob("bb/selected.bin", "SELECTED BLOB")
         _ = try stage(selectedBlobs: [selectedBlob])
@@ -189,7 +197,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertFalse(operations.events.contains(.copySelectedBlob))
     }
 
-    // T-RST-22/T-RST-41: a consumed marker makes every later launch a no-op.
+    // T-RST-22/T-RST-41 expected RED: a consumed marker cannot yet be proven a
+    // no-op, so a later launch can attempt selected-state mutation again.
     func testActivationIsNoOpAfterSuccessfulMarkerConsumption() throws {
         _ = try stage()
         let operations = RecordingRestoreActivationOperations()
@@ -384,8 +393,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertFalse(operations.events.contains(.removeOperationTree))
     }
 
-    // A durable recovery-required outcome is a launch freeze, not permission
-    // to retry selected-state mutation on every later cold start.
+    // expected RED: a durable recovery-required outcome is ignored on the next
+    // launch, which retries selected-state mutation instead of freezing replay.
     func testDurableRecoveryOutcomeFreezesSecondLaunchBeforeMutation() throws {
         let staged = try stage()
         let firstOperations = RecordingRestoreActivationOperations(
@@ -415,8 +424,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: outcomeURL), durableOutcome)
     }
 
-    // The terminal sidecar is the durable replay key. It must reach disk before
-    // the pending marker can be consumed, for both activation and rollback.
+    // expected RED: activation and rollback consume the pending marker before
+    // the terminal outcome sidecar has been written durably.
     func testTerminalOutcomeIsDurableBeforePendingMarkerConsumption() throws {
         _ = try stage()
         let activationOperations = RecordingRestoreActivationOperations()
@@ -441,6 +450,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         )
     }
 
+    // expected RED: marker-removal retry failure returns recovery without the
+    // authenticated operation, snapshot, and verified safety-database context.
     func testTerminalOutcomeMarkerRetryFailureRetainsAuthenticatedRecoveryContext() throws {
         let staged = try stage()
         let terminal = RestoreActivationResult.failedAndRolledBack(
@@ -470,8 +481,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertFalse(operations.events.contains(.replaceSafetyDatabase))
     }
 
-    // A sidecar write fault must remain visible and must leave the authenticated
-    // request in place; otherwise a crash can silently lose status and cleanup.
+    // expected RED: an outcome-sidecar write fault consumes the pending marker
+    // or loses authenticated context, silently discarding replay and cleanup state.
     func testOutcomeWriteFailureKeepsPendingMarkerAndBlocksLaunch() throws {
         let staged = try stage()
         let operations = RecordingRestoreActivationOperations(failures: [.writeOutcome])
@@ -581,6 +592,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(replayOperations.events.isEmpty)
     }
 
+    // expected RED: markerless recovery trusts tampered operation-local intent
+    // and can re-enter live-state mutation instead of failing closed.
     func testMarkerlessRecoveryRejectsTamperedOperationIntentWithoutLiveMutation() throws {
         let staged = try stage()
         let failed = activate(operations: RecordingRestoreActivationOperations(
@@ -683,6 +696,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         ))
     }
 
+    // expected RED: after outcome unlink succeeds but directory sync fails, a
+    // retry sees no sidecar and omits the outstanding removal durability proof.
     func testActivationOutcomeAcknowledgementRetriesAfterUnlinkSyncFailure() throws {
         _ = try stage()
         XCTAssertEqual(
@@ -708,6 +723,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(replayOperations.events.contains(.synchronizeMarkerDirectory))
     }
 
+    // expected RED: after staging-failure unlink succeeds but directory sync
+    // fails, a retry sees no sidecar and omits the outstanding durability proof.
     func testStagingFailureAcknowledgementRetriesAfterUnlinkSyncFailure() throws {
         let operationID = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
         _ = try RestoreSidecarStore.recordStagingFailure(
@@ -734,6 +751,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(replayOperations.events.contains(.synchronizeMarkerDirectory))
     }
 
+    // expected RED: first-use failure-sidecar creation does not durably publish
+    // the staging root through its parent or retry that proof after failure.
     func testFirstUseStagingFailureSidecarPublishesParentAndRetriesProof() throws {
         let operationID = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
         let stagingParent = fixture.stagingRootDirectory.deletingLastPathComponent()
@@ -765,6 +784,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(retryOperations.events.contains(.synchronizeStagingParent))
     }
 
+    // expected RED: acknowledging a recovery-required outcome removes its
+    // durable freeze even though the marker and recovery operation tree remain.
     func testRecoveryOutcomeAcknowledgementPreservesDurableFreezeAndOperationTree() throws {
         let staged = try stage()
         let result = activate(operations: RecordingRestoreActivationOperations(
@@ -790,6 +811,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: staged.operationDirectoryURL.path))
     }
 
+    // expected RED: no bounded cleanup seam removes only the exact unclaimed
+    // interrupted operation while preserving unrelated operation trees.
     func testInterruptedStagingCleanupRemovesOnlyExactUnclaimedOperation() throws {
         let interruptedID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
         let unrelatedID = "44444444-4444-4444-4444-444444444444"
@@ -822,6 +845,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedDirectory.path))
     }
 
+    // expected RED: interrupted cleanup returns early when the child is already
+    // absent, skipping the operations-directory sync still owed after unlink.
     func testInterruptedStagingCleanupRetriesOperationsSyncWhenTreeAlreadyAbsent() throws {
         let interruptedID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
         let operationDirectory = fixture.stagingRootDirectory
@@ -856,6 +881,8 @@ final class RestoreActivationServiceTests: XCTestCase {
         )
     }
 
+    // expected RED: interrupted cleanup has no durable claim check and can
+    // remove an operation still owned by a pending marker or recovery outcome.
     func testInterruptedStagingCleanupPreservesMarkerAndRecoveryClaimedTrees() throws {
         let markerClaimed = try stage()
         let markerOperationID = try XCTUnwrap(UUID(uuidString: markerClaimed.intent.operationID))

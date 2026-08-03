@@ -241,6 +241,8 @@ final class RestoreServiceTests: XCTestCase {
         XCTAssertFalse(markerText.contains(fixture.backupDirectory.path))
     }
 
+    // expected RED: staging publishes the global pending marker without first
+    // durably writing a matching content-free intent inside the operation tree.
     func testStagePersistsMatchingOperationIntentBeforePendingMarker() throws {
         try fixture.writeLiveState(sentinel: "current row")
         _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
@@ -327,6 +329,8 @@ final class RestoreServiceTests: XCTestCase {
         )
     }
 
+    // expected RED: marker publication compensation deletes the operation tree
+    // even when marker unlink or its directory sync has not completed durably.
     func testMarkerCleanupFailurePreservesOperationUntilUnlinkIsDurable() throws {
         try fixture.writeLiveState(sentinel: "current row")
         _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
@@ -357,6 +361,8 @@ final class RestoreServiceTests: XCTestCase {
         ))
     }
 
+    // expected RED: first-use staging creates RestoreStaging and writes the
+    // pending marker without synchronizing the staging root's parent directory.
     func testFirstUseStagingRootPublishesParentBeforeMarker() throws {
         try fixture.writeLiveState(sentinel: "current row")
         _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
@@ -375,6 +381,8 @@ final class RestoreServiceTests: XCTestCase {
         )
     }
 
+    // expected RED: a first-use staging-parent sync failure is ignored and the
+    // pending marker is still published without a durable root.
     func testFirstUseStagingParentSyncFailurePublishesNoMarker() throws {
         try fixture.writeLiveState(sentinel: "current row")
         _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")
@@ -400,6 +408,8 @@ final class RestoreServiceTests: XCTestCase {
         ))
     }
 
+    // expected RED: once RestoreStaging is visible after a failed parent sync,
+    // retry skips the publication proof and writes the pending marker first.
     func testStagingParentPublicationRetriesAfterFirstUseSyncFailure() throws {
         try fixture.writeLiveState(sentinel: "current row")
         _ = try fixture.writeCompleteSnapshot(sentinel: "selected row")

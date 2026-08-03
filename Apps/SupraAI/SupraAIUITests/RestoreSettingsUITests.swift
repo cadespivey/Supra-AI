@@ -9,7 +9,8 @@ final class RestoreSettingsUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    // T-UI-RST-01/T-RST-33: blocked facts and reason are announced, but selection is disabled.
+    // T-UI-RST-01/T-RST-33 expected RED: the hosted Settings route has no
+    // restore candidate controls, so the blocked snapshot facts never appear.
     func testInvalidSnapshotShowsFactsAndCannotBeSelected() {
         let app = launchSettingsScenario("mixed")
         let inspect = reveal("restore.inspect", in: app)
@@ -28,8 +29,8 @@ final class RestoreSettingsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["restore.review"].isEnabled)
     }
 
-    // T-UI-RST-02/T-RST-34...35: confirmation identifies replacement,
-    // automatic quit, and cold-launch activation; Escape still cancels it.
+    // T-UI-RST-02/T-RST-34...35 expected RED: Settings has no restore
+    // confirmation naming replacement and next-launch activation to cancel.
     func testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel() {
         let app = launchSettingsScenario("mixed")
         reveal("restore.inspect", in: app).click()
@@ -55,8 +56,8 @@ final class RestoreSettingsUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["restore.terminal.shell"].exists)
     }
 
-    // T-UI-RST-03/T-RST-36/R-06: staging replaces the work surface, quiesces
-    // the live writer, and exits without offering another writable interaction.
+    // T-UI-RST-03/T-RST-36/R-06 expected RED: successful staging leaves the
+    // app running with restart controls instead of a terminal shell and exit.
     func testSuccessfulStageShowsTerminalSurfaceAndQuits() {
         let app = launchSettingsScenario("mixed")
         reveal("restore.inspect", in: app).click()
@@ -79,7 +80,8 @@ final class RestoreSettingsUITests: XCTestCase {
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
     }
 
-    // T-UI-RST-04: double-failure replaces the work surface with an accessible recovery shell.
+    // T-UI-RST-04 expected RED: the hosted double-failure launch exposes no
+    // accessible recovery shell, preservation instructions, or safe quit action.
     func testRecoveryRequiredShellProvidesPreservationAndQuitInstructions() {
         let app = XCUIApplication()
         app.launchArguments += [

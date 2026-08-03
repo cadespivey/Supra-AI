@@ -336,6 +336,8 @@ run_case \
     SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$guided_class_only_hook" \
     bash "${scripts}/run-app-smoke-tests.sh" --check
 
+# Standing guard: restore hosted-test discovery and selector wiring landed in
+# 866c551; these already-green meta-cases intentionally lock future omission.
 run_case \
   "a missing restore Settings smoke test fails closed" \
   1 \

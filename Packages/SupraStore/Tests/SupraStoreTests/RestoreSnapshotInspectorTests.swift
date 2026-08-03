@@ -137,8 +137,8 @@ final class RestoreSnapshotInspectorTests: XCTestCase {
         XCTAssertEqual(candidate.incompatibility, .foreignKeyIntegrityFailed)
     }
 
-    // T-RST-08/T-RST-39: manifest/database mismatch and an unsupported future
-    // migration have distinct fail-closed compatibility results.
+    // T-RST-08/T-RST-39 expected RED: manifest/database migration mismatch and
+    // a future migration have no distinct fail-closed compatibility model.
     func testMigrationMismatchAndFutureSchemaHaveDistinctBlockingReasons() throws {
         _ = try fixture.writeCompleteSnapshot(
             stem: "SupraAI-20260731-120000-000",
