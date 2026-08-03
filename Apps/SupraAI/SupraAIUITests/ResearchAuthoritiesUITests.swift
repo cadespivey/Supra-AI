@@ -876,7 +876,11 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
 
     func testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly() throws {
         let storageRoot = appSandboxWritableStorageRoot(prefix: "AuthorityReviewUITest")
-        let app = launchMotionApp(flag: "-uiTestMotionDraftSuccess", storageRoot: storageRoot)
+        let app = launchMotionApp(
+            flag: "-uiTestMotionDraftSuccess",
+            storageRoot: storageRoot,
+            additionalArguments: ["-uiTestInitialMatterTab", "Authorities"]
+        )
         let expectedExcerpt = "A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
 
         openReviewedAuthorityThroughProductionNavigation(in: app)
