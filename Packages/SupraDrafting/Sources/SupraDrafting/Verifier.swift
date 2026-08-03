@@ -180,12 +180,17 @@ public struct DraftVerifier: Verifier, Sendable {
                 authority.groundKey
             ].contains(where: Self.isBlank)
                 && !InstructionShapeDetector.isBlocking(authority.reviewedExcerpt)
+            let supportedContract = authority.groundKey == MotionGroundSpec.failureToStateClaim.key
+                && Self.isSupportedFloridaCitation(authority.citation)
             guard complete,
+                  supportedContract,
                   authorityIndices.indices.contains(index),
                   authorityIndices[index] != nil
             else {
                 if !complete {
                     block(.authorityValidity, "Selected authority \(index + 1) is incomplete or instruction-shaped.")
+                } else if !supportedContract {
+                    block(.authorityValidity, "Selected authority \(index + 1) is outside the supported Florida failure-to-state-a-claim contract.")
                 }
                 continue
             }
@@ -258,6 +263,17 @@ public struct DraftVerifier: Verifier, Sendable {
     private static func containsPlaceholder(_ value: String) -> Bool {
         value.localizedCaseInsensitiveContains("[cite]")
             || value.localizedCaseInsensitiveContains("[fact?]")
+    }
+
+    private static func isSupportedFloridaCitation(_ citation: String) -> Bool {
+        let folded = citation.lowercased()
+        let hasFloridaCourt = folded.contains("fla.") || folded.contains("florida")
+        let hasReporter = folded.contains("so. ")
+            || folded.contains("f. supp.")
+            || folded.contains("fla. l. weekly")
+        return hasFloridaCourt
+            && hasReporter
+            && citation.rangeOfCharacter(from: .decimalDigits) != nil
     }
 
     // MARK: - Per-Auth-section (motion)
