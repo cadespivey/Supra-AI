@@ -19,6 +19,9 @@ public struct DurableFileWriter: Sendable {
         case destinationExists
         case atomicInstallFailed(Int32)
         case parentDirectorySynchronizationFailed(Int32)
+        case fileIdentityInspectionFailed(Int32)
+        case createOnlyRollbackFailed(Int32)
+        case createOnlyRollbackConflict(String, Int32)
     }
 
     public typealias FaultInjector = @Sendable (FaultStage) throws -> Void
@@ -104,6 +107,12 @@ public struct DurableFileWriter: Sendable {
         case createExclusive
     }
 
+    private struct FileIdentity: Equatable {
+        let device: dev_t
+        let inode: ino_t
+        let generation: UInt32
+    }
+
     private func performWrite(
         to destination: URL,
         installPolicy: InstallPolicy,
@@ -146,9 +155,25 @@ public struct DurableFileWriter: Sendable {
         try validator(temporary)
         try Task.checkCancellation()
         try faultInjector(.beforeInstall)
+        guard let installedFileIdentity = try Self.fileIdentity(at: temporary) else {
+            throw WriterError.fileIdentityInspectionFailed(ENOENT)
+        }
         try Self.atomicInstall(temporary, at: standardizedDestination, policy: installPolicy)
         installed = true
-        try parentDirectorySynchronizer(parent)
+        do {
+            try parentDirectorySynchronizer(parent)
+        } catch {
+            guard installPolicy == .createExclusive else { throw error }
+            let changedDirectory = try Self.rollbackCreateExclusiveInstall(
+                at: standardizedDestination,
+                quarantine: temporary,
+                expectedIdentity: installedFileIdentity
+            )
+            if changedDirectory {
+                try parentDirectorySynchronizer(parent)
+            }
+            throw error
+        }
     }
 
     private static func createExclusiveTemporaryFile(at url: URL) throws -> FileHandle {
@@ -197,6 +222,83 @@ public struct DurableFileWriter: Sendable {
         guard Darwin.fsync(descriptor) == 0 else {
             throw WriterError.parentDirectorySynchronizationFailed(errno)
         }
+    }
+
+    /// Removes a failed create-only install only when the destination is still
+    /// the exact file moved there by this writer. The old temporary pathname is
+    /// reused as a quarantine so a replacement race can be restored without
+    /// overwriting any newer destination.
+    private static func rollbackCreateExclusiveInstall(
+        at destination: URL,
+        quarantine: URL,
+        expectedIdentity: FileIdentity
+    ) throws -> Bool {
+        guard try fileIdentity(at: destination) == expectedIdentity else {
+            return false
+        }
+
+        let renameResult = destination.path.withCString { source in
+            quarantine.path.withCString { target in
+                Darwin.renamex_np(source, target, UInt32(RENAME_EXCL))
+            }
+        }
+        guard renameResult == 0 else {
+            let code = errno
+            if code == ENOENT { return false }
+            throw WriterError.createOnlyRollbackFailed(code)
+        }
+
+        let quarantinedIdentity: FileIdentity?
+        do {
+            quarantinedIdentity = try fileIdentity(at: quarantine)
+        } catch {
+            try restoreRollbackQuarantine(quarantine, to: destination)
+            throw error
+        }
+
+        guard quarantinedIdentity == expectedIdentity else {
+            if quarantinedIdentity != nil {
+                try restoreRollbackQuarantine(quarantine, to: destination)
+            }
+            return true
+        }
+
+        let unlinkResult = quarantine.path.withCString { Darwin.unlink($0) }
+        guard unlinkResult == 0 else {
+            let code = errno
+            try restoreRollbackQuarantine(quarantine, to: destination)
+            throw WriterError.createOnlyRollbackFailed(code)
+        }
+        return true
+    }
+
+    private static func restoreRollbackQuarantine(
+        _ quarantine: URL,
+        to destination: URL
+    ) throws {
+        let result = quarantine.path.withCString { source in
+            destination.path.withCString { target in
+                Darwin.renamex_np(source, target, UInt32(RENAME_EXCL))
+            }
+        }
+        guard result == 0 else {
+            throw WriterError.createOnlyRollbackConflict(quarantine.lastPathComponent, errno)
+        }
+    }
+
+    private static func fileIdentity(at url: URL) throws -> FileIdentity? {
+        var status = stat()
+        let result = url.path.withCString { Darwin.lstat($0, &status) }
+        guard result == 0 else {
+            let code = errno
+            if code == ENOENT { return nil }
+            throw WriterError.fileIdentityInspectionFailed(code)
+        }
+        return FileIdentity(
+            device: status.st_dev,
+            inode: status.st_ino,
+            generation: status.st_gen
+        )
     }
 }
 
