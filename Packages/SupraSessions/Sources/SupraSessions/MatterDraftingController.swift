@@ -503,8 +503,8 @@ public final class MatterDraftingController: ObservableObject {
             let courtHeader = Self.explicitCourtHeader(for: matter)
             if courtHeader.isEmpty {
                 reasons.append("The matter is missing an explicit court.")
-            } else if !Self.isSupportedNoticeJurisdiction(matter: matter, courtHeader: courtHeader) {
-                reasons.append("Only Florida motion-to-dismiss filings are supported in this workflow.")
+            } else if !FloridaMotionToDismissContract.isSupportedFilingCourt(courtHeader) {
+                reasons.append(FloridaMotionToDismissContract.filingCourtRequirement)
             }
             let noticeInputs = NoticeAppearance.Inputs(
                 courtHeader: courtHeader,
@@ -647,8 +647,8 @@ public final class MatterDraftingController: ObservableObject {
             guard !courtHeader.isEmpty else {
                 return .failure(.missingCaptionField("court"))
             }
-            guard Self.isSupportedNoticeJurisdiction(matter: matter, courtHeader: courtHeader) else {
-                return .failure(.unsupportedJurisdiction(courtHeader))
+            guard FloridaMotionToDismissContract.isSupportedFilingCourt(courtHeader) else {
+                return .failure(.motionBlocked([FloridaMotionToDismissContract.filingCourtRequirement]))
             }
             guard let caseNumber = matter.docketNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !caseNumber.isEmpty else {
                 return .failure(.missingCaptionField("case/docket number"))
@@ -692,15 +692,17 @@ public final class MatterDraftingController: ObservableObject {
                 "\(representedRole), \(representedName), moves to dismiss \(respondingTo) for failure to state a claim. This motion is assembled from the factual excerpts and reviewed authorities selected by counsel."
             )]
             let packet = Self.motionPacket(snapshot: snapshot, groundSpecs: groundSpecs)
-            guard packet.authorities.allSatisfy({ Self.isSupportedFloridaCitation($0.citation) }) else {
-                return .failure(.motionBlocked(["Every selected authority must have a supported Florida citation."]))
+            guard packet.authorities.allSatisfy({
+                FloridaMotionToDismissContract.isSupportedAuthorityCitation($0.citation)
+            }) else {
+                return .failure(.motionBlocked(["Every selected authority must have a supported Florida state citation."]))
             }
             let evidence = MotionVerificationEvidence(
                 facts: packet.facts.map {
                     MotionFactEvidence(
                         factID: $0.chunkID,
                         text: $0.text,
-                        sourceID: $0.documentID,
+                        sourceID: $0.revisionID,
                         locator: $0.locator
                     )
                 },
@@ -1048,7 +1050,7 @@ public final class MatterDraftingController: ObservableObject {
                 snippet = ""
                 blockers.append("the reviewed proposition evidence is unavailable (\(reason.rawValue))")
             }
-            if !Self.isSupportedFloridaCitation(citation) {
+            if !FloridaMotionToDismissContract.isSupportedAuthorityCitation(citation) {
                 blockers.append("the citation is missing or unsupported")
             }
             if snippet.isEmpty {
@@ -1077,13 +1079,6 @@ public final class MatterDraftingController: ObservableObject {
             return ""
         }
         return citations.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
-    nonisolated private static func isSupportedFloridaCitation(_ citation: String) -> Bool {
-        let folded = citation.lowercased()
-        let hasFloridaCourt = folded.contains("fla.") || folded.contains("florida")
-        let hasReporter = folded.contains("so. ") || folded.contains("f. supp.") || folded.contains("fla. l. weekly")
-        return hasFloridaCourt && hasReporter && citation.rangeOfCharacter(from: .decimalDigits) != nil
     }
 
     nonisolated private static func uniqueNonEmpty(_ values: [String]) -> [String] {

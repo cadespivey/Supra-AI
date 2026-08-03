@@ -8,7 +8,7 @@ import SupraDraftingCore
 public struct DraftVerifier: Verifier, Sendable {
     public let identity = DraftComponentIdentity(
         id: "supra.drafting.draft-verifier",
-        version: "2"
+        version: "3"
     )
     public let citator: CitatorClient?
 
@@ -181,7 +181,7 @@ public struct DraftVerifier: Verifier, Sendable {
             ].contains(where: Self.isBlank)
                 && !InstructionShapeDetector.isBlocking(authority.reviewedExcerpt)
             let supportedContract = authority.groundKey == MotionGroundSpec.failureToStateClaim.key
-                && Self.isSupportedFloridaCitation(authority.citation)
+                && FloridaMotionToDismissContract.isSupportedAuthorityCitation(authority.citation)
             guard complete,
                   supportedContract,
                   authorityIndices.indices.contains(index),
@@ -263,17 +263,6 @@ public struct DraftVerifier: Verifier, Sendable {
     private static func containsPlaceholder(_ value: String) -> Bool {
         value.localizedCaseInsensitiveContains("[cite]")
             || value.localizedCaseInsensitiveContains("[fact?]")
-    }
-
-    private static func isSupportedFloridaCitation(_ citation: String) -> Bool {
-        let folded = citation.lowercased()
-        let hasFloridaCourt = folded.contains("fla.") || folded.contains("florida")
-        let hasReporter = folded.contains("so. ")
-            || folded.contains("f. supp.")
-            || folded.contains("fla. l. weekly")
-        return hasFloridaCourt
-            && hasReporter
-            && citation.rangeOfCharacter(from: .decimalDigits) != nil
     }
 
     // MARK: - Per-Auth-section (motion)
