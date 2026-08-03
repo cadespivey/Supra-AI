@@ -123,23 +123,26 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         )
         XCTAssertNotNil(try fixture.store.authorities.fetchAuthority(id: fixture.authority.id)?.reviewedPropositionJSON)
 
-        let audit = try XCTUnwrap(try fixture.store.auditEvents.fetchEvents(
+        let audits = try fixture.store.auditEvents.fetchEvents(
             relatedTable: AuthorityRecord.databaseTableName,
             relatedID: fixture.authority.id,
             eventType: "authority_proposition_reviewed"
-        ).single)
+        )
+        XCTAssertEqual(audits.count, 1)
+        let audit = try XCTUnwrap(audits.first)
         XCTAssertEqual(audit.actor, "synthetic-reviewer")
-        let metadata = try jsonObject(try XCTUnwrap(audit.metadataJSON))
+        let auditMetadataJSON = try XCTUnwrap(audit.metadataJSON)
+        let metadata = try jsonObject(auditMetadataJSON)
         XCTAssertEqual(Set(metadata.keys), Set([
             "schema_version", "ground_key", "source_kind", "excerpt_byte_start",
             "excerpt_byte_length", "opinion_sha256", "excerpt_sha256",
             "effective_citation_sha256", "court_sha256", "binding_sha256",
         ]))
         XCTAssertEqual(metadata["ground_key"] as? String, "mtd.failureToStateClaim")
-        XCTAssertFalse(try XCTUnwrap(audit.metadataJSON).contains(excerpt))
-        XCTAssertFalse(try XCTUnwrap(audit.metadataJSON).contains(opinion))
-        XCTAssertFalse(try XCTUnwrap(audit.metadataJSON).contains(citation))
-        XCTAssertFalse(try XCTUnwrap(audit.metadataJSON).contains(court))
+        XCTAssertFalse(auditMetadataJSON.contains(excerpt))
+        XCTAssertFalse(auditMetadataJSON.contains(opinion))
+        XCTAssertFalse(auditMetadataJSON.contains(citation))
+        XCTAssertFalse(auditMetadataJSON.contains(court))
     }
 
     func testTARP03ReviewUsesUTF8OffsetsAndRejectsNonUniqueOrOversizedEvidence() throws {
@@ -430,16 +433,19 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
             .notReviewed
         )
 
-        let audit = try XCTUnwrap(try fixture.store.auditEvents.fetchEvents(
+        let audits = try fixture.store.auditEvents.fetchEvents(
             relatedTable: AuthorityRecord.databaseTableName,
             relatedID: fixture.authority.id,
             eventType: "authority_proposition_review_revoked"
-        ).single)
+        )
+        XCTAssertEqual(audits.count, 1)
+        let audit = try XCTUnwrap(audits.first)
         XCTAssertEqual(audit.actor, "synthetic-revoker")
-        let metadata = try jsonObject(try XCTUnwrap(audit.metadataJSON))
+        let auditMetadataJSON = try XCTUnwrap(audit.metadataJSON)
+        let metadata = try jsonObject(auditMetadataJSON)
         XCTAssertEqual(metadata["ground_key"] as? String, "mtd.failureToStateClaim")
         XCTAssertEqual(metadata["previous_binding_sha256"] as? String, reviewed.bindingSHA256)
-        XCTAssertFalse(try XCTUnwrap(audit.metadataJSON).contains(excerpt))
+        XCTAssertFalse(auditMetadataJSON.contains(excerpt))
         XCTAssertThrowsError(try fixture.store.authorities.revokePropositionReview(
             authorityID: fixture.authority.id,
             revokedBy: "synthetic-revoker",
