@@ -1669,6 +1669,14 @@ public enum SupraMigrator {
             }
         }
 
+        migrator.registerMigration("v070_add_authority_reviewed_proposition") { db in
+            // Historical authority rows have no proposition-specific human
+            // review that can be reconstructed safely. Keep them unreviewed.
+            try db.alter(table: "authorities") { table in
+                table.add(column: "reviewed_proposition_json", .text)
+            }
+        }
+
         return migrator
     }
 
