@@ -1017,6 +1017,25 @@ final class RestoreActivationServiceTests: XCTestCase {
         XCTAssertNil(record.scheduledAt)
     }
 
+    // Standing fail-closed guard: adding legacy-v1 compatibility must never
+    // broaden outcome decoding to schemas this build does not understand.
+    func testActivationOutcomeReadRejectsFutureSchemaVersion() throws {
+        try FileManager.default.createDirectory(
+            at: fixture.stagingRootDirectory,
+            withIntermediateDirectories: true
+        )
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let futureOutcome = """
+        {"schemaVersion":\(RestoreOutcomeRecord.currentSchemaVersion + 1),"operationID":"11111111-2222-3333-4444-555555555555","snapshotIdentifier":"SupraAI-20260731-090000-000","status":"activated","scheduledAt":"2024-09-22T23:59:00Z","completedAt":"2024-09-23T00:00:00Z"}
+        """
+        try Data(futureOutcome.utf8).write(to: outcomeURL, options: .atomic)
+
+        XCTAssertThrowsError(try RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+    }
+
     private func stage(
         currentBlobs: [RestoreTestBlob] = [],
         selectedBlobs: [RestoreTestBlob] = [],
