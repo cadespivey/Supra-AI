@@ -374,6 +374,27 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         }
     }
 
+    // Expected RED: the shipping v1 producer writes nil structural fields, but
+    // whitespace optionals currently pass through as if they were absent.
+    func testTMDSS03FRejectsNonNilV1StructuralCoordinates() throws {
+        let fixture = try makeFixture()
+        let chunk = fixture.chunks[0]
+        try fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE document_chunks SET unit_kind = ? WHERE id = ?",
+                arguments: ["\t", chunk.id]
+            )
+        }
+
+        XCTAssertThrowsError(
+            try fixture.store.draftingSources.captureMotionSnapshot(
+                request(for: fixture, factChunkIDs: [chunk.id])
+            )
+        ) { error in
+            XCTAssertEqual(error as? MotionDraftSnapshotError, .factBindingInvalid(chunk.id))
+        }
+    }
+
     // Expected RED: raw authority flags and citation text can currently enter a motion
     // without proposition-specific reviewed evidence for the selected ground.
     func testTMDSS04CaptureRequiresLiveReviewedAuthorityProposition() throws {
