@@ -101,6 +101,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             "MEMORANDUM OF LAW",
             "FAILS TO STATE A CLAIM",
             fixture.selectedAuthorityCitation,
+            "Applying the reviewed pleading standards to selected fact 1",
             "JUDGE: Avery Stone",
             "Submitted for review:",
             "/s/ Harvey Specter",

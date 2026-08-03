@@ -160,7 +160,7 @@ final class MotionVerificationTests: XCTestCase {
         XCTAssertEqual(MotionGroundSpec.contractIdentity,
                        DraftComponentIdentity(id: "supra.drafting.motion-ground-contract", version: "3"))
         XCTAssertEqual(MotionToDismiss.assemblerIdentity,
-                       DraftComponentIdentity(id: "supra.drafting.motion-to-dismiss-assembler", version: "1"))
+                       DraftComponentIdentity(id: "supra.drafting.motion-to-dismiss-assembler", version: "2"))
     }
 
     // MVS-08. Expected RED: exact paragraph matching currently accepts an arbitrary
@@ -284,9 +284,26 @@ final class MotionVerificationTests: XCTestCase {
         }
     }
 
+    // MVS-11. Expected RED: exact facts may appear only in the statement of facts;
+    // the verifier does not require the argument to apply the reviewed pleading
+    // standards to each selected excerpt.
+    func testFactApplicationMustBeExactCompleteOrderedAndAfterAuthorities() async {
+        let expected = canonicalApplicationParagraphs
+        let fixtures = [
+            validModel(applicationParagraphs: []),
+            validModel(applicationParagraphs: [expected[0] + " Changed.", expected[1]]),
+            validModel(applicationParagraphs: Array(expected.reversed())),
+        ]
+
+        for model in fixtures {
+            await assertBlocked(model: model, evidence: evidence)
+        }
+    }
+
     private func validModel(
         numberedFacts: [String]? = nil,
         authorityParagraphs: [String]? = nil,
+        applicationParagraphs: [String]? = nil,
         introduction: String = "Defendant moves to dismiss the fictional complaint."
     ) -> DocumentModel {
         MotionToDismiss.assemble(
@@ -305,12 +322,21 @@ final class MotionVerificationTests: XCTestCase {
             numberedFacts: numberedFacts ?? evidence.facts.map(\.text),
             argumentPoints: [MotionToDismiss.ArgumentPoint(
                 heading: "THE FICTIONAL COMPLAINT FAILS TO STATE A CLAIM.",
-                body: (authorityParagraphs ?? evidence.authorities.map(\.canonicalParagraph)).map(BodyBlock.paragraph)
+                body: (
+                    (authorityParagraphs ?? evidence.authorities.map(\.canonicalParagraph))
+                        + (applicationParagraphs ?? canonicalApplicationParagraphs)
+                ).map(BodyBlock.paragraph)
             )],
             conclusion: "WHEREFORE, Defendant requests dismissal.",
             signature: signature,
             certificate: certificate
         )
+    }
+
+    private var canonicalApplicationParagraphs: [String] {
+        evidence.facts.enumerated().map { index, fact in
+            "Applying the reviewed pleading standards to selected fact \(index + 1) (“\(fact.text)”), the moving party submits that the excerpt does not plead the ultimate facts necessary to state a legally sufficient claim."
+        }
     }
 
     private func assertBlocked(model: DocumentModel, evidence: MotionVerificationEvidence) async {
