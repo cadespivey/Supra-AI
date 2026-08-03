@@ -226,6 +226,52 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
         XCTAssertEqual(unverified, "Mark this authority verified before recording proposition support.")
     }
 
+    func testMarkNotAdverseRemediatesSavedAuthorityAndEnablesExactReview() async throws {
+        // Expected RED: Authority Detail can explain this prerequisite, but the
+        // Authorities controller has no in-context action that satisfies it.
+        let opinion = "The unique reviewed proposition appears in this fictional opinion."
+        let fixture = try makeFixture(opinionText: opinion)
+        let resultID = try XCTUnwrap(fixture.authority.researchResultID)
+        try fixture.store.authorities.updateReviewState(
+            authorityID: fixture.authority.id,
+            reviewState: .needsLaterReview
+        )
+        try fixture.store.research.updateResultReviewState(
+            resultID: resultID,
+            reviewState: .needsLaterReview
+        )
+        let controller = makeController(fixture: fixture)
+        controller.load()
+
+        XCTAssertNil(controller.markAuthorityNotAdverse(authorityID: fixture.authority.id))
+
+        XCTAssertEqual(
+            try fixture.store.authorities.fetchAuthority(id: fixture.authority.id)?.reviewState,
+            ResearchResultReviewState.notAdverse.rawValue
+        )
+        XCTAssertEqual(
+            try fixture.store.research.fetchResult(resultID: resultID)?.reviewState,
+            ResearchResultReviewState.notAdverse.rawValue
+        )
+        XCTAssertEqual(controller.authorities.first?.reviewState, ResearchResultReviewState.notAdverse.rawValue)
+        XCTAssertEqual(controller.authorities.first?.failureToStateClaimReviewState, .notReviewed)
+        let audit = try XCTUnwrap(
+            fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                .first { $0.eventType == "authority_review_state_changed" }
+        )
+        XCTAssertTrue(audit.summary.localizedCaseInsensitiveContains("not adverse"))
+
+        let reviewMessage = await controller.recordFailureToStateClaimReview(
+            authorityID: fixture.authority.id,
+            excerpt: opinion
+        )
+        XCTAssertNil(reviewMessage)
+        guard case .ready(let reviewed)? = controller.authorities.first?.failureToStateClaimReviewState else {
+            return XCTFail("In-context eligibility remediation did not enable exact proposition review")
+        }
+        XCTAssertEqual(reviewed.excerpt, opinion)
+    }
+
     func testLoadExposesBlockedStateAndRevokeClearsIt() throws {
         // Expected RED: authority items did not expose recomputed typed evidence,
         // and the controller had no audited revocation action for blocked evidence.

@@ -457,6 +457,7 @@ printf '%s\n' \
   '  func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
   '  func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() {}' \
   '  func testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly() {}' \
+  '  func testTUIAUTH02BlockedAuthorityRemediatesIntoMotionReadiness() {}' \
   '}' \
   >"$accessibility_hook"
 # Standing guard: the exact methods nested in the shipping XCTest class must
@@ -553,7 +554,7 @@ motion_ui_tests="${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUIT
 if grep -Fq 'drafting.motion.fact.\(source.chunkID)' "$motion_view" \
     && grep -Fq 'drafting.motion.authority.\(source.authorityID)' "$motion_view" \
     && grep -Fq 'drafting.motion.fact.ui-motion-fact-chunk' "$motion_ui_tests" \
-    && grep -Fq 'drafting.motion.authority.ui-motion-authority-success' "$motion_ui_tests"; then
+    && grep -Fq 'ui-motion-authority-success' "$motion_ui_tests"; then
   printf '%s\n' 'PASS: motion smoke selects exact identified production source rows'
 else
   record_failure 'motion smoke does not select exact identified production source rows'
@@ -578,26 +579,75 @@ else
   printf '%s\n' 'PASS: motion hosted smoke uses production matter and Draft navigation'
 fi
 
-if grep -Fq '.disabled(controller.isGenerating)' "$motion_view" \
-    && grep -Fq 'if controller.isGenerating {' "$motion_view" \
+if grep -Fq 'private var isWorking: Bool { generationTask != nil || controller.isGenerating }' "$motion_view" \
+    && grep -Fq 'guard !isWorking else { return }' "$motion_view" \
+    && grep -Fq '.interactiveDismissDisabled(isWorking)' "$motion_view" \
+    && grep -Fq 'generationToken' "$motion_view" \
+    && grep -Fq 'drafting.close.header' "$motion_ui_tests" \
+    && grep -Fq 'drafting.close.footer' "$motion_ui_tests" \
     && grep -Fq 'docxArtifacts(beneath: storageRoot)' "$motion_ui_tests"; then
-  printf '%s\n' 'PASS: in-flight motion UI stays locked with reachable cancellation and disk proof'
+  printf '%s\n' 'PASS: view-owned motion work closes double-start and dismissal races with disk proof'
 else
-  record_failure 'in-flight motion UI can hide cancellation or lacks disk-level absence proof'
+  record_failure 'motion UI lacks a view-owned task token, dismissal lock, or disk-level absence proof'
+fi
+
+if grep -Fq '.accessibilityLabel(sourceAccessibilityLabel' "$motion_view" \
+    && grep -Fq '.accessibilityValue(sourceAccessibilityValue' "$motion_view" \
+    && grep -Fq 'source.displayExcerpt' "$motion_view" \
+    && grep -Fq 'localizedCaseInsensitiveContains("Selected")' "$motion_ui_tests" \
+    && grep -Fq 'authority.label.contains(exactMotionAuthorityExcerpt)' "$motion_ui_tests"; then
+  printf '%s\n' 'PASS: motion source rows announce literal state and expose reviewed authority text'
+else
+  record_failure 'motion source rows lack literal accessibility state or reviewed proposition text'
+fi
+
+if grep -Fq 'motionFactLoadError' "$motion_view" \
+    && grep -Fq 'motionAuthorityLoadError' "$motion_view" \
+    && grep -Fq 'drafting.motion.sources.retry' "$motion_view"; then
+  printf '%s\n' 'PASS: motion source load failures remain distinct from empty libraries and expose retry'
+else
+  record_failure 'motion source load failures are still presented as empty libraries or have no retry'
+fi
+
+if grep -Fq 'The court, judge where applicable, and case number come from the matter.' "$motion_view" \
+    && ! grep -Fq 'The court, division, and case number come from the matter.' "$motion_view"; then
+  printf '%s\n' 'PASS: motion caption guidance names only fields the controller uses'
+else
+  record_failure 'motion caption guidance still promises an unused division field'
 fi
 
 authority_detail_view="${repo_root}/Apps/SupraAI/SupraAI/Authorities/AuthorityDetailView.swift"
+authorities_controller="${repo_root}/Packages/SupraSessions/Sources/SupraSessions/AuthoritiesController.swift"
 motion_ui_class="$(sed -n '/final class MotionToDismissWorkspaceUITests:/,/^}/p' "$motion_ui_tests")"
 if grep -Fq 'authority.reviewedProposition.status' "$authority_detail_view" \
     && grep -Fq 'authority.reviewedProposition.excerpt' "$authority_detail_view" \
     && grep -Fq 'authority.reviewedProposition.save' "$authority_detail_view" \
     && grep -Fq 'authority.reviewedProposition.remove' "$authority_detail_view" \
     && grep -Fq 'testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly' <<<"$motion_ui_class" \
-    && grep -Fq 'authorities.row.ui-motion-authority-success' <<<"$motion_ui_class" \
-    && grep -Fq 'expectedExcerpt' <<<"$motion_ui_class"; then
+    && grep -Fq 'authorityID: "ui-motion-authority-success"' <<<"$motion_ui_class" \
+    && grep -Fq 'exactMotionAuthorityExcerpt' <<<"$motion_ui_class"; then
   printf '%s\n' 'PASS: hosted authority editor proves exact reviewed evidence lifecycle'
 else
   record_failure 'hosted authority editor does not prove the exact reviewed evidence lifecycle'
+fi
+
+if grep -Fq 'authority.reviewState.markNotAdverse' "$authority_detail_view" \
+    && grep -Fq 'markAuthorityNotAdverse' "$authorities_controller" \
+    && grep -Fq 'testTUIAUTH02BlockedAuthorityRemediatesIntoMotionReadiness' <<<"$motion_ui_class" \
+    && grep -Fq 'ui-motion-authority-blocked' <<<"$motion_ui_class"; then
+  printf '%s\n' 'PASS: blocked saved authority has an in-context hosted remediation path'
+else
+  record_failure 'blocked saved authority lacks an in-context hosted remediation path'
+fi
+
+matter_workspace_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterWorkspaceView.swift"
+if grep -Fq 'prewarm(role: .drafting)' "$matter_workspace_view"; then
+  record_failure 'opening Draft still eagerly loads a model before the user selects a model-backed kind'
+elif grep -Fq 'selection == .kind(.letterDemand)' "$motion_view" \
+    && grep -Fq 'library.prewarm(role: .drafting)' "$motion_view"; then
+  printf '%s\n' 'PASS: drafting model prewarm is deferred to the model-backed demand-letter kind'
+else
+  record_failure 'demand-letter selection no longer prewarms its assigned drafting model'
 fi
 
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \

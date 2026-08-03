@@ -762,6 +762,8 @@ final class DraftingBlockedStateUITests: XCTestCase {
 /// and keeps deterministic blockers free of file actions.
 @MainActor
 final class MotionToDismissWorkspaceUITests: XCTestCase {
+    private let exactMotionAuthorityExcerpt = "A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
+
     override func setUp() {
         continueAfterFailure = false
     }
@@ -823,6 +825,14 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let blockedAuthority = app.buttons["drafting.motion.authority.ui-motion-authority-blocked"]
         XCTAssertTrue(blockedAuthority.waitForExistence(timeout: 5))
         XCTAssertFalse(blockedAuthority.isEnabled)
+        XCTAssertTrue(
+            blockedAuthority.label.localizedCaseInsensitiveContains("Review Required"),
+            blockedAuthority.debugDescription
+        )
+        XCTAssertTrue(
+            blockedAuthority.value.debugDescription.localizedCaseInsensitiveContains("Blocked"),
+            blockedAuthority.debugDescription
+        )
         let readiness = app.descendants(matching: .any)["drafting.motion.readiness"]
         XCTAssertTrue(readiness.waitForExistence(timeout: 5))
         XCTAssertTrue(
@@ -856,6 +866,9 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let notice = app.buttons["drafting.kind.noticeAppearance"]
         XCTAssertTrue(notice.exists)
         XCTAssertFalse(notice.isEnabled, "Work-product switching must stay locked while generation is in flight")
+        XCTAssertFalse(generate.isEnabled, "A view-owned in-flight task must close the double-start window")
+        XCTAssertFalse(app.buttons["drafting.close.header"].isEnabled)
+        XCTAssertFalse(app.buttons["drafting.close.footer"].isEnabled)
         XCTAssertTrue(cancel.isEnabled)
         XCTAssertTrue(cancel.isHittable)
         cancel.click()
@@ -876,9 +889,10 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
             storageRoot: storageRoot,
             additionalArguments: ["-uiTestInitialMatterTab", "Authorities"]
         )
-        let expectedExcerpt = "A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
-
-        openReviewedAuthorityThroughProductionNavigation(in: app)
+        openAuthorityThroughProductionNavigation(
+            in: app,
+            authorityID: "ui-motion-authority-success"
+        )
 
         let status = app.descendants(matching: .any)["authority.reviewedProposition.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 10), "Reviewed-proposition status was not exposed")
@@ -887,14 +901,14 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let excerpt = app.descendants(matching: .any)["authority.reviewedProposition.excerpt"]
         XCTAssertTrue(excerpt.waitForExistence(timeout: 5), "Exact-excerpt editor was not exposed")
         let excerptValue = (excerpt.value as? String) ?? excerpt.label
-        XCTAssertEqual(excerptValue, expectedExcerpt)
+        XCTAssertEqual(excerptValue, exactMotionAuthorityExcerpt)
 
         let remove = app.buttons["authority.reviewedProposition.remove"]
         scrollToHittable(remove, in: app)
         XCTAssertTrue(remove.isHittable, remove.debugDescription)
         remove.click()
         waitForStatus(status, containing: "Not reviewed")
-        XCTAssertEqual((excerpt.value as? String) ?? excerpt.label, expectedExcerpt)
+        XCTAssertEqual((excerpt.value as? String) ?? excerpt.label, exactMotionAuthorityExcerpt)
 
         let save = app.buttons["authority.reviewedProposition.save"]
         scrollToHittable(save, in: app)
@@ -902,10 +916,60 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         XCTAssertTrue(save.isHittable, save.debugDescription)
         save.click()
         waitForStatus(status, containing: "Ready")
-        XCTAssertEqual((excerpt.value as? String) ?? excerpt.label, expectedExcerpt)
+        XCTAssertEqual((excerpt.value as? String) ?? excerpt.label, exactMotionAuthorityExcerpt)
     }
 
-    private func openReviewedAuthorityThroughProductionNavigation(in app: XCUIApplication) {
+    func testTUIAUTH02BlockedAuthorityRemediatesIntoMotionReadiness() throws {
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "AuthorityRemediationUITest")
+        let app = launchMotionApp(
+            flag: "-uiTestMotionDraftBlocked",
+            storageRoot: storageRoot,
+            additionalArguments: ["-uiTestInitialMatterTab", "Authorities"]
+        )
+        openAuthorityThroughProductionNavigation(
+            in: app,
+            authorityID: "ui-motion-authority-blocked"
+        )
+
+        let markNotAdverse = app.buttons["authority.reviewState.markNotAdverse"]
+        XCTAssertTrue(markNotAdverse.waitForExistence(timeout: 10), markNotAdverse.debugDescription)
+        scrollToHittable(markNotAdverse, in: app)
+        XCTAssertTrue(markNotAdverse.isHittable, markNotAdverse.debugDescription)
+        markNotAdverse.click()
+        XCTAssertFalse(
+            markNotAdverse.waitForExistence(timeout: 1),
+            "The saved authority did not publish its remediated review state"
+        )
+
+        let excerpt = app.descendants(matching: .any)["authority.reviewedProposition.excerpt"]
+        XCTAssertTrue(excerpt.waitForExistence(timeout: 5))
+        excerpt.click()
+        excerpt.typeText(exactMotionAuthorityExcerpt)
+        let save = app.buttons["authority.reviewedProposition.save"]
+        scrollToHittable(save, in: app)
+        XCTAssertTrue(save.isEnabled)
+        save.click()
+        let status = app.descendants(matching: .any)["authority.reviewedProposition.status"]
+        waitForStatus(status, containing: "Ready")
+
+        let draft = app.buttons["matter.draft"]
+        XCTAssertTrue(draft.waitForExistence(timeout: 5))
+        draft.click()
+        let motion = app.buttons["drafting.kind.motionToDismiss"]
+        XCTAssertTrue(motion.waitForExistence(timeout: 5))
+        motion.click()
+        fillMotionInputsAndSelectSources(
+            in: app,
+            includeAuthority: true,
+            authorityID: "ui-motion-authority-blocked"
+        )
+        XCTAssertTrue(app.buttons["drafting.generate"].isEnabled)
+    }
+
+    private func openAuthorityThroughProductionNavigation(
+        in app: XCUIApplication,
+        authorityID: String
+    ) {
         let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
         XCTAssertTrue(matter.waitForExistence(timeout: 20))
         XCTAssertTrue(matter.isHittable)
@@ -916,8 +980,8 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         XCTAssertTrue(authorities.isHittable)
         authorities.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
-        let row = app.descendants(matching: .any)["authorities.row.ui-motion-authority-success"]
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded reviewed authority was not listed")
+        let row = app.descendants(matching: .any)["authorities.row.\(authorityID)"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded authority was not listed")
         scrollToHittable(row, in: app)
         XCTAssertTrue(row.isHittable, row.debugDescription)
         row.click()
@@ -960,7 +1024,11 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         motion.click()
     }
 
-    private func fillMotionInputsAndSelectSources(in app: XCUIApplication, includeAuthority: Bool) {
+    private func fillMotionInputsAndSelectSources(
+        in app: XCUIApplication,
+        includeAuthority: Bool,
+        authorityID: String = "ui-motion-authority-success"
+    ) {
         let respondingTo = app.textFields["drafting.motion.respondingTo"]
         XCTAssertTrue(respondingTo.waitForExistence(timeout: 5))
         respondingTo.click()
@@ -976,12 +1044,16 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let fact = app.buttons["drafting.motion.fact.ui-motion-fact-chunk"]
         XCTAssertTrue(fact.waitForExistence(timeout: 5), "The seeded fact was not exposed as a selectable production row")
         XCTAssertTrue(fact.isEnabled)
+        XCTAssertTrue(fact.value.debugDescription.localizedCaseInsensitiveContains("Ready"), fact.debugDescription)
         fact.click()
+        XCTAssertTrue(fact.value.debugDescription.localizedCaseInsensitiveContains("Selected"), fact.debugDescription)
 
         if includeAuthority {
-            let authority = app.buttons["drafting.motion.authority.ui-motion-authority-success"]
+            let authority = app.buttons["drafting.motion.authority.\(authorityID)"]
             XCTAssertTrue(authority.waitForExistence(timeout: 5), "The reviewed authority was not exposed as a selectable production row")
             XCTAssertTrue(authority.isEnabled)
+            XCTAssertTrue(authority.label.contains(exactMotionAuthorityExcerpt), authority.debugDescription)
+            XCTAssertTrue(authority.value.debugDescription.localizedCaseInsensitiveContains("Ready"), authority.debugDescription)
             let generate = app.buttons["drafting.generate"]
             XCTAssertTrue(generate.waitForExistence(timeout: 5))
             // Expected RED before geometry-based scroll targeting: XCTest reports
@@ -999,6 +1071,7 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
             )
             XCTAssertTrue(authority.isHittable, authority.debugDescription)
             authority.click()
+            XCTAssertTrue(authority.value.debugDescription.localizedCaseInsensitiveContains("Selected"), authority.debugDescription)
             XCTAssertTrue(generate.isEnabled, "Selecting both exact source rows must make the supported motion ready")
         }
     }
