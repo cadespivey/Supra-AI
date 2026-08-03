@@ -773,8 +773,6 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
 
         openMotionDraftThroughProductionNavigation(in: app)
         fillMotionInputsAndSelectSources(in: app, includeAuthority: true)
-        XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.factSources"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.authoritySources"].exists)
         let readiness = app.descendants(matching: .any)["drafting.motion.readiness"]
         XCTAssertTrue(readiness.waitForExistence(timeout: 5))
         XCTAssertTrue(readiness.label.localizedCaseInsensitiveContains("ready"), readiness.debugDescription)
@@ -976,6 +974,8 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         relief.click()
         relief.typeText("dismissal without prejudice and leave to amend")
 
+        XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.factSources"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.authoritySources"].waitForExistence(timeout: 5))
         let fact = app.buttons["drafting.motion.fact.ui-motion-fact-chunk"]
         XCTAssertTrue(fact.waitForExistence(timeout: 5), "The seeded fact was not exposed as a selectable production row")
         XCTAssertTrue(fact.isEnabled)
