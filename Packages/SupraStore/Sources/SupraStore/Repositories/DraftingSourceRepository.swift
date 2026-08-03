@@ -41,6 +41,16 @@ public struct MotionDraftSettingSnapshot: Codable, Equatable, Sendable {
     public let valueSHA256: String
 }
 
+/// Content-free identity of one persisted structure edge that supplied context
+/// to a selected v2 chunk. Array order is the exact projection order.
+public struct MotionDraftStructureEdgeSnapshot: Codable, Equatable, Hashable, Sendable {
+    public let edgeID: String
+    public let fromNodeID: String
+    public let toNodeID: String
+    public let kind: String
+    public let projectionOrder: Int
+}
+
 public struct MotionDraftFactSnapshot: Codable, Equatable, Sendable {
     public let chunkID: String
     public let documentID: String
@@ -59,6 +69,9 @@ public struct MotionDraftFactSnapshot: Codable, Equatable, Sendable {
     public let charStart: Int
     public let charEnd: Int
     public let text: String
+    public let ocrConfidence: Double?
+    public let boundingBoxesSHA256: String?
+    public let relatedStructureEdges: [MotionDraftStructureEdgeSnapshot]
     public let revisionSHA256: String
     public let excerptSHA256: String
 }
@@ -82,7 +95,7 @@ public struct MotionDraftAuthoritySnapshot: Codable, Equatable, Sendable {
 /// Immutable values read from one GRDB snapshot. Raw excerpts are available to
 /// the in-memory assembler/verifier; only their canonical hashes belong in audit metadata.
 public struct MotionDraftStoreSnapshot: Sendable {
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
 
     public let request: MotionDraftSnapshotRequest
     public let matter: MatterRecord
@@ -111,6 +124,14 @@ public struct MotionDraftStoreSnapshot: Sendable {
     }
 }
 
+/// Store-owned outer contract for the schema-v2, content-free motion lineage
+/// emitted by SupraSessions. Store validates the full shape before it blesses
+/// the lineage and current source snapshot in one transaction.
+public enum MotionDraftAuditEnvelope {
+    public static let schemaVersion = 2
+    public static let kindID = "motionToDismiss"
+}
+
 public enum MotionDraftSnapshotError: Error, Equatable, Sendable {
     case blankMatterID
     case emptyFactSelection
@@ -127,6 +148,7 @@ public enum MotionDraftSnapshotError: Error, Equatable, Sendable {
     case authorityOutsideMatter(String)
     case authorityPropositionUnavailable(authorityID: String, reason: String)
     case auditMatterMismatch
+    case auditEnvelopeInvalid
     case sourceSnapshotStale
 }
 
@@ -157,6 +179,13 @@ public final class DraftingSourceRepository: @unchecked Sendable {
     ) throws {
         guard event.matterID == snapshot.request.matterID else {
             throw MotionDraftSnapshotError.auditMatterMismatch
+        }
+        guard event.eventType == "draft_generated",
+              event.relatedTable == MatterRecord.databaseTableName,
+              event.relatedID == snapshot.request.matterID,
+              let metadataJSON = event.metadataJSON,
+              Self.validAuditEnvelope(metadataJSON, requiring: snapshot) else {
+            throw MotionDraftSnapshotError.auditEnvelopeInvalid
         }
         try writer.write { db in
             let current: MotionDraftStoreSnapshot
@@ -292,12 +321,20 @@ public final class DraftingSourceRepository: @unchecked Sendable {
               part.documentID == document.id,
               part.currentRevisionID == revisionID,
               part.sourceKind == chunk.sourceKind,
+              part.pageIndex == chunk.pageIndex,
+              part.pageLabel == chunk.pageLabel,
+              part.sheetName == chunk.sheetName,
+              part.cellRange == chunk.cellRange,
+              part.emailPartPath == chunk.emailPartPath,
+              part.ocrConfidence == chunk.ocrConfidence,
+              part.boundingBoxesJSON == chunk.boundingBoxesJSON,
               let revision = try DocumentPartRevisionRecord.fetchOne(db, key: revisionID),
               revision.documentID == document.id,
               revision.partIndex == part.partIndex else {
             throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
         }
 
+        let relatedStructureEdges: [MotionDraftStructureEdgeSnapshot]
         do {
             if let nodeID = nonblank(chunk.nodeID) {
                 guard let node = try DocumentStructureNodeRecord.fetchOne(db, key: nodeID),
@@ -336,7 +373,7 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                     resolvedByID: resolvedByID,
                     edges: edges
                 )
-                guard expectedChunks.contains(where: {
+                guard let matched = expectedChunks.first(where: {
                     $0.nodeID == node.id
                         && $0.unitKind == node.kind
                         && $0.charStart == start
@@ -345,10 +382,12 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                 }) else {
                     throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
                 }
+                relatedStructureEdges = matched.relatedStructureEdges
             } else {
                 guard exactCharacterSlice(revision.text, start: start, end: end) == chunk.normalizedText else {
                     throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
                 }
+                relatedStructureEdges = []
             }
         } catch is MotionDraftSnapshotError {
             throw MotionDraftSnapshotError.factBindingInvalid(chunkID)
@@ -375,15 +414,18 @@ public final class DraftingSourceRepository: @unchecked Sendable {
             nodeID: chunk.nodeID,
             unitKind: chunk.unitKind,
             chunkerVersion: chunk.chunkerVersion,
-            sourceKind: chunk.sourceKind,
-            pageIndex: chunk.pageIndex,
-            pageLabel: chunk.pageLabel,
-            sheetName: chunk.sheetName,
-            cellRange: chunk.cellRange,
-            emailPartPath: chunk.emailPartPath,
+            sourceKind: part.sourceKind,
+            pageIndex: part.pageIndex,
+            pageLabel: part.pageLabel,
+            sheetName: part.sheetName,
+            cellRange: part.cellRange,
+            emailPartPath: part.emailPartPath,
             charStart: start,
             charEnd: end,
             text: chunk.normalizedText,
+            ocrConfidence: part.ocrConfidence,
+            boundingBoxesSHA256: part.boundingBoxesJSON.map { sha256(Data($0.utf8)) },
+            relatedStructureEdges: relatedStructureEdges,
             revisionSHA256: sha256(Data(revision.text.utf8)),
             excerptSHA256: sha256(Data(chunk.normalizedText.utf8))
         )
@@ -474,6 +516,9 @@ public final class DraftingSourceRepository: @unchecked Sendable {
         let emailPartPath: String?
         let charStart: Int
         let charEnd: Int
+        let ocrConfidence: Double?
+        let boundingBoxesSHA256: String?
+        let relatedStructureEdges: [MotionDraftStructureEdgeSnapshot]
         let revisionSHA256: String
         let excerptSHA256: String
     }
@@ -546,6 +591,9 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                     emailPartPath: $0.emailPartPath,
                     charStart: $0.charStart,
                     charEnd: $0.charEnd,
+                    ocrConfidence: $0.ocrConfidence,
+                    boundingBoxesSHA256: $0.boundingBoxesSHA256,
+                    relatedStructureEdges: $0.relatedStructureEdges,
                     revisionSHA256: $0.revisionSHA256,
                     excerptSHA256: $0.excerptSHA256
                 )
@@ -571,6 +619,237 @@ public final class DraftingSourceRepository: @unchecked Sendable {
         return sha256(try encoder.encode(payload))
     }
 
+    private struct DecodedMotionAuditEnvelope: Decodable {
+        struct Fact: Decodable {
+            let chunkID: String
+            let documentID: String
+            let partID: String
+            let revisionID: String
+            let nodeID: String?
+            let unitKind: String?
+            let chunkerVersion: Int
+            let charStart: Int
+            let charEnd: Int
+            let ocrConfidence: Double?
+            let boundingBoxesSHA256: String?
+            let relatedStructureEdges: [MotionDraftStructureEdgeSnapshot]
+            let revisionSHA256: String
+            let excerptSHA256: String
+        }
+
+        struct Authority: Decodable {
+            let authorityID: String
+            let groundKey: String
+            let evidenceSchemaVersion: Int
+            let excerptByteStart: Int
+            let excerptByteLength: Int
+            let opinionSHA256: String
+            let excerptSHA256: String
+            let effectiveCitationSHA256: String
+            let courtSHA256: String
+            let bindingSHA256: String
+        }
+
+        struct ComponentIdentity: Decodable {
+            let id: String
+            let version: String
+        }
+
+        let schemaVersion: Int
+        let kindID: String
+        let sourceSnapshotSHA256: String
+        let facts: [Fact]
+        let authorities: [Authority]
+        let groundKeys: [String]
+        let requestSHA256: String
+        let captionSHA256: String
+        let assistantProfileSHA256: String
+        let effectiveStyleSHA256: String
+        let groundContractIdentity: ComponentIdentity
+        let assemblerIdentity: ComponentIdentity
+        let verifierIdentity: ComponentIdentity
+        let gateIdentity: ComponentIdentity
+        let rendererIdentity: ComponentIdentity
+        let verificationReceiptSHA256: String
+        let verificationStatus: String
+        let outputFileName: String
+        let outputSHA256: String
+        let outputByteSize: Int
+    }
+
+    private static func validAuditEnvelope(
+        _ metadataJSON: String,
+        requiring snapshot: MotionDraftStoreSnapshot
+    ) -> Bool {
+        let data = Data(metadataJSON.utf8)
+        guard hasContentFreeAuditSchema(data),
+              let envelope = try? JSONDecoder().decode(DecodedMotionAuditEnvelope.self, from: data),
+              envelope.schemaVersion == MotionDraftAuditEnvelope.schemaVersion,
+              envelope.kindID == MotionDraftAuditEnvelope.kindID,
+              envelope.sourceSnapshotSHA256 == snapshot.fingerprintSHA256,
+              isSHA256(envelope.sourceSnapshotSHA256),
+              envelope.assistantProfileSHA256 == snapshot.assistantProfile.valueSHA256,
+              envelope.verificationStatus == "passed",
+              envelope.outputByteSize >= 0,
+              !envelope.outputFileName.isEmpty,
+              !envelope.outputFileName.contains("/"),
+              !envelope.outputFileName.contains("\\"),
+              !envelope.facts.isEmpty,
+              !envelope.authorities.isEmpty,
+              !envelope.groundKeys.isEmpty,
+              envelope.facts.count == snapshot.facts.count,
+              envelope.authorities.count == snapshot.authorities.count else {
+            return false
+        }
+
+        let envelopeHashes = [
+            envelope.requestSHA256,
+            envelope.captionSHA256,
+            envelope.assistantProfileSHA256,
+            envelope.effectiveStyleSHA256,
+            envelope.verificationReceiptSHA256,
+            envelope.outputSHA256,
+        ]
+        guard envelopeHashes.allSatisfy({ isSHA256($0) }),
+              [
+                  envelope.groundContractIdentity,
+                  envelope.assemblerIdentity,
+                  envelope.verifierIdentity,
+                  envelope.gateIdentity,
+                  envelope.rendererIdentity,
+              ].allSatisfy({ nonblank($0.id) != nil && nonblank($0.version) != nil }) else {
+            return false
+        }
+
+        var expectedGroundKeys: [String] = []
+        for authority in snapshot.authorities where !expectedGroundKeys.contains(authority.groundKey.rawValue) {
+            expectedGroundKeys.append(authority.groundKey.rawValue)
+        }
+        guard envelope.groundKeys == expectedGroundKeys else { return false }
+
+        for (fact, source) in zip(envelope.facts, snapshot.facts) {
+            guard fact.chunkID == source.chunkID,
+                  fact.documentID == source.documentID,
+                  fact.partID == source.partID,
+                  fact.revisionID == source.revisionID,
+                  fact.nodeID == source.nodeID,
+                  fact.unitKind == source.unitKind,
+                  fact.chunkerVersion == source.chunkerVersion,
+                  fact.charStart == source.charStart,
+                  fact.charEnd == source.charEnd,
+                  fact.ocrConfidence == source.ocrConfidence,
+                  fact.boundingBoxesSHA256 == source.boundingBoxesSHA256,
+                  fact.relatedStructureEdges == source.relatedStructureEdges,
+                  fact.revisionSHA256 == source.revisionSHA256,
+                  fact.excerptSHA256 == source.excerptSHA256,
+                  isSHA256(fact.revisionSHA256),
+                  isSHA256(fact.excerptSHA256),
+                  fact.boundingBoxesSHA256.map({ isSHA256($0) }) ?? true,
+                  fact.relatedStructureEdges.enumerated().allSatisfy({ index, edge in
+                      edge.projectionOrder == index
+                          && ["responds_to", "references", "header_for"].contains(edge.kind)
+                          && nonblank(edge.edgeID) != nil
+                          && nonblank(edge.fromNodeID) != nil
+                          && nonblank(edge.toNodeID) != nil
+                  }) else {
+                return false
+            }
+        }
+
+        for (authority, source) in zip(envelope.authorities, snapshot.authorities) {
+            guard authority.authorityID == source.authorityID,
+                  authority.groundKey == source.groundKey.rawValue,
+                  authority.evidenceSchemaVersion == source.evidenceSchemaVersion,
+                  authority.excerptByteStart == source.excerptByteStart,
+                  authority.excerptByteLength == source.excerptByteLength,
+                  authority.opinionSHA256 == source.opinionSHA256,
+                  authority.excerptSHA256 == source.excerptSHA256,
+                  authority.effectiveCitationSHA256 == source.effectiveCitationSHA256,
+                  authority.courtSHA256 == source.courtSHA256,
+                  authority.bindingSHA256 == source.bindingSHA256,
+                  [
+                      authority.opinionSHA256,
+                      authority.excerptSHA256,
+                      authority.effectiveCitationSHA256,
+                      authority.courtSHA256,
+                      authority.bindingSHA256,
+                  ].allSatisfy({ isSHA256($0) }) else {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Rejects unknown keys at every content-bearing level. Synthesized
+    /// Decodable conformance intentionally ignores unknown keys, so this schema
+    /// check is what prevents raw source/profile fields from hitchhiking beside
+    /// the approved identifier/hash-only lineage.
+    private static func hasContentFreeAuditSchema(_ data: Data) -> Bool {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return false
+        }
+        let rootKeys: Set<String> = [
+            "schemaVersion", "kindID", "sourceSnapshotSHA256", "facts", "authorities",
+            "groundKeys", "requestSHA256", "captionSHA256", "assistantProfileSHA256",
+            "effectiveStyleSHA256", "groundContractIdentity", "assemblerIdentity",
+            "verifierIdentity", "gateIdentity", "rendererIdentity",
+            "verificationReceiptSHA256", "verificationStatus", "outputFileName",
+            "outputSHA256", "outputByteSize",
+        ]
+        guard Set(root.keys) == rootKeys else { return false }
+
+        let factRequiredKeys: Set<String> = [
+            "chunkID", "documentID", "partID", "revisionID", "chunkerVersion",
+            "charStart", "charEnd", "relatedStructureEdges", "revisionSHA256",
+            "excerptSHA256",
+        ]
+        let factAllowedKeys = factRequiredKeys.union([
+            "nodeID", "unitKind", "ocrConfidence", "boundingBoxesSHA256",
+        ])
+        let edgeKeys: Set<String> = [
+            "edgeID", "fromNodeID", "toNodeID", "kind", "projectionOrder",
+        ]
+        guard let facts = root["facts"] as? [[String: Any]],
+              facts.allSatisfy({ fact in
+                  let keys = Set(fact.keys)
+                  guard factRequiredKeys.isSubset(of: keys), keys.isSubset(of: factAllowedKeys),
+                        let edges = fact["relatedStructureEdges"] as? [[String: Any]] else {
+                      return false
+                  }
+                  return edges.allSatisfy { Set($0.keys) == edgeKeys }
+              }) else {
+            return false
+        }
+
+        let authorityKeys: Set<String> = [
+            "authorityID", "groundKey", "evidenceSchemaVersion", "excerptByteStart",
+            "excerptByteLength", "opinionSHA256", "excerptSHA256",
+            "effectiveCitationSHA256", "courtSHA256", "bindingSHA256",
+        ]
+        guard let authorities = root["authorities"] as? [[String: Any]],
+              authorities.allSatisfy({ Set($0.keys) == authorityKeys }) else {
+            return false
+        }
+
+        let identityKeys: Set<String> = ["id", "version"]
+        for key in [
+            "groundContractIdentity", "assemblerIdentity", "verifierIdentity",
+            "gateIdentity", "rendererIdentity",
+        ] {
+            guard let identity = root[key] as? [String: Any],
+                  Set(identity.keys) == identityKeys else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func isSHA256(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            (48...57).contains($0) || (97...102).contains($0)
+        }
+    }
+
     private static func exactCharacterSlice(
         _ text: String,
         start: Int,
@@ -588,6 +867,7 @@ public final class DraftingSourceRepository: @unchecked Sendable {
         let charStart: Int
         let charEnd: Int
         let text: String
+        let relatedStructureEdges: [MotionDraftStructureEdgeSnapshot]
     }
 
     private static let shippingV2MaxChars = 1_200
@@ -663,10 +943,22 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                let responseText = nonblank(resolvedByID[response.id]) {
                 let combined = primaryText + "\n" + responseText
                 if combined.count <= shippingV2MaxChars {
-                    result.append(structuredProjection(node: node, text: combined))
+                    result.append(structuredProjection(
+                        node: node,
+                        text: combined,
+                        relatedEdges: [responseEdge]
+                    ))
                 } else {
-                    result.append(structuredProjection(node: node, text: primaryText))
-                    result.append(structuredProjection(node: response, text: responseText))
+                    result.append(structuredProjection(
+                        node: node,
+                        text: primaryText,
+                        relatedEdges: [responseEdge]
+                    ))
+                    result.append(structuredProjection(
+                        node: response,
+                        text: responseText,
+                        relatedEdges: [responseEdge]
+                    ))
                 }
                 consumed.formUnion([node.id, response.id])
                 continue
@@ -677,25 +969,28 @@ public final class DraftingSourceRepository: @unchecked Sendable {
             }), let useText = nonblank(resolvedByID[referenceEdge.fromNodeID]) {
                 result.append(structuredProjection(
                     node: node,
-                    text: primaryText + "\n" + useText
+                    text: primaryText + "\n" + useText,
+                    relatedEdges: [referenceEdge]
                 ))
                 consumed.insert(node.id)
                 continue
             }
 
-            let headers = orderedEdges.filter {
+            let headerEdges = orderedEdges.filter {
                 $0.kind == "header_for" && $0.fromNodeID == node.id
-            }.compactMap { nonblank(resolvedByID[$0.toNodeID]) }
+            }.filter { nonblank(resolvedByID[$0.toNodeID]) != nil }
+            let headers = headerEdges.compactMap { nonblank(resolvedByID[$0.toNodeID]) }
             if !headers.isEmpty {
                 result.append(structuredProjection(
                     node: node,
-                    text: headers.joined(separator: "\n") + "\n" + primaryText
+                    text: headers.joined(separator: "\n") + "\n" + primaryText,
+                    relatedEdges: headerEdges
                 ))
                 consumed.insert(node.id)
                 continue
             }
 
-            result.append(structuredProjection(node: node, text: primaryText))
+            result.append(structuredProjection(node: node, text: primaryText, relatedEdges: []))
             consumed.insert(node.id)
         }
         return result
@@ -703,14 +998,24 @@ public final class DraftingSourceRepository: @unchecked Sendable {
 
     private static func structuredProjection(
         node: DocumentStructureNodeRecord,
-        text: String
+        text: String,
+        relatedEdges: [DocumentStructureEdgeRecord]
     ) -> StructuredChunkProjection {
         StructuredChunkProjection(
             nodeID: node.id,
             unitKind: node.kind,
             charStart: node.charStart ?? 0,
             charEnd: node.charEnd ?? node.textContent?.count ?? 0,
-            text: text
+            text: text,
+            relatedStructureEdges: relatedEdges.enumerated().map { index, edge in
+                MotionDraftStructureEdgeSnapshot(
+                    edgeID: edge.id,
+                    fromNodeID: edge.fromNodeID,
+                    toNodeID: edge.toNodeID,
+                    kind: edge.kind,
+                    projectionOrder: index
+                )
+            }
         )
     }
 

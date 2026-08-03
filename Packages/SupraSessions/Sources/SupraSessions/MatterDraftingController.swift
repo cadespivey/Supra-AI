@@ -787,7 +787,7 @@ public final class MatterDraftingController: ObservableObject {
             try Task.checkCancellation()
 
             let lineage = MotionDraftAuditLineage(
-                schemaVersion: 2,
+                schemaVersion: MotionDraftAuditEnvelope.schemaVersion,
                 kindID: DraftKindID.motionToDismiss.rawValue,
                 sourceSnapshotSHA256: snapshot.fingerprintSHA256,
                 facts: snapshot.facts.map(MotionDraftAuditLineage.Fact.init),
@@ -1728,6 +1728,9 @@ public struct MotionDraftAuditLineage: Codable, Sendable, Equatable {
         public let chunkerVersion: Int
         public let charStart: Int
         public let charEnd: Int
+        public let ocrConfidence: Double?
+        public let boundingBoxesSHA256: String?
+        public let relatedStructureEdges: [MotionDraftStructureEdgeSnapshot]
         public let revisionSHA256: String
         public let excerptSHA256: String
 
@@ -1741,6 +1744,9 @@ public struct MotionDraftAuditLineage: Codable, Sendable, Equatable {
             chunkerVersion = source.chunkerVersion
             charStart = source.charStart
             charEnd = source.charEnd
+            ocrConfidence = source.ocrConfidence
+            boundingBoxesSHA256 = source.boundingBoxesSHA256
+            relatedStructureEdges = source.relatedStructureEdges
             revisionSHA256 = source.revisionSHA256
             excerptSHA256 = source.excerptSHA256
         }
