@@ -8,7 +8,7 @@ import SupraExports
 import SupraStore
 import XCTest
 
-/// T-MTD-01...22: the first supported motion vertical. Every fixture is
+/// T-MTD-01...24: the first supported motion vertical. Every fixture is
 /// fictional and every negative assertion checks both the file boundary and the
 /// success-audit boundary.
 @MainActor
@@ -42,7 +42,13 @@ final class MotionToDismissControllerTests: XCTestCase {
         let fixture = try makeFixture()
         let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
 
-        let packet = try controller.motionPacket(input: fixture.selectedInput, matterID: fixture.matterID)
+        let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(
+            snapshotRequest(for: fixture)
+        )
+        let packet = MatterDraftingController.motionPacket(
+            snapshot: snapshot,
+            groundSpecs: [.failureToStateClaim]
+        )
         XCTAssertEqual(packet.facts.map(\.chunkID), [fixture.selectedFact.chunkID])
         XCTAssertEqual(packet.authorities.map(\.authorityID), [fixture.selectedAuthorityID])
         XCTAssertEqual(packet.facts.map(\.text), [fixture.selectedFact.text])
@@ -371,6 +377,82 @@ final class MotionToDismissControllerTests: XCTestCase {
         }.joined(separator: "\n")
         XCTAssertTrue(bodyText.contains("SELECTED_AUTHORITY_CANARY"))
         XCTAssertFalse(bodyText.contains("UNREVIEWED_SUMMARY_CANARY"))
+    }
+
+    // T-MTD-23. Expected RED: compensation hashes the public destination and then
+    // unlinks that same path, with no quarantine/interleaving seam. A replacement
+    // that arrives after verification can therefore be deleted as if it were ours.
+    func testTMTD23CompensationNeverDeletesReplacementInstalledAfterQuarantine() async throws {
+        let fixture = try makeFixture()
+        let destination = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+            .appendingPathComponent("Motion-to-Dismiss-interleaving.docx")
+        let replacement = Data("concurrent-reviewed-replacement".utf8)
+        var checkpointCount = 0
+        var observedQuarantine: URL?
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileStampProvider: { "interleaving" },
+            motionCompensationCheckpoint: { publicURL, quarantineURL in
+                checkpointCount += 1
+                observedQuarantine = quarantineURL
+                XCTAssertEqual(publicURL.standardizedFileURL, destination.standardizedFileURL)
+                XCTAssertFalse(FileManager.default.fileExists(atPath: publicURL.path))
+                XCTAssertTrue(FileManager.default.fileExists(atPath: quarantineURL.path))
+                try replacement.write(to: publicURL, options: .withoutOverwriting)
+            },
+            motionAuditCommitter: { _, _ in throw InjectedFailure.stop }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        assertFailure(result)
+        XCTAssertEqual(checkpointCount, 1)
+        XCTAssertEqual(try Data(contentsOf: destination), replacement)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(observedQuarantine).path))
+        XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+            .contains { $0.eventType == "draft_generated" })
+    }
+
+    // T-MTD-24. Expected RED: compensation has no atomic, non-overwriting restore
+    // path for mismatched content. If another file wins the public path after
+    // quarantine, both it and the mismatched quarantined bytes must survive.
+    func testTMTD24MismatchedQuarantineNeverOverwritesConcurrentDestination() async throws {
+        let fixture = try makeFixture()
+        let destination = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+            .appendingPathComponent("Motion-to-Dismiss-mismatch.docx")
+        let mismatched = Data("unexpected-pre-compensation-content".utf8)
+        let replacement = Data("concurrent-destination-content".utf8)
+        var observedQuarantine: URL?
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileStampProvider: { "mismatch" },
+            motionCompensationCheckpoint: { publicURL, quarantineURL in
+                observedQuarantine = quarantineURL
+                XCTAssertFalse(FileManager.default.fileExists(atPath: publicURL.path))
+                try replacement.write(to: publicURL, options: .withoutOverwriting)
+            },
+            motionAuditCommitter: { _, _ in
+                try mismatched.write(to: destination, options: .atomic)
+                throw InjectedFailure.stop
+            }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        assertFailure(result)
+        XCTAssertEqual(try Data(contentsOf: destination), replacement)
+        let quarantine = try XCTUnwrap(observedQuarantine)
+        XCTAssertEqual(try Data(contentsOf: quarantine), mismatched)
+        XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+            .contains { $0.eventType == "draft_generated" })
     }
 
     // T-UI-MTD-06 companion — cancellation after the async verifier boundary cannot persist.

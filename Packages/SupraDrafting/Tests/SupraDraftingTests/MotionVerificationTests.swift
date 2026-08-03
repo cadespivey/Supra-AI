@@ -194,6 +194,32 @@ final class MotionVerificationTests: XCTestCase {
         }
     }
 
+    // MVS-09. Expected RED: runMotion does not inspect cancellation after its
+    // verifier await, so a verifier that returns nominal support while cancellation
+    // is pending still reaches the synchronous gate and renderer.
+    func testCancellationAfterMotionVerifierNeverReachesRenderer() async {
+        let renderer = MotionCountingRenderer(
+            identity: .init(id: "test.cancelled-motion-renderer", version: "1")
+        )
+        let verifier = CancellingCompleteSupportVerifier()
+        let pipeline = DraftPipeline(verifier: verifier, renderer: renderer)
+        let model = validModel()
+        let scopedEvidence = evidence
+
+        let task = Task {
+            try await pipeline.runMotion(model: model, evidence: scopedEvidence, style: .defaultFL)
+        }
+        do {
+            _ = try await task.value
+            XCTFail("cancelled motion verification unexpectedly reached rendering")
+        } catch is CancellationError {
+            // Expected at the verifier-to-gate boundary.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertEqual(renderer.renderCount, 0)
+    }
+
     private func validModel(
         numberedFacts: [String]? = nil,
         authorityParagraphs: [String]? = nil,
@@ -305,6 +331,19 @@ private struct CompleteSupportVerifier: Verifier {
                 )
             }
         return VerificationResult(failures: [], followUps: [], propositionSupport: support)
+    }
+}
+
+private struct CancellingCompleteSupportVerifier: Verifier {
+    let identity = DraftComponentIdentity(id: "test.cancelling-complete-verifier", version: "1")
+
+    func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
+        let result = await CompleteSupportVerifier(identity: identity)
+            .verify(unit, kind: kind, style: style)
+        withUnsafeCurrentTask { task in
+            task?.cancel()
+        }
+        return result
     }
 }
 
