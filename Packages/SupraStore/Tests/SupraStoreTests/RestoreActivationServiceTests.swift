@@ -968,9 +968,28 @@ final class RestoreActivationServiceTests: XCTestCase {
         let outcomeURL = fixture.stagingRootDirectory
             .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
         let unsafeOutcome = """
-        {"schemaVersion":1,"operationID":"11111111-2222-3333-4444-555555555555","snapshotIdentifier":"/Users/private/client.sqlite","status":"activated","completedAt":"2024-09-23T00:00:00Z"}
+        {"schemaVersion":\(RestoreOutcomeRecord.currentSchemaVersion),"operationID":"11111111-2222-3333-4444-555555555555","snapshotIdentifier":"/Users/private/client.sqlite","status":"activated","scheduledAt":"2024-09-22T23:59:00Z","completedAt":"2024-09-23T00:00:00Z"}
         """
         try Data(unsafeOutcome.utf8).write(to: outcomeURL, options: .atomic)
+
+        XCTAssertThrowsError(try RestoreSidecarStore.readActivationOutcome(
+            stagingRootDirectory: fixture.stagingRootDirectory
+        ))
+    }
+
+    // T-RST-H09 expected RED: an activated outcome without the authenticated
+    // scheduling timestamp is accepted and can erase the scheduling audit silently.
+    func testActivationOutcomeReadRejectsActivatedRecordWithoutScheduleTimestamp() throws {
+        try FileManager.default.createDirectory(
+            at: fixture.stagingRootDirectory,
+            withIntermediateDirectories: true
+        )
+        let outcomeURL = fixture.stagingRootDirectory
+            .appendingPathComponent(RestoreOutcomeRecord.lastOutcomeFileName)
+        let incompleteOutcome = """
+        {"schemaVersion":\(RestoreOutcomeRecord.currentSchemaVersion),"operationID":"11111111-2222-3333-4444-555555555555","snapshotIdentifier":"SupraAI-20260731-090000-000","status":"activated","completedAt":"2024-09-23T00:00:00Z"}
+        """
+        try Data(incompleteOutcome.utf8).write(to: outcomeURL, options: .atomic)
 
         XCTAssertThrowsError(try RestoreSidecarStore.readActivationOutcome(
             stagingRootDirectory: fixture.stagingRootDirectory
