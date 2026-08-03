@@ -915,7 +915,7 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let authorities = app.buttons["matterTab.Authorities"]
         XCTAssertTrue(authorities.waitForExistence(timeout: 10), "Matter workspace did not expose Authorities")
         XCTAssertTrue(authorities.isHittable)
-        authorities.click()
+        authorities.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         let row = app.descendants(matching: .any)["authorities.row.ui-motion-authority-success"]
         XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded reviewed authority was not listed")
