@@ -163,6 +163,37 @@ final class MotionVerificationTests: XCTestCase {
                        DraftComponentIdentity(id: "supra.drafting.motion-to-dismiss-assembler", version: "1"))
     }
 
+    // MVS-08. Expected RED: exact paragraph matching currently accepts an arbitrary
+    // nonblank ground key and an arbitrary non-Florida citation string.
+    func testUnsupportedGroundAndNonFloridaCitationNeverReachRenderer() async {
+        let unsupportedGround = MotionAuthorityEvidence(
+            authorityID: "authority-wrong-ground",
+            citation: authorityOne.citation,
+            reviewedExcerpt: authorityOne.reviewedExcerpt,
+            groundKey: "mtd.unsupportedGround"
+        )
+        let nonFloridaCitation = MotionAuthorityEvidence(
+            authorityID: "authority-wrong-court",
+            citation: "Example v. Fictional, 123 P.3d 456 (Cal. Ct. App. 2020)",
+            reviewedExcerpt: authorityOne.reviewedExcerpt,
+            groundKey: "mtd.failureToStateClaim"
+        )
+
+        for authority in [unsupportedGround, nonFloridaCitation] {
+            let scopedEvidence = MotionVerificationEvidence(
+                facts: [factOne],
+                authorities: [authority]
+            )
+            await assertBlocked(
+                model: validModel(
+                    numberedFacts: [factOne.text],
+                    authorityParagraphs: [authority.canonicalParagraph]
+                ),
+                evidence: scopedEvidence
+            )
+        }
+    }
+
     private func validModel(
         numberedFacts: [String]? = nil,
         authorityParagraphs: [String]? = nil,
