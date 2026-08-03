@@ -60,10 +60,9 @@ if [[ ! -f "$accessibility_test" ]] \
   printf '%s\n' 'ERROR: remediation accessibility smoke tests are missing' >&2
   exit 1
 fi
-if ! grep -Eq 'class[[:space:]]+MotionToDismissWorkspaceUITests' "$accessibility_test" \
-    || ! grep -Fq 'testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX' "$accessibility_test" \
-    || ! grep -Fq 'testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions' "$accessibility_test" \
-    || ! grep -Fq 'testTUIMTD06CancellingInFlightMotionLeavesNoArtifact' "$accessibility_test"; then
+if ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX \
+    || ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions \
+    || ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests testTUIMTD06CancellingInFlightMotionLeavesNoArtifact; then
   printf '%s\n' 'ERROR: supported motion hosted smoke tests are missing' >&2
   exit 1
 fi
