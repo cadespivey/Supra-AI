@@ -718,11 +718,10 @@ public final class MatterDraftingController: ObservableObject {
             let authorityParagraphs = evidence.authorities.map { authority in
                 BodyBlock.paragraph(authority.canonicalParagraph)
             }
+            let applicationParagraphs = evidence.canonicalApplicationParagraphs.map(BodyBlock.paragraph)
             let argument = MotionToDismiss.ArgumentPoint(
                 heading: "THE \(respondingTo.uppercased()) FAILS TO STATE A CLAIM.",
-                body: authorityParagraphs + [.paragraph(
-                    "Counsel submits that the selected factual excerpts should be evaluated under these cited standards."
-                )]
+                body: authorityParagraphs + applicationParagraphs
             )
             let conclusion = "WHEREFORE, \(representedName) respectfully requests \(relief)."
             let model = MotionToDismiss.assemble(

@@ -8,7 +8,7 @@ import SupraDraftingCore
 public struct DraftVerifier: Verifier, Sendable {
     public let identity = DraftComponentIdentity(
         id: "supra.drafting.draft-verifier",
-        version: "3"
+        version: "4"
     )
     public let citator: CitatorClient?
 
@@ -170,6 +170,24 @@ public struct DraftVerifier: Verifier, Sendable {
                 .allSatisfy(<)
         if !exactAuthorityOrder {
             block(.authorityValidity, "Reviewed authority paragraphs are missing, duplicated, changed, or reordered.")
+        }
+
+        let expectedApplicationParagraphs = evidence.canonicalApplicationParagraphs
+        let applicationIndices = expectedApplicationParagraphs.map { expected -> Int? in
+            let matches = paragraphTexts.indices.filter { paragraphTexts[$0] == expected }
+            return matches.count == 1 ? matches[0] : nil
+        }
+        let exactApplicationOrder = applicationIndices.allSatisfy { $0 != nil }
+            && zip(applicationIndices.compactMap { $0 }, applicationIndices.compactMap { $0 }.dropFirst())
+                .allSatisfy(<)
+        let applicationsFollowAuthorities = authorityIndices.compactMap { $0 }.last.map { lastAuthority in
+            applicationIndices.compactMap { $0 }.first.map { $0 > lastAuthority } ?? false
+        } ?? false
+        if !exactApplicationOrder || !applicationsFollowAuthorities {
+            block(
+                .factProvenance,
+                "The argument must apply the reviewed pleading standards to every selected fact exactly once and in order."
+            )
         }
 
         for (index, authority) in evidence.authorities.enumerated() {

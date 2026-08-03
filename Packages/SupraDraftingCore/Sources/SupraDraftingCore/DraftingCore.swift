@@ -878,6 +878,12 @@ public struct MotionFactEvidence: Sendable, Equatable {
     }
 
     public var propositionID: String { "motion.fact.\(factID)" }
+
+    /// Deterministic advocacy that applies the reviewed pleading standard to this
+    /// exact selected excerpt without introducing a new factual assertion.
+    public func canonicalApplicationParagraph(number: Int) -> String {
+        "Applying the reviewed pleading standards to selected fact \(number) (“\(text)”), the moving party submits that the excerpt does not plead the ultimate facts necessary to state a legally sufficient claim."
+    }
 }
 
 /// One exact proposition excerpt whose reviewed state was validated by the caller's atomic
@@ -912,6 +918,12 @@ public struct MotionVerificationEvidence: Sendable, Equatable {
 
     public var requiredPropositionIDs: [String] {
         facts.map(\.propositionID) + authorities.map(\.propositionID)
+    }
+
+    public var canonicalApplicationParagraphs: [String] {
+        facts.enumerated().map { index, fact in
+            fact.canonicalApplicationParagraph(number: index + 1)
+        }
     }
 }
 
