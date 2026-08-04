@@ -8,7 +8,7 @@ import SupraExports
 import SupraStore
 import XCTest
 
-/// T-MTD-01...30: the first supported motion vertical. Every fixture is
+/// T-MTD-01...32: the first supported motion vertical. Every fixture is
 /// fictional and every negative assertion checks both the file boundary and the
 /// success-audit boundary.
 @MainActor
@@ -794,6 +794,154 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
         XCTAssertEqual(captured.authorities.first?.citation, displayed.citation)
         XCTAssertEqual(captured.authorities.first?.bindingSHA256, displayed.bindingSHA256)
+    }
+
+    // T-MTD-31. Expected RED: the motion input currently retains only a fact
+    // chunk ID. If exact excerpt bytes drift under the same chunk/revision IDs,
+    // readiness and capture silently substitute B for displayed fact A.
+    func testTMTD31DraftRejectsFactSelectionWhenDisplayedExcerptBindingChanged() async throws {
+        let fixture = try makeFixture()
+        let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
+        let displayed = try XCTUnwrap(
+            controller.motionFactSources(matterID: fixture.matterID)
+                .first { $0.chunkID == fixture.selectedFact.chunkID }
+        )
+        XCTAssertEqual(displayed.text, fixture.selectedFact.text)
+        let replacement = "REPLACEMENT_FACT_B The amended pleading now alleges a specific delivery date but no actionable breach."
+        let part = DocumentPagePartRecord(
+            documentID: fixture.selectedFact.documentID,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: replacement,
+            charCount: replacement.count
+        )
+        let revision = DocumentPartRevisionRecord(
+            documentID: fixture.selectedFact.documentID,
+            partIndex: 0,
+            derivationKey: "motion-drift:\(fixture.selectedFact.documentID)",
+            origin: "parser",
+            method: "synthetic-drift",
+            text: replacement,
+            charCount: replacement.count
+        )
+        let selection = DocumentPartSelectionRecord(
+            documentID: fixture.selectedFact.documentID,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "motion-drift:\(fixture.selectedFact.documentID)",
+            selectedBy: "policy",
+            policyVersion: 1,
+            decisionJSON: #"{"rule":"synthetic_drift"}"#
+        )
+        _ = try fixture.store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: fixture.selectedFact.documentID,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+        try fixture.store.documentIndex.replaceChunks(
+            documentID: fixture.selectedFact.documentID,
+            chunks: [DocumentChunkRecord(
+                id: fixture.selectedFact.chunkID,
+                documentID: fixture.selectedFact.documentID,
+                pagePartID: part.id,
+                revisionID: revision.id,
+                chunkIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                charStart: 0,
+                charEnd: replacement.count,
+                normalizedText: replacement,
+                displayExcerpt: replacement,
+                tokenCount: 24
+            )]
+        )
+
+        let current = try XCTUnwrap(
+            controller.motionFactSources(matterID: fixture.matterID)
+                .first { $0.chunkID == fixture.selectedFact.chunkID }
+        )
+        XCTAssertEqual(current.text, replacement)
+        XCTAssertFalse(
+            controller.motionReadiness(input: fixture.selectedInput, matterID: fixture.matterID).canGenerate,
+            "changed fact bytes must require reload and reselection"
+        )
+        assertFailure(
+            await controller.draft(.motionToDismiss(fixture.selectedInput), matterID: fixture.matterID)
+        )
+        try assertNoSuccessfulMotionSideEffects(fixture)
+    }
+
+    // T-MTD-32. Expected RED: documents, parts, and chunks are currently loaded
+    // in separate Store reads. Replacing a part/revision/chunk after the part read
+    // yields a mixed-time blocked row instead of one coherent current source row.
+    func testTMTD32FactDisplayComesFromOneDatabaseSnapshot() throws {
+        let fixture = try makeFixture()
+        let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
+        let replacement = "COHERENT_FACT_B The complaint alleges delivery while omitting a breached contractual duty."
+        var replacementRevisionID: String?
+        var didInterleave = false
+        controller.motionFactSourceLoadCheckpoint = { documentID in
+            guard documentID == fixture.selectedFact.documentID, !didInterleave else { return }
+            didInterleave = true
+            let part = DocumentPagePartRecord(
+                documentID: documentID,
+                partIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                normalizedText: replacement,
+                charCount: replacement.count
+            )
+            let revision = DocumentPartRevisionRecord(
+                documentID: documentID,
+                partIndex: 0,
+                derivationKey: "motion-replacement:\(documentID)",
+                origin: "parser",
+                method: "synthetic-interleaving",
+                text: replacement,
+                charCount: replacement.count
+            )
+            replacementRevisionID = revision.id
+            let selection = DocumentPartSelectionRecord(
+                documentID: documentID,
+                partIndex: 0,
+                selectedRevisionID: revision.id,
+                selectionKey: "motion-replacement:\(documentID)",
+                selectedBy: "policy",
+                policyVersion: 1,
+                decisionJSON: #"{"rule":"synthetic_interleaving"}"#
+            )
+            _ = try fixture.store.documentRevisions.replacePartsAndPersistLineage(
+                documentID: documentID,
+                parts: [part],
+                revisions: [revision],
+                selections: [selection]
+            )
+            try fixture.store.documentIndex.replaceChunks(
+                documentID: documentID,
+                chunks: [DocumentChunkRecord(
+                    id: fixture.selectedFact.chunkID,
+                    documentID: documentID,
+                    pagePartID: part.id,
+                    revisionID: revision.id,
+                    chunkIndex: 0,
+                    sourceKind: DocumentSourceKind.text.rawValue,
+                    charStart: 0,
+                    charEnd: replacement.count,
+                    normalizedText: replacement,
+                    displayExcerpt: replacement,
+                    tokenCount: 21
+                )]
+            )
+        }
+
+        let displayed = try XCTUnwrap(
+            controller.motionFactSources(matterID: fixture.matterID)
+                .first { $0.chunkID == fixture.selectedFact.chunkID }
+        )
+
+        XCTAssertTrue(didInterleave)
+        XCTAssertTrue(displayed.isReady, displayed.blockingReason ?? "unexpected block")
+        XCTAssertEqual(displayed.documentRevisionID, replacementRevisionID)
+        XCTAssertEqual(displayed.text, replacement)
     }
 
     // MARK: - Fixtures

@@ -111,6 +111,7 @@ public final class MatterDraftingController: ObservableObject {
     /// shipping default is inert; tests use it to prove display/evidence reads
     /// cannot be assembled from different database snapshots.
     var motionAuthoritySourceLoadCheckpoint: () throws -> Void = {}
+    var motionFactSourceLoadCheckpoint: (String) throws -> Void = { _ in }
     /// Present when the app can call the on-device model — required for the LLM-backed
     /// kinds (`letterDemand`). The deterministic notice and supported-motion
     /// paths work without it.
@@ -1010,6 +1011,7 @@ public final class MatterDraftingController: ObservableObject {
             let partsByID = Dictionary(
                 uniqueKeysWithValues: try store.documentIndex.fetchParts(documentID: document.id).map { ($0.id, $0) }
             )
+            try motionFactSourceLoadCheckpoint(document.id)
             for chunk in try store.documentIndex.fetchChunks(documentID: document.id) {
                 var blockers: [String] = []
                 if document.status != MatterDocumentStatus.ready.rawValue {
