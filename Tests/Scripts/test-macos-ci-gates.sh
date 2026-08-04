@@ -601,6 +601,10 @@ recovery_drafting_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterDrafting
 recovery_fixture_probe="$(sed -n '/private var interruptedDraftRecoveryUITestEvidence:/,/^    }/p' "$recovery_drafting_view")"
 if grep -Fq 'static var interruptedDraftRecoveryUITestManagedRoot: URL?' "$app_environment" \
     && grep -Fq 'drafting.interruptedRecovery.fixtureEvidence' "$recovery_drafting_view" \
+    && grep -Fq '@State private var interruptedDraftRecoveryUITestRecoveredURL: URL?' "$recovery_drafting_view" \
+    && grep -Fq 'controller.interruptedDraftRecoveries.compactMap(\.fileURL)' "$recovery_drafting_view" \
+    && grep -Fq '.onChange(of: controller.interruptedDraftRecoveries)' "$recovery_drafting_view" \
+    && grep -Fq 'guard let recoveredURL = interruptedDraftRecoveryUITestRecoveredURL' <<<"$recovery_fixture_probe" \
     && grep -Fq 'FileManager.default.enumerator(' <<<"$recovery_fixture_probe" \
     && grep -Fq 'options: []' <<<"$recovery_fixture_probe" \
     && grep -Fq '.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' <<<"$recovery_fixture_probe" \
