@@ -455,6 +455,38 @@ final class DurableFileWriterTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
     }
 
+    // ACR-FILE-018. Each newly published directory entry is part of the same
+    // durability boundary as the final file. Creating the managed root,
+    // `exports`, and the matter directory must synchronize each containing
+    // parent before the installed artifact can be reported durable.
+    func testACRFILE018ContainedWriteSynchronizesEveryCreatedDirectoryComponent() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let root = container.appendingPathComponent("managed-root", isDirectory: true)
+        let exports = root.appendingPathComponent("exports", isDirectory: true)
+        let matter = exports.appendingPathComponent("matter-123", isDirectory: true)
+        let destination = matter.appendingPathComponent("motion.md")
+        let payload = Data("# Durable directory chain\n".utf8)
+        let synchronizer = DirectorySynchronizationRecorder()
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { synchronizer.synchronize($0) }
+        )
+
+        _ = try writer.writeNewOwned(
+            payload,
+            to: destination,
+            containedIn: root,
+            validator: { _ in }
+        )
+
+        XCTAssertEqual(
+            synchronizer.directories,
+            [container, root, exports, matter].map(\.standardizedFileURL)
+        )
+        XCTAssertEqual(try Data(contentsOf: destination), payload)
+    }
+
     private func assertContainedWriteRejectsTemporaryReplacement(
         at replacementStage: DurableFileWriter.FaultStage
     ) throws {
@@ -566,5 +598,20 @@ private final class FailFirstDirectorySynchronizer: @unchecked Sendable {
             return calls
         }
         if call == 1 { try firstCall(directory) }
+    }
+}
+
+private final class DirectorySynchronizationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedDirectories: [URL] = []
+
+    var directories: [URL] {
+        lock.withLock { recordedDirectories }
+    }
+
+    func synchronize(_ directory: URL) {
+        lock.withLock {
+            recordedDirectories.append(directory.standardizedFileURL)
+        }
     }
 }
