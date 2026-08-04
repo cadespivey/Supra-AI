@@ -529,6 +529,28 @@ else
   record_failure 'shipping bootstrap does not safely reconcile draft artifact intents before remediation UI'
 fi
 
+root_view="${repo_root}/Apps/SupraAI/SupraAI/RootView.swift"
+if grep -Fq '.onChange(of: environment.remediationRecoverySummary)' "$root_view" \
+    && grep -Fq 'interruptedNoticePresentedThisLaunch' "$root_view" \
+    && grep -Fq 'interruptedDraftsPending' "$root_view" \
+    && grep -Fq 'presentRemediationNoticeIfNeeded()' "$root_view" \
+    && grep -Fq 'public or user-visible drafts' "$root_view" \
+    && grep -Fq 'internal temporary or owned rollback files' "$root_view"; then
+  printf '%s\n' 'PASS: interrupted artifact notice survives legacy acknowledgment and late bootstrap summary'
+else
+  record_failure 'interrupted artifact notice can be hidden by legacy acknowledgment or late bootstrap timing'
+fi
+
+drafting_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift"
+if grep -Fq 'controller.interruptedDraftRecoveries' "$drafting_view" \
+    && grep -Fq 'controller.confirmInterruptedDraftArtifactsReviewed' "$drafting_view" \
+    && grep -Fq 'drafting.interruptedRecoveryWarning' "$drafting_view" \
+    && grep -Fq 'Regenerate Before Use' "$drafting_view"; then
+  printf '%s\n' 'PASS: affected drafting surface names and resolves interrupted artifacts explicitly'
+else
+  record_failure 'affected drafting surface lacks interrupted artifact filenames or explicit resolution'
+fi
+
 if grep -Eq 'guidedQAUITestAuthorized[[:space:]]*=[[:space:]]*Self\.isUITestMode[[:space:]]*&&' "$app_environment" \
     && grep -Fq 'guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient' "$app_environment"; then
   printf '%s\n' 'PASS: guided Q&A synthetic runtime requires hermetic UI-test authority'
