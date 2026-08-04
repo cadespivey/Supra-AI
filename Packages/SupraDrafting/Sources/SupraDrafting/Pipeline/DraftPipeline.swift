@@ -100,6 +100,7 @@ public struct DraftPipeline: Sendable {
             requiredPropositionIDs: evidence.requiredPropositionIDs
         )
         beforeMotionRender()
+        try Task.checkCancellation()
         let docx = try renderer.render(.court(model), style: style)
         return DraftResult(
             docx: docx,
