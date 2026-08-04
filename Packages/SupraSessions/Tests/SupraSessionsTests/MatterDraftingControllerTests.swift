@@ -5,7 +5,7 @@ import SupraDraftingCore
 import SupraExports
 import SupraRuntimeInterface
 @testable import SupraSessions
-import SupraDocuments
+@testable import SupraDocuments
 import SupraStore
 import XCTest
 
@@ -16,6 +16,38 @@ import XCTest
 final class MatterDraftingControllerTests: XCTestCase {
 
     private enum PersistenceFailure: Error { case stop }
+
+    private struct DirectorySyncFailure: LocalizedError {
+        var errorDescription: String? { "injected directory synchronization failure" }
+    }
+
+    private final class DirectorySyncProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private let failOnCall: Int?
+        private var directories: [URL] = []
+
+        init(failOnCall: Int? = nil) {
+            self.failOnCall = failOnCall
+        }
+
+        var callCount: Int {
+            lock.withLock { directories.count }
+        }
+
+        var synchronizedDirectories: [URL] {
+            lock.withLock { directories }
+        }
+
+        func synchronize(_ directory: URL) throws {
+            let call = lock.withLock {
+                directories.append(directory.standardizedFileURL)
+                return directories.count
+            }
+            if call == failOnCall {
+                throw DirectorySyncFailure()
+            }
+        }
+    }
 
     // MARK: - Helpers
 
@@ -267,6 +299,168 @@ final class MatterDraftingControllerTests: XCTestCase {
         guard case .failure = result else { return XCTFail("expected audit failure") }
         XCTAssertTrue(auditObservedInstalledFile)
         XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-009 follow-on. Expected RED: a replacement install whose
+    // parent-directory sync fails currently leaves a new, unaudited markdown
+    // artifact visible instead of rolling the namespace change back durably.
+    @MainActor
+    func testCustomDraftDirectorySyncFailureLeavesNoNewArtifactOrAudit() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Directory-sync matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Sync-outline-fixed.md")
+        let syncProbe = DirectorySyncProbe(failOnCall: 1)
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
+        )
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "Sync outline", description: "Do not publish an unsynchronized draft.")
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected directory-sync persistence failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("directory synchronization"), message)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(syncProbe.callCount, 2, "install rollback must also synchronize the parent directory")
+        XCTAssertEqual(Set(syncProbe.synchronizedDirectories), [directory.standardizedFileURL])
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-009/011 follow-on. Expected RED: a failed parent-directory
+    // sync after a notice install currently replaces a reviewed canary even
+    // though draft generation reports failure and records no success audit.
+    @MainActor
+    func testNoticeDirectorySyncFailurePreservesCanaryAndWritesNoAudit() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(
+            name: "Directory-sync filing",
+            court: "IN THE CIRCUIT COURT OF DUVAL COUNTY, FLORIDA",
+            docketNumber: "2026-CA-001847"
+        )
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("Notice-of-Appearance-fixed.docx")
+        let canary = Data("previous-reviewed-docx".utf8)
+        try canary.write(to: destination)
+        let syncProbe = DirectorySyncProbe(failOnCall: 1)
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
+        )
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" }
+        )
+
+        let result = await controller.draftNoticeOfAppearance(
+            matterID: matter.id,
+            parties: sampleParties(),
+            partyRepresented: "Defendant",
+            representedPartyName: "Liberty Rail, LLC",
+            recipients: sampleRecipients()
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected directory-sync persistence failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("directory synchronization"), message)
+        XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path),
+            [destination.lastPathComponent]
+        )
+        XCTAssertEqual(syncProbe.callCount, 2, "failed new install rollback must also synchronize the parent")
+        XCTAssertEqual(Set(syncProbe.synchronizedDirectories), [directory.standardizedFileURL])
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-010 follow-on. Expected RED: removing a newly installed
+    // generic draft after its required audit fails currently omits the parent
+    // directory sync and can report a rollback that is not durable.
+    @MainActor
+    func testGenericDraftAuditCompensationSynchronizesParentAfterRemoval() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Audit-compensation matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Audit-outline-fixed.md")
+        let syncProbe = DirectorySyncProbe()
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
+        )
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { _ in throw PersistenceFailure.stop }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "Audit outline", description: "Install then compensate durably.")
+        )
+
+        guard case .failure = result else { return XCTFail("expected audit failure") }
+        XCTAssertEqual(syncProbe.callCount, 2)
+        XCTAssertEqual(Set(syncProbe.synchronizedDirectories), [directory.standardizedFileURL])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-010 follow-on. Expected RED: a failed sync after generic audit
+    // compensation currently cannot be surfaced as a partial rollback failure
+    // because the parent directory is never synchronized after removal.
+    @MainActor
+    func testGenericDraftAuditCompensationSyncFailureReportsPartialRollback() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Partial-rollback matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Partial-rollback-fixed.md")
+        let syncProbe = DirectorySyncProbe(failOnCall: 2)
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
+        )
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { _ in throw PersistenceFailure.stop }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "Partial rollback", description: "Surface rollback durability failure.")
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected a partial rollback failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains("directory synchronization"), message)
+        XCTAssertEqual(syncProbe.callCount, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
