@@ -623,6 +623,30 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         XCTAssertTrue(storedIDs.isDisjoint(with: invalidEvents.map(\.id)))
     }
 
+    // T-MTD-17 RED: shape validation is not ownership. A caller can currently
+    // invent every non-source digest and producer coordinate, then ask Store to
+    // bless that forged lineage. Store must construct and bind those values to
+    // typed inputs and the actual artifact bytes instead.
+    func testTMDSS08CommitRejectsCallerForgedArtifactAndProducerLineage() throws {
+        let fixture = try makeFixture()
+        let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(request(for: fixture))
+        let forged = motionAuditEvent(
+            id: "forged-motion-audit",
+            fixture: fixture,
+            metadataJSON: try auditMetadata(snapshot: snapshot)
+        )
+
+        XCTAssertThrowsError(
+            try fixture.store.draftingSources.recordMotionAudit(forged, requiring: snapshot)
+        ) { error in
+            XCTAssertEqual(error as? MotionDraftSnapshotError, .auditEnvelopeInvalid)
+        }
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id)
+                .contains { $0.id == forged.id }
+        )
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord

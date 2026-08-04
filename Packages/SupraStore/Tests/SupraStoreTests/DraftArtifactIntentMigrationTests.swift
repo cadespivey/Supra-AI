@@ -1,0 +1,34 @@
+import GRDB
+@testable import SupraStore
+import XCTest
+
+final class DraftArtifactIntentMigrationTests: XCTestCase {
+    // T-DAI-01 RED: a public artifact needs a durable Store-owned intent before
+    // publication so relaunch can finish or surface the interrupted operation.
+    func testTDAI01V071CreatesDurableContentFreeArtifactIntentLedger() throws {
+        let migrator = SupraMigrator.makeMigrator()
+        XCTAssertTrue(migrator.migrations.contains("v071_create_draft_artifact_intents"))
+
+        let queue = try DatabaseQueue()
+        try migrator.migrate(queue)
+
+        try queue.read { db in
+            XCTAssertEqual(
+                Set(try db.columns(in: "draft_artifact_intents").map(\.name)),
+                Set([
+                    "id", "matter_id", "artifact_kind", "format", "file_name",
+                    "output_sha256", "output_byte_size", "audit_metadata_json",
+                    "motion_snapshot_request_json", "motion_snapshot_sha256",
+                    "status", "created_at", "updated_at", "terminal_at",
+                ])
+            )
+            XCTAssertEqual(
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT \"unique\" FROM pragma_index_list('draft_artifact_intents') WHERE name = 'idx_draft_artifact_intents_matter_file'"
+                ),
+                1
+            )
+        }
+    }
+}
