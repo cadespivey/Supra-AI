@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 @testable import SupraDocuments
 import XCTest
@@ -349,10 +350,9 @@ final class DurableFileWriterTests: XCTestCase {
                 validator: { _ in }
             )
         ) { error in
-            XCTAssertEqual(
-                (error as? InjectedFailure)?.stage,
-                .beforeValidation
-            )
+            guard case .managedTemporaryCleanupUncertain = error as? DurableFileWriter.WriterError else {
+                return XCTFail("Expected managed temporary cleanup uncertainty, got \(error)")
+            }
         }
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
@@ -417,9 +417,9 @@ final class DurableFileWriterTests: XCTestCase {
         try assertContainedWriteRejectsTemporaryReplacement(at: .beforeInstall)
     }
 
-    // The validator result must be bound to the writer-created bytes. Swapping
-    // in a valid DOCX only for validation and restoring the original invalid
-    // inode must never authorize installation of those invalid origin bytes.
+    // The validator result must be bound to the writer-created bytes. The
+    // managed writer supplies an immutable Data value rather than a pathname
+    // that can be swapped only for validation.
     func testACRFILE017ValidatorSwapAndRestoreCannotAuthorizeOriginBytes() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -428,8 +428,6 @@ final class DurableFileWriterTests: XCTestCase {
             .appendingPathComponent("matter-123", isDirectory: true)
             .appendingPathComponent("motion.docx")
         let invalidOrigin = Data("not-an-office-archive".utf8)
-        let validReplacement = try validDOCXData(in: root)
-        let preservedOrigin = root.appendingPathComponent("preserved-invalid-origin.docx")
         let writer = DurableFileWriter()
 
         XCTAssertThrowsError(
@@ -437,12 +435,9 @@ final class DurableFileWriterTests: XCTestCase {
                 invalidOrigin,
                 to: destination,
                 containedIn: root,
-                validator: { temporaryURL in
-                    try FileManager.default.moveItem(at: temporaryURL, to: preservedOrigin)
-                    try validReplacement.write(to: temporaryURL)
-                    try DocumentExportValidator.validate(temporaryURL, as: .docx)
-                    try FileManager.default.removeItem(at: temporaryURL)
-                    try FileManager.default.moveItem(at: preservedOrigin, to: temporaryURL)
+                validator: { temporaryData in
+                    XCTAssertEqual(temporaryData, invalidOrigin)
+                    try DocumentExportValidator.validate(temporaryData, as: .docx)
                 }
             )
         ) { error in
@@ -470,7 +465,9 @@ final class DurableFileWriterTests: XCTestCase {
         let synchronizer = DirectorySynchronizationRecorder()
         let writer = DurableFileWriter(
             faultInjector: { _ in },
-            parentDirectorySynchronizer: { synchronizer.synchronize($0) }
+            anchoredParentDirectorySynchronizer: {
+                try synchronizer.synchronize($0, descriptor: $1)
+            }
         )
 
         _ = try writer.writeNewOwned(
@@ -503,7 +500,9 @@ final class DurableFileWriterTests: XCTestCase {
         let synchronizer = DirectorySynchronizationRecorder()
         let writer = DurableFileWriter(
             faultInjector: { _ in },
-            parentDirectorySynchronizer: { synchronizer.synchronize($0) }
+            anchoredParentDirectorySynchronizer: {
+                try synchronizer.synchronize($0, descriptor: $1)
+            }
         )
 
         _ = try writer.writeNewOwned(
@@ -595,8 +594,8 @@ final class DurableFileWriterTests: XCTestCase {
                 validator: { _ in }
             )
         ) { error in
-            guard case .unsafeManagedParent = error as? DurableFileWriter.WriterError else {
-                return XCTFail("Expected unsafe managed-parent failure, got \(error)")
+            guard case .managedTemporaryCleanupUncertain = error as? DurableFileWriter.WriterError else {
+                return XCTFail("Expected managed temporary cleanup uncertainty, got \(error)")
             }
         }
 
@@ -612,22 +611,6 @@ final class DurableFileWriterTests: XCTestCase {
             .appendingPathComponent("Supra-DurableFileWriter-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
-    }
-
-    private func validDOCXData(in directory: URL) throws -> Data {
-        let url = directory.appendingPathComponent("valid-validator-replacement.docx")
-        try DocumentExportBuilder.write(
-            DocumentExportPayload(
-                title: "Validation replacement",
-                contentMarkdown: "Valid Office package.",
-                reviewWarning: "Test fixture",
-                sources: []
-            ),
-            format: .docx,
-            to: url
-        )
-        defer { try? FileManager.default.removeItem(at: url) }
-        return try Data(contentsOf: url)
     }
 
     private func temporaryArtifacts(in directory: URL) throws -> [URL] {
@@ -682,9 +665,29 @@ private final class DirectorySynchronizationRecorder: @unchecked Sendable {
         lock.withLock { recordedDirectories }
     }
 
-    func synchronize(_ directory: URL) {
+    func synchronize(_ directory: URL, descriptor: Int32) throws {
+        var descriptorStatus = stat()
+        guard Darwin.fstat(descriptor, &descriptorStatus) == 0 else {
+            throw DirectorySynchronizationRecorderError.descriptorInspectionFailed(errno)
+        }
+        var pathStatus = stat()
+        let pathResult = directory.path.withCString { Darwin.lstat($0, &pathStatus) }
+        guard pathResult == 0 else {
+            throw DirectorySynchronizationRecorderError.pathInspectionFailed(errno)
+        }
+        guard descriptorStatus.st_dev == pathStatus.st_dev,
+              descriptorStatus.st_ino == pathStatus.st_ino,
+              descriptorStatus.st_gen == pathStatus.st_gen else {
+            throw DirectorySynchronizationRecorderError.descriptorPathMismatch
+        }
         lock.withLock {
             recordedDirectories.append(directory.standardizedFileURL)
         }
     }
+}
+
+private enum DirectorySynchronizationRecorderError: Error {
+    case descriptorInspectionFailed(Int32)
+    case pathInspectionFailed(Int32)
+    case descriptorPathMismatch
 }

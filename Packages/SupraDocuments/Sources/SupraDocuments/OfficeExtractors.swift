@@ -18,7 +18,20 @@ enum ZipArchiveReader {
         } catch {
             throw ExtractionError.malformed("Not a readable archive: \(error.localizedDescription)")
         }
+        return try validatedArchive(archive, policy: policy)
+    }
 
+    static func validatedArchive(data: Data, policy: ImportPolicy) throws -> Archive {
+        let archive: Archive
+        do {
+            archive = try Archive(data: data, accessMode: .read, pathEncoding: nil)
+        } catch {
+            throw ExtractionError.malformed("Not a readable archive: \(error.localizedDescription)")
+        }
+        return try validatedArchive(archive, policy: policy)
+    }
+
+    private static func validatedArchive(_ archive: Archive, policy: ImportPolicy) throws -> Archive {
         var canonicalPaths = Set<String>()
         var expandedBytes = 0
         var entryCount = 0

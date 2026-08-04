@@ -776,8 +776,8 @@ final class DraftArtifactReconciliationTests: XCTestCase {
     }
 
     // T-DAR-19. Format validation must consume the immutable bytes that cleanup
-    // later authorizes. A valid file swapped in only for URL validation cannot
-    // authorize deletion of restored invalid origin bytes.
+    // later authorizes. The validator receives those immutable bytes rather
+    // than a pathname that can be swapped during validation.
     func testTDAR19RollbackValidationSwapAndRestoreCannotAuthorizeDeletion() throws {
         let fixture = try makeFixture()
         let invalidOrigin = Data("not-an-office-archive".utf8)
@@ -795,19 +795,13 @@ final class DraftArtifactReconciliationTests: XCTestCase {
             ".supra-draft-rollback-bbf231d5-d197-47d5-92ec-78ac7f33e593-\(intent.fileName)"
         )
         try invalidOrigin.write(to: quarantine)
-        let preservedOrigin = fixture.storage.root
-            .appendingPathComponent("preserved-invalid-rollback.docx")
-        let validReplacement = try validDOCXData(in: fixture.storage.root)
         let service = DraftArtifactReconciliationService(
             store: fixture.store,
             storage: fixture.storage
         )
-        service.artifactFormatValidator = { candidate, format in
-            try FileManager.default.moveItem(at: candidate, to: preservedOrigin)
-            try validReplacement.write(to: candidate)
-            try DocumentExportValidator.validate(candidate, as: format)
-            try FileManager.default.removeItem(at: candidate)
-            try FileManager.default.moveItem(at: preservedOrigin, to: candidate)
+        service.artifactFormatValidator = { candidateData, format in
+            XCTAssertEqual(candidateData, invalidOrigin)
+            try DocumentExportValidator.validate(candidateData, as: format)
         }
 
         let summary = try service.reconcilePendingIntents()
@@ -827,8 +821,8 @@ final class DraftArtifactReconciliationTests: XCTestCase {
     }
 
     // T-DAR-20. Public finalization has the same byte-binding requirement as
-    // rollback cleanup: URL validation of a transient valid replacement cannot
-    // authorize completion with restored invalid origin bytes.
+    // rollback cleanup: validation must consume the exact descriptor-bound
+    // bytes that finalization would commit.
     func testTDAR20PublicValidationSwapAndRestoreCannotAuthorizeFinalization() throws {
         let fixture = try makeFixture()
         let invalidOrigin = Data("not-an-office-archive".utf8)
@@ -841,19 +835,13 @@ final class DraftArtifactReconciliationTests: XCTestCase {
             id: "public-validation-swap"
         )
         let publicURL = try install(invalidOrigin, intent: intent, storage: fixture.storage)
-        let preservedOrigin = fixture.storage.root
-            .appendingPathComponent("preserved-invalid-public.docx")
-        let validReplacement = try validDOCXData(in: fixture.storage.root)
         let service = DraftArtifactReconciliationService(
             store: fixture.store,
             storage: fixture.storage
         )
-        service.artifactFormatValidator = { candidate, format in
-            try FileManager.default.moveItem(at: candidate, to: preservedOrigin)
-            try validReplacement.write(to: candidate)
-            try DocumentExportValidator.validate(candidate, as: format)
-            try FileManager.default.removeItem(at: candidate)
-            try FileManager.default.moveItem(at: preservedOrigin, to: candidate)
+        service.artifactFormatValidator = { candidateData, format in
+            XCTAssertEqual(candidateData, invalidOrigin)
+            try DocumentExportValidator.validate(candidateData, as: format)
         }
 
         let summary = try service.reconcilePendingIntents()
@@ -895,22 +883,6 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         return url
     }
 
-    private func validDOCXData(in directory: URL) throws -> Data {
-        let url = directory.appendingPathComponent("valid-reconciliation-replacement.docx")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try DocumentExportBuilder.write(
-            DocumentExportPayload(
-                title: "Validation replacement",
-                contentMarkdown: "Valid Office package.",
-                reviewWarning: "Test fixture",
-                sources: []
-            ),
-            format: .docx,
-            to: url
-        )
-        defer { try? FileManager.default.removeItem(at: url) }
-        return try Data(contentsOf: url)
-    }
 }
 
 private enum InjectedParentSubstitutionFailure: Error {

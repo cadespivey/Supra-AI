@@ -42,7 +42,7 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
     /// Deterministic format-validation seam used to prove a validator result
     /// cannot be detached from the bytes that reconciliation later finalizes or
     /// removes. Production uses the complete format-aware validator.
-    var artifactFormatValidator: (URL, DocumentExportFormat) throws -> Void = {
+    var artifactFormatValidator: (Data, DocumentExportFormat) throws -> Void = {
         try DocumentExportValidator.validate($0, as: $1)
     }
 
@@ -102,6 +102,11 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                     summary.removedRollbackQuarantineCount += 1
                     summary.abortedCount += 1
                     continue
+                case .removedOwnedRecoveryRequired:
+                    try requireRecovery(intent.id)
+                    summary.removedRollbackQuarantineCount += 1
+                    summary.recoveryRequiredCount += 1
+                    continue
                 case .recoveryRequired:
                     try requireRecovery(intent.id)
                     summary.recoveryRequiredCount += 1
@@ -122,42 +127,26 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                 summary.recoveryRequiredCount += 1
             case .regular:
                 do {
-                    guard let inspectedIdentity = try fileWriter.installedFileIdentity(at: publicURL) else {
+                    guard let inspectedIdentity = try fileWriter.installedFileIdentity(
+                        at: publicURL,
+                        containedIn: storage.root
+                    ) else {
                         throw ReconciliationError.artifactChangedDuringInspection
                     }
                     try publicArtifactInspectionCheckpoint(publicURL)
-                    guard Self.regularFileState(at: publicURL) == .regular,
-                          Self.isSafeManagedURL(
-                            publicURL,
-                            storage: storage,
-                            matterID: intent.matterID,
-                            fileName: intent.fileName
-                          ),
-                          try fileWriter.matchesInstalledFileIdentity(inspectedIdentity, at: publicURL) else {
-                        throw ReconciliationError.artifactChangedDuringInspection
-                    }
-                    let beforeValidation = try Data(contentsOf: publicURL, options: .mappedIfSafe)
-                    guard beforeValidation.count == intent.outputByteSize,
-                          DocumentStorage.sha256Hex(of: beforeValidation) == intent.outputSHA256 else {
-                        throw ReconciliationError.artifactMismatch
-                    }
-                    try artifactFormatValidator(
-                        publicURL,
-                        try Self.exportFormat(intent.format)
-                    )
-                    // Bind finalization to the bytes observed after format
-                    // validation as well; replacement during inspection fails.
-                    let installed = try Data(contentsOf: publicURL, options: .mappedIfSafe)
-                    guard installed == beforeValidation,
-                          Self.regularFileState(at: publicURL) == .regular,
-                          Self.isSafeManagedURL(
-                            publicURL,
-                            storage: storage,
-                            matterID: intent.matterID,
-                            fileName: intent.fileName
-                          ),
-                          try fileWriter.matchesInstalledFileIdentity(inspectedIdentity, at: publicURL) else {
-                        throw ReconciliationError.artifactChangedDuringInspection
+                    let installed = try fileWriter.validatedInstalledFileData(
+                        matching: inspectedIdentity,
+                        at: publicURL,
+                        containedIn: storage.root
+                    ) { candidate in
+                        guard candidate.count == intent.outputByteSize,
+                              DocumentStorage.sha256Hex(of: candidate) == intent.outputSHA256 else {
+                            throw ReconciliationError.artifactMismatch
+                        }
+                        try artifactFormatValidator(
+                            candidate,
+                            try Self.exportFormat(intent.format)
+                        )
                     }
                     try store.draftArtifacts.finalizeIntent(
                         id: intent.id,
@@ -224,6 +213,7 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
     private enum RollbackReconciliation {
         case none
         case removedOwned
+        case removedOwnedRecoveryRequired
         case recoveryRequired
     }
 
@@ -261,29 +251,56 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
               ) else {
             return .recoveryRequired
         }
-        let beforeValidation = try Data(contentsOf: candidate, options: .mappedIfSafe)
-        guard beforeValidation.count == intent.outputByteSize,
-              DocumentStorage.sha256Hex(of: beforeValidation) == intent.outputSHA256 else {
-            return .recoveryRequired
-        }
+        let validated: Data
         do {
-            try artifactFormatValidator(
-                candidate,
-                try Self.exportFormat(intent.format)
-            )
+            validated = try fileWriter.validatedInstalledFileData(
+                matching: inspectedIdentity,
+                at: candidate,
+                containedIn: storage.root
+            ) { candidateData in
+                guard candidateData.count == intent.outputByteSize,
+                      DocumentStorage.sha256Hex(of: candidateData) == intent.outputSHA256 else {
+                    throw ReconciliationError.artifactMismatch
+                }
+                try artifactFormatValidator(
+                    candidateData,
+                    try Self.exportFormat(intent.format)
+                )
+            }
         } catch {
             return .recoveryRequired
         }
-        let afterValidation = try Data(contentsOf: candidate, options: .mappedIfSafe)
-        guard afterValidation == beforeValidation else { return .recoveryRequired }
         try cleanupPreUnlinkCheckpoint(candidate)
-        guard Self.regularFileState(at: candidate) == .regular,
-              try fileWriter.unlinkFile(
-                  matching: inspectedIdentity,
-                  at: candidate,
-                  containedIn: storage.root
-              ) else {
+        guard Self.regularFileState(at: publicURL) == .missing else {
             return .recoveryRequired
+        }
+        do {
+            _ = try fileWriter.validatedInstalledFileData(
+                matching: inspectedIdentity,
+                at: candidate,
+                containedIn: storage.root
+            ) { finalData in
+                guard finalData == validated else {
+                    throw ReconciliationError.artifactChangedDuringInspection
+                }
+            }
+        } catch {
+            return .recoveryRequired
+        }
+        guard Self.regularFileState(at: publicURL) == .missing else {
+            return .recoveryRequired
+        }
+        let removed = try fileWriter.unlinkFile(
+            matching: inspectedIdentity,
+            at: candidate,
+            containedIn: storage.root
+        )
+        guard removed else { return .recoveryRequired }
+        guard Self.regularFileState(at: publicURL) == .missing else {
+            // The writer has already unlinked and synchronized the exact
+            // rollback source. A public survivor still requires recovery, but
+            // the durable quarantine removal remains an accurate summary fact.
+            return .removedOwnedRecoveryRequired
         }
         return .removedOwned
     }

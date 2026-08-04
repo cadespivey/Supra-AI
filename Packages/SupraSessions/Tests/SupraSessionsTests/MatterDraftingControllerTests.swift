@@ -22,46 +22,20 @@ final class MatterDraftingControllerTests: XCTestCase {
         var errorDescription: String? { "injected directory synchronization failure" }
     }
 
-    private final class DirectorySyncProbe: @unchecked Sendable {
-        private let lock = NSLock()
-        private let failOnCall: Int?
-        private var directories: [URL] = []
-
-        init(failOnCall: Int? = nil) {
-            self.failOnCall = failOnCall
-        }
-
-        var callCount: Int {
-            lock.withLock { directories.count }
-        }
-
-        var synchronizedDirectories: [URL] {
-            lock.withLock { directories }
-        }
-
-        func synchronize(_ directory: URL) throws {
-            let call = lock.withLock {
-                directories.append(directory.standardizedFileURL)
-                return directories.count
-            }
-            if call == failOnCall {
-                throw DirectorySyncFailure()
-            }
-        }
-    }
-
     private final class InstallRollbackSyncProbe: @unchecked Sendable {
-        enum Phase: Equatable {
+        enum Phase: Hashable {
             case install
             case rollback
         }
 
         private let lock = NSLock()
         private let destination: URL
+        private let failingPhases: Set<Phase>
         private var observedPhases: [Phase] = []
 
-        init(destination: URL) {
+        init(destination: URL, failingPhases: Set<Phase> = [.install, .rollback]) {
             self.destination = destination
+            self.failingPhases = failingPhases
         }
 
         var phases: [Phase] {
@@ -81,7 +55,7 @@ final class MatterDraftingControllerTests: XCTestCase {
                 }
                 return nil
             }
-            if phase != nil {
+            if phase.map(failingPhases.contains) == true {
                 throw DirectorySyncFailure()
             }
         }
@@ -469,7 +443,6 @@ final class MatterDraftingControllerTests: XCTestCase {
             destination.lastPathComponent
         )
         var intentID: String?
-        var quarantineURL: URL?
         let controller = MatterDraftingController(
             store: store,
             storage: storage,
@@ -485,8 +458,7 @@ final class MatterDraftingControllerTests: XCTestCase {
                     at: preservedDestination,
                     to: destination
                 )
-            },
-            draftCompensationPreUnlinkCheckpoint: { quarantineURL = $0 }
+            }
         )
 
         let result = await controller.draftCustomDescription(
@@ -503,13 +475,18 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertTrue(message.contains("rollback also failed"), message)
         XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: preservedDestination.path))
-        try DocumentExportValidator.validate(destination, as: .markdown)
-        XCTAssertNotNil(quarantineURL)
-        if let quarantineURL {
-            XCTAssertTrue(FileManager.default.fileExists(atPath: quarantineURL.path))
-            try DocumentExportValidator.validate(quarantineURL, as: .markdown)
-        }
         let intent = try XCTUnwrap(try store.draftArtifacts.intent(id: XCTUnwrap(intentID)))
+        let publicData = try Data(contentsOf: destination)
+        XCTAssertEqual(publicData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: publicData), intent.outputSHA256)
+        let retainedQuarantines = try FileManager.default.contentsOfDirectory(
+            at: preservedParent,
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix(".supra-draft-rollback-") }
+        XCTAssertEqual(retainedQuarantines.count, 1)
+        let quarantineData = try Data(contentsOf: XCTUnwrap(retainedQuarantines.first))
+        XCTAssertEqual(quarantineData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: quarantineData), intent.outputSHA256)
         XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
@@ -701,7 +678,10 @@ final class MatterDraftingControllerTests: XCTestCase {
         let storage = makeStorage()
         let directory = storage.exportsDirectory(forMatterID: matter.id)
         let destination = directory.appendingPathComponent("Sync-outline-fixed.md")
-        let syncProbe = DirectorySyncProbe(failOnCall: 1)
+        let syncProbe = InstallRollbackSyncProbe(
+            destination: destination,
+            failingPhases: [.install]
+        )
         let writer = DurableFileWriter(
             faultInjector: { _ in },
             parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
@@ -723,8 +703,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         }
         XCTAssertTrue(message.contains("directory synchronization"), message)
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
-        XCTAssertEqual(syncProbe.callCount, 2, "install rollback must also synchronize the parent directory")
-        XCTAssertEqual(Set(syncProbe.synchronizedDirectories), [directory.standardizedFileURL])
+        XCTAssertEqual(syncProbe.phases, [.install, .rollback])
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
@@ -795,7 +774,12 @@ final class MatterDraftingControllerTests: XCTestCase {
         let destination = directory.appendingPathComponent("Notice-of-Appearance-fixed.docx")
         let canary = Data("previous-reviewed-docx".utf8)
         try canary.write(to: destination)
-        let syncProbe = DirectorySyncProbe(failOnCall: 1)
+        let installedDestination = directory
+            .appendingPathComponent("Notice-of-Appearance-fixed-2.docx")
+        let syncProbe = InstallRollbackSyncProbe(
+            destination: installedDestination,
+            failingPhases: [.install]
+        )
         let writer = DurableFileWriter(
             faultInjector: { _ in },
             parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
@@ -824,8 +808,7 @@ final class MatterDraftingControllerTests: XCTestCase {
             try FileManager.default.contentsOfDirectory(atPath: directory.path),
             [destination.lastPathComponent]
         )
-        XCTAssertEqual(syncProbe.callCount, 2, "failed new install rollback must also synchronize the parent")
-        XCTAssertEqual(Set(syncProbe.synchronizedDirectories), [directory.standardizedFileURL])
+        XCTAssertEqual(syncProbe.phases, [.install, .rollback])
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
@@ -839,7 +822,10 @@ final class MatterDraftingControllerTests: XCTestCase {
         let storage = makeStorage()
         let directory = storage.exportsDirectory(forMatterID: matter.id)
         let destination = directory.appendingPathComponent("Audit-outline-fixed.md")
-        let syncProbe = DirectorySyncProbe()
+        let syncProbe = InstallRollbackSyncProbe(
+            destination: destination,
+            failingPhases: []
+        )
         let writer = DurableFileWriter(
             faultInjector: { _ in },
             parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
@@ -858,8 +844,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         )
 
         guard case .failure = result else { return XCTFail("expected audit failure") }
-        XCTAssertEqual(syncProbe.callCount, 2)
-        XCTAssertEqual(Set(syncProbe.synchronizedDirectories), [directory.standardizedFileURL])
+        XCTAssertEqual(syncProbe.phases, [.install, .rollback])
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
@@ -874,7 +859,10 @@ final class MatterDraftingControllerTests: XCTestCase {
         let storage = makeStorage()
         let directory = storage.exportsDirectory(forMatterID: matter.id)
         let destination = directory.appendingPathComponent("Partial-rollback-fixed.md")
-        let syncProbe = DirectorySyncProbe(failOnCall: 2)
+        let syncProbe = InstallRollbackSyncProbe(
+            destination: destination,
+            failingPhases: [.rollback]
+        )
         let writer = DurableFileWriter(
             faultInjector: { _ in },
             parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
@@ -897,7 +885,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         }
         XCTAssertTrue(message.contains("rollback also failed"), message)
         XCTAssertTrue(message.contains("directory synchronization"), message)
-        XCTAssertEqual(syncProbe.callCount, 2)
+        XCTAssertEqual(syncProbe.phases, [.install, .rollback])
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
@@ -937,7 +925,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         }
         XCTAssertTrue(auditObservedInstalledDraft)
         XCTAssertTrue(message.contains("rollback also failed"), message)
-        XCTAssertTrue(message.contains("changed"), message)
+        XCTAssertTrue(message.contains("could not verify"), message)
         XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertEqual(try? Data(contentsOf: destination), concurrentCanary)
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)

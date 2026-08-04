@@ -75,13 +75,15 @@ public struct DurableFileWriter: Sendable {
         }
 
         func matches(destination: URL) -> Bool {
-            destination.standardizedFileURL.deletingLastPathComponent() == parentURL
+            destination.standardizedFileURL.deletingLastPathComponent().path
+                    == parentURL.standardizedFileURL.path
                 && destination.lastPathComponent == destinationName
         }
 
         func matches(destination: URL, managedRoot: URL) -> Bool {
             matches(destination: destination)
-                && managedRootURL == managedRoot.standardizedFileURL
+                && managedRootURL?.standardizedFileURL.path
+                    == managedRoot.standardizedFileURL.path
         }
     }
 
@@ -142,6 +144,15 @@ public struct DurableFileWriter: Sendable {
         case fileUnlinkFailed(Int32)
         case createOnlyRollbackFailed(Int32)
         case createOnlyRollbackConflict(String, Int32)
+        case createOnlyRollbackSynchronizationFailed(String)
+        case publicDestinationStillLinked(String)
+        case publicDestinationStillLinkedWithoutRetainedQuarantine
+        case publicDestinationStillLinkedAfterRemoval
+        case quarantinePathChanged(String)
+        case retainedQuarantineChanged(String)
+        case postInstallStateUncertain(String)
+        case managedTemporaryCleanupUncertain(String, String)
+        case sourceNameReappeared(String)
     }
 
     public typealias FaultInjector = @Sendable (FaultStage) throws -> Void
@@ -173,6 +184,19 @@ public struct DurableFileWriter: Sendable {
         self.anchoredParentDirectorySynchronizer = { url, _ in
             try parentDirectorySynchronizer(url)
         }
+        self.fileUnlinkCheckpoint = fileUnlinkCheckpoint
+    }
+
+    /// Test seam for proving that descriptor-relative durability operations use
+    /// the descriptor belonging to the labeled containing directory.
+    init(
+        faultInjector: @escaping FaultInjector,
+        anchoredParentDirectorySynchronizer: @escaping AnchoredParentDirectorySynchronizer,
+        fileUnlinkCheckpoint: @escaping FileUnlinkCheckpoint = { _ in }
+    ) {
+        self.faultInjector = faultInjector
+        self.parentDirectorySynchronizer = Self.synchronizeParentDirectory
+        self.anchoredParentDirectorySynchronizer = anchoredParentDirectorySynchronizer
         self.fileUnlinkCheckpoint = fileUnlinkCheckpoint
     }
 
@@ -239,7 +263,7 @@ public struct DurableFileWriter: Sendable {
         _ data: Data,
         to destination: URL,
         containedIn managedRoot: URL,
-        validator: (URL) throws -> Void
+        validator: (Data) throws -> Void
     ) throws -> InstalledFileIdentity {
         try performContainedCreateOnlyWrite(
             data,
@@ -333,6 +357,7 @@ public struct DurableFileWriter: Sendable {
         do {
             try parentDirectorySynchronizer(parent)
         } catch {
+            let installSynchronizationError = error
             guard installPolicy == .createExclusive else { throw error }
             let changedDirectory = try Self.rollbackCreateExclusiveInstall(
                 at: standardizedDestination,
@@ -340,9 +365,15 @@ public struct DurableFileWriter: Sendable {
                 expectedIdentity: installedFileIdentity
             )
             if changedDirectory {
-                try parentDirectorySynchronizer(parent)
+                do {
+                    try parentDirectorySynchronizer(parent)
+                } catch {
+                    throw WriterError.createOnlyRollbackSynchronizationFailed(
+                        error.localizedDescription
+                    )
+                }
             }
-            throw error
+            throw installSynchronizationError
         }
         return installedFileIdentity
     }
@@ -392,6 +423,79 @@ public struct DurableFileWriter: Sendable {
             allowsDetachedParentCleanup: false
         )
         return identity.anchored(to: anchor)
+    }
+
+    /// Reads and validates the exact installed inode through its retained
+    /// managed-directory capability. The caller receives bytes only after the
+    /// managed root/parent chain, descriptor identity, and public name have
+    /// remained stable across validation and two equal reads from the same file
+    /// descriptor. No pathname-based validator participates in this boundary.
+    public func validatedInstalledFileData(
+        matching expected: InstalledFileIdentity,
+        at url: URL,
+        containedIn managedRoot: URL,
+        validator: (Data) throws -> Void
+    ) throws -> Data {
+        let destination = url.standardizedFileURL
+        let standardizedRoot = managedRoot.standardizedFileURL
+        guard let anchor = expected.managedAnchor,
+              anchor.matches(destination: destination, managedRoot: standardizedRoot),
+              Self.managedAnchorIsReachable(anchor),
+              try Self.fileIdentity(
+                  named: destination.lastPathComponent,
+                  in: anchor.parentDescriptor
+              ) == expected else {
+            throw WriterError.unsafeManagedParent(ESTALE)
+        }
+
+        let descriptor = destination.lastPathComponent.withCString {
+            Darwin.openat(
+                anchor.parentDescriptor,
+                $0,
+                O_RDONLY | O_CLOEXEC | O_NOFOLLOW
+            )
+        }
+        guard descriptor >= 0 else {
+            throw WriterError.fileIdentityInspectionFailed(errno)
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+
+        guard try Self.fileIdentity(descriptor: descriptor) == expected else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
+        }
+        let first = try handle.readToEnd() ?? Data()
+        guard try Self.fileIdentity(descriptor: descriptor) == expected,
+              Self.managedAnchorIsReachable(anchor),
+              try Self.fileIdentity(
+                  named: destination.lastPathComponent,
+                  in: anchor.parentDescriptor
+              ) == expected else {
+            throw WriterError.unsafeManagedParent(ESTALE)
+        }
+
+        try validator(first)
+
+        guard try Self.fileIdentity(descriptor: descriptor) == expected,
+              Self.managedAnchorIsReachable(anchor),
+              try Self.fileIdentity(
+                  named: destination.lastPathComponent,
+                  in: anchor.parentDescriptor
+              ) == expected else {
+            throw WriterError.unsafeManagedParent(ESTALE)
+        }
+        try handle.seek(toOffset: 0)
+        let final = try handle.readToEnd() ?? Data()
+        guard final == first,
+              try Self.fileIdentity(descriptor: descriptor) == expected,
+              Self.managedAnchorIsReachable(anchor),
+              try Self.fileIdentity(
+                  named: destination.lastPathComponent,
+                  in: anchor.parentDescriptor
+              ) == expected else {
+            throw WriterError.unsafeManagedParent(ESTALE)
+        }
+        return final
     }
 
     /// Removes a pathname only when its current no-follow identity still equals
@@ -458,14 +562,22 @@ public struct DurableFileWriter: Sendable {
                     error.localizedDescription
                 )
             }
+            guard try Self.fileIdentity(
+                named: destination.lastPathComponent,
+                in: anchor.parentDescriptor
+            ) == nil,
+                  try Self.fileIdentity(at: destination) == nil else {
+                throw WriterError.sourceNameReappeared(destination.lastPathComponent)
+            }
         }
         return removed
     }
 
     /// Quarantines a just-installed managed file through the retained parent
     /// descriptor, validates its exact bytes, then removes only the owned inode.
-    /// Any mismatch is restored with an exclusive descriptor-relative rename;
-    /// if a newer destination exists, both entries remain preserved.
+    /// The exact quarantine is restored only when initial content validation or
+    /// a callback fails without changing its identity. Changed or missing names
+    /// are left untouched and surfaced as explicit recovery states.
     @discardableResult
     public func removeInstalledFile(
         matching expected: InstalledFileIdentity,
@@ -477,11 +589,13 @@ public struct DurableFileWriter: Sendable {
         preRemovalCheckpoint: (URL) throws -> Void = { _ in }
     ) throws -> Bool {
         let destination = url.standardizedFileURL
-        let anchor = try Self.anchor(
-            for: expected,
-            destination: destination,
-            managedRoot: managedRoot.standardizedFileURL
-        )
+        guard let anchor = expected.managedAnchor,
+              anchor.matches(
+                  destination: destination,
+                  managedRoot: managedRoot.standardizedFileURL
+              ) else {
+            throw WriterError.unsafeManagedParent(ESTALE)
+        }
         guard let quarantineName = try Self.quarantineEntry(
             named: destination.lastPathComponent,
             in: anchor.parentDescriptor,
@@ -489,6 +603,9 @@ public struct DurableFileWriter: Sendable {
                 ".supra-draft-rollback-\(UUID().uuidString.lowercased())-\(destination.lastPathComponent)"
             }
         ) else {
+            if try Self.fileIdentity(at: destination) == expected {
+                throw WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine
+            }
             return missingIsSuccess
         }
         let quarantineURL = anchor.parentURL.appendingPathComponent(
@@ -499,88 +616,238 @@ public struct DurableFileWriter: Sendable {
             named: quarantineName,
             in: anchor.parentDescriptor
         ) else {
+            if try Self.fileIdentity(at: destination) == expected {
+                throw WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine
+            }
             return false
         }
+        if quarantinedIdentity != expected {
+            var checkpointError: Error?
+            do {
+                try quarantineCheckpoint(destination, quarantineURL)
+            } catch {
+                checkpointError = error
+            }
+            let currentQuarantineIdentity = try Self.fileIdentity(
+                named: quarantineName,
+                in: anchor.parentDescriptor
+            )
+            let exactFileRemainsPublic = try Self.fileIdentity(at: destination) == expected
+            guard currentQuarantineIdentity == quarantinedIdentity else {
+                if exactFileRemainsPublic {
+                    throw WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine
+                }
+                throw WriterError.quarantinePathChanged(quarantineName)
+            }
+            if exactFileRemainsPublic {
+                throw WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine
+            }
+            guard try Self.restoreOwnedEntry(
+                named: quarantineName,
+                to: destination.lastPathComponent,
+                matching: quarantinedIdentity,
+                in: anchor.parentDescriptor
+            ) else {
+                throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
+            }
+            if let checkpointError { throw checkpointError }
+            return false
+        }
+        let initialQuarantineData = try Self.fileData(
+            named: quarantineName,
+            in: anchor.parentDescriptor,
+            matching: expected
+        )
 
         do {
             try quarantineCheckpoint(destination, quarantineURL)
         } catch {
-            guard try Self.restoreOwnedEntry(
-                named: quarantineName,
-                to: destination.lastPathComponent,
-                matching: quarantinedIdentity,
-                in: anchor.parentDescriptor
-            ) else {
-                throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
-            }
-            throw error
-        }
-
-        guard try Self.fileIdentity(
-            named: quarantineName,
-            in: anchor.parentDescriptor
-        ) == quarantinedIdentity else {
-            throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
-        }
-        guard quarantinedIdentity == expected else {
-            guard try Self.restoreOwnedEntry(
-                named: quarantineName,
-                to: destination.lastPathComponent,
-                matching: quarantinedIdentity,
-                in: anchor.parentDescriptor
-            ) else {
-                throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
-            }
-            return false
-        }
-
-        do {
-            try contentValidator(
-                Self.fileData(
+            switch try Self.quarantinePublicState(
+                quarantineName: quarantineName,
+                parentDescriptor: anchor.parentDescriptor,
+                destination: destination,
+                expected: expected
+            ) {
+            case .exactQuarantineOnly:
+                guard try Self.fileData(
                     named: quarantineName,
                     in: anchor.parentDescriptor,
                     matching: expected
-                )
-            )
-        } catch {
-            guard try Self.restoreOwnedEntry(
-                named: quarantineName,
-                to: destination.lastPathComponent,
-                matching: expected,
-                in: anchor.parentDescriptor
-            ) else {
-                throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
+                ) == initialQuarantineData else {
+                    throw WriterError.retainedQuarantineChanged(quarantineName)
+                }
+                guard try Self.restoreOwnedEntry(
+                    named: quarantineName,
+                    to: destination.lastPathComponent,
+                    matching: expected,
+                    in: anchor.parentDescriptor
+                ) else {
+                    throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
+                }
+                throw error
+            case .exactQuarantineAndPublic:
+                throw WriterError.publicDestinationStillLinked(quarantineName)
+            case .publicWithoutExactQuarantine:
+                throw WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine
+            case .quarantineChangedOrMissing:
+                throw WriterError.quarantinePathChanged(quarantineName)
             }
-            throw error
+        }
+        try Self.requireExactQuarantineOnly(
+            quarantineName: quarantineName,
+            parentDescriptor: anchor.parentDescriptor,
+            destination: destination,
+            expected: expected
+        )
+
+        var firstCandidate: Data?
+        do {
+            let candidate = try Self.fileData(
+                named: quarantineName,
+                in: anchor.parentDescriptor,
+                matching: expected
+            )
+            firstCandidate = candidate
+            try contentValidator(candidate)
+        } catch {
+            switch try Self.quarantinePublicState(
+                quarantineName: quarantineName,
+                parentDescriptor: anchor.parentDescriptor,
+                destination: destination,
+                expected: expected
+            ) {
+            case .exactQuarantineOnly:
+                if let firstCandidate,
+                   try Self.fileData(
+                       named: quarantineName,
+                       in: anchor.parentDescriptor,
+                       matching: expected
+                   ) != firstCandidate {
+                    throw WriterError.retainedQuarantineChanged(quarantineName)
+                }
+                guard try Self.restoreOwnedEntry(
+                    named: quarantineName,
+                    to: destination.lastPathComponent,
+                    matching: expected,
+                    in: anchor.parentDescriptor
+                ) else {
+                    throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
+                }
+                throw error
+            case .exactQuarantineAndPublic:
+                throw WriterError.publicDestinationStillLinked(quarantineName)
+            case .publicWithoutExactQuarantine:
+                throw WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine
+            case .quarantineChangedOrMissing:
+                throw WriterError.quarantinePathChanged(quarantineName)
+            }
+        }
+        try Self.requireExactQuarantineOnly(
+            quarantineName: quarantineName,
+            parentDescriptor: anchor.parentDescriptor,
+            destination: destination,
+            expected: expected
+        )
+        guard let validatedQuarantineData = firstCandidate,
+              try Self.fileData(
+                  named: quarantineName,
+                  in: anchor.parentDescriptor,
+                  matching: expected
+              ) == validatedQuarantineData else {
+            throw WriterError.retainedQuarantineChanged(quarantineName)
         }
 
         do {
             try preRemovalCheckpoint(quarantineURL)
         } catch {
-            guard try Self.restoreOwnedEntry(
-                named: quarantineName,
-                to: destination.lastPathComponent,
-                matching: expected,
-                in: anchor.parentDescriptor
-            ) else {
-                throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
+            switch try Self.quarantinePublicState(
+                quarantineName: quarantineName,
+                parentDescriptor: anchor.parentDescriptor,
+                destination: destination,
+                expected: expected
+            ) {
+            case .exactQuarantineOnly:
+                guard try Self.fileData(
+                    named: quarantineName,
+                    in: anchor.parentDescriptor,
+                    matching: expected
+                ) == validatedQuarantineData else {
+                    throw WriterError.retainedQuarantineChanged(quarantineName)
+                }
+                guard try Self.restoreOwnedEntry(
+                    named: quarantineName,
+                    to: destination.lastPathComponent,
+                    matching: expected,
+                    in: anchor.parentDescriptor
+                ) else {
+                    throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
+                }
+                throw error
+            case .exactQuarantineAndPublic:
+                throw WriterError.publicDestinationStillLinked(quarantineName)
+            case .publicWithoutExactQuarantine:
+                throw WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine
+            case .quarantineChangedOrMissing:
+                throw WriterError.quarantinePathChanged(quarantineName)
             }
-            throw error
+        }
+        try Self.requireExactQuarantineOnly(
+            quarantineName: quarantineName,
+            parentDescriptor: anchor.parentDescriptor,
+            destination: destination,
+            expected: expected
+        )
+        guard try Self.fileData(
+            named: quarantineName,
+            in: anchor.parentDescriptor,
+            matching: expected
+        ) == validatedQuarantineData else {
+            throw WriterError.retainedQuarantineChanged(quarantineName)
         }
 
-        guard try Self.fileIdentity(
-            named: quarantineName,
-            in: anchor.parentDescriptor
-        ) == expected else {
-            return false
-        }
-        try contentValidator(
-            Self.fileData(
+        var finalCandidate: Data?
+        do {
+            let candidate = try Self.fileData(
                 named: quarantineName,
                 in: anchor.parentDescriptor,
                 matching: expected
             )
+            guard candidate == validatedQuarantineData else {
+                throw WriterError.retainedQuarantineChanged(quarantineName)
+            }
+            finalCandidate = candidate
+            try contentValidator(candidate)
+        } catch {
+            switch try Self.quarantinePublicState(
+                quarantineName: quarantineName,
+                parentDescriptor: anchor.parentDescriptor,
+                destination: destination,
+                expected: expected
+            ) {
+            case .exactQuarantineOnly:
+                throw WriterError.retainedQuarantineChanged(quarantineName)
+            case .exactQuarantineAndPublic:
+                throw WriterError.publicDestinationStillLinked(quarantineName)
+            case .publicWithoutExactQuarantine:
+                throw WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine
+            case .quarantineChangedOrMissing:
+                throw WriterError.quarantinePathChanged(quarantineName)
+            }
+        }
+        try Self.requireExactQuarantineOnly(
+            quarantineName: quarantineName,
+            parentDescriptor: anchor.parentDescriptor,
+            destination: destination,
+            expected: expected
         )
+        guard let finalCandidate,
+              try Self.fileData(
+                  named: quarantineName,
+                  in: anchor.parentDescriptor,
+                  matching: expected
+              ) == finalCandidate else {
+            throw WriterError.retainedQuarantineChanged(quarantineName)
+        }
         let removed = try Self.removeEntry(
             named: quarantineName,
             matching: expected,
@@ -594,6 +861,16 @@ public struct DurableFileWriter: Sendable {
                     error.localizedDescription
                 )
             }
+            guard try Self.fileIdentity(
+                named: quarantineName,
+                in: anchor.parentDescriptor
+            ) == nil,
+                  try Self.fileIdentity(at: quarantineURL) == nil else {
+                throw WriterError.sourceNameReappeared(quarantineName)
+            }
+        }
+        if try Self.fileIdentity(at: destination) == expected {
+            throw WriterError.publicDestinationStillLinkedAfterRemoval
         }
         return removed
     }
@@ -611,7 +888,7 @@ public struct DurableFileWriter: Sendable {
         _ data: Data,
         to destination: URL,
         managedRoot: URL,
-        validator: (URL) throws -> Void
+        validator: (Data) throws -> Void
     ) throws -> InstalledFileIdentity {
         try Task.checkCancellation()
         let standardizedDestination = destination.standardizedFileURL
@@ -624,9 +901,21 @@ public struct DurableFileWriter: Sendable {
 
         let managedParent = try Self.openManagedParent(
             for: standardizedDestination,
-            managedRoot: standardizedRoot
+            managedRoot: standardizedRoot,
+            directoryAuthenticator: anchoredParentDirectorySynchronizer
         )
-        let temporaryName = ".\(standardizedDestination.lastPathComponent).supra-tmp-\(UUID().uuidString)"
+        let retainedAnchor: ManagedFileAnchor
+        do {
+            retainedAnchor = try ManagedFileAnchor(
+                retaining: managedParent,
+                destinationName: standardizedDestination.lastPathComponent,
+                allowsDetachedParentCleanup: true
+            )
+        } catch {
+            Self.close(managedParent)
+            throw error
+        }
+        var temporaryName = ".\(standardizedDestination.lastPathComponent).supra-tmp-\(UUID().uuidString)"
         let temporaryURL = managedParent.parentURL.appendingPathComponent(
             temporaryName,
             isDirectory: false
@@ -651,101 +940,228 @@ public struct DurableFileWriter: Sendable {
         } catch {
             Darwin.close(descriptor)
             Self.close(managedParent)
-            throw error
-        }
-        let retainedAnchor: ManagedFileAnchor
-        do {
-            retainedAnchor = try ManagedFileAnchor(
-                retaining: managedParent,
-                destinationName: standardizedDestination.lastPathComponent,
-                allowsDetachedParentCleanup: true
+            throw WriterError.managedTemporaryCleanupUncertain(
+                temporaryName,
+                "temporary identity capture failed, so identity-bound cleanup could not be authorized: \(String(describing: error))"
             )
-        } catch {
-            Darwin.close(descriptor)
-            Self.close(managedParent)
-            throw error
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         var handleIsOpen = true
         var installed = false
         defer {
             if handleIsOpen { try? handle.close() }
-            if !installed {
-                _ = try? Self.removeEntry(
-                    named: temporaryName,
-                    matching: createdTemporaryIdentity,
-                    in: managedParent.parentDescriptor
-                )
-            }
             Self.close(managedParent)
         }
 
-        try faultInjector(.beforeWrite)
-        let sink = DurableFileSink(handle: handle, beforeWrite: {
-            try faultInjector(.duringWrite)
-        })
-        try sink.write(data)
-        try Task.checkCancellation()
-        try faultInjector(.beforeSynchronize)
-        try handle.synchronize()
-        try handle.close()
-        handleIsOpen = false
+        do {
+            try faultInjector(.beforeWrite)
+            let sink = DurableFileSink(handle: handle, beforeWrite: {
+                try faultInjector(.duringWrite)
+            })
+            try sink.write(data)
+            try Task.checkCancellation()
+            try faultInjector(.beforeSynchronize)
+            try handle.synchronize()
+            try handle.close()
+            handleIsOpen = false
 
-        try Task.checkCancellation()
-        try faultInjector(.beforeValidation)
-        guard Self.managedParentIsReachable(managedParent),
-              try Self.fileIdentity(
-                  named: temporaryName,
-                  in: managedParent.parentDescriptor
-              ) == createdTemporaryIdentity,
-              try Self.fileIdentity(at: temporaryURL) == createdTemporaryIdentity else {
-            throw WriterError.unsafeManagedParent(ESTALE)
-        }
-        try validator(temporaryURL)
-        try Task.checkCancellation()
-        guard Self.managedParentIsReachable(managedParent),
-              try Self.fileIdentity(
-                  named: temporaryName,
-                  in: managedParent.parentDescriptor
-              ) == createdTemporaryIdentity,
-              try Self.fileIdentity(at: temporaryURL) == createdTemporaryIdentity else {
-            throw WriterError.unsafeManagedParent(ESTALE)
-        }
-
-        try faultInjector(.beforeInstall)
-        guard Self.managedParentIsReachable(managedParent),
-              try Self.fileIdentity(
-                  named: temporaryName,
-                  in: managedParent.parentDescriptor
-              ) == createdTemporaryIdentity,
-              try Self.fileIdentity(at: temporaryURL) == createdTemporaryIdentity else {
-            throw WriterError.unsafeManagedParent(ESTALE)
-        }
-        try Self.atomicInstall(
-            temporaryName,
-            at: standardizedDestination.lastPathComponent,
-            in: managedParent.parentDescriptor
-        )
-        installed = true
-        guard Self.managedParentIsReachable(managedParent),
-              try Self.fileIdentity(
-                  named: standardizedDestination.lastPathComponent,
-                  in: managedParent.parentDescriptor
-              ) == createdTemporaryIdentity,
-              try Self.fileIdentity(at: standardizedDestination) == createdTemporaryIdentity else {
-            let changedDirectory = try Self.rollbackCreateExclusiveInstall(
-                destinationName: standardizedDestination.lastPathComponent,
-                quarantineName: temporaryName,
-                parentDescriptor: managedParent.parentDescriptor,
-                expectedIdentity: createdTemporaryIdentity
+            try Task.checkCancellation()
+            try faultInjector(.beforeValidation)
+            guard Self.managedParentIsReachable(managedParent),
+                  try Self.fileIdentity(
+                      named: temporaryName,
+                      in: managedParent.parentDescriptor
+                  ) == createdTemporaryIdentity,
+                  try Self.fileIdentity(at: temporaryURL) == createdTemporaryIdentity else {
+                throw WriterError.unsafeManagedParent(ESTALE)
+            }
+            let validatedData = try Self.fileData(
+                named: temporaryName,
+                in: managedParent.parentDescriptor,
+                matching: createdTemporaryIdentity
             )
-            if changedDirectory {
+            try validator(validatedData)
+            try Task.checkCancellation()
+            guard Self.managedParentIsReachable(managedParent),
+                  try Self.fileIdentity(
+                      named: temporaryName,
+                      in: managedParent.parentDescriptor
+                  ) == createdTemporaryIdentity,
+                  try Self.fileIdentity(at: temporaryURL) == createdTemporaryIdentity else {
+                throw WriterError.unsafeManagedParent(ESTALE)
+            }
+
+            try faultInjector(.beforeInstall)
+            guard Self.managedParentIsReachable(managedParent),
+                  try Self.fileIdentity(
+                      named: temporaryName,
+                      in: managedParent.parentDescriptor
+                  ) == createdTemporaryIdentity,
+                  try Self.fileIdentity(at: temporaryURL) == createdTemporaryIdentity else {
+                throw WriterError.unsafeManagedParent(ESTALE)
+            }
+
+            // No caller callback observes the fresh name below. Isolating the
+            // validated inode after the final callback narrows the remaining
+            // identity-check-to-rename boundary to an unpredictable exact temporary
+            // name that still matches reconciliation's temporary grammar.
+            guard let isolatedName = try Self.quarantineEntry(
+                named: temporaryName,
+                in: managedParent.parentDescriptor,
+                quarantineName: {
+                    ".\(standardizedDestination.lastPathComponent).supra-tmp-\(UUID().uuidString)"
+                }
+            ) else {
+                throw WriterError.fileIdentityInspectionFailed(ENOENT)
+            }
+            temporaryName = isolatedName
+            guard Self.managedParentIsReachable(managedParent),
+                  try Self.fileIdentity(
+                      named: temporaryName,
+                      in: managedParent.parentDescriptor
+                  ) == createdTemporaryIdentity,
+                  try Self.fileData(
+                      named: temporaryName,
+                      in: managedParent.parentDescriptor,
+                      matching: createdTemporaryIdentity
+                  ) == validatedData else {
+                throw WriterError.unsafeManagedParent(ESTALE)
+            }
+            try Self.atomicInstall(
+                temporaryName,
+                at: standardizedDestination.lastPathComponent,
+                in: managedParent.parentDescriptor
+            )
+            installed = true
+            do {
+                guard try Self.installedPublicationMatches(
+                    destination: standardizedDestination,
+                    expected: createdTemporaryIdentity,
+                    validatedData: validatedData,
+                    in: managedParent
+                ) else {
+                    throw WriterError.postInstallStateUncertain(
+                        "the installed destination changed before final synchronization"
+                    )
+                }
+            } catch {
+                let verificationDetail = String(describing: error)
+                try rollbackUncertainContainedInstall(
+                    destination: standardizedDestination,
+                    temporaryName: temporaryName,
+                    expected: createdTemporaryIdentity,
+                    in: managedParent
+                )
+                throw WriterError.postInstallStateUncertain(
+                    "post-install verification failed before final synchronization: \(verificationDetail)"
+                )
+            }
+            do {
                 try anchoredParentDirectorySynchronizer(
                     managedParent.parentURL,
                     managedParent.parentDescriptor
                 )
+            } catch {
+                let installSynchronizationError = error
+                try rollbackUncertainContainedInstall(
+                    destination: standardizedDestination,
+                    temporaryName: temporaryName,
+                    expected: createdTemporaryIdentity,
+                    in: managedParent
+                )
+                throw WriterError.postInstallStateUncertain(
+                    "final directory synchronization failed after installation: \(installSynchronizationError.localizedDescription)"
+                )
             }
-            throw WriterError.unsafeManagedParent(ESTALE)
+            do {
+                guard try Self.installedPublicationMatches(
+                    destination: standardizedDestination,
+                    expected: createdTemporaryIdentity,
+                    validatedData: validatedData,
+                    in: managedParent
+                ) else {
+                    throw WriterError.postInstallStateUncertain(
+                        "the managed parent, installed destination, or validated bytes changed during final synchronization"
+                    )
+                }
+            } catch let error as WriterError {
+                if case .postInstallStateUncertain = error { throw error }
+                throw WriterError.postInstallStateUncertain(
+                    "post-install inspection failed after final synchronization: \(String(describing: error))"
+                )
+            } catch {
+                throw WriterError.postInstallStateUncertain(
+                    "post-install inspection failed after final synchronization: \(error.localizedDescription)"
+                )
+            }
+            return createdTemporaryIdentity.anchored(to: retainedAnchor)
+        } catch {
+            let operationError = error
+            if !installed {
+                if handleIsOpen {
+                    try? handle.close()
+                    handleIsOpen = false
+                }
+                try cleanupManagedTemporary(
+                    named: temporaryName,
+                    matching: createdTemporaryIdentity,
+                    in: managedParent
+                )
+            }
+            throw operationError
+        }
+    }
+
+    private static func installedPublicationMatches(
+        destination: URL,
+        expected: InstalledFileIdentity,
+        validatedData: Data,
+        in managedParent: ManagedParent
+    ) throws -> Bool {
+        guard Self.managedParentIsReachable(managedParent),
+              try fileIdentity(
+                  named: destination.lastPathComponent,
+                  in: managedParent.parentDescriptor
+              ) == expected,
+              try fileData(
+                  named: destination.lastPathComponent,
+                  in: managedParent.parentDescriptor,
+                  matching: expected
+              ) == validatedData,
+              try fileIdentity(at: destination) == expected else {
+            return false
+        }
+        return true
+    }
+
+    /// Once create-only installation has occurred, any inability to prove and
+    /// durably remove the exact installed inode is a recovery state. A throwing
+    /// callback may have moved or hard-linked the inode under an unknown name,
+    /// so even a successful best-effort rollback does not restore abort-level
+    /// certainty for the intent.
+    private func rollbackUncertainContainedInstall(
+        destination: URL,
+        temporaryName: String,
+        expected: InstalledFileIdentity,
+        in managedParent: ManagedParent
+    ) throws {
+        let changedDirectory: Bool
+        do {
+            changedDirectory = try Self.rollbackCreateExclusiveInstall(
+                destinationName: destination.lastPathComponent,
+                quarantineName: temporaryName,
+                parentDescriptor: managedParent.parentDescriptor,
+                expectedIdentity: expected
+            )
+        } catch {
+            throw WriterError.postInstallStateUncertain(
+                "rollback of the installed destination could not be verified: \(String(describing: error))"
+            )
+        }
+        guard changedDirectory else {
+            throw WriterError.postInstallStateUncertain(
+                "the exact installed inode was no longer available at its retained destination for rollback"
+            )
         }
         do {
             try anchoredParentDirectorySynchronizer(
@@ -753,27 +1169,109 @@ public struct DurableFileWriter: Sendable {
                 managedParent.parentDescriptor
             )
         } catch {
-            let changedDirectory = try Self.rollbackCreateExclusiveInstall(
-                destinationName: standardizedDestination.lastPathComponent,
-                quarantineName: temporaryName,
-                parentDescriptor: managedParent.parentDescriptor,
-                expectedIdentity: createdTemporaryIdentity
+            throw WriterError.createOnlyRollbackSynchronizationFailed(
+                error.localizedDescription
             )
-            if changedDirectory {
-                try anchoredParentDirectorySynchronizer(
-                    managedParent.parentURL,
-                    managedParent.parentDescriptor
+        }
+        do {
+            let retainedDestination = try Self.fileIdentity(
+                named: destination.lastPathComponent,
+                in: managedParent.parentDescriptor
+            )
+            let retainedTemporary = try Self.fileIdentity(
+                named: temporaryName,
+                in: managedParent.parentDescriptor
+            )
+            let publicDestination = try Self.fileIdentity(at: destination)
+            guard retainedDestination != expected,
+                  retainedTemporary != expected,
+                  publicDestination != expected else {
+                throw WriterError.postInstallStateUncertain(
+                    "the exact installed inode remains reachable after rollback synchronization"
                 )
             }
-            throw error
+        } catch let error as WriterError {
+            if case .postInstallStateUncertain = error { throw error }
+            throw WriterError.postInstallStateUncertain(
+                "post-rollback inspection failed: \(String(describing: error))"
+            )
+        } catch {
+            throw WriterError.postInstallStateUncertain(
+                "post-rollback inspection failed: \(error.localizedDescription)"
+            )
         }
-        return createdTemporaryIdentity.anchored(to: retainedAnchor)
+    }
+
+    private func cleanupManagedTemporary(
+        named temporaryName: String,
+        matching expected: InstalledFileIdentity,
+        in managedParent: ManagedParent
+    ) throws {
+        let removed: Bool
+        do {
+            removed = try Self.removeEntry(
+                named: temporaryName,
+                matching: expected,
+                in: managedParent.parentDescriptor
+            )
+        } catch {
+            throw WriterError.managedTemporaryCleanupUncertain(
+                temporaryName,
+                "exact temporary unlink failed: \(String(describing: error))"
+            )
+        }
+        guard removed else {
+            throw WriterError.managedTemporaryCleanupUncertain(
+                temporaryName,
+                "the exact managed temporary could not be verified at its retained name"
+            )
+        }
+        do {
+            try anchoredParentDirectorySynchronizer(
+                managedParent.parentURL,
+                managedParent.parentDescriptor
+            )
+        } catch {
+            throw WriterError.managedTemporaryCleanupUncertain(
+                temporaryName,
+                "directory synchronization failed: \(error.localizedDescription)"
+            )
+        }
+        do {
+            guard try Self.fileIdentity(
+                named: temporaryName,
+                in: managedParent.parentDescriptor
+            ) == nil,
+                  try Self.fileIdentity(
+                      at: managedParent.parentURL.appendingPathComponent(
+                          temporaryName,
+                          isDirectory: false
+                      )
+                  ) == nil else {
+                throw WriterError.managedTemporaryCleanupUncertain(
+                    temporaryName,
+                    "the removed temporary name reappeared after directory synchronization"
+                )
+            }
+        } catch let error as WriterError {
+            if case .managedTemporaryCleanupUncertain = error { throw error }
+            throw WriterError.managedTemporaryCleanupUncertain(
+                temporaryName,
+                "post-cleanup inspection failed: \(String(describing: error))"
+            )
+        } catch {
+            throw WriterError.managedTemporaryCleanupUncertain(
+                temporaryName,
+                "post-cleanup inspection failed: \(error.localizedDescription)"
+            )
+        }
     }
 
     private static func openManagedParent(
         for destination: URL,
         managedRoot: URL,
-        createMissingDirectories: Bool = true
+        createMissingDirectories: Bool = true,
+        directoryAuthenticator: AnchoredParentDirectorySynchronizer? = nil
     ) throws -> ManagedParent {
         let parent = destination.deletingLastPathComponent().standardizedFileURL
         let rootPath = managedRoot.path
@@ -789,31 +1287,42 @@ public struct DurableFileWriter: Sendable {
             throw WriterError.invalidDestination
         }
 
+        let rootDescriptor: Int32
         if createMissingDirectories {
-            try FileManager.default.createDirectory(
+            guard let directoryAuthenticator else {
+                throw WriterError.unsafeManagedParent(EINVAL)
+            }
+            rootDescriptor = try openOrCreateManagedRoot(
                 at: managedRoot,
-                withIntermediateDirectories: true
+                directoryAuthenticator: directoryAuthenticator
             )
-        }
-        let rootDescriptor = managedRoot.path.withCString {
-            Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        } else {
+            rootDescriptor = managedRoot.path.withCString {
+                Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+            }
         }
         guard rootDescriptor >= 0 else {
             throw WriterError.unsafeManagedParent(errno)
         }
 
         var currentDescriptor = rootDescriptor
+        var currentURL = managedRoot
         do {
             for component in components {
                 let nextDescriptor = try openOrCreateManagedDirectory(
                     named: component,
                     in: currentDescriptor,
-                    createIfMissing: createMissingDirectories
+                    containingURL: currentURL,
+                    createIfMissing: createMissingDirectories,
+                    directoryAuthenticator: createMissingDirectories
+                        ? directoryAuthenticator
+                        : nil
                 )
                 if currentDescriptor != rootDescriptor {
                     Darwin.close(currentDescriptor)
                 }
                 currentDescriptor = nextDescriptor
+                currentURL.appendPathComponent(component, isDirectory: true)
             }
             guard let identity = try fileIdentity(descriptor: currentDescriptor) else {
                 throw WriterError.fileIdentityInspectionFailed(ENOENT)
@@ -838,7 +1347,9 @@ public struct DurableFileWriter: Sendable {
     private static func openOrCreateManagedDirectory(
         named name: String,
         in parentDescriptor: Int32,
-        createIfMissing: Bool
+        containingURL: URL,
+        createIfMissing: Bool,
+        directoryAuthenticator: AnchoredParentDirectorySynchronizer?
     ) throws -> Int32 {
         let flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
         var descriptor = name.withCString {
@@ -858,7 +1369,96 @@ public struct DurableFileWriter: Sendable {
         guard descriptor >= 0 else {
             throw WriterError.unsafeManagedParent(errno)
         }
+        let openedIdentity: InstalledFileIdentity
+        do {
+            guard let identity = try fileIdentity(descriptor: descriptor) else {
+                throw WriterError.fileIdentityInspectionFailed(ENOENT)
+            }
+            openedIdentity = identity
+        } catch {
+            Darwin.close(descriptor)
+            throw error
+        }
+        if let directoryAuthenticator {
+            do {
+                try directoryAuthenticator(containingURL, parentDescriptor)
+            } catch {
+                Darwin.close(descriptor)
+                throw WriterError.anchoredParentDirectorySynchronizationFailed(
+                    error.localizedDescription
+                )
+            }
+            let edgeStillMatches: Bool
+            do {
+                let descriptorIdentity = try fileIdentity(descriptor: descriptor)
+                let namedIdentity = try fileIdentity(named: name, in: parentDescriptor)
+                edgeStillMatches = descriptorIdentity == openedIdentity
+                    && namedIdentity == openedIdentity
+            } catch {
+                Darwin.close(descriptor)
+                throw error
+            }
+            guard edgeStillMatches else {
+                Darwin.close(descriptor)
+                throw WriterError.unsafeManagedParent(ESTALE)
+            }
+        }
         return descriptor
+    }
+
+    /// Opens the nearest existing configured ancestor without following its
+    /// final component, then creates/authenticates each missing component with
+    /// descriptor-relative operations. Every managed-root edge is synchronized
+    /// on every publication, including retries after a prior mkdir fsync failed.
+    private static func openOrCreateManagedRoot(
+        at managedRoot: URL,
+        directoryAuthenticator: @escaping AnchoredParentDirectorySynchronizer
+    ) throws -> Int32 {
+        let standardizedRoot = managedRoot.standardizedFileURL
+        guard standardizedRoot.isFileURL,
+              !standardizedRoot.lastPathComponent.isEmpty,
+              standardizedRoot.path != "/" else {
+            throw WriterError.invalidDestination
+        }
+
+        var componentsToOpen = [standardizedRoot.lastPathComponent]
+        var existingAncestor = standardizedRoot.deletingLastPathComponent()
+        var ancestorDescriptor: Int32 = -1
+        while ancestorDescriptor < 0 {
+            ancestorDescriptor = existingAncestor.path.withCString {
+                Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+            }
+            if ancestorDescriptor >= 0 { break }
+            let code = errno
+            guard code == ENOENT,
+                  existingAncestor.path != "/",
+                  !existingAncestor.lastPathComponent.isEmpty else {
+                throw WriterError.unsafeManagedParent(code)
+            }
+            componentsToOpen.append(existingAncestor.lastPathComponent)
+            existingAncestor.deleteLastPathComponent()
+        }
+
+        var currentDescriptor = ancestorDescriptor
+        var currentURL = existingAncestor
+        do {
+            for component in componentsToOpen.reversed() {
+                let nextDescriptor = try openOrCreateManagedDirectory(
+                    named: component,
+                    in: currentDescriptor,
+                    containingURL: currentURL,
+                    createIfMissing: true,
+                    directoryAuthenticator: directoryAuthenticator
+                )
+                Darwin.close(currentDescriptor)
+                currentDescriptor = nextDescriptor
+                currentURL.appendPathComponent(component, isDirectory: true)
+            }
+            return currentDescriptor
+        } catch {
+            Darwin.close(currentDescriptor)
+            throw error
+        }
     }
 
     private static func managedParentIsReachable(_ managedParent: ManagedParent) -> Bool {
@@ -990,6 +1590,63 @@ public struct DurableFileWriter: Sendable {
             return -1
         }
         return duplicate
+    }
+
+    private enum QuarantinePublicState {
+        case exactQuarantineOnly
+        case exactQuarantineAndPublic
+        case publicWithoutExactQuarantine
+        case quarantineChangedOrMissing
+    }
+
+    /// Classifies both names after every caller-controlled rollback boundary.
+    /// The retained descriptor is authoritative for the quarantine; the public
+    /// pathname is intentionally checked separately because it may now resolve
+    /// through a replacement managed-parent chain.
+    private static func quarantinePublicState(
+        quarantineName: String,
+        parentDescriptor: Int32,
+        destination: URL,
+        expected: InstalledFileIdentity
+    ) throws -> QuarantinePublicState {
+        let exactQuarantine = try fileIdentity(
+            named: quarantineName,
+            in: parentDescriptor
+        ) == expected
+        let exactPublic = try fileIdentity(at: destination) == expected
+        switch (exactQuarantine, exactPublic) {
+        case (true, false):
+            return .exactQuarantineOnly
+        case (true, true):
+            return .exactQuarantineAndPublic
+        case (false, true):
+            return .publicWithoutExactQuarantine
+        case (false, false):
+            return .quarantineChangedOrMissing
+        }
+    }
+
+    private static func requireExactQuarantineOnly(
+        quarantineName: String,
+        parentDescriptor: Int32,
+        destination: URL,
+        expected: InstalledFileIdentity
+    ) throws {
+        switch try quarantinePublicState(
+            quarantineName: quarantineName,
+            parentDescriptor: parentDescriptor,
+            destination: destination,
+            expected: expected
+        ) {
+        case .exactQuarantineOnly:
+            return
+        case .exactQuarantineAndPublic:
+            throw WriterError.publicDestinationStillLinked(quarantineName)
+        case .publicWithoutExactQuarantine:
+            throw WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine
+        case .quarantineChangedOrMissing:
+            throw WriterError.quarantinePathChanged(quarantineName)
+        }
     }
 
     private static func quarantineEntry(

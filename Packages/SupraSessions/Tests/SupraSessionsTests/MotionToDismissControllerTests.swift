@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import GRDB
 import SupraCore
@@ -36,8 +37,15 @@ final class MotionToDismissControllerTests: XCTestCase {
 
         func synchronize(directory: URL, destination: URL) throws {
             let shouldFail = lock.withLock { () -> Bool in
+                let destinationExists = FileManager.default.fileExists(atPath: destination.path)
+                guard destinationExists || !directories.isEmpty else {
+                    // Contained publication authenticates/synchronizes every
+                    // managed-directory edge before installation. These calls
+                    // are not the install/compensation stages under test here.
+                    return false
+                }
                 directories.append(directory.standardizedFileURL)
-                destinationStates.append(FileManager.default.fileExists(atPath: destination.path))
+                destinationStates.append(destinationExists)
                 quarantineStates.append(
                     quarantine.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
                 )
@@ -1388,16 +1396,24 @@ final class MotionToDismissControllerTests: XCTestCase {
         }
         XCTAssertTrue(message.contains("rollback also failed"), message)
         XCTAssertTrue(FileManager.default.fileExists(atPath: publicURL.path))
-        try DocumentExportValidator.validate(publicURL, as: .docx)
         let quarantine = try XCTUnwrap(quarantineURL)
         XCTAssertTrue(FileManager.default.fileExists(atPath: quarantine.path))
-        if FileManager.default.fileExists(atPath: quarantine.path) {
-            try DocumentExportValidator.validate(quarantine, as: .docx)
-        }
-        XCTAssertEqual(
-            try fixture.store.draftArtifacts.intent(id: XCTUnwrap(intentID))?.status,
-            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        let intent = try XCTUnwrap(
+            try fixture.store.draftArtifacts.intent(id: XCTUnwrap(intentID))
         )
+        let publicData = try Data(contentsOf: publicURL)
+        let quarantineData = try Data(contentsOf: quarantine)
+        XCTAssertEqual(publicData.count, intent.outputByteSize)
+        XCTAssertEqual(quarantineData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: publicData), intent.outputSHA256)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: quarantineData), intent.outputSHA256)
+        var publicStatus = stat()
+        var quarantineStatus = stat()
+        XCTAssertEqual(publicURL.path.withCString { Darwin.lstat($0, &publicStatus) }, 0)
+        XCTAssertEqual(quarantine.path.withCString { Darwin.lstat($0, &quarantineStatus) }, 0)
+        XCTAssertEqual(publicStatus.st_dev, quarantineStatus.st_dev)
+        XCTAssertEqual(publicStatus.st_ino, quarantineStatus.st_ino)
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
         XCTAssertFalse(
             try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
                 .contains { $0.eventType == "draft_generated" }

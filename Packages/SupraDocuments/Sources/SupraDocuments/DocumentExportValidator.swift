@@ -1,5 +1,6 @@
 import Foundation
 import PDFKit
+import ZIPFoundation
 
 /// Format-aware validation performed against the complete temporary artifact
 /// before `DurableFileWriter` makes it visible at the destination.
@@ -47,21 +48,30 @@ public enum DocumentExportValidator {
 
     public static func validate(_ url: URL, as format: DocumentExportFormat) throws {
         try Task.checkCancellation()
+        let data = try Data(contentsOf: url)
+        try validate(data, as: format)
+    }
+
+    /// Validates the immutable bytes that will be published. Callers that have
+    /// already read from a descriptor-anchored file can use this overload to
+    /// avoid reopening a mutable filesystem path during validation.
+    public static func validate(_ data: Data, as format: DocumentExportFormat) throws {
+        try Task.checkCancellation()
         switch format {
         case .markdown:
-            try validateMarkdown(url)
+            try validateMarkdown(data)
         case .csv:
-            try validateCSV(url)
+            try validateCSV(data)
         case .pdf:
-            try validatePDF(url)
+            try validatePDF(data)
         case .docx:
             try validateOfficeArchive(
-                url,
+                data,
                 requiredXMLParts: ["[Content_Types].xml", "_rels/.rels", "word/document.xml"]
             )
         case .xlsx:
             try validateOfficeArchive(
-                url,
+                data,
                 requiredXMLParts: [
                     "[Content_Types].xml",
                     "_rels/.rels",
@@ -73,8 +83,7 @@ public enum DocumentExportValidator {
         }
     }
 
-    private static func validateMarkdown(_ url: URL) throws {
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+    private static func validateMarkdown(_ data: Data) throws {
         guard let text = String(data: data, encoding: .utf8) else {
             throw ValidationError.invalidUTF8
         }
@@ -83,8 +92,7 @@ public enum DocumentExportValidator {
         }
     }
 
-    private static func validateCSV(_ url: URL) throws {
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+    private static func validateCSV(_ data: Data) throws {
         guard let text = String(data: data, encoding: .utf8) else {
             throw ValidationError.invalidUTF8
         }
@@ -101,8 +109,8 @@ public enum DocumentExportValidator {
         }
     }
 
-    private static func validatePDF(_ url: URL) throws {
-        guard let document = PDFDocument(url: url) else {
+    private static func validatePDF(_ data: Data) throws {
+        guard let document = PDFDocument(data: data) else {
             throw ValidationError.unreadablePDF
         }
         guard document.pageCount > 0 else {
@@ -110,10 +118,12 @@ public enum DocumentExportValidator {
         }
     }
 
-    private static func validateOfficeArchive(_ url: URL, requiredXMLParts: [String]) throws {
+    private static func validateOfficeArchive(_ data: Data, requiredXMLParts: [String]) throws {
+        let archive: Archive
         let paths: Set<String>
         do {
-            paths = Set(try ZipArchiveReader.entryPaths(in: url))
+            archive = try ZipArchiveReader.validatedArchive(data: data, policy: .default)
+            paths = Set(archive.map(\.path))
         } catch {
             throw ValidationError.unreadableOfficeArchive
         }
@@ -122,7 +132,7 @@ public enum DocumentExportValidator {
             guard paths.contains(path) else { throw ValidationError.missingOfficePart(path) }
         }
         for path in paths where path.hasSuffix(".xml") || path.hasSuffix(".rels") {
-            let data = try officeEntryData(in: url, path: path)
+            let data = try officeEntryData(in: archive, path: path)
             let parser = XMLParser(data: data)
             guard parser.parse() else { throw ValidationError.malformedOfficeXML(path) }
             xmlParts[path] = data
@@ -130,9 +140,9 @@ public enum DocumentExportValidator {
         try validateRelationships(paths: paths, xmlParts: xmlParts)
     }
 
-    private static func officeEntryData(in url: URL, path: String) throws -> Data {
+    private static func officeEntryData(in archive: Archive, path: String) throws -> Data {
         do {
-            guard let data = try ZipArchiveReader.entryData(in: url, path: path) else {
+            guard let data = try ZipArchiveReader.entryData(in: archive, path: path, policy: .default) else {
                 throw ValidationError.missingOfficePart(path)
             }
             return data

@@ -1498,6 +1498,9 @@ public final class MatterDraftingController: ObservableObject {
     private enum PersistenceError: Error, LocalizedError {
         case auditFailed(String)
         case partialFailure(audit: String, compensation: String)
+        case rollbackSynchronizationUncertain(String)
+        case postInstallStateUncertain(String)
+        case temporaryCleanupUncertain(name: String, detail: String)
         case filenameAllocationFailed
 
         var errorDescription: String? {
@@ -1506,6 +1509,12 @@ public final class MatterDraftingController: ObservableObject {
                 "The draft audit failed and the file change was rolled back: \(detail)"
             case let .partialFailure(audit, compensation):
                 "The draft was installed, but auditing failed (\(audit)) and rollback also failed (\(compensation))."
+            case let .rollbackSynchronizationUncertain(detail):
+                "The draft install failed and rollback directory synchronization also failed; recovery is required: \(detail)"
+            case let .postInstallStateUncertain(detail):
+                "The draft install reached an uncertain final publication state; recovery is required: \(detail)"
+            case let .temporaryCleanupUncertain(name, detail):
+                "Managed temporary cleanup for \(name) could not be verified; recovery is required: \(detail)"
             case .filenameAllocationFailed:
                 "A unique draft filename could not be allocated."
             }
@@ -1547,19 +1556,27 @@ public final class MatterDraftingController: ObservableObject {
                     data,
                     to: url,
                     containedIn: storage.root
-                ) { temporaryURL in
-                    try DocumentExportValidator.validate(temporaryURL, as: format)
+                ) { temporaryData in
+                    try DocumentExportValidator.validate(temporaryData, as: format)
                 }
             } catch DurableFileWriter.WriterError.destinationExists {
                 try? store.draftArtifacts.abortIntent(id: intent.id)
                 continue
+            } catch let DurableFileWriter.WriterError.createOnlyRollbackSynchronizationFailed(detail) {
+                try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
+                throw PersistenceError.rollbackSynchronizationUncertain(detail)
+            } catch let DurableFileWriter.WriterError.postInstallStateUncertain(detail) {
+                try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
+                throw PersistenceError.postInstallStateUncertain(detail)
+            } catch let DurableFileWriter.WriterError.managedTemporaryCleanupUncertain(name, detail) {
+                try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
+                throw PersistenceError.temporaryCleanupUncertain(name: name, detail: detail)
             } catch {
                 try? store.draftArtifacts.abortIntent(id: intent.id)
                 throw error
             }
 
             do {
-                try DocumentExportValidator.validate(url, as: format)
                 let event = try store.draftArtifacts.auditEventPreview(intentID: intent.id)
                 try auditRecorder(event)
                 let installed = try finalInstalledOutput(
@@ -1632,18 +1649,26 @@ public final class MatterDraftingController: ObservableObject {
                     data,
                     to: url,
                     containedIn: storage.root
-                ) { temporaryURL in
-                    try DocumentExportValidator.validate(temporaryURL, as: .docx)
+                ) { temporaryData in
+                    try DocumentExportValidator.validate(temporaryData, as: .docx)
                 }
             } catch DurableFileWriter.WriterError.destinationExists {
                 try? store.draftArtifacts.abortIntent(id: intent.id)
                 continue
+            } catch let DurableFileWriter.WriterError.createOnlyRollbackSynchronizationFailed(detail) {
+                try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
+                throw PersistenceError.rollbackSynchronizationUncertain(detail)
+            } catch let DurableFileWriter.WriterError.postInstallStateUncertain(detail) {
+                try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
+                throw PersistenceError.postInstallStateUncertain(detail)
+            } catch let DurableFileWriter.WriterError.managedTemporaryCleanupUncertain(name, detail) {
+                try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
+                throw PersistenceError.temporaryCleanupUncertain(name: name, detail: detail)
             } catch {
                 try? store.draftArtifacts.abortIntent(id: intent.id)
                 throw error
             }
             do {
-                try DocumentExportValidator.validate(url, as: .docx)
                 let event = try store.draftArtifacts.auditEventPreview(intentID: intent.id)
                 try motionAuditCommitter(event, snapshot)
                 let installed = try finalInstalledOutput(
@@ -1680,32 +1705,27 @@ public final class MatterDraftingController: ObservableObject {
         throw PersistenceError.filenameAllocationFailed
     }
 
-    /// Reopens the public path after the process-boundary observer and binds the
-    /// bytes sent to Store to the exact inode installed by `writeNewOwned`.
-    /// Validation, two stable reads, content checks, and a final no-follow
-    /// identity comparison all happen immediately before transactional finalize.
+    /// Reopens the public name through the retained managed-directory capability
+    /// after the process-boundary observer. The writer binds format/content
+    /// validation and two stable reads to the exact installed descriptor, then
+    /// returns those bytes immediately before transactional finalize.
     private func finalInstalledOutput(
         at url: URL,
         format: DocumentExportFormat,
         expectedIdentity: DurableFileWriter.InstalledFileIdentity,
         intent: DraftArtifactIntentRecord
     ) throws -> Data {
-        guard try fileWriter.matchesInstalledFileIdentity(expectedIdentity, at: url) else {
-            throw DraftCompensationError.destinationChanged
+        try fileWriter.validatedInstalledFileData(
+            matching: expectedIdentity,
+            at: url,
+            containedIn: storage.root
+        ) { installed in
+            guard installed.count == intent.outputByteSize,
+                  DocumentStorage.sha256Hex(of: installed) == intent.outputSHA256 else {
+                throw DraftCompensationError.destinationChanged
+            }
+            try DocumentExportValidator.validate(installed, as: format)
         }
-        try DocumentExportValidator.validate(url, as: format)
-        let first = try Data(contentsOf: url, options: .mappedIfSafe)
-        guard first.count == intent.outputByteSize,
-              DocumentStorage.sha256Hex(of: first) == intent.outputSHA256,
-              try fileWriter.matchesInstalledFileIdentity(expectedIdentity, at: url) else {
-            throw DraftCompensationError.destinationChanged
-        }
-        let final = try Data(contentsOf: url, options: .mappedIfSafe)
-        guard final == first,
-              try fileWriter.matchesInstalledFileIdentity(expectedIdentity, at: url) else {
-            throw DraftCompensationError.destinationChanged
-        }
-        return final
     }
 
     private enum DraftCompensationError: Error, LocalizedError {
@@ -1720,6 +1740,12 @@ public final class MatterDraftingController: ObservableObject {
         case deletionIdentityChanged(String)
         case deletionFailed(String, String)
         case directorySynchronizationFailed(String)
+        case publicDestinationStillLinked(String)
+        case publicDestinationStillLinkedWithoutRetainedQuarantine
+        case publicDestinationStillLinkedAfterRemoval
+        case quarantinePathChanged(String)
+        case sourceNameReappeared(String)
+        case removalCouldNotBeVerified
 
         var errorDescription: String? {
             switch self {
@@ -1745,6 +1771,18 @@ public final class MatterDraftingController: ObservableObject {
                 return "The verified rollback quarantine \(name) could not be removed: \(detail)."
             case let .directorySynchronizationFailed(detail):
                 return "The draft rollback was removed, but its directory synchronization failed: \(detail)."
+            case let .publicDestinationStillLinked(name):
+                return "The exact installed draft remains at the public destination and rollback material remains preserved as \(name)."
+            case .publicDestinationStillLinkedWithoutRetainedQuarantine:
+                return "The exact installed draft remains at the public destination, but no exact rollback quarantine could be verified at the retained name; recovery is required."
+            case .publicDestinationStillLinkedAfterRemoval:
+                return "The exact installed draft reappeared at the public destination after quarantine removal; recovery is required."
+            case let .quarantinePathChanged(name):
+                return "The rollback quarantine path changed before deletion; nothing at \(name) was removed and recovery is required."
+            case let .sourceNameReappeared(name):
+                return "The removed rollback source name \(name) reappeared after directory synchronization; recovery is required."
+            case .removalCouldNotBeVerified:
+                return "Draft rollback could not verify removal of the exact installed file; recovery is required."
             }
         }
     }
@@ -1786,12 +1824,24 @@ public final class MatterDraftingController: ObservableObject {
                 }
             )
             guard removed else {
-                throw DraftCompensationError.deletionIdentityChanged(url.lastPathComponent)
+                throw DraftCompensationError.removalCouldNotBeVerified
             }
         } catch let error as DraftCompensationError {
             throw error
         } catch let DurableFileWriter.WriterError.createOnlyRollbackConflict(name, code) {
             throw DraftCompensationError.destinationChangedAndQuarantined(name, code)
+        } catch let DurableFileWriter.WriterError.publicDestinationStillLinked(name) {
+            throw DraftCompensationError.publicDestinationStillLinked(name)
+        } catch DurableFileWriter.WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine {
+            throw DraftCompensationError.publicDestinationStillLinkedWithoutRetainedQuarantine
+        } catch DurableFileWriter.WriterError.publicDestinationStillLinkedAfterRemoval {
+            throw DraftCompensationError.publicDestinationStillLinkedAfterRemoval
+        } catch let DurableFileWriter.WriterError.quarantinePathChanged(name) {
+            throw DraftCompensationError.quarantinePathChanged(name)
+        } catch let DurableFileWriter.WriterError.sourceNameReappeared(name) {
+            throw DraftCompensationError.sourceNameReappeared(name)
+        } catch let DurableFileWriter.WriterError.retainedQuarantineChanged(name) {
+            throw DraftCompensationError.deletionIdentityChanged(name)
         } catch let DurableFileWriter.WriterError.anchoredParentDirectorySynchronizationFailed(detail) {
             throw DraftCompensationError.directorySynchronizationFailed(detail)
         } catch let DurableFileWriter.WriterError.createOnlyRollbackFailed(code) {
