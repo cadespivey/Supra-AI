@@ -2542,6 +2542,164 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(controller.canCompleteSession)
     }
 
+    // Expected RED: the Research Results not-adverse action still performs the
+    // result, authority, and audit writes independently with suppressed errors.
+    // A failed result update must roll back the whole action rather than leave a
+    // split authority state and a false success audit.
+    func testResearchResultNotAdverseRollsBackAuthorityAndAuditOnResultFailure() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Atomic review matter")
+        let session = try store.research.createSession(
+            matterID: matter.id,
+            title: "Atomic review session",
+            issueText: "Synthetic issue",
+            jurisdiction: "Florida",
+            status: .resultsReady
+        )
+        let query = try store.research.createQuery(
+            researchSessionID: session.id,
+            queryText: "synthetic query",
+            queryIndex: 0,
+            status: .completed
+        )
+        let result = try store.research.insertResult(ResearchResultRecord(
+            researchQueryID: query.id,
+            caseName: "Synthetic Atomic Authority",
+            reviewState: ResearchResultReviewState.needsLaterReview.rawValue
+        ))
+        let authority = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id,
+            researchSessionID: session.id,
+            researchResultID: result.id,
+            caseName: result.caseName,
+            reviewState: ResearchResultReviewState.needsLaterReview.rawValue
+        ))
+        try await store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER synthetic_research_result_review_failure
+                BEFORE UPDATE OF review_state ON research_results
+                BEGIN
+                    SELECT RAISE(ABORT, 'synthetic research result review failure');
+                END
+                """)
+        }
+        let controller = makeRunController(
+            store: store,
+            matterID: matter.id,
+            client: StubCourtListenerClient()
+        )
+        controller.openSession(session.id)
+
+        controller.reviewResult(result.id, as: .notAdverse)
+
+        XCTAssertEqual(
+            try store.research.fetchResult(resultID: result.id)?.reviewState,
+            ResearchResultReviewState.needsLaterReview.rawValue
+        )
+        XCTAssertEqual(
+            try store.authorities.fetchAuthority(id: authority.id)?.reviewState,
+            ResearchResultReviewState.needsLaterReview.rawValue
+        )
+        XCTAssertTrue(
+            try store.auditEvents.fetchEvents(matterID: matter.id)
+                .filter { $0.eventType == "research_result_reviewed" }
+                .isEmpty
+        )
+    }
+
+    // Expected RED: reviewResult currently accepts any result ID while a session
+    // is open. Both a same-matter/different-session result and a foreign-matter
+    // result must remain untouched and must not be audited under the open matter.
+    func testResearchResultNotAdverseRejectsResultsOutsideOpenMatterAndSession() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Scoped review matter")
+        let openSession = try store.research.createSession(
+            matterID: matter.id,
+            title: "Open review session",
+            issueText: "Synthetic issue",
+            jurisdiction: "Florida",
+            status: .resultsReady
+        )
+        _ = try store.research.createQuery(
+            researchSessionID: openSession.id,
+            queryText: "open query",
+            queryIndex: 0,
+            status: .completed
+        )
+
+        func makeOutOfScopeResult(
+            matterID: String,
+            sessionTitle: String
+        ) throws -> (ResearchResultRecord, AuthorityRecord) {
+            let session = try store.research.createSession(
+                matterID: matterID,
+                title: sessionTitle,
+                issueText: "Out-of-scope issue",
+                jurisdiction: "Florida",
+                status: .resultsReady
+            )
+            let query = try store.research.createQuery(
+                researchSessionID: session.id,
+                queryText: "out-of-scope query",
+                queryIndex: 0,
+                status: .completed
+            )
+            let result = try store.research.insertResult(ResearchResultRecord(
+                researchQueryID: query.id,
+                caseName: "Out-of-Scope Synthetic Authority",
+                reviewState: ResearchResultReviewState.needsLaterReview.rawValue
+            ))
+            let authority = try store.authorities.insertAuthority(AuthorityRecord(
+                matterID: matterID,
+                researchSessionID: session.id,
+                researchResultID: result.id,
+                caseName: result.caseName,
+                reviewState: ResearchResultReviewState.needsLaterReview.rawValue
+            ))
+            return (result, authority)
+        }
+
+        let sameMatterOtherSession = try makeOutOfScopeResult(
+            matterID: matter.id,
+            sessionTitle: "Other same-matter session"
+        )
+        let foreignMatter = try store.matters.createMatter(name: "Foreign review matter")
+        let foreign = try makeOutOfScopeResult(
+            matterID: foreignMatter.id,
+            sessionTitle: "Foreign session"
+        )
+        let controller = makeRunController(
+            store: store,
+            matterID: matter.id,
+            client: StubCourtListenerClient()
+        )
+        controller.openSession(openSession.id)
+
+        controller.reviewResult(sameMatterOtherSession.0.id, as: .notAdverse)
+        controller.reviewResult(foreign.0.id, as: .notAdverse)
+
+        for (result, authority) in [sameMatterOtherSession, foreign] {
+            XCTAssertEqual(
+                try store.research.fetchResult(resultID: result.id)?.reviewState,
+                ResearchResultReviewState.needsLaterReview.rawValue
+            )
+            XCTAssertEqual(
+                try store.authorities.fetchAuthority(id: authority.id)?.reviewState,
+                ResearchResultReviewState.needsLaterReview.rawValue
+            )
+        }
+        XCTAssertTrue(
+            try store.auditEvents.fetchEvents(matterID: matter.id)
+                .filter { $0.eventType == "research_result_reviewed" }
+                .isEmpty
+        )
+        XCTAssertTrue(
+            try store.auditEvents.fetchEvents(matterID: foreignMatter.id)
+                .filter { $0.eventType == "research_result_reviewed" }
+                .isEmpty
+        )
+    }
+
     // MARK: - Local-first research (tiered retrieval spec §4)
 
     func testLocalFirstResearchAnswersFromSavedAuthoritiesAndOffersNetwork() async throws {

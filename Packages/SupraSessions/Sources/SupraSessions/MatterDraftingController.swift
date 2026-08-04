@@ -107,6 +107,10 @@ public final class MatterDraftingController: ObservableObject {
     private let pipelineFactory: @Sendable () -> DraftPipeline
     private let beforeMotionPersistence: AsyncDraftCheckpoint
     private let motionCompensationCheckpoint: MotionCompensationCheckpoint
+    /// Deterministic test checkpoint for source-snapshot interleavings. The
+    /// shipping default is inert; tests use it to prove display/evidence reads
+    /// cannot be assembled from different database snapshots.
+    var motionAuthoritySourceLoadCheckpoint: () throws -> Void = {}
     /// Present when the app can call the on-device model — required for the LLM-backed
     /// kinds (`letterDemand`). The deterministic notice and supported-motion
     /// paths work without it.
@@ -1063,7 +1067,9 @@ public final class MatterDraftingController: ObservableObject {
     }
 
     private func loadMotionAuthoritySources(matterID: String) throws -> [MotionDraftAuthoritySource] {
-        try store.authorities.fetchAuthorities(matterID: matterID).map { authority in
+        let authorities = try store.authorities.fetchAuthorities(matterID: matterID)
+        try motionAuthoritySourceLoadCheckpoint()
+        return try authorities.map { authority in
             let citation = Self.motionCitation(from: authority)
             var blockers: [String] = []
             let snippet: String

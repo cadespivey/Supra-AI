@@ -467,6 +467,47 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
+    // ACR-EXPORT-010 ownership follow-on. Expected RED: generic audit
+    // compensation currently unlinks by pathname, so a concurrent owner that
+    // replaces the installed draft during the failed audit loses its file.
+    @MainActor
+    func testGenericDraftAuditCompensationPreservesConcurrentReplacement() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Concurrent compensation matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Concurrent-outline-fixed.md")
+        let concurrentCanary = Data("concurrent-owner-canary".utf8)
+        var auditObservedInstalledDraft = false
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { event in
+                auditObservedInstalledDraft = event.eventType == "draft_generated"
+                    && (try? DocumentExportValidator.validate(destination, as: .markdown)) != nil
+                try FileManager.default.removeItem(at: destination)
+                try concurrentCanary.write(to: destination)
+                throw PersistenceFailure.stop
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "Concurrent outline", description: "Preserve a later path owner.")
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected a partial rollback failure, got \(result)")
+        }
+        XCTAssertTrue(auditObservedInstalledDraft)
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains("changed"), message)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(try? Data(contentsOf: destination), concurrentCanary)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
     // ACR-EXPORT-011: rendered DOCX drafts take the same validated temporary
     // path; an install fault cannot truncate a previously reviewed filing.
     @MainActor

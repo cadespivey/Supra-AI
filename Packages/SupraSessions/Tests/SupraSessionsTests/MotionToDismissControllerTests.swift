@@ -8,7 +8,7 @@ import SupraExports
 import SupraStore
 import XCTest
 
-/// T-MTD-01...29: the first supported motion vertical. Every fixture is
+/// T-MTD-01...30: the first supported motion vertical. Every fixture is
 /// fictional and every negative assertion checks both the file boundary and the
 /// success-audit boundary.
 @MainActor
@@ -748,6 +748,52 @@ final class MotionToDismissControllerTests: XCTestCase {
         let result = await controller.draft(.motionToDismiss(selectedInput), matterID: fixture.matterID)
         assertFailure(result)
         try assertNoSuccessfulMotionSideEffects(fixture)
+    }
+
+    // T-MTD-30. Expected RED: source rows currently fetch authority metadata and
+    // reviewed evidence in separate database reads. A citation/review update
+    // between them can display citation A with binding B, then allow capture to
+    // substitute current citation B for the citation counsel actually saw.
+    func testTMTD30AuthorityDisplayAndBindingComeFromOneDatabaseSnapshot() throws {
+        let fixture = try makeFixture()
+        let replacementCitation = "Fictional Marine, LLC v. Harbor Works, Inc., 346 So. 3d 111, 115 (Fla. 1st DCA 2025)"
+        let reviewedExcerpt = "SELECTED_AUTHORITY_CANARY A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
+        let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
+        var didInterleave = false
+        controller.motionAuthoritySourceLoadCheckpoint = {
+            guard !didInterleave else { return }
+            didInterleave = true
+            try fixture.store.authorities.updatePreferredCitation(
+                authorityID: fixture.selectedAuthorityID,
+                preferredCitation: replacementCitation
+            )
+            _ = try fixture.store.authorities.reviewProposition(
+                authorityID: fixture.selectedAuthorityID,
+                groundKey: .failureToStateClaim,
+                excerpt: reviewedExcerpt,
+                reviewedBy: "interleaving-reviewer",
+                reviewedAt: Date(timeIntervalSince1970: 1_785_514_000)
+            )
+        }
+
+        let displayed = try XCTUnwrap(
+            controller.motionAuthoritySources(matterID: fixture.matterID)
+                .first { $0.authorityID == fixture.selectedAuthorityID }
+        )
+        let binding = try XCTUnwrap(displayed.bindingSHA256)
+        XCTAssertTrue(didInterleave)
+        XCTAssertEqual(displayed.citation, replacementCitation)
+
+        var input = fixture.selectedInput
+        input.selectedAuthorities = [MotionDraftAuthoritySourceSelection(
+            authorityID: displayed.authorityID,
+            expectedBindingSHA256: binding
+        )]
+        let captured = try fixture.store.draftingSources.captureMotionSnapshot(
+            snapshotRequest(for: fixture, input: input)
+        )
+        XCTAssertEqual(captured.authorities.first?.citation, displayed.citation)
+        XCTAssertEqual(captured.authorities.first?.bindingSHA256, displayed.bindingSHA256)
     }
 
     // MARK: - Fixtures
