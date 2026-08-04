@@ -870,9 +870,15 @@ struct MatterDraftingView: View {
             selectedFactChunkIDs: motionFactSources
                 .filter { selectedMotionFactIDs.contains($0.chunkID) }
                 .map(\.chunkID),
-            selectedAuthorityIDs: motionAuthoritySources
+            selectedAuthorities: motionAuthoritySources
                 .filter { selectedMotionAuthorityIDs.contains($0.authorityID) }
-                .map(\.authorityID)
+                .compactMap { source in
+                    guard let bindingSHA256 = source.bindingSHA256 else { return nil }
+                    return MotionDraftAuthoritySourceSelection(
+                        authorityID: source.authorityID,
+                        expectedBindingSHA256: bindingSHA256
+                    )
+                }
         )
     }
 
@@ -881,6 +887,11 @@ struct MatterDraftingView: View {
     }
 
     private func loadMotionSourcesIfNeeded() {
+        let displayedAuthorityBindings = Dictionary(
+            uniqueKeysWithValues: motionAuthoritySources.compactMap { source in
+                source.bindingSHA256.map { (source.authorityID, $0) }
+            }
+        )
         controller.message = nil
         let facts = controller.motionFactSources(matterID: matterID)
         motionFactLoadError = controller.message
@@ -893,9 +904,17 @@ struct MatterDraftingView: View {
         motionFactSources = facts
         motionAuthoritySources = authorities
         let currentFactIDs = Set(motionFactSources.map(\.chunkID))
-        let currentAuthorityIDs = Set(motionAuthoritySources.map(\.authorityID))
+        let currentAuthorityBindings = Dictionary(
+            uniqueKeysWithValues: motionAuthoritySources.compactMap { source in
+                source.bindingSHA256.map { (source.authorityID, $0) }
+            }
+        )
         selectedMotionFactIDs.formIntersection(currentFactIDs)
-        selectedMotionAuthorityIDs.formIntersection(currentAuthorityIDs)
+        selectedMotionAuthorityIDs = Set(selectedMotionAuthorityIDs.filter { authorityID in
+            guard let displayed = displayedAuthorityBindings[authorityID],
+                  let current = currentAuthorityBindings[authorityID] else { return false }
+            return displayed == current
+        })
     }
 
     private func toggle(_ id: String, in selection: inout Set<String>) {

@@ -16,8 +16,27 @@ public final class AuthorityRepository: @unchecked Sendable {
             guard authority.reviewedPropositionJSON == nil else {
                 throw AuthorityRepositoryError.untrustedPropositionEvidenceOnInsert
             }
-            try authority.insert(db, onConflict: .ignore)
-            return authority
+            try Self.validateResearchProvenance(authority: authority, db: db)
+
+            if let persisted = try AuthorityRecord.fetchOne(db, key: authority.id) {
+                guard Self.hasSameSourceIdentity(persisted, authority) else {
+                    throw AuthorityRepositoryError.authorityConflict
+                }
+                return persisted
+            }
+            if try AuthorityRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM authorities WHERE matter_id = ? AND research_result_id = ?",
+                arguments: [authority.matterID, authority.researchResultID]
+            ) != nil {
+                throw AuthorityRepositoryError.authorityConflict
+            }
+
+            try authority.insert(db)
+            guard let persisted = try AuthorityRecord.fetchOne(db, key: authority.id) else {
+                throw AuthorityRepositoryError.authorityConflict
+            }
+            return persisted
         }
     }
 
@@ -50,6 +69,64 @@ public final class AuthorityRepository: @unchecked Sendable {
                 """,
                 arguments: [reviewState.rawValue, Date(), authorityID]
             )
+        }
+    }
+
+    /// Marks a saved authority and its originating result not adverse and records
+    /// the review-state audit in one transaction. Any provenance, result, or audit
+    /// failure rolls the entire state transition back.
+    @discardableResult
+    public func markNotAdverse(
+        authorityID: String,
+        matterID: String,
+        actor: String,
+        markedAt: Date = Date()
+    ) throws -> Bool {
+        try writer.write { db in
+            guard let authority = try AuthorityRecord.fetchOne(db, key: authorityID),
+                  authority.matterID == matterID else {
+                throw AuthorityRepositoryError.authorityNotFound
+            }
+            guard authority.deletedAt == nil else {
+                throw AuthorityRepositoryError.reviewRequiresLiveAuthority
+            }
+            try Self.validateResearchProvenance(authority: authority, db: db)
+            guard let result = try ResearchResultRecord.fetchOne(db, key: authority.researchResultID) else {
+                throw AuthorityRepositoryError.authorityProvenanceMismatch
+            }
+            let normalizedActor = actor.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedActor.isEmpty else {
+                throw AuthorityRepositoryError.reviewerRequired
+            }
+
+            let target = ResearchResultReviewState.notAdverse.rawValue
+            guard authority.reviewState != target || result.reviewState != target else {
+                return false
+            }
+            try db.execute(
+                sql: "UPDATE authorities SET review_state = ?, updated_at = ? WHERE id = ? AND matter_id = ? AND deleted_at IS NULL",
+                arguments: [target, markedAt, authorityID, matterID]
+            )
+            guard db.changesCount == 1 else {
+                throw AuthorityRepositoryError.reviewRequiresLiveAuthority
+            }
+            try db.execute(
+                sql: "UPDATE research_results SET review_state = ?, updated_at = ? WHERE id = ?",
+                arguments: [target, markedAt, authority.researchResultID]
+            )
+            guard db.changesCount == 1 else {
+                throw AuthorityRepositoryError.authorityProvenanceMismatch
+            }
+            try AuditEventRecord(
+                matterID: matterID,
+                timestamp: markedAt,
+                eventType: "authority_review_state_changed",
+                actor: normalizedActor,
+                summary: "Marked authority not adverse: “\(authority.caseName)”",
+                relatedTable: AuthorityRecord.databaseTableName,
+                relatedID: authority.id
+            ).insert(db)
+            return true
         }
     }
 
@@ -292,6 +369,7 @@ public final class AuthorityRepository: @unchecked Sendable {
             guard let authority = try AuthorityRecord.fetchOne(db, key: authorityID) else {
                 throw AuthorityRepositoryError.authorityNotFound
             }
+            try Self.validateResearchProvenance(authority: authority, db: db)
             guard authority.deletedAt == nil else {
                 throw AuthorityRepositoryError.reviewRequiresLiveAuthority
             }
@@ -399,6 +477,7 @@ public final class AuthorityRepository: @unchecked Sendable {
                   authority.matterID == matterID else {
                 throw AuthorityRepositoryError.authorityNotFound
             }
+            try Self.validateResearchProvenance(authority: authority, db: db)
             guard authority.deletedAt == nil else {
                 throw AuthorityRepositoryError.reviewRequiresLiveAuthority
             }
@@ -443,6 +522,11 @@ public final class AuthorityRepository: @unchecked Sendable {
         try writer.read { db in
             guard let authority = try AuthorityRecord.fetchOne(db, key: authorityID) else {
                 return .blocked(.authorityNotFound)
+            }
+            do {
+                try Self.validateResearchProvenance(authority: authority, db: db)
+            } catch {
+                return .blocked(.authorityProvenanceInvalid)
             }
             return Self.reviewedPropositionState(authority: authority, groundKey: groundKey)
         }
@@ -507,6 +591,47 @@ public final class AuthorityRepository: @unchecked Sendable {
             return .blocked(.staleEvidence)
         }
         return .ready(reviewed)
+    }
+
+    /// Validates the complete result -> query -> session -> matter chain for a
+    /// saved authority inside the caller's existing database snapshot.
+    static func validateResearchProvenance(
+        authority: AuthorityRecord,
+        db: Database
+    ) throws {
+        let matches = try Int.fetchOne(
+            db,
+            sql: """
+                SELECT 1
+                FROM research_results AS result
+                JOIN research_queries AS query
+                  ON query.id = result.research_query_id
+                JOIN research_sessions AS session
+                  ON session.id = query.research_session_id
+                WHERE result.id = ?
+                  AND session.id = ?
+                  AND session.matter_id = ?
+                LIMIT 1
+                """,
+            arguments: [
+                authority.researchResultID,
+                authority.researchSessionID,
+                authority.matterID,
+            ]
+        )
+        guard matches == 1 else {
+            throw AuthorityRepositoryError.authorityProvenanceMismatch
+        }
+    }
+
+    private static func hasSameSourceIdentity(
+        _ lhs: AuthorityRecord,
+        _ rhs: AuthorityRecord
+    ) -> Bool {
+        lhs.id == rhs.id
+            && lhs.matterID == rhs.matterID
+            && lhs.researchSessionID == rhs.researchSessionID
+            && lhs.researchResultID == rhs.researchResultID
     }
 
     private static func trimOptional(_ value: String?) -> String? {

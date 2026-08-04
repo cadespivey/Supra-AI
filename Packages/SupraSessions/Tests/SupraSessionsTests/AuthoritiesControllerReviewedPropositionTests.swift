@@ -272,6 +272,52 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
         XCTAssertEqual(reviewed.excerpt, opinion)
     }
 
+    func testMarkNotAdverseSurfacesAtomicFailureAndReloadsUnchangedState() throws {
+        let fixture = try makeFixture(opinionText: "Synthetic opinion text.")
+        try fixture.store.authorities.updateReviewState(
+            authorityID: fixture.authority.id,
+            reviewState: .needsLaterReview
+        )
+        try fixture.store.research.updateResultReviewState(
+            resultID: fixture.authority.researchResultID,
+            reviewState: .needsLaterReview
+        )
+        try fixture.store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER synthetic_controller_result_review_failure
+                BEFORE UPDATE OF review_state ON research_results
+                BEGIN
+                    SELECT RAISE(ABORT, 'synthetic controller result review failure');
+                END
+                """)
+        }
+        let controller = makeController(fixture: fixture)
+        controller.load()
+
+        let message = controller.markAuthorityNotAdverse(authorityID: fixture.authority.id)
+
+        XCTAssertNotNil(message)
+        XCTAssertEqual(
+            try fixture.store.authorities.fetchAuthority(id: fixture.authority.id)?.reviewState,
+            ResearchResultReviewState.needsLaterReview.rawValue
+        )
+        XCTAssertEqual(
+            try fixture.store.research.fetchResult(
+                resultID: fixture.authority.researchResultID
+            )?.reviewState,
+            ResearchResultReviewState.needsLaterReview.rawValue
+        )
+        XCTAssertEqual(
+            controller.authorities.first?.reviewState,
+            ResearchResultReviewState.needsLaterReview.rawValue
+        )
+        XCTAssertTrue(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                .filter { $0.eventType == "authority_review_state_changed" }
+                .isEmpty
+        )
+    }
+
     func testLoadExposesBlockedStateAndRevokeClearsIt() throws {
         // Expected RED: authority items did not expose recomputed typed evidence,
         // and the controller had no audited revocation action for blocked evidence.

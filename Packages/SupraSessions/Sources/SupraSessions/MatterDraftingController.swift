@@ -503,7 +503,7 @@ public final class MatterDraftingController: ObservableObject {
     public func motionReadiness(input: MotionToDismissDraftInput, matterID: String) -> MotionDraftReadiness {
         var reasons: [String] = []
         let selectedFactIDs = Self.uniqueNonEmpty(input.selectedFactChunkIDs)
-        let selectedAuthorityIDs = Self.uniqueNonEmpty(input.selectedAuthorityIDs)
+        let selectedAuthorities = Self.uniqueMotionAuthoritySelections(input.selectedAuthorities)
 
         let matter: MatterRecord?
         do {
@@ -590,23 +590,25 @@ public final class MatterDraftingController: ObservableObject {
             reasons.append("Selected fact sources could not be verified.")
         }
 
-        if selectedAuthorityIDs.count != input.selectedAuthorityIDs.count {
+        if selectedAuthorities.count != input.selectedAuthorities.count {
             reasons.append("Authority selections must contain unique, nonblank IDs.")
         }
-        if selectedAuthorityIDs.isEmpty {
+        if selectedAuthorities.isEmpty {
             reasons.append("Select at least one reviewed authority.")
         }
         do {
             let availableAuthorities = Dictionary(
                 uniqueKeysWithValues: try loadMotionAuthoritySources(matterID: matterID).map { ($0.authorityID, $0) }
             )
-            for id in selectedAuthorityIDs {
-                guard let source = availableAuthorities[id] else {
-                    reasons.append("Selected authority \(id) is unavailable in this matter.")
+            for selection in selectedAuthorities {
+                guard let source = availableAuthorities[selection.authorityID] else {
+                    reasons.append("Selected authority \(selection.authorityID) is unavailable in this matter.")
                     continue
                 }
                 if !source.isReady {
                     reasons.append("Authority “\(source.caseName)” is unavailable: \(source.blockingReason ?? "it is not reviewed and supported").")
+                } else if source.bindingSHA256 != selection.expectedBindingSHA256 {
+                    reasons.append("Authority “\(source.caseName)” changed after it was selected. Reload and select it again.")
                 }
             }
         } catch {
@@ -616,7 +618,7 @@ public final class MatterDraftingController: ObservableObject {
         let uniqueReasons = Self.uniqueStrings(reasons)
         return MotionDraftReadiness(
             selectedFactCount: selectedFactIDs.count,
-            selectedAuthorityCount: selectedAuthorityIDs.count,
+            selectedAuthorityCount: selectedAuthorities.count,
             blockingReasons: uniqueReasons
         )
     }
@@ -641,15 +643,17 @@ public final class MatterDraftingController: ObservableObject {
             }
 
             let selectedFactIDs = Self.uniqueNonEmpty(input.selectedFactChunkIDs)
-            let selectedAuthorityIDs = Self.uniqueNonEmpty(input.selectedAuthorityIDs)
+            let selectedAuthorities = Self.uniqueMotionAuthoritySelections(input.selectedAuthorities)
+            let selectedAuthorityIDs = selectedAuthorities.map(\.authorityID)
             let groundSpecs = try Self.motionGroundSpecs(input.grounds)
             let snapshotRequest = MotionDraftSnapshotRequest(
                 matterID: matterID,
                 factChunkIDs: selectedFactIDs,
-                authoritySelections: selectedAuthorityIDs.map {
+                authoritySelections: selectedAuthorities.map {
                     MotionDraftAuthoritySelection(
-                        authorityID: $0,
-                        groundKey: .failureToStateClaim
+                        authorityID: $0.authorityID,
+                        groundKey: .failureToStateClaim,
+                        expectedBindingSHA256: $0.expectedBindingSHA256
                     )
                 },
                 assistantProfileSettingKey: AssistantProfile.profileKey,
@@ -1063,17 +1067,21 @@ public final class MatterDraftingController: ObservableObject {
             let citation = Self.motionCitation(from: authority)
             var blockers: [String] = []
             let snippet: String
+            let bindingSHA256: String?
             switch try store.authorities.reviewedPropositionState(
                 authorityID: authority.id,
                 groundKey: .failureToStateClaim
             ) {
             case let .ready(reviewed):
                 snippet = reviewed.excerpt
+                bindingSHA256 = reviewed.bindingSHA256
             case .notReviewed:
                 snippet = ""
+                bindingSHA256 = nil
                 blockers.append("the failure-to-state-a-claim proposition has not been reviewed")
             case let .blocked(reason):
                 snippet = ""
+                bindingSHA256 = nil
                 blockers.append("the reviewed proposition evidence is unavailable (\(reason.rawValue))")
             }
             if !FloridaMotionToDismissContract.isSupportedAuthorityCitation(citation) {
@@ -1090,6 +1098,7 @@ public final class MatterDraftingController: ObservableObject {
                 caseName: authority.caseName,
                 citation: citation,
                 snippet: snippet,
+                bindingSHA256: bindingSHA256,
                 isReady: blockers.isEmpty,
                 blockingReason: blockers.isEmpty ? nil : blockers.joined(separator: ", ")
             )
@@ -1113,6 +1122,23 @@ public final class MatterDraftingController: ObservableObject {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
             return trimmed
+        }
+    }
+
+    nonisolated private static func uniqueMotionAuthoritySelections(
+        _ values: [MotionDraftAuthoritySourceSelection]
+    ) -> [MotionDraftAuthoritySourceSelection] {
+        var seen = Set<String>()
+        return values.compactMap { selection in
+            let authorityID = selection.authorityID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let binding = selection.expectedBindingSHA256.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !authorityID.isEmpty,
+                  !binding.isEmpty,
+                  seen.insert(authorityID).inserted else { return nil }
+            return MotionDraftAuthoritySourceSelection(
+                authorityID: authorityID,
+                expectedBindingSHA256: binding
+            )
         }
     }
 
@@ -1339,7 +1365,7 @@ public final class MatterDraftingController: ObservableObject {
             case let .partialFailure(audit, compensation):
                 "The draft was installed, but auditing failed (\(audit)) and rollback also failed (\(compensation))."
             case .filenameAllocationFailed:
-                "A unique motion filename could not be allocated."
+                "A unique draft filename could not be allocated."
             }
         }
     }
@@ -1353,43 +1379,66 @@ public final class MatterDraftingController: ObservableObject {
     ) throws -> URL {
         let directory = storage.exportsDirectory(forMatterID: matterID)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let fileName = "\(sanitize(title))-\(fileStampProvider()).\(format.fileExtension)"
-        let url = directory.appendingPathComponent(fileName)
-        let previousData: Data?
-        if FileManager.default.fileExists(atPath: url.path) {
-            previousData = try Data(contentsOf: url, options: .mappedIfSafe)
-        } else {
-            previousData = nil
-        }
+        let rawStamp = sanitize(fileStampProvider())
+        let stamp = rawStamp.isEmpty ? UUID().uuidString.lowercased() : rawStamp
+        let basename = sanitize(title)
 
-        try fileWriter.write(data, to: url) { temporaryURL in
-            try DocumentExportValidator.validate(temporaryURL, as: format)
-        }
-
-        let event = AuditEventRecord(
-            matterID: matterID,
-            eventType: "draft_generated",
-            actor: "user",
-            summary: "Generated \(auditLabel) draft (\(fileName))",
-            relatedTable: "matters",
-            relatedID: matterID,
-            metadataJSON: nil
-        )
-        do {
-            try auditRecorder(event)
-        } catch {
-            let auditDescription = error.localizedDescription
+        for attempt in 1...100 {
+            let collisionSuffix = attempt == 1 ? "" : "-\(attempt)"
+            let fileName = "\(basename)-\(stamp)\(collisionSuffix).\(format.fileExtension)"
+            let url = directory.appendingPathComponent(fileName)
             do {
-                try compensateFile(at: url, previousData: previousData)
-            } catch {
-                throw PersistenceError.partialFailure(
-                    audit: auditDescription,
-                    compensation: error.localizedDescription
-                )
+                try fileWriter.writeNew(data, to: url) { temporaryURL in
+                    try DocumentExportValidator.validate(temporaryURL, as: format)
+                }
+            } catch DurableFileWriter.WriterError.destinationExists {
+                continue
             }
-            throw PersistenceError.auditFailed(auditDescription)
+
+            let event = AuditEventRecord(
+                matterID: matterID,
+                eventType: "draft_generated",
+                actor: "user",
+                summary: "Generated \(auditLabel) draft (\(fileName))",
+                relatedTable: "matters",
+                relatedID: matterID,
+                metadataJSON: nil
+            )
+            do {
+                try auditRecorder(event)
+            } catch {
+                let auditDescription = error.localizedDescription
+                do {
+                    try removeNewDraftFile(at: url)
+                } catch {
+                    throw PersistenceError.partialFailure(
+                        audit: auditDescription,
+                        compensation: error.localizedDescription
+                    )
+                }
+                throw PersistenceError.auditFailed(auditDescription)
+            }
+            return url
         }
-        return url
+        throw PersistenceError.filenameAllocationFailed
+    }
+
+    private func removeNewDraftFile(at url: URL) throws {
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            throw MotionCompensationError.deletionFailed(
+                url.lastPathComponent,
+                error.localizedDescription
+            )
+        }
+        do {
+            try fileWriter.synchronizeParentDirectory(of: url)
+        } catch {
+            throw MotionCompensationError.directorySynchronizationFailed(
+                error.localizedDescription
+            )
+        }
     }
 
     /// Motion persistence is create-only. A collision chooses a distinct name;
@@ -1584,16 +1633,6 @@ public final class MatterDraftingController: ObservableObject {
         return result == 0 ? nil : errno
     }
 
-    private func compensateFile(at url: URL, previousData: Data?) throws {
-        if let previousData {
-            try fileWriter.write(previousData, to: url) { _ in }
-        } else if FileManager.default.fileExists(atPath: url.path) {
-            // No prior artifact existed; this removes only the newly installed
-            // draft whose required audit failed.
-            try FileManager.default.removeItem(at: url)
-        }
-    }
-
     private func sanitize(_ title: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_"))
         let cleaned = String(title.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" })
@@ -1678,7 +1717,7 @@ public struct MotionToDismissDraftInput: Sendable, Equatable {
     public var grounds: [String]
     public var reliefSought: String
     public var selectedFactChunkIDs: [String]
-    public var selectedAuthorityIDs: [String]
+    public var selectedAuthorities: [MotionDraftAuthoritySourceSelection]
 
     public init(
         parties: [PartyLine],
@@ -1690,7 +1729,7 @@ public struct MotionToDismissDraftInput: Sendable, Equatable {
         grounds: [String],
         reliefSought: String,
         selectedFactChunkIDs: [String],
-        selectedAuthorityIDs: [String]
+        selectedAuthorities: [MotionDraftAuthoritySourceSelection]
     ) {
         self.parties = parties
         self.partyRepresented = partyRepresented
@@ -1701,7 +1740,20 @@ public struct MotionToDismissDraftInput: Sendable, Equatable {
         self.grounds = grounds
         self.reliefSought = reliefSought
         self.selectedFactChunkIDs = selectedFactChunkIDs
-        self.selectedAuthorityIDs = selectedAuthorityIDs
+        self.selectedAuthorities = selectedAuthorities
+    }
+}
+
+/// The exact reviewed authority evidence the user selected from the displayed
+/// source row. Reusing only the authority ID would allow a later review envelope
+/// to be substituted silently before snapshot capture.
+public struct MotionDraftAuthoritySourceSelection: Sendable, Equatable, Hashable {
+    public let authorityID: String
+    public let expectedBindingSHA256: String
+
+    public init(authorityID: String, expectedBindingSHA256: String) {
+        self.authorityID = authorityID
+        self.expectedBindingSHA256 = expectedBindingSHA256
     }
 }
 
@@ -1745,6 +1797,7 @@ public struct MotionDraftAuthoritySource: Sendable, Equatable, Identifiable {
     public let caseName: String
     public let citation: String
     public let snippet: String
+    public let bindingSHA256: String?
     public let isReady: Bool
     public let blockingReason: String?
 
@@ -1755,6 +1808,7 @@ public struct MotionDraftAuthoritySource: Sendable, Equatable, Identifiable {
         caseName: String,
         citation: String,
         snippet: String,
+        bindingSHA256: String?,
         isReady: Bool,
         blockingReason: String?
     ) {
@@ -1762,6 +1816,7 @@ public struct MotionDraftAuthoritySource: Sendable, Equatable, Identifiable {
         self.caseName = caseName
         self.citation = citation
         self.snippet = snippet
+        self.bindingSHA256 = bindingSHA256
         self.isReady = isReady
         self.blockingReason = blockingReason
     }

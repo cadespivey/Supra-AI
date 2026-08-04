@@ -560,10 +560,15 @@ letter_generation_function="$(sed -n '/private func generateLetter(token:/,/^   
 if grep -Fq 'drafting.motion.fact.\(source.chunkID)' "$motion_view" \
     && grep -Fq 'drafting.motion.authority.\(source.authorityID)' "$motion_view" \
     && grep -Fq 'drafting.motion.fact.ui-motion-fact-chunk' "$motion_ui_tests" \
-    && grep -Fq 'ui-motion-authority-success' "$motion_ui_tests"; then
-  printf '%s\n' 'PASS: motion smoke selects exact identified production source rows'
+    && grep -Fq 'ui-motion-authority-success' "$motion_ui_tests" \
+    && grep -Fq 'expectedBindingSHA256: bindingSHA256' "$motion_view" \
+    && grep -Fq 'displayedAuthorityBindings[authorityID]' "$motion_view" \
+    && grep -Fq 'return displayed == current' "$motion_view" \
+    && grep -Fq 'source.bindingSHA256 != selection.expectedBindingSHA256' \
+      "${repo_root}/Packages/SupraSessions/Sources/SupraSessions/MatterDraftingController.swift"; then
+  printf '%s\n' 'PASS: motion smoke selects exact identified, review-bound production source rows'
 else
-  record_failure 'motion smoke does not select exact identified production source rows'
+  record_failure 'motion smoke does not select exact identified, review-bound production source rows'
 fi
 
 motion_source_loader="$(sed -n '/private func loadMotionSourcesIfNeeded()/,/^    }/p' "$motion_view")"

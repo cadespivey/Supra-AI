@@ -863,7 +863,8 @@ final class DraftingSourceSnapshotTests: XCTestCase {
             authoritySelections: [
                 MotionDraftAuthoritySelection(
                     authorityID: fixture.authority.id,
-                    groundKey: .failureToStateClaim
+                    groundKey: .failureToStateClaim,
+                    expectedBindingSHA256: fixture.review.bindingSHA256
                 ),
             ],
             assistantProfileSettingKey: assistantKey,

@@ -396,39 +396,32 @@ public final class AuthoritiesController: ObservableObject {
 
     /// Resolves the review-state prerequisite for proposition evidence without
     /// forcing the user to rediscover the authority's originating research session.
-    /// The action remains matter-scoped and mirrors the research review state when
-    /// the saved authority still has a linked result.
+    /// The matter-scoped authority, linked research result, and audit entry commit
+    /// together so the UI never reports a partially applied review state.
     public func markAuthorityNotAdverse(authorityID: String) -> String? {
-        guard let item = authorities.first(where: { $0.id == authorityID }) else {
+        guard authorities.contains(where: { $0.id == authorityID }) else {
             return "Authority not found."
         }
         defer { load() }
         do {
-            guard let authority = try store.authorities.fetchAuthority(id: authorityID),
-                  authority.matterID == matterID,
-                  authority.deletedAt == nil else {
-                return "Authority not found."
-            }
-            guard authority.reviewState != ResearchResultReviewState.notAdverse.rawValue else {
-                return nil
-            }
-            try store.authorities.updateReviewState(
+            _ = try store.authorities.markNotAdverse(
                 authorityID: authorityID,
-                reviewState: .notAdverse
-            )
-            try? store.research.updateResultReviewState(
-                resultID: authority.researchResultID,
-                reviewState: .notAdverse
-            )
-            _ = try? store.auditEvents.recordEvent(
                 matterID: matterID,
-                eventType: "authority_review_state_changed",
                 actor: "user",
-                summary: "Marked authority not adverse: “\(item.caseName)”",
-                relatedTable: "authorities",
-                relatedID: authorityID
+                markedAt: Date()
             )
             return nil
+        } catch let error as AuthorityRepositoryError {
+            switch error {
+            case .authorityNotFound:
+                return "Authority not found."
+            case .reviewRequiresLiveAuthority:
+                return "This authority is no longer in the library."
+            case .authorityProvenanceMismatch:
+                return "This authority is no longer linked to its originating research result."
+            default:
+                return "Couldn't mark this authority not adverse. Try again."
+            }
         } catch {
             return "Couldn't mark this authority not adverse. Try again."
         }
@@ -456,6 +449,10 @@ public final class AuthoritiesController: ObservableObject {
         switch error {
         case .untrustedPropositionEvidenceOnInsert:
             "Couldn't save the proposition review. Try again."
+        case .authorityProvenanceMismatch:
+            "This authority is no longer linked to its originating research result."
+        case .authorityConflict:
+            "This authority conflicts with another saved authority."
         case .authorityNotFound:
             "Authority not found."
         case .reviewRequiresLiveAuthority:

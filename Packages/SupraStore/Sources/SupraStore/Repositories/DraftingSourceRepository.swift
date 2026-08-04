@@ -6,10 +6,16 @@ import SupraCore
 public struct MotionDraftAuthoritySelection: Codable, Equatable, Hashable, Sendable {
     public let authorityID: String
     public let groundKey: AuthorityReviewedPropositionGround
+    public let expectedBindingSHA256: String
 
-    public init(authorityID: String, groundKey: AuthorityReviewedPropositionGround) {
+    public init(
+        authorityID: String,
+        groundKey: AuthorityReviewedPropositionGround,
+        expectedBindingSHA256: String
+    ) {
         self.authorityID = authorityID
         self.groundKey = groundKey
+        self.expectedBindingSHA256 = expectedBindingSHA256
     }
 }
 
@@ -146,6 +152,8 @@ public enum MotionDraftSnapshotError: Error, Equatable, Sendable {
     case factBindingInvalid(String)
     case authorityNotFound(String)
     case authorityOutsideMatter(String)
+    case authorityProvenanceInvalid(String)
+    case authoritySelectionStale(String)
     case authorityPropositionUnavailable(authorityID: String, reason: String)
     case auditMatterMismatch
     case auditEnvelopeInvalid
@@ -265,6 +273,9 @@ public final class DraftingSourceRepository: @unchecked Sendable {
             let id = selection.authorityID
             guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw MotionDraftSnapshotError.authorityNotFound(id)
+            }
+            guard isSHA256(selection.expectedBindingSHA256) else {
+                throw MotionDraftSnapshotError.authoritySelectionStale(id)
             }
             guard authorityIDs.insert(id).inserted else {
                 throw MotionDraftSnapshotError.duplicateAuthorityID(id)
@@ -423,6 +434,11 @@ public final class DraftingSourceRepository: @unchecked Sendable {
         guard authority.matterID == matterID else {
             throw MotionDraftSnapshotError.authorityOutsideMatter(selection.authorityID)
         }
+        do {
+            try AuthorityRepository.validateResearchProvenance(authority: authority, db: db)
+        } catch {
+            throw MotionDraftSnapshotError.authorityProvenanceInvalid(selection.authorityID)
+        }
         let state = AuthorityRepository.reviewedPropositionState(
             authority: authority,
             groundKey: selection.groundKey
@@ -441,6 +457,9 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                 authorityID: authority.id,
                 reason: reason.rawValue
             )
+        }
+        guard reviewed.bindingSHA256 == selection.expectedBindingSHA256 else {
+            throw MotionDraftSnapshotError.authoritySelectionStale(authority.id)
         }
         guard let citation = AuthorityRepository.effectiveCitation(authority) else {
             throw MotionDraftSnapshotError.authorityPropositionUnavailable(

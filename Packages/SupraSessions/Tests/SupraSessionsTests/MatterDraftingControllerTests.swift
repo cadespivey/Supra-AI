@@ -269,7 +269,7 @@ final class MatterDraftingControllerTests: XCTestCase {
     }
 
     // ACR-EXPORT-010: a required audit failure is explicitly compensated after
-    // install, restoring a preexisting draft byte-for-byte.
+    // a create-only collision allocation, leaving the preexisting draft untouched.
     @MainActor
     func testDraftAuditFailureRestoresCanary() async throws {
         let store = try makeStore()
@@ -278,6 +278,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         let directory = storage.exportsDirectory(forMatterID: matter.id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let destination = directory.appendingPathComponent("Atomic-outline-fixed.md")
+        let allocatedDestination = directory.appendingPathComponent("Atomic-outline-fixed-2.md")
         let canary = Data("reviewed-canary".utf8)
         try canary.write(to: destination)
         var auditObservedInstalledFile = false
@@ -287,7 +288,8 @@ final class MatterDraftingControllerTests: XCTestCase {
             fileStampProvider: { "fixed" },
             auditRecorder: { event in
                 auditObservedInstalledFile = event.eventType == "draft_generated"
-                    && (try? DocumentExportValidator.validate(destination, as: .markdown)) != nil
+                    && event.summary.contains("(\(allocatedDestination.lastPathComponent))")
+                    && (try? DocumentExportValidator.validate(allocatedDestination, as: .markdown)) != nil
                 throw PersistenceFailure.stop
             }
         )
@@ -299,6 +301,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         guard case .failure = result else { return XCTFail("expected audit failure") }
         XCTAssertTrue(auditObservedInstalledFile)
         XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: allocatedDestination.path))
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 

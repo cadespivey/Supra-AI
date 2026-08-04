@@ -360,6 +360,7 @@ struct AuthorityDetailView: View {
             switch reason {
             case .authorityNotFound: "Blocked — authority not found"
             case .authorityNotLive: "Blocked — authority is no longer in the library"
+            case .authorityProvenanceInvalid: "Blocked — authority source linkage is invalid"
             case .authorityEligibilityChanged: "Blocked — authority review or verification changed"
             case .malformedEvidence: "Blocked — saved review evidence is malformed"
             case .unsupportedEvidence: "Blocked — saved review evidence uses an unsupported version"

@@ -84,6 +84,7 @@ public enum AuthorityReviewedPropositionSourceKind: String, Codable, CaseIterabl
 public enum AuthorityReviewedPropositionBlockReason: String, Codable, Equatable, Sendable {
     case authorityNotFound = "authority_not_found"
     case authorityNotLive = "authority_not_live"
+    case authorityProvenanceInvalid = "authority_provenance_invalid"
     case authorityEligibilityChanged = "authority_eligibility_changed"
     case malformedEvidence = "malformed_evidence"
     case unsupportedEvidence = "unsupported_evidence"
@@ -99,6 +100,8 @@ public enum AuthorityReviewedPropositionState: Equatable, Sendable {
 
 public enum AuthorityRepositoryError: Error, Equatable, Sendable {
     case untrustedPropositionEvidenceOnInsert
+    case authorityProvenanceMismatch
+    case authorityConflict
     case authorityNotFound
     case reviewRequiresLiveAuthority
     case reviewRequiresNotAdverse

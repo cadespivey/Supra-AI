@@ -67,7 +67,8 @@ final class MotionToDismissControllerTests: XCTestCase {
             XCTAssertEqual(input.respondingTo, "Plaintiff's First Amended Complaint")
             XCTAssertEqual(input.reliefSought, "dismissal without prejudice and leave to amend")
             XCTAssertEqual(input.selectedFactChunkIDs, [fixture.selectedFact.chunkID])
-            XCTAssertEqual(input.selectedAuthorityIDs, [fixture.selectedAuthorityID])
+            XCTAssertEqual(input.selectedAuthorities.map(\.authorityID), [fixture.selectedAuthorityID])
+            XCTAssertTrue(input.selectedAuthorities.allSatisfy { isSHA256($0.expectedBindingSHA256) })
         case .noticeAppearance, .customDescription:
             XCTFail("motion request was silently converted to a notice/custom request")
         }
@@ -180,7 +181,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             fixture.federalFalsePositiveAuthorityID,
         ] {
             var input = fixture.selectedInput
-            input.selectedAuthorityIDs = [authorityID]
+            input.selectedAuthorities = [try authoritySelection(store: fixture.store, authorityID: authorityID)]
             let readiness = controller.motionReadiness(input: input, matterID: fixture.matterID)
             XCTAssertFalse(readiness.canGenerate)
             let result = await controller.draft(.motionToDismiss(input), matterID: fixture.matterID)
@@ -682,9 +683,8 @@ final class MotionToDismissControllerTests: XCTestCase {
 
     // T-MTD-29. Expected RED: selecting an authority after displaying reviewed
     // binding A must not silently resolve the same authority ID to replacement
-    // binding B at capture/generation time. The current input carries only the ID,
-    // so this test preserves the failing boundary until the displayed binding is
-    // part of the typed selection contract and revalidated by the controller.
+    // binding B at capture/generation time. The typed selection must retain and
+    // revalidate the exact binding shown when the user selected the row.
     func testTMTD29DraftRejectsAuthoritySelectionWhenDisplayedReviewBindingChanged() async throws {
         let fixture = try makeFixture()
         let displayedExcerpt = "DISPLAYED_BINDING_A A motion to dismiss for failure to state a claim tests the legal sufficiency of the complaint."
@@ -707,14 +707,20 @@ final class MotionToDismissControllerTests: XCTestCase {
                 .first { $0.authorityID == fixture.selectedAuthorityID }
         )
         XCTAssertEqual(displayedSource.snippet, displayedExcerpt)
+        XCTAssertEqual(displayedSource.bindingSHA256, displayedReview.bindingSHA256)
+        var selectedInput = fixture.selectedInput
+        selectedInput.selectedAuthorities = [
+            MotionDraftAuthoritySourceSelection(
+                authorityID: fixture.selectedAuthorityID,
+                expectedBindingSHA256: displayedReview.bindingSHA256
+            ),
+        ]
         let displayedSnapshot = try fixture.store.draftingSources.captureMotionSnapshot(
-            snapshotRequest(for: fixture)
+            snapshotRequest(for: fixture, input: selectedInput)
         )
         XCTAssertEqual(displayedSnapshot.authorities.map(\.bindingSHA256), [displayedReview.bindingSHA256])
 
-        // This input represents the user's selection of the row displayed above.
-        // At present it retains the authority ID but loses displayedReview.bindingSHA256.
-        let selectedInput = fixture.selectedInput
+        // This input retains the exact binding from the row displayed above.
         let replacementReview = try fixture.store.authorities.reviewProposition(
             authorityID: fixture.selectedAuthorityID,
             groundKey: .failureToStateClaim,
@@ -723,8 +729,15 @@ final class MotionToDismissControllerTests: XCTestCase {
             reviewedAt: Date(timeIntervalSince1970: 1_785_513_800)
         )
         XCTAssertNotEqual(replacementReview.bindingSHA256, displayedReview.bindingSHA256)
+        var replacementInput = fixture.selectedInput
+        replacementInput.selectedAuthorities = [
+            MotionDraftAuthoritySourceSelection(
+                authorityID: fixture.selectedAuthorityID,
+                expectedBindingSHA256: replacementReview.bindingSHA256
+            ),
+        ]
         let currentSnapshot = try fixture.store.draftingSources.captureMotionSnapshot(
-            snapshotRequest(for: fixture)
+            snapshotRequest(for: fixture, input: replacementInput)
         )
         XCTAssertEqual(currentSnapshot.authorities.map(\.bindingSHA256), [replacementReview.bindingSHA256])
 
@@ -847,6 +860,10 @@ final class MotionToDismissControllerTests: XCTestCase {
             root: FileManager.default.temporaryDirectory
                 .appendingPathComponent("MotionFiles-\(UUID().uuidString)", isDirectory: true)
         )
+        let selectedAuthority = try authoritySelection(
+            store: store,
+            authorityID: selectedAuthorityID
+        )
         let input = MotionToDismissDraftInput(
             parties: sampleParties(),
             partyRepresented: "Defendant",
@@ -857,7 +874,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             grounds: ["failure to state a claim"],
             reliefSought: "dismissal without prejudice and leave to amend",
             selectedFactChunkIDs: [selectedFact.chunkID],
-            selectedAuthorityIDs: [selectedAuthorityID]
+            selectedAuthorities: [selectedAuthority]
         )
         return Fixture(
             store: store,
@@ -976,6 +993,26 @@ final class MotionToDismissControllerTests: XCTestCase {
         return authority.id
     }
 
+    private func authoritySelection(
+        store: SupraStore,
+        authorityID: String
+    ) throws -> MotionDraftAuthoritySourceSelection {
+        let bindingSHA256: String
+        switch try store.authorities.reviewedPropositionState(
+            authorityID: authorityID,
+            groundKey: .failureToStateClaim
+        ) {
+        case let .ready(reviewed):
+            bindingSHA256 = reviewed.bindingSHA256
+        case .notReviewed, .blocked:
+            bindingSHA256 = String(repeating: "0", count: 64)
+        }
+        return MotionDraftAuthoritySourceSelection(
+            authorityID: authorityID,
+            expectedBindingSHA256: bindingSHA256
+        )
+    }
+
     private func makeStore() throws -> SupraStore {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MotionStore-\(UUID().uuidString)", isDirectory: true)
@@ -1036,14 +1073,19 @@ final class MotionToDismissControllerTests: XCTestCase {
         }
     }
 
-    private func snapshotRequest(for fixture: Fixture) -> MotionDraftSnapshotRequest {
-        MotionDraftSnapshotRequest(
+    private func snapshotRequest(
+        for fixture: Fixture,
+        input: MotionToDismissDraftInput? = nil
+    ) -> MotionDraftSnapshotRequest {
+        let input = input ?? fixture.selectedInput
+        return MotionDraftSnapshotRequest(
             matterID: fixture.matterID,
-            factChunkIDs: fixture.selectedInput.selectedFactChunkIDs,
-            authoritySelections: fixture.selectedInput.selectedAuthorityIDs.map {
+            factChunkIDs: input.selectedFactChunkIDs,
+            authoritySelections: input.selectedAuthorities.map {
                 MotionDraftAuthoritySelection(
-                    authorityID: $0,
-                    groundKey: .failureToStateClaim
+                    authorityID: $0.authorityID,
+                    groundKey: .failureToStateClaim,
+                    expectedBindingSHA256: $0.expectedBindingSHA256
                 )
             },
             assistantProfileSettingKey: AssistantProfile.profileKey,
