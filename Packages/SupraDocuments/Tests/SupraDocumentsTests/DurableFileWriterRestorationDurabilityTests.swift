@@ -4,11 +4,11 @@ import XCTest
 @testable import SupraDocuments
 
 final class DurableFileWriterRestorationDurabilityTests: XCTestCase {
-    // ACR-FILE-043. Quarantining a foreign replacement is a namespace change
+    // ACR-FILE-043a. Quarantining a foreign replacement is a namespace change
     // even when the writer immediately restores that exact entry. The retained
     // parent must be synchronized before the removal reports that it did not
     // remove the writer-owned file.
-    func testACRFILE043ForeignReplacementRestoreSynchronizesRetainedParent() throws {
+    func testACRFILE043aForeignReplacementRestoreSynchronizesRetainedParent() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let destination = root
@@ -52,6 +52,56 @@ final class DurableFileWriterRestorationDurabilityTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: preservedOwned), ownedBytes)
     }
 
+    // ACR-FILE-043b. If the restore cannot be made durable, the writer must
+    // classify the result as uncertain instead of reporting an ordinary
+    // not-owned outcome after putting the replacement back in public view.
+    func testACRFILE043bForeignReplacementRestoreSyncFailureIsUncertain() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root
+            .appendingPathComponent("exports", isDirectory: true)
+            .appendingPathComponent("matter-123", isDirectory: true)
+            .appendingPathComponent("motion.docx")
+        let preservedOwned = root.appendingPathComponent("preserved-owned.docx")
+        let ownedBytes = Data("writer-owned-motion".utf8)
+        let foreignBytes = Data("foreign-replacement".utf8)
+
+        let identity = try DurableFileWriter().writeNewOwned(
+            ownedBytes,
+            to: destination,
+            containedIn: root,
+            validator: { _ in }
+        )
+        try FileManager.default.moveItem(at: destination, to: preservedOwned)
+        try foreignBytes.write(to: destination)
+
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            anchoredParentDirectorySynchronizer: { _, _ in
+                throw InjectedRestorationSynchronizationFailure.injected
+            }
+        )
+
+        XCTAssertThrowsError(
+            try writer.removeInstalledFile(
+                matching: identity,
+                at: destination,
+                containedIn: root,
+                contentValidator: { _ in
+                    XCTFail("A foreign replacement must not enter owned-content validation")
+                }
+            )
+        ) { error in
+            guard case .anchoredParentDirectorySynchronizationFailed =
+                error as? DurableFileWriter.WriterError else {
+                return XCTFail("Expected uncertain restoration durability, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(try Data(contentsOf: destination), foreignBytes)
+        XCTAssertEqual(try Data(contentsOf: preservedOwned), ownedBytes)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -61,6 +111,10 @@ final class DurableFileWriterRestorationDurabilityTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
+}
+
+private enum InjectedRestorationSynchronizationFailure: Error {
+    case injected
 }
 
 private final class RestorationDirectorySynchronizationRecorder: @unchecked Sendable {
