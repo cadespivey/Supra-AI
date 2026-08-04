@@ -362,6 +362,49 @@ final class DurableFileWriterTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: XCTUnwrap(replacements.first)), foreignBytes)
     }
 
+    // A throwing compensation checkpoint may also replace the quarantine it was
+    // handed. Catch-path restore must authenticate the descriptor-relative entry
+    // before restoring anything to the public destination.
+    func testACRFILE014ThrowingCheckpointNeverRestoresForeignQuarantine() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root
+            .appendingPathComponent("exports", isDirectory: true)
+            .appendingPathComponent("matter-123", isDirectory: true)
+            .appendingPathComponent("owned.txt")
+        let ownedBytes = Data("writer-owned-publication".utf8)
+        let foreignBytes = Data("foreign-quarantine-canary".utf8)
+        let writer = DurableFileWriter()
+        let identity = try writer.writeNewOwned(
+            ownedBytes,
+            to: destination,
+            containedIn: root,
+            validator: { _ in }
+        )
+        var observedQuarantine: URL?
+        let preservedOwned = root.appendingPathComponent("preserved-owned-publication.txt")
+
+        XCTAssertThrowsError(
+            try writer.removeInstalledFile(
+                matching: identity,
+                at: destination,
+                containedIn: root,
+                quarantineCheckpoint: { _, quarantine in
+                    observedQuarantine = quarantine
+                    try FileManager.default.moveItem(at: quarantine, to: preservedOwned)
+                    try foreignBytes.write(to: quarantine)
+                    throw InjectedFailure(stage: .beforeInstall)
+                },
+                contentValidator: { _ in }
+            )
+        )
+
+        let quarantine = try XCTUnwrap(observedQuarantine)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(try Data(contentsOf: preservedOwned), ownedBytes)
+        XCTAssertEqual(try Data(contentsOf: quarantine), foreignBytes)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("Supra-DurableFileWriter-\(UUID().uuidString)", isDirectory: true)
