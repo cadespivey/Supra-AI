@@ -29,19 +29,26 @@ public struct DurableFileWriter: Sendable {
         case atomicInstallFailed(Int32)
         case parentDirectorySynchronizationFailed(Int32)
         case fileIdentityInspectionFailed(Int32)
+        case unsafeManagedParent(Int32)
+        case fileUnlinkFailed(Int32)
         case createOnlyRollbackFailed(Int32)
         case createOnlyRollbackConflict(String, Int32)
     }
 
     public typealias FaultInjector = @Sendable (FaultStage) throws -> Void
     typealias ParentDirectorySynchronizer = @Sendable (URL) throws -> Void
+    typealias AnchoredParentDirectorySynchronizer = @Sendable (URL, Int32) throws -> Void
 
     private let faultInjector: FaultInjector
     private let parentDirectorySynchronizer: ParentDirectorySynchronizer
+    private let anchoredParentDirectorySynchronizer: AnchoredParentDirectorySynchronizer
 
     public init(faultInjector: @escaping FaultInjector = { _ in }) {
         self.faultInjector = faultInjector
         self.parentDirectorySynchronizer = Self.synchronizeParentDirectory
+        self.anchoredParentDirectorySynchronizer = { _, descriptor in
+            try Self.synchronizeDirectory(descriptor)
+        }
     }
 
     init(
@@ -50,6 +57,9 @@ public struct DurableFileWriter: Sendable {
     ) {
         self.faultInjector = faultInjector
         self.parentDirectorySynchronizer = parentDirectorySynchronizer
+        self.anchoredParentDirectorySynchronizer = { url, _ in
+            try parentDirectorySynchronizer(url)
+        }
     }
 
     /// Commits a caller-owned namespace change in the same durability domain as
@@ -103,6 +113,24 @@ public struct DurableFileWriter: Sendable {
             to: destination,
             installPolicy: .createExclusive,
             writer: { sink in try sink.write(data) },
+            validator: validator
+        )
+    }
+
+    /// Create-only write whose directory creation, temporary-file creation, and
+    /// install are anchored to no-follow directory descriptors beneath a
+    /// caller-configured managed root. A symlink occupying the root or any
+    /// descendant parent is rejected before bytes are written through it.
+    public func writeNewOwned(
+        _ data: Data,
+        to destination: URL,
+        containedIn managedRoot: URL,
+        validator: (URL) throws -> Void
+    ) throws -> InstalledFileIdentity {
+        try performContainedCreateOnlyWrite(
+            data,
+            to: destination,
+            managedRoot: managedRoot,
             validator: validator
         )
     }
@@ -223,6 +251,252 @@ public struct DurableFileWriter: Sendable {
         try Self.fileIdentity(at: url)
     }
 
+    /// Removes a pathname only when its current no-follow identity still equals
+    /// the caller's inspection token. POSIX `unlink` is intentionally
+    /// nonrecursive: a directory substituted after inspection is preserved.
+    @discardableResult
+    public func unlinkFile(
+        matching expected: InstalledFileIdentity,
+        at url: URL
+    ) throws -> Bool {
+        guard try Self.fileIdentity(at: url) == expected else { return false }
+        let result = url.path.withCString { Darwin.unlink($0) }
+        guard result == 0 else {
+            let code = errno
+            if code == ENOENT { return false }
+            throw WriterError.fileUnlinkFailed(code)
+        }
+        return true
+    }
+
+    private struct ManagedParent {
+        let rootDescriptor: Int32
+        let parentDescriptor: Int32
+        let parentURL: URL
+        let relativeComponents: [String]
+        let identity: InstalledFileIdentity
+    }
+
+    private func performContainedCreateOnlyWrite(
+        _ data: Data,
+        to destination: URL,
+        managedRoot: URL,
+        validator: (URL) throws -> Void
+    ) throws -> InstalledFileIdentity {
+        try Task.checkCancellation()
+        let standardizedDestination = destination.standardizedFileURL
+        let standardizedRoot = managedRoot.standardizedFileURL
+        guard standardizedDestination.isFileURL,
+              standardizedRoot.isFileURL,
+              !standardizedDestination.lastPathComponent.isEmpty else {
+            throw WriterError.invalidDestination
+        }
+
+        let managedParent = try Self.openManagedParent(
+            for: standardizedDestination,
+            managedRoot: standardizedRoot
+        )
+        let temporaryName = ".\(standardizedDestination.lastPathComponent).supra-tmp-\(UUID().uuidString)"
+        let temporaryURL = managedParent.parentURL.appendingPathComponent(
+            temporaryName,
+            isDirectory: false
+        )
+        let descriptor = temporaryName.withCString {
+            Darwin.openat(
+                managedParent.parentDescriptor,
+                $0,
+                O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC | O_NOFOLLOW,
+                S_IRUSR | S_IWUSR
+            )
+        }
+        guard descriptor >= 0 else {
+            let code = errno
+            Self.close(managedParent)
+            throw WriterError.temporaryFileCreationFailed(code)
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var handleIsOpen = true
+        var installed = false
+        defer {
+            if handleIsOpen { try? handle.close() }
+            if !installed {
+                _ = temporaryName.withCString {
+                    Darwin.unlinkat(managedParent.parentDescriptor, $0, 0)
+                }
+            }
+            Self.close(managedParent)
+        }
+
+        try faultInjector(.beforeWrite)
+        let sink = DurableFileSink(handle: handle, beforeWrite: {
+            try faultInjector(.duringWrite)
+        })
+        try sink.write(data)
+        try Task.checkCancellation()
+        try faultInjector(.beforeSynchronize)
+        try handle.synchronize()
+        try handle.close()
+        handleIsOpen = false
+
+        try Task.checkCancellation()
+        try faultInjector(.beforeValidation)
+        guard let temporaryIdentity = try Self.fileIdentity(
+            named: temporaryName,
+            in: managedParent.parentDescriptor
+        ), Self.managedParentIsReachable(managedParent),
+              try Self.fileIdentity(at: temporaryURL) == temporaryIdentity else {
+            throw WriterError.unsafeManagedParent(ESTALE)
+        }
+        try validator(temporaryURL)
+        try Task.checkCancellation()
+        guard Self.managedParentIsReachable(managedParent),
+              try Self.fileIdentity(
+                named: temporaryName,
+                in: managedParent.parentDescriptor
+              ) == temporaryIdentity,
+              try Self.fileIdentity(at: temporaryURL) == temporaryIdentity else {
+            throw WriterError.unsafeManagedParent(ESTALE)
+        }
+
+        try faultInjector(.beforeInstall)
+        try Self.atomicInstall(
+            temporaryName,
+            at: standardizedDestination.lastPathComponent,
+            in: managedParent.parentDescriptor
+        )
+        installed = true
+        do {
+            try anchoredParentDirectorySynchronizer(
+                managedParent.parentURL,
+                managedParent.parentDescriptor
+            )
+        } catch {
+            let changedDirectory = try Self.rollbackCreateExclusiveInstall(
+                destinationName: standardizedDestination.lastPathComponent,
+                quarantineName: temporaryName,
+                parentDescriptor: managedParent.parentDescriptor,
+                expectedIdentity: temporaryIdentity
+            )
+            if changedDirectory {
+                try anchoredParentDirectorySynchronizer(
+                    managedParent.parentURL,
+                    managedParent.parentDescriptor
+                )
+            }
+            throw error
+        }
+        return temporaryIdentity
+    }
+
+    private static func openManagedParent(
+        for destination: URL,
+        managedRoot: URL
+    ) throws -> ManagedParent {
+        let parent = destination.deletingLastPathComponent().standardizedFileURL
+        let rootPath = managedRoot.path
+        let parentPath = parent.path
+        guard parentPath.hasPrefix(rootPath + "/") else {
+            throw WriterError.invalidDestination
+        }
+        let relativePath = String(parentPath.dropFirst(rootPath.count + 1))
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+            .map(String.init)
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw WriterError.invalidDestination
+        }
+
+        try FileManager.default.createDirectory(
+            at: managedRoot,
+            withIntermediateDirectories: true
+        )
+        let rootDescriptor = managedRoot.path.withCString {
+            Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        }
+        guard rootDescriptor >= 0 else {
+            throw WriterError.unsafeManagedParent(errno)
+        }
+
+        var currentDescriptor = rootDescriptor
+        do {
+            for component in components {
+                let nextDescriptor = try openOrCreateManagedDirectory(
+                    named: component,
+                    in: currentDescriptor
+                )
+                if currentDescriptor != rootDescriptor {
+                    Darwin.close(currentDescriptor)
+                }
+                currentDescriptor = nextDescriptor
+            }
+            guard let identity = try fileIdentity(descriptor: currentDescriptor) else {
+                throw WriterError.fileIdentityInspectionFailed(ENOENT)
+            }
+            return ManagedParent(
+                rootDescriptor: rootDescriptor,
+                parentDescriptor: currentDescriptor,
+                parentURL: parent,
+                relativeComponents: components,
+                identity: identity
+            )
+        } catch {
+            if currentDescriptor != rootDescriptor {
+                Darwin.close(currentDescriptor)
+            }
+            Darwin.close(rootDescriptor)
+            throw error
+        }
+    }
+
+    private static func openOrCreateManagedDirectory(
+        named name: String,
+        in parentDescriptor: Int32
+    ) throws -> Int32 {
+        let flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+        var descriptor = name.withCString {
+            Darwin.openat(parentDescriptor, $0, flags)
+        }
+        if descriptor < 0, errno == ENOENT {
+            let createResult = name.withCString {
+                Darwin.mkdirat(parentDescriptor, $0, S_IRWXU)
+            }
+            if createResult != 0, errno != EEXIST {
+                throw WriterError.unsafeManagedParent(errno)
+            }
+            descriptor = name.withCString {
+                Darwin.openat(parentDescriptor, $0, flags)
+            }
+        }
+        guard descriptor >= 0 else {
+            throw WriterError.unsafeManagedParent(errno)
+        }
+        return descriptor
+    }
+
+    private static func managedParentIsReachable(_ managedParent: ManagedParent) -> Bool {
+        var currentDescriptor = Darwin.dup(managedParent.rootDescriptor)
+        guard currentDescriptor >= 0 else { return false }
+        defer { Darwin.close(currentDescriptor) }
+        for component in managedParent.relativeComponents {
+            let nextDescriptor = component.withCString {
+                Darwin.openat(
+                    currentDescriptor,
+                    $0,
+                    O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+                )
+            }
+            guard nextDescriptor >= 0 else { return false }
+            Darwin.close(currentDescriptor)
+            currentDescriptor = nextDescriptor
+        }
+        return (try? fileIdentity(descriptor: currentDescriptor)) == managedParent.identity
+    }
+
+    private static func close(_ managedParent: ManagedParent) {
+        Darwin.close(managedParent.parentDescriptor)
+        Darwin.close(managedParent.rootDescriptor)
+    }
+
     private static func createExclusiveTemporaryFile(at url: URL) throws -> FileHandle {
         let descriptor = url.path.withCString {
             Darwin.open($0, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, S_IRUSR | S_IWUSR)
@@ -257,6 +531,31 @@ public struct DurableFileWriter: Sendable {
         }
     }
 
+    private static func atomicInstall(
+        _ temporaryName: String,
+        at destinationName: String,
+        in parentDescriptor: Int32
+    ) throws {
+        let result = temporaryName.withCString { source in
+            destinationName.withCString { target in
+                Darwin.renameatx_np(
+                    parentDescriptor,
+                    source,
+                    parentDescriptor,
+                    target,
+                    UInt32(RENAME_EXCL)
+                )
+            }
+        }
+        guard result == 0 else {
+            let code = errno
+            if code == EEXIST {
+                throw WriterError.destinationExists
+            }
+            throw WriterError.atomicInstallFailed(code)
+        }
+    }
+
     private static func synchronizeParentDirectory(_ directory: URL) throws {
         let descriptor = directory.path.withCString {
             Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
@@ -266,6 +565,12 @@ public struct DurableFileWriter: Sendable {
         }
         defer { Darwin.close(descriptor) }
 
+        guard Darwin.fsync(descriptor) == 0 else {
+            throw WriterError.parentDirectorySynchronizationFailed(errno)
+        }
+    }
+
+    private static func synchronizeDirectory(_ descriptor: Int32) throws {
         guard Darwin.fsync(descriptor) == 0 else {
             throw WriterError.parentDirectorySynchronizationFailed(errno)
         }
@@ -319,6 +624,74 @@ public struct DurableFileWriter: Sendable {
         return true
     }
 
+    private static func rollbackCreateExclusiveInstall(
+        destinationName: String,
+        quarantineName: String,
+        parentDescriptor: Int32,
+        expectedIdentity: InstalledFileIdentity
+    ) throws -> Bool {
+        guard try fileIdentity(named: destinationName, in: parentDescriptor) == expectedIdentity else {
+            return false
+        }
+
+        let renameResult = destinationName.withCString { source in
+            quarantineName.withCString { target in
+                Darwin.renameatx_np(
+                    parentDescriptor,
+                    source,
+                    parentDescriptor,
+                    target,
+                    UInt32(RENAME_EXCL)
+                )
+            }
+        }
+        guard renameResult == 0 else {
+            let code = errno
+            if code == ENOENT { return false }
+            throw WriterError.createOnlyRollbackFailed(code)
+        }
+
+        let quarantinedIdentity: InstalledFileIdentity?
+        do {
+            quarantinedIdentity = try fileIdentity(
+                named: quarantineName,
+                in: parentDescriptor
+            )
+        } catch {
+            try restoreRollbackQuarantine(
+                quarantineName,
+                to: destinationName,
+                in: parentDescriptor
+            )
+            throw error
+        }
+
+        guard quarantinedIdentity == expectedIdentity else {
+            if quarantinedIdentity != nil {
+                try restoreRollbackQuarantine(
+                    quarantineName,
+                    to: destinationName,
+                    in: parentDescriptor
+                )
+            }
+            return true
+        }
+
+        let unlinkResult = quarantineName.withCString {
+            Darwin.unlinkat(parentDescriptor, $0, 0)
+        }
+        guard unlinkResult == 0 else {
+            let code = errno
+            try restoreRollbackQuarantine(
+                quarantineName,
+                to: destinationName,
+                in: parentDescriptor
+            )
+            throw WriterError.createOnlyRollbackFailed(code)
+        }
+        return true
+    }
+
     private static func restoreRollbackQuarantine(
         _ quarantine: URL,
         to destination: URL
@@ -333,6 +706,27 @@ public struct DurableFileWriter: Sendable {
         }
     }
 
+    private static func restoreRollbackQuarantine(
+        _ quarantineName: String,
+        to destinationName: String,
+        in parentDescriptor: Int32
+    ) throws {
+        let result = quarantineName.withCString { source in
+            destinationName.withCString { target in
+                Darwin.renameatx_np(
+                    parentDescriptor,
+                    source,
+                    parentDescriptor,
+                    target,
+                    UInt32(RENAME_EXCL)
+                )
+            }
+        }
+        guard result == 0 else {
+            throw WriterError.createOnlyRollbackConflict(quarantineName, errno)
+        }
+    }
+
     private static func fileIdentity(at url: URL) throws -> InstalledFileIdentity? {
         var status = stat()
         let result = url.path.withCString { Darwin.lstat($0, &status) }
@@ -340,6 +734,38 @@ public struct DurableFileWriter: Sendable {
             let code = errno
             if code == ENOENT { return nil }
             throw WriterError.fileIdentityInspectionFailed(code)
+        }
+        return InstalledFileIdentity(
+            device: status.st_dev,
+            inode: status.st_ino,
+            generation: status.st_gen
+        )
+    }
+
+    private static func fileIdentity(
+        named name: String,
+        in parentDescriptor: Int32
+    ) throws -> InstalledFileIdentity? {
+        var status = stat()
+        let result = name.withCString {
+            Darwin.fstatat(parentDescriptor, $0, &status, AT_SYMLINK_NOFOLLOW)
+        }
+        guard result == 0 else {
+            let code = errno
+            if code == ENOENT { return nil }
+            throw WriterError.fileIdentityInspectionFailed(code)
+        }
+        return InstalledFileIdentity(
+            device: status.st_dev,
+            inode: status.st_ino,
+            generation: status.st_gen
+        )
+    }
+
+    private static func fileIdentity(descriptor: Int32) throws -> InstalledFileIdentity? {
+        var status = stat()
+        guard Darwin.fstat(descriptor, &status) == 0 else {
+            throw WriterError.fileIdentityInspectionFailed(errno)
         }
         return InstalledFileIdentity(
             device: status.st_dev,

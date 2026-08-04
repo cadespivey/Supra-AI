@@ -30,6 +30,7 @@ public final class MatterDraftingController: ObservableObject {
     ) throws -> Void
     public typealias AsyncDraftCheckpoint = @Sendable () async throws -> Void
     public typealias MotionCompensationCheckpoint = (_ publicURL: URL, _ quarantineURL: URL) throws -> Void
+    public typealias DraftCompensationPreUnlinkCheckpoint = (_ quarantineURL: URL) throws -> Void
 
     public struct DraftArtifact: Sendable, Equatable {
         /// What produced this artifact — a wired catalog kind, or a free-form custom
@@ -122,6 +123,7 @@ public final class MatterDraftingController: ObservableObject {
     private let pipelineFactory: @Sendable () -> DraftPipeline
     private let beforeMotionPersistence: AsyncDraftCheckpoint
     private let motionCompensationCheckpoint: MotionCompensationCheckpoint
+    private let draftCompensationPreUnlinkCheckpoint: DraftCompensationPreUnlinkCheckpoint
     /// Deterministic test checkpoint for source-snapshot interleavings. The
     /// shipping default is inert; tests use it to prove display/evidence reads
     /// cannot be assembled from different database snapshots.
@@ -147,6 +149,7 @@ public final class MatterDraftingController: ObservableObject {
         pipelineFactory: (@Sendable () -> DraftPipeline)? = nil,
         beforeMotionPersistence: AsyncDraftCheckpoint? = nil,
         motionCompensationCheckpoint: MotionCompensationCheckpoint? = nil,
+        draftCompensationPreUnlinkCheckpoint: DraftCompensationPreUnlinkCheckpoint? = nil,
         motionAuditCommitter: MotionDraftAuditCommitter? = nil
     ) {
         self.store = store
@@ -165,6 +168,7 @@ public final class MatterDraftingController: ObservableObject {
         self.pipelineFactory = pipelineFactory ?? { DraftPipeline.makeDefault() }
         self.beforeMotionPersistence = beforeMotionPersistence ?? {}
         self.motionCompensationCheckpoint = motionCompensationCheckpoint ?? { _, _ in }
+        self.draftCompensationPreUnlinkCheckpoint = draftCompensationPreUnlinkCheckpoint ?? { _ in }
     }
 
     public func refreshLegacyDraftReviewState(matterID: String) {
@@ -1517,7 +1521,6 @@ public final class MatterDraftingController: ObservableObject {
         artifactKind: DraftArtifactIntentKind
     ) throws -> URL {
         let directory = storage.exportsDirectory(forMatterID: matterID)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let rawStamp = sanitize(fileStampProvider())
         let stamp = rawStamp.isEmpty ? UUID().uuidString.lowercased() : rawStamp
         let basename = sanitize(title)
@@ -1541,7 +1544,11 @@ public final class MatterDraftingController: ObservableObject {
             }
             let installedIdentity: DurableFileWriter.InstalledFileIdentity
             do {
-                installedIdentity = try fileWriter.writeNewOwned(data, to: url) { temporaryURL in
+                installedIdentity = try fileWriter.writeNewOwned(
+                    data,
+                    to: url,
+                    containedIn: storage.root
+                ) { temporaryURL in
                     try DocumentExportValidator.validate(temporaryURL, as: format)
                 }
             } catch DurableFileWriter.WriterError.destinationExists {
@@ -1600,7 +1607,6 @@ public final class MatterDraftingController: ObservableObject {
         auditInput: MotionDraftAuditInput
     ) throws -> URL {
         let directory = storage.exportsDirectory(forMatterID: matterID)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let rawStamp = sanitize(fileStampProvider())
         let stamp = rawStamp.isEmpty ? UUID().uuidString.lowercased() : rawStamp
         let basename = sanitize(title)
@@ -1623,7 +1629,11 @@ public final class MatterDraftingController: ObservableObject {
             }
             let installedIdentity: DurableFileWriter.InstalledFileIdentity
             do {
-                installedIdentity = try fileWriter.writeNewOwned(data, to: url) { temporaryURL in
+                installedIdentity = try fileWriter.writeNewOwned(
+                    data,
+                    to: url,
+                    containedIn: storage.root
+                ) { temporaryURL in
                     try DocumentExportValidator.validate(temporaryURL, as: .docx)
                 }
             } catch DurableFileWriter.WriterError.destinationExists {
@@ -1708,6 +1718,7 @@ public final class MatterDraftingController: ObservableObject {
         case inspectionFailedAndQuarantined(String, Int32)
         case checkpointFailed(String)
         case checkpointFailedAndQuarantined(String, Int32)
+        case deletionIdentityChanged(String)
         case deletionFailed(String, String)
         case directorySynchronizationFailed(String)
 
@@ -1729,6 +1740,8 @@ public final class MatterDraftingController: ObservableObject {
                 return "Draft rollback stopped before deletion and the file was restored: \(detail)."
             case let .checkpointFailedAndQuarantined(name, code):
                 return "Draft rollback stopped before deletion; the destination was left untouched and the file remains preserved as \(name) (restore errno \(code))."
+            case let .deletionIdentityChanged(name):
+                return "The verified rollback quarantine changed before unlink and remains preserved as \(name)."
             case let .deletionFailed(name, detail):
                 return "The verified rollback quarantine \(name) could not be removed: \(detail)."
             case let .directorySynchronizationFailed(detail):
@@ -1783,7 +1796,40 @@ public final class MatterDraftingController: ObservableObject {
             throw DraftCompensationError.destinationChanged
         }
         do {
-            try FileManager.default.removeItem(at: quarantine)
+            try draftCompensationPreUnlinkCheckpoint(quarantine)
+        } catch {
+            if let code = restoreQuarantinedDraftFile(quarantine, to: url) {
+                throw DraftCompensationError.checkpointFailedAndQuarantined(
+                    quarantine.lastPathComponent,
+                    code
+                )
+            }
+            throw DraftCompensationError.checkpointFailed(error.localizedDescription)
+        }
+        let stillMatchesExpected: Bool
+        do {
+            let matchesIdentity = try fileWriter.matchesInstalledFileIdentity(
+                expectedIdentity,
+                at: quarantine
+            )
+            let quarantinedData = try Data(contentsOf: quarantine, options: .mappedIfSafe)
+            stillMatchesExpected = matchesIdentity
+                && DocumentStorage.sha256Hex(of: quarantinedData) == expectedSHA256
+        } catch {
+            throw DraftCompensationError.deletionFailed(
+                quarantine.lastPathComponent,
+                error.localizedDescription
+            )
+        }
+        guard stillMatchesExpected else {
+            throw DraftCompensationError.deletionIdentityChanged(quarantine.lastPathComponent)
+        }
+        do {
+            guard try fileWriter.unlinkFile(matching: expectedIdentity, at: quarantine) else {
+                throw DraftCompensationError.deletionIdentityChanged(quarantine.lastPathComponent)
+            }
+        } catch let error as DraftCompensationError {
+            throw error
         } catch {
             throw DraftCompensationError.deletionFailed(
                 quarantine.lastPathComponent,

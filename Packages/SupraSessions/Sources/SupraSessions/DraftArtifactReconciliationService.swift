@@ -36,6 +36,9 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
     /// Deterministic process-boundary seam used to prove pathname replacement
     /// after the initial no-follow regular-file check fails closed.
     var publicArtifactInspectionCheckpoint: (URL) throws -> Void = { _ in }
+    /// Deterministic final-removal seam. Cleanup must recheck the inspected
+    /// inode after this checkpoint and use a nonrecursive unlink.
+    var cleanupPreUnlinkCheckpoint: (URL) throws -> Void = { _ in }
 
     public init(
         store: SupraStore,
@@ -191,11 +194,15 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                   identifier.uuidString.caseInsensitiveCompare(suffix) == .orderedSame else {
                 continue
             }
-            let values = try entry.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            guard values.isRegularFile == true, values.isSymbolicLink != true else {
+            guard Self.regularFileState(at: entry) == .regular,
+                  let inspectedIdentity = try fileWriter.installedFileIdentity(at: entry) else {
                 throw ReconciliationError.unsafeOwnedTemporary
             }
-            try fileManager.removeItem(at: entry)
+            try cleanupPreUnlinkCheckpoint(entry)
+            guard Self.regularFileState(at: entry) == .regular,
+                  try fileWriter.unlinkFile(matching: inspectedIdentity, at: entry) else {
+                throw ReconciliationError.unsafeOwnedTemporary
+            }
             removed += 1
         }
         if removed > 0 {
@@ -237,8 +244,8 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
             return .recoveryRequired
         }
         let candidate = candidates[0]
-        let values = try candidate.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-        guard values.isRegularFile == true, values.isSymbolicLink != true else {
+        guard Self.regularFileState(at: candidate) == .regular,
+              let inspectedIdentity = try fileWriter.installedFileIdentity(at: candidate) else {
             return .recoveryRequired
         }
         let beforeValidation = try Data(contentsOf: candidate, options: .mappedIfSafe)
@@ -256,7 +263,11 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
         }
         let afterValidation = try Data(contentsOf: candidate, options: .mappedIfSafe)
         guard afterValidation == beforeValidation else { return .recoveryRequired }
-        try fileManager.removeItem(at: candidate)
+        try cleanupPreUnlinkCheckpoint(candidate)
+        guard Self.regularFileState(at: candidate) == .regular,
+              try fileWriter.unlinkFile(matching: inspectedIdentity, at: candidate) else {
+            return .recoveryRequired
+        }
         try fileWriter.synchronizeParentDirectory(of: publicURL)
         return .removedOwned
     }
