@@ -30,30 +30,31 @@ public enum FloridaMotionToDismissContract {
         }
     }
 
-    /// Accepts only the state reporter forms supported by this vertical and an
+    /// Accepts one complete citation composed of an optional case caption, one
+    /// supported state reporter, an optional state-reporter pinpoint, and an
     /// anchored Florida Supreme Court or District Court of Appeal parenthetical.
-    /// Party names containing “Florida” and federal `(M.D. Fla.)` parentheticals
-    /// therefore cannot satisfy the contract.
+    /// The caption grammar cannot consume another comma-delimited reporter, so a
+    /// mixed federal + Florida string fails rather than borrowing its final
+    /// Florida parenthetical.
     public static func isSupportedAuthorityCitation(_ citation: String) -> Bool {
         let value = normalizedWhitespace(citation)
         guard !value.isEmpty else { return false }
 
+        let optionalCaseCaption = #"(?:(?:(?!,\s*\d).)+,\s*)?"#
+        let southernReporter = #"\d{1,4}\s+So\.\s+(?:(?:2d|3d)\s+)?\d{1,6}"#
+        let southernPinpoint = #"(?:,\s+\d{1,6}(?:[-–—]\d{1,6})?)?"#
+        let weeklyReporter = #"\d{1,3}\s+Fla\.\s+L\.\s+Weekly\s+(?:D|S)?\d{1,6}"#
+        let weeklyPinpoint = #"(?:,\s+(?:D|S)?\d{1,6}(?:[-–—](?:D|S)?\d{1,6})?)?"#
         let stateParenthetical =
-            #"\(\s*Fla\.(?:\s+(?:1st|2d|3d|4th|5th|6th)\s+DCA)?\s+\d{4}\s*\)\s*$"#
-        guard value.range(
-            of: stateParenthetical,
-            options: [.regularExpression, .caseInsensitive]
-        ) != nil else {
-            return false
-        }
+            #"\s+\(\s*Fla\.(?:\s+(?:1st|2d|3d|4th|5th|6th)\s+DCA)?\s+\d{4}\s*\)"#
+        let supportedCitation =
+            "^\(optionalCaseCaption)(?:\(southernReporter)\(southernPinpoint)|"
+            + "\(weeklyReporter)\(weeklyPinpoint))\(stateParenthetical)$"
 
-        let supportedReporters = [
-            #"\b\d{1,4}\s+So\.\s+(?:(?:2d|3d)\s+)?\d{1,6}\b"#,
-            #"\b\d{1,3}\s+Fla\.\s+L\.\s+Weekly\s+(?:D|S)?\d{1,6}\b"#,
-        ]
-        return supportedReporters.contains {
-            value.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil
-        }
+        return value.range(
+            of: supportedCitation,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
     }
 
     private static func normalizedWhitespace(_ value: String) -> String {
