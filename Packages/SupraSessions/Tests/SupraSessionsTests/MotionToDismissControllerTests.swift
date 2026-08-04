@@ -1,6 +1,6 @@
 import Foundation
 import SupraCore
-import SupraDocuments
+@testable import SupraDocuments
 import SupraDrafting
 import SupraDraftingCore
 import SupraExports
@@ -14,6 +14,42 @@ import XCTest
 @MainActor
 final class MotionToDismissControllerTests: XCTestCase {
     private enum InjectedFailure: Error { case stop }
+    private struct DirectorySyncFailure: LocalizedError {
+        var errorDescription: String? { "injected directory synchronization failure" }
+    }
+    private final class DirectorySyncProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private let failOnCall: Int?
+        private var quarantine: URL?
+        private var directories: [URL] = []
+        private var destinationStates: [Bool] = []
+        private var quarantineStates: [Bool] = []
+
+        init(failOnCall: Int? = nil) {
+            self.failOnCall = failOnCall
+        }
+
+        func setQuarantine(_ url: URL) {
+            lock.withLock { quarantine = url }
+        }
+
+        func synchronize(directory: URL, destination: URL) throws {
+            let shouldFail = lock.withLock { () -> Bool in
+                directories.append(directory.standardizedFileURL)
+                destinationStates.append(FileManager.default.fileExists(atPath: destination.path))
+                quarantineStates.append(
+                    quarantine.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+                )
+                return failOnCall == directories.count
+            }
+            if shouldFail { throw DirectorySyncFailure() }
+        }
+
+        var synchronizedDirectories: [URL] { lock.withLock { directories } }
+        var destinationExistsAtSync: [Bool] { lock.withLock { destinationStates } }
+        var quarantineExistsAtSync: [Bool] { lock.withLock { quarantineStates } }
+        var callCount: Int { lock.withLock { directories.count } }
+    }
 
     // T-MTD-01...04 — availability and a typed, non-default request contract.
     func testTMTD01Through04MotionAvailabilityAndTypedRequestContract() async throws {
@@ -532,6 +568,87 @@ final class MotionToDismissControllerTests: XCTestCase {
 
         XCTAssertEqual(verifier.factSourceIDs, [fixture.selectedFact.revisionID])
         XCTAssertFalse(verifier.factSourceIDs.contains(fixture.selectedFact.documentID))
+    }
+
+    // T-MTD-27. Expected RED: writeNew synchronizes the install, but a later
+    // failed-audit compensation unlinks its quarantine without another directory
+    // sync before reporting that rollback succeeded.
+    func testTMTD27AuditRollbackSynchronizesDirectoryAfterQuarantineRemoval() async throws {
+        let fixture = try makeFixture()
+        let destination = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+            .appendingPathComponent("Motion-to-Dismiss-sync-rollback.docx")
+        let syncProbe = DirectorySyncProbe()
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { directory in
+                try syncProbe.synchronize(directory: directory, destination: destination)
+            }
+        )
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileWriter: writer,
+            fileStampProvider: { "sync-rollback" },
+            motionCompensationCheckpoint: { _, quarantine in
+                syncProbe.setQuarantine(quarantine)
+            },
+            motionAuditCommitter: { _, _ in throw InjectedFailure.stop }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        assertFailure(result)
+        XCTAssertEqual(syncProbe.synchronizedDirectories.count, 2)
+        XCTAssertEqual(Set(syncProbe.synchronizedDirectories).count, 1)
+        XCTAssertEqual(syncProbe.destinationExistsAtSync, [true, false])
+        XCTAssertEqual(syncProbe.quarantineExistsAtSync, [false, false])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+            .contains { $0.eventType == "draft_generated" })
+    }
+
+    // T-MTD-28. Expected RED: without the compensating directory sync, an audit
+    // failure is reported as fully rolled back even when that durability boundary
+    // would fail.
+    func testTMTD28AuditRollbackDirectorySyncFailureReportsPartialFailure() async throws {
+        let fixture = try makeFixture()
+        let destination = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+            .appendingPathComponent("Motion-to-Dismiss-sync-failure.docx")
+        let syncProbe = DirectorySyncProbe(failOnCall: 2)
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { _ in
+                try syncProbe.synchronize(
+                    directory: destination.deletingLastPathComponent(),
+                    destination: destination
+                )
+            }
+        )
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileWriter: writer,
+            fileStampProvider: { "sync-failure" },
+            motionAuditCommitter: { _, _ in throw InjectedFailure.stop }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected a partial rollback failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains("directory synchronization"), message)
+        XCTAssertEqual(syncProbe.callCount, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+            .contains { $0.eventType == "draft_generated" })
     }
 
     // T-UI-MTD-06 companion — cancellation after the async verifier boundary cannot persist.

@@ -301,6 +301,57 @@ final class ModelLibraryRuntimeTruthTests: XCTestCase {
         XCTAssertEqual(stub.runtimeHeldModelID?.rawValue.uuidString, first.id)
     }
 
+    // Expected RED: ensure directly awaits the continuation-backed load RPC.
+    // Cancelling the caller therefore cannot return until the shared load replies.
+    @MainActor
+    func testCancelledEnsureReturnsBeforeContinuationBackedSharedLoadCompletes() async throws {
+        let store = try makeStore()
+        let stub = RestartableRuntimeStub(blockFirstLoad: true)
+        let library = ModelLibrary(store: store, runtimeClient: stub)
+        let model = try library.addModel(
+            displayName: "Continuation-backed Drafting Model",
+            path: "/tmp/continuation-backed",
+            bookmarkData: nil
+        )
+        var result: Result<ModelID, ModelRouteResolutionIssue>?
+        let returned = expectation(description: "cancelled ensure returned")
+        let ensure = Task { @MainActor in
+            result = await library.ensureLoadedRoutedModelID(for: .drafting)
+            returned.fulfill()
+        }
+
+        var waited = 0
+        while stub.loadRequestCount == 0, waited < 200 {
+            waited += 1
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard stub.loadRequestCount == 1 else {
+            ensure.cancel()
+            stub.releaseFirstLoad()
+            await ensure.value
+            return XCTFail("precondition: ensure never started the model load")
+        }
+
+        ensure.cancel()
+        await fulfillment(of: [returned], timeout: 0.25)
+        stub.releaseFirstLoad()
+        await ensure.value
+
+        guard case let .failure(issue) = result else {
+            return XCTFail("cancelled ensure unexpectedly succeeded: \(String(describing: result))")
+        }
+        XCTAssertTrue(issue.message.localizedCaseInsensitiveContains("cancelled"))
+        XCTAssertEqual(stub.loadRequestCount, 1, "cancellation must not duplicate the shared load")
+
+        waited = 0
+        while stub.runtimeHeldModelID == nil, waited < 200 {
+            waited += 1
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(stub.runtimeHeldModelID?.rawValue.uuidString, model.id)
+        XCTAssertEqual(library.loadedModelID?.rawValue.uuidString, model.id)
+    }
+
     // MARK: - Guards: the fast path stays fast, and truth is actually consulted
 
     @MainActor
