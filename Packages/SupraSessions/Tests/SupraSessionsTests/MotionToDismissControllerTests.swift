@@ -1111,6 +1111,44 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
     }
 
+    // T-MTD-31. A nonthrowing audit checkpoint can still race with another
+    // process replacing the public path. Finalization must authenticate the
+    // post-checkpoint file and preserve bytes it no longer owns.
+    func testTMTD31CheckpointReplacementIsPreservedWithoutCompletedIntentOrAudit() async throws {
+        let fixture = try makeFixture()
+        let destination = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+            .appendingPathComponent("Motion-to-Dismiss-checkpoint-race.docx")
+        let replacement = Data("concurrent reviewed motion replacement".utf8)
+        var intentID: String?
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileStampProvider: { "checkpoint-race" },
+            motionAuditCommitter: { event, _ in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                try replacement.write(to: destination, options: .atomic)
+            }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        if case .success = result {
+            XCTFail("a replaced public motion must not be reported as finalized")
+        }
+        XCTAssertEqual(try Data(contentsOf: destination), replacement)
+        let intent = try XCTUnwrap(
+            try fixture.store.draftArtifacts.intent(id: XCTUnwrap(intentID))
+        )
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                .contains { $0.eventType == "draft_generated" }
+        )
+    }
+
     // MARK: - Fixtures
 
     private struct IndexedFact {

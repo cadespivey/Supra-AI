@@ -305,6 +305,45 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
+    // ACR-EXPORT-012. The audit callback is a process-boundary seam. If another
+    // process replaces the installed path while that callback runs, Store must
+    // never finalize from bytes read before the callback or remove the replacement.
+    @MainActor
+    func testGenericDraftCheckpointReplacementIsPreservedWithoutCompletedIntentOrAudit() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Checkpoint replacement matter")
+        let storage = makeStorage()
+        let destination = storage.exportsDirectory(forMatterID: matter.id)
+            .appendingPathComponent("Checkpoint-replacement-race.md")
+        let replacement = Data("concurrent reviewed replacement".utf8)
+        var intentID: String?
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "race" },
+            auditRecorder: { event in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                try replacement.write(to: destination, options: .atomic)
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Checkpoint replacement",
+                description: "Authenticate the final installed bytes."
+            )
+        )
+
+        if case .success = result {
+            XCTFail("a replaced public artifact must not be reported as finalized")
+        }
+        XCTAssertEqual(try Data(contentsOf: destination), replacement)
+        let intent = try XCTUnwrap(try store.draftArtifacts.intent(id: XCTUnwrap(intentID)))
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
     // ACR-EXPORT-009 follow-on. Expected RED: a replacement install whose
     // parent-directory sync fails currently leaves a new, unaudited markdown
     // artifact visible instead of rolling the namespace change back durably.
