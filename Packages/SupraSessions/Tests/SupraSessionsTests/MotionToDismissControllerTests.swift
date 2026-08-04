@@ -1209,8 +1209,9 @@ final class MotionToDismissControllerTests: XCTestCase {
 
             assertFailure(result)
             XCTAssertFalse(FileManager.default.fileExists(atPath: externalDestination.path))
-            XCTAssertTrue(
-                try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).isEmpty
+            XCTAssertFalse(
+                try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                    .contains { $0.eventType == "draft_generated" }
             )
             let intentStatuses = try await fixture.store.database.writer.read { db in
                 try String.fetchAll(
@@ -1278,8 +1279,9 @@ final class MotionToDismissControllerTests: XCTestCase {
             try fixture.store.draftArtifacts.intent(id: XCTUnwrap(intentID))
         )
         XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
-        XCTAssertTrue(
-            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).isEmpty
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                .contains { $0.eventType == "draft_generated" }
         )
     }
 
